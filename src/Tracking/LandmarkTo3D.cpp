@@ -298,14 +298,18 @@ bool LandmarkTo3D::processHandPnp(TrackedHand& hand)
 	m_bPnpPoseValid[sideIndex]= true;
 
 	// cameraPoints= R * obj + t for all 21 landmarks (articulation comes from
-	// the per-frame object model)
+	// the per-frame object model). The calibrated depth scale then moves the
+	// hand along its rays; the warm start keeps the solver's own pose.
 	cv::Matx33d rotation;
 	cv::Rodrigues(rvec, rotation);
+	const float depthScale= m_depthScale[sideIndex];
 	for (int i= 0; i < HAND_LANDMARK_COUNT; ++i)
 	{
 		const cv::Vec3d rotated=
 			rotation * cv::Vec3d(objectModel[i].x, objectModel[i].y, objectModel[i].z) + tvec;
 		hand.cameraPoints[i]= glm::vec3((float)rotated(0), (float)rotated(1), (float)rotated(2));
+		if (depthScale != 1.f)
+			hand.cameraPoints[i]*= depthScale;
 	}
 
 	hand.hasCameraSpace= true;

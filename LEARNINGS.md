@@ -236,6 +236,10 @@ The per-frame view (the tool's CSV) then placed the bias. The front camera label
 
 Learned: a prior that leashes a state to its own prediction holds nothing when the state was never right, and in a single view the pixels are indifferent to the depth-versus-articulation trade. The absolute reference has to come from somewhere, and the model's self-consistent 2.5D is a better one than the free fit, even though it is a view-dependent opinion.
 
+The lift's own bias then got its calibration: a per-camera, per-side depth scale on the PnP result (`liftDepthScale`), measured offline as the median of stereo distance over lift distance on the same frames. The three recordings share one camera, one user and one calibrated skeleton, and still disagree: left 0.92, 0.92, 0.96 and right 0.96, 0.91, 1.03. Within a recording the one-second rolling median wanders between 0.79 and 1.05 while the hands move, and holds within 0.02 on the one recording where they rest, so the bias is a function of pose rather than of the camera. Cross-validated by giving each recording the median of the other two, all four gates pass (palm p50 2.8 cm, p90 8.0 cm, flips 1.3 percent, fingers 5.9 degrees), the per-recording optimum does no better (2.9 / 8.0), and the sample-weighted pooled value fails p90 because one recording's 400 resting frames outvote the other two. A scale from another session is as good as the session's own, and the p90 that remains is the pose-dependent spread no constant can remove.
+
+Learned: a systematic bias calibrates out, but measure first whether it is a constant of the device or a function of the input. This one is both, a device-sized mean with a pose-sized swing around it, so the wizard's single-pose measurement buys the mean and nothing more, and the swing is the next model's problem, not another calibration's.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

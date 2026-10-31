@@ -55,6 +55,8 @@ The lift is `cv::solvePnP` against a dynamic per-frame metric object model. Arti
 
 The solve is warm-started per side from the previous frame's rvec/tvec with `SOLVEPNP_ITERATIVE`, and cold-started with `SOLVEPNP_SQPNP`. ITERATIVE's cold-start DLT is ill-conditioned on near-planar point sets, and a flat hand posed by FK is exactly that, collapsing to near-zero or negative depth repeatedly until the hand curls. SQPnP has no planar degeneracy. A rare solve failure just skips camera space for the frame, and fusion's staleness window absorbs the gap.
 
+The solved camera-space points are then multiplied by that camera's per-side `liftDepthScale` (`cameras[i].liftDepthScale` in the config, `setDepthScale`, 1 by default), a similarity about the optical center that moves the hand along its rays and leaves the reprojection untouched. The landmark model's depth from one viewpoint carries a bias that depends on the view and the hand, measured 4 to 8 percent deep on a left hand from a front camera and 2 percent either way on the right, and the scale lands the lift on a depth measured another way (stereo offline, the desk plane in the single-camera wizard). In a multi-camera rig the lift only seeds fusion, so the scale matters there only through the single-view depth anchor below.
+
 `LandmarkTo3D` also fills the parametric `HandPose` (palm transform, finger angles, skeleton) and its `fkReprojectionPx` validation metric, the mean pixel error between the 2D landmarks and the FK hand rebuilt from the extracted pose.
 
 ## The hand pose model

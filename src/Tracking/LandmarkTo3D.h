@@ -65,6 +65,16 @@ public:
 	}
 	float getRefLengthMeters() const { return m_refLengthMeters; }
 
+	// Per-side factor on the solved lift's distance from the camera (see
+	// CameraProfile::liftDepthScale). Applied to the camera-space landmarks
+	// as a similarity about the optical center, so the reprojection is
+	// unchanged and only the depth moves. 1 = the lift as solved.
+	void setDepthScale(eHandSide side, float scale)
+	{
+		if (scale > 1e-3f)
+			m_depthScale[(int)side]= scale;
+	}
+
 	// Per-side rest angles for THIS camera, subtracted from every later
 	// measurement so the captured pose reports zeros. Without them the raw
 	// angles (relative to the flat-hand default) are reported as-is.
@@ -123,6 +133,7 @@ private:
 	float m_cx= 0.f;
 	float m_cy= 0.f;
 	float m_refLengthMeters= 0.08f;
+	std::array<float, 2> m_depthScale{1.f, 1.f};
 
 
 	std::array<HandSkeleton, 2> m_calibratedSkeleton{};

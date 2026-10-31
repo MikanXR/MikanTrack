@@ -111,6 +111,7 @@ All calibration results live in the active project's `project.json` (`AppConfig`
 
 - Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the board geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
 - Extrinsics: per camera under `cameras[i].extrinsics` (`present`, `markerFromCamera`, `patternReprojectionErrorPx`, `patternCornerCount`, `markerId`, `markerLengthMm`), plus the cross-camera worst-pair metrics under top-level `extrinsicsQuality` (`worstPairReprojectionRmsPx`, `worstPairSpacingErrorMm`, `worstPairSpacingScale`, `worstPairPlanarityRmsMm`, and the pair's identity)
+- Lift depth scale: per camera under `cameras[i].liftDepthScale` (left, right), the factor on that camera's monocular lift distance, 1 until measured
 - Hand bones: `handSkeleton.left`/`handSkeleton.right` (finger bases plus phalanx lengths; neutral directions are rebuilt on load), and the reference bone under `handScale` (`present`, `refLengthMeters`)
 - Hand rest pose: `fusedRestAngles.left`/`fusedRestAngles.right`
 - Angle prior: `anglePrior.left`/`anglePrior.right` (`mean`, `precision`)

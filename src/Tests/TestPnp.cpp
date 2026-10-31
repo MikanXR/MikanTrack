@@ -135,6 +135,44 @@ static int runPnpTest(const TestArgs& args)
 		result= 1;
 	}
 
+	// The calibrated depth scale is a similarity about the optical center:
+	// every landmark lands at scale * truth, so the reprojection is unchanged
+	{
+		const float depthScale= 0.9f;
+		LandmarkTo3D landmarkTo3D;
+		landmarkTo3D.configure(intrinsics, boneLength);
+		landmarkTo3D.setDepthScale(eHandSide::Left, depthScale);
+
+		std::array<glm::vec3, HAND_LANDMARK_COUNT> truthCamera;
+		TrackingFrameResult frame;
+		frame.timestampMs= 1000.0;
+		frame.hands[(int)eHandSide::Left]= buildHand(truthCamera);
+		landmarkTo3D.process(frame);
+
+		const TrackedHand& hand= frame.hands[(int)eHandSide::Left];
+		float sum= 0.f;
+		float maxPixelError= 0.f;
+		for (int lm= 0; lm < HAND_LANDMARK_COUNT; ++lm)
+		{
+			const glm::vec3 delta= hand.cameraPoints[lm] - depthScale * truthCamera[lm];
+			sum+= glm::dot(delta, delta);
+			const glm::vec3& p= hand.cameraPoints[lm];
+			const glm::vec2 projected(fx * p.x / p.z + cx, fy * p.y / p.z + cy);
+			maxPixelError= std::max(maxPixelError,
+									glm::length(projected - glm::vec2(hand.imagePoints[lm])));
+		}
+		const float rms= sqrtf(sum / (float)HAND_LANDMARK_COUNT);
+		MIKAN_LOG_INFO("test-pnp") << "PnP depth scale 0.9: tracked=" << hand.hasCameraSpace
+			<< " rms error vs scaled truth mm=" << rms * 1000.f
+			<< " max reprojection px=" << maxPixelError;
+		if (!hand.hasCameraSpace || rms > 0.001f || maxPixelError > 0.01f)
+		{
+			MIKAN_LOG_ERROR("test-pnp")
+				<< "FAILED: the depth scale must scale the lift about the optical center";
+			result= 1;
+		}
+	}
+
 	// The real collapsed frame must solve to a plausible depth from a cold
 	// start (the live hand was under a meter away; ITERATIVE read it at 2-4cm
 	// or behind the camera and the sanity gate rejected every frame)

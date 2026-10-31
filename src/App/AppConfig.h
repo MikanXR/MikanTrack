@@ -176,6 +176,14 @@ struct CameraProfile
 	IntrinsicsConfig intrinsics;
 	ExtrinsicsConfig extrinsics;
 	BodyPoseCameraConfig bodyPose;
+	// Per side, the factor this camera's monocular lift distance is
+	// multiplied by. The landmark model's depth from one viewpoint carries a
+	// bias that depends on the view and the hand (measured 4 to 8 percent
+	// deep on a left hand from a front camera, within 3 percent either way
+	// on the right), and the scale lands the lift on a depth measured
+	// another way, stereo or the desk plane. 1 = the lift as solved.
+	// Indexed by eHandSide.
+	std::array<float, 2> liftDepthScale{1.f, 1.f};
 };
 
 // Wrist-strapped inertial trackers (Joy-Cons today, SlimeVR later).

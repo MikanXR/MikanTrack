@@ -242,6 +242,13 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 	profile.bodyPose.poseFrameDivider= bp.value("poseFrameDivider", 2);
 	profile.bodyPose.detectorIntervalFrames= bp.value("detectorIntervalFrames", 20);
 
+	const json& lift= j.value("liftDepthScale", json::array());
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		profile.liftDepthScale[sideIndex]=
+			lift.is_array() && (int)lift.size() > sideIndex ? lift[sideIndex].get<float>() : 1.f;
+	}
+
 	const json& ex= j.value("extrinsics", json::object());
 	profile.extrinsics.present= ex.value("present", false);
 	profile.extrinsics.patternReprojectionErrorPx= ex.value("patternReprojectionErrorPx", 0.0);
@@ -283,6 +290,7 @@ static json cameraProfileToJson(const CameraProfile& profile)
 			 {"poseFrameDivider", profile.bodyPose.poseFrameDivider},
 			 {"detectorIntervalFrames", profile.bodyPose.detectorIntervalFrames},
 		 }},
+		{"liftDepthScale", {profile.liftDepthScale[0], profile.liftDepthScale[1]}},
 		{"extrinsics",
 		 {
 			 {"present", profile.extrinsics.present},

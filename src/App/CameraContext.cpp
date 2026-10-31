@@ -96,6 +96,7 @@ void CameraContext::configure(const AppConfig& config)
 				m_landmarkTo3D->setCalibratedSkeleton(
 					(eHandSide)sideIndex, config.handSkeleton.skeleton[sideIndex]);
 			}
+			m_landmarkTo3D->setDepthScale((eHandSide)sideIndex, profile.liftDepthScale[sideIndex]);
 		}
 
 		// Undistortion for the ML input + preview. ALWAYS rebuilt on a

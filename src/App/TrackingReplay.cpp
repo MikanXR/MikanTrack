@@ -162,14 +162,12 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 			// would diverge from live for every calibrated recording.
 			landmarkTo3D->clearCalibratedSkeleton();
 			const bool bApplySkeleton= !bWhatIf || whatIfParams->bApplyCalibratedSkeleton;
-			if (bApplySkeleton)
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					if (m_recordedConfig.handSkeleton.present[sideIndex])
-						landmarkTo3D->setCalibratedSkeleton(
-							(eHandSide)sideIndex, m_recordedConfig.handSkeleton.skeleton[sideIndex]);
-				}
+				if (bApplySkeleton && m_recordedConfig.handSkeleton.present[sideIndex])
+					landmarkTo3D->setCalibratedSkeleton(
+						(eHandSide)sideIndex, m_recordedConfig.handSkeleton.skeleton[sideIndex]);
+				landmarkTo3D->setDepthScale((eHandSide)sideIndex, profile.liftDepthScale[sideIndex]);
 			}
 		}
 		m_landmarkTo3D.push_back(std::move(landmarkTo3D));
