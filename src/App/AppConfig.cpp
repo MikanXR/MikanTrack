@@ -360,6 +360,7 @@ HandFusionConfig makeHandFusionConfig(const AppConfig& config)
 	fusionConfig.estimator.maxStepMetersPerS= config.fusion.estimatorMaxStepMetersPerS;
 	fusionConfig.estimator.jointLimitsEnabled= config.fusion.estimatorJointLimitsEnabled;
 	fusionConfig.estimator.jointLimitSigmaRad= config.fusion.estimatorJointLimitSigmaRad;
+	fusionConfig.estimator.monoDepthAnchorSigmaM= config.fusion.estimatorMonoDepthAnchorSigmaM;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		HandStateEstimatorConfig::AnglePrior& prior= fusionConfig.estimator.anglePrior[sideIndex];
@@ -533,6 +534,7 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.fusion.estimatorMaxStepMetersPerS= fu.value("estimatorMaxStepMetersPerS", 4.f);
 	config.fusion.estimatorJointLimitsEnabled= fu.value("estimatorJointLimitsEnabled", true);
 	config.fusion.estimatorJointLimitSigmaRad= fu.value("estimatorJointLimitSigmaRad", 0.05f);
+	config.fusion.estimatorMonoDepthAnchorSigmaM= fu.value("estimatorMonoDepthAnchorSigmaM", 0.01f);
 	config.fusion.estimatorAnglePriorWeight= fu.value("estimatorAnglePriorWeight", 0.3f);
 
 	restAnglesFromJson(j.value("fusedRestAngles", json::object()), config.fusedRestAngles);
@@ -657,6 +659,7 @@ std::string AppConfig::toJsonString() const
 		{"estimatorMaxStepMetersPerS", fusion.estimatorMaxStepMetersPerS},
 		{"estimatorJointLimitsEnabled", fusion.estimatorJointLimitsEnabled},
 		{"estimatorJointLimitSigmaRad", fusion.estimatorJointLimitSigmaRad},
+		{"estimatorMonoDepthAnchorSigmaM", fusion.estimatorMonoDepthAnchorSigmaM},
 		{"estimatorAnglePriorWeight", fusion.estimatorAnglePriorWeight},
 	};
 

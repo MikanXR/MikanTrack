@@ -8,12 +8,20 @@
 // stereo-triangulated output, so frames where that pass itself fell back to
 // one camera stay out of the hand statistics.
 //
-//   --replay-mono-baseline <recording.jsonl>... [cameraIndex]
+//   --replay-mono-baseline <recording.jsonl>... [cameraIndex] [frames.csv]
 //
 // cameraIndex defaults to the recording's body-pose camera (the front camera
 // of the tri-camera setup). The gates at the end are the acceptance bar of
 // the single-camera plan's first stage, pooled over every recording and both
 // sides; the exit code is 1 when any gate fails.
+//
+// The optional .csv path receives one row per compared hand and frame: the
+// truth and mono palms, the error split along the ray, the camera's own
+// label and lift of that hand (matched by projected wrist, since per-camera
+// labels are bookkeeping), and the FK reprojection of the truth and the mono
+// pose against the camera's pixels. It is the per-frame view behind the
+// pooled numbers, for attributing a bias to the landmarks, the lift, or the
+// fit.
 //
 // Coverage reads optimistic by one mechanism: the masked camera's recorded
 // landmarks include hands it found through cross-camera search hints, which
@@ -82,6 +90,13 @@ struct SideStats
 	Stats palmLateralCm;
 	Stats palmRotDeg;
 	Stats fingerDeg; // pooled over the 20 DoF
+	// Frame-to-frame palm steps of each pass over consecutive compared
+	// records, the jitter the anchor trades accuracy against
+	Stats truthStepMm;
+	Stats monoStepMm;
+	int lastComparedFrame= -1;
+	glm::vec3 lastTruthPalm{0.f};
+	glm::vec3 lastMonoPalm{0.f};
 
 	// Elbow, sampled once per body model frame
 	int elbowModelFrames= 0;
@@ -105,6 +120,8 @@ struct SideStats
 		palmLateralCm.append(other.palmLateralCm);
 		palmRotDeg.append(other.palmRotDeg);
 		fingerDeg.append(other.fingerDeg);
+		truthStepMm.append(other.truthStepMm);
+		monoStepMm.append(other.monoStepMm);
 		elbowModelFrames+= other.elbowModelFrames;
 		elbowFlips+= other.elbowFlips;
 		elbowErrCm.append(other.elbowErrCm);
@@ -204,6 +221,14 @@ void accumulateFrame(const TrackingFrameResult& truth, const TrackingFrameResult
 		side.palmLateralCm.add(glm::length(error - along * ray) * 100.f, frameIndex);
 		side.palmRotDeg.add(angleBetweenDeg(truthPose.palmOrientationWorld, monoPose.palmOrientationWorld),
 							frameIndex);
+		if (side.lastComparedFrame == frameIndex - 1)
+		{
+			side.truthStepMm.add(glm::length(truthPose.palmPositionWorld - side.lastTruthPalm) * 1000.f, frameIndex);
+			side.monoStepMm.add(glm::length(monoPose.palmPositionWorld - side.lastMonoPalm) * 1000.f, frameIndex);
+		}
+		side.lastComparedFrame= frameIndex;
+		side.lastTruthPalm= truthPose.palmPositionWorld;
+		side.lastMonoPalm= monoPose.palmPositionWorld;
 
 		// Both passes subtract the same rest offset, so the streamed angles
 		// compare directly
@@ -263,7 +288,9 @@ void logSide(const char* tag, int sideIndex, const SideStats& side)
 		<< ", rot deg p50/p90 " << side.palmRotDeg.p50() << "/" << side.palmRotDeg.p90();
 	MIKAN_LOG_INFO(tag)
 		<< "    finger deg p50/p90 " << side.fingerDeg.p50() << "/" << side.fingerDeg.p90()
-		<< " (" << side.fingerDeg.count() << " samples)";
+		<< " (" << side.fingerDeg.count() << " samples)"
+		<< ", palm step mm p50/p90 truth " << side.truthStepMm.p50() << "/" << side.truthStepMm.p90()
+		<< " mono " << side.monoStepMm.p50() << "/" << side.monoStepMm.p90();
 	const float flipPct= side.elbowModelFrames > 0
 		? 100.f * (float)side.elbowFlips / (float)side.elbowModelFrames
 		: 0.f;
@@ -284,6 +311,130 @@ void logHead(const char* tag, const HeadStats& head)
 		<< " (" << head.headErrCm.count() << " samples)";
 }
 
+struct CameraGeometry
+{
+	glm::dmat4 cameraFromWorld{1.0};
+	glm::vec3 positionWorld{0.f};
+	float fx= 0.f, fy= 0.f, cx= 0.f, cy= 0.f;
+
+	bool project(const glm::vec3& world, glm::vec2& outPx) const
+	{
+		const glm::dvec4 camPoint= cameraFromWorld * glm::dvec4(glm::dvec3(world), 1.0);
+		if (camPoint.z < 1e-3)
+			return false;
+		outPx= glm::vec2((float)(fx * camPoint.x / camPoint.z + cx), (float)(fy * camPoint.y / camPoint.z + cy));
+		return true;
+	}
+};
+
+// The camera's tracked hand nearest the truth wrist in the image, or -1.
+// Labels are bookkeeping, so the physical hand is found by projection.
+int matchCameraHand(const HandPose& truthPose, const CameraGeometry& geometry,
+					const TrackingFrameResult& cameraResult)
+{
+	glm::vec2 wristPx;
+	if (!truthPose.tracked || !geometry.project(truthPose.getWristPositionWorld(), wristPx))
+		return -1;
+	int matched= -1;
+	float bestDistPx= 150.f; // beyond this the camera saw a different hand
+	for (int handIndex= 0; handIndex < 2; ++handIndex)
+	{
+		const TrackedHand& hand= cameraResult.hands[handIndex];
+		if (!hand.tracked)
+			continue;
+		const float dist= glm::length(glm::vec2(hand.imagePoints[(int)eHandLandmark::WRIST]) - wristPx);
+		if (dist < bestDistPx)
+		{
+			bestDistPx= dist;
+			matched= handIndex;
+		}
+	}
+	return matched;
+}
+
+// Mean pixel distance between a fused pose's FK hand projected into the
+// camera and the camera's recorded landmarks. The streamed angles carry the
+// rest offset, so it is added back before FK.
+bool fkResidualPx(const HandPose& pose, const AppConfig& config, const CameraGeometry& geometry,
+				  const TrackedHand& hand, float& outMeanPx)
+{
+	const int sideIndex= (int)pose.side;
+	HandStateEstimator::Pose fkPose;
+	fkPose.palmPositionWorld= pose.palmPositionWorld;
+	fkPose.palmOrientationWorld= pose.palmOrientationWorld;
+	fkPose.rawAngles= pose.fingers;
+	if (config.fusedRestAngles.present[sideIndex])
+	{
+		const std::array<FingerAngles, FINGER_COUNT>& rest= config.fusedRestAngles.angles[sideIndex];
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		{
+			fkPose.rawAngles[finger].lateral+= rest[finger].lateral;
+			fkPose.rawAngles[finger].proximal+= rest[finger].proximal;
+			fkPose.rawAngles[finger].intermediate+= rest[finger].intermediate;
+			fkPose.rawAngles[finger].distal+= rest[finger].distal;
+		}
+	}
+	std::array<glm::vec3, HAND_LANDMARK_COUNT> worldPoints;
+	HandStateEstimator::predictWorldLandmarks(fkPose, pose.skeleton, worldPoints);
+
+	float sum= 0.f;
+	for (int i= 0; i < HAND_LANDMARK_COUNT; ++i)
+	{
+		glm::vec2 projected;
+		if (!geometry.project(worldPoints[i], projected))
+			return false;
+		sum+= glm::length(projected - glm::vec2(hand.imagePoints[i]));
+	}
+	outMeanPx= sum / (float)HAND_LANDMARK_COUNT;
+	return true;
+}
+
+void writeCsvHeader(std::ofstream& csv)
+{
+	csv << "recording,frame,side,truthX,truthY,truthZ,monoX,monoY,monoZ,truthDistM,alongCm,lateralCm,rotDeg,"
+		   "camHand,camLabel,camRightProb,camPresence,camFkPx,liftAlongCm,liftLateralCm,truthFkPx,monoFkPx\n";
+}
+
+void writeCsvRow(std::ofstream& csv, const std::string& recordingName, int frameIndex, int sideIndex,
+				 const HandPose& truthPose, const HandPose& monoPose, const CameraGeometry& geometry,
+				 const TrackingFrameResult& cameraResult, const AppConfig& config)
+{
+	const glm::vec3 error= monoPose.palmPositionWorld - truthPose.palmPositionWorld;
+	const glm::vec3 toTruth= truthPose.palmPositionWorld - geometry.positionWorld;
+	const glm::vec3 ray= glm::normalize(toTruth);
+	const float along= glm::dot(error, ray);
+	csv << recordingName << ',' << frameIndex << ',' << (sideIndex == 0 ? 'L' : 'R') << ','
+		<< truthPose.palmPositionWorld.x << ',' << truthPose.palmPositionWorld.y << ','
+		<< truthPose.palmPositionWorld.z << ',' << monoPose.palmPositionWorld.x << ','
+		<< monoPose.palmPositionWorld.y << ',' << monoPose.palmPositionWorld.z << ','
+		<< glm::length(toTruth) << ',' << along * 100.f << ',' << glm::length(error - along * ray) * 100.f
+		<< ',' << angleBetweenDeg(truthPose.palmOrientationWorld, monoPose.palmOrientationWorld);
+
+	const int handIndex= matchCameraHand(truthPose, geometry, cameraResult);
+	if (handIndex < 0)
+	{
+		csv << ",-1,,,,,,,,\n";
+		return;
+	}
+	const TrackedHand& hand= cameraResult.hands[handIndex];
+	const HandPose& lifted= cameraResult.poses[handIndex];
+	float liftAlong= 0.f;
+	float liftLateral= 0.f;
+	if (lifted.tracked && lifted.hasWorldPose)
+	{
+		const glm::vec3 liftError= lifted.palmPositionWorld - truthPose.palmPositionWorld;
+		liftAlong= glm::dot(liftError, ray);
+		liftLateral= glm::length(liftError - liftAlong * ray);
+	}
+	float truthFk= -1.f;
+	float monoFk= -1.f;
+	fkResidualPx(truthPose, config, geometry, hand, truthFk);
+	fkResidualPx(monoPose, config, geometry, hand, monoFk);
+	csv << ',' << handIndex << ',' << (hand.side == eHandSide::Left ? 'L' : 'R') << ',' << hand.rightProb
+		<< ',' << hand.presence << ',' << lifted.fkReprojectionPx << ',' << liftAlong * 100.f << ','
+		<< liftLateral * 100.f << ',' << truthFk << ',' << monoFk << '\n';
+}
+
 int defaultCameraIndex(const AppConfig& config)
 {
 	for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
@@ -300,18 +451,32 @@ static int runReplayMonoBaselineTool(const TestArgs& args)
 	const char* tag= "replay-mono-baseline";
 
 	std::vector<std::string> recordings;
+	std::string csvPath;
 	int requestedCamera= -1;
 	for (const std::string& arg : args)
 	{
 		if (arg.size() > 6 && arg.substr(arg.size() - 6) == ".jsonl")
 			recordings.push_back(arg);
+		else if (arg.size() > 4 && arg.substr(arg.size() - 4) == ".csv")
+			csvPath= arg;
 		else
 			requestedCamera= atoi(arg.c_str());
 	}
 	if (recordings.empty())
 	{
-		MIKAN_LOG_ERROR(tag) << "Usage: --replay-mono-baseline <recording.jsonl>... [cameraIndex]";
+		MIKAN_LOG_ERROR(tag) << "Usage: --replay-mono-baseline <recording.jsonl>... [cameraIndex] [frames.csv]";
 		return 1;
+	}
+	std::ofstream csv;
+	if (!csvPath.empty())
+	{
+		csv.open(csvPath, std::ios::trunc);
+		if (!csv.is_open())
+		{
+			MIKAN_LOG_ERROR(tag) << "Cannot write " << csvPath;
+			return 1;
+		}
+		writeCsvHeader(csv);
 	}
 
 	int result= 0;
@@ -347,6 +512,17 @@ static int runReplayMonoBaselineTool(const TestArgs& args)
 		const glm::dmat4 markerFromCamera= profile.extrinsics.markerFromCamera;
 		const glm::vec3 cameraPositionWorld= glm::vec3(markerFromCamera * glm::dvec4(0.0, 0.0, 0.0, 1.0));
 		const float forearmLengthMeters= makeBodyDimensions(config).forearmLengthMeters;
+		CameraGeometry geometry;
+		geometry.cameraFromWorld= glm::inverse(markerFromCamera);
+		geometry.positionWorld= cameraPositionWorld;
+		{
+			const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
+			geometry.fx= (float)cameraMatrix.x0;
+			geometry.fy= (float)cameraMatrix.y1;
+			geometry.cx= (float)cameraMatrix.z0;
+			geometry.cy= (float)cameraMatrix.z1;
+		}
+		const std::string recordingName= std::filesystem::path(path).stem().string();
 
 		replay.setCaptureDiagnostics(true);
 		replay.runAll();
@@ -368,6 +544,20 @@ static int runReplayMonoBaselineTool(const TestArgs& args)
 			accumulateFrame(frame.replayedFused, frame.whatIfFused, *frame.recorded, frameIndex,
 							cameraIndex, cameraPositionWorld, forearmLengthMeters, lastModelFrameIndex,
 							sides, head);
+			if (csv.is_open() && cameraIndex < (int)frame.whatIfPerCamera.size())
+			{
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					const HandPose& truthPose= frame.replayedFused.poses[sideIndex];
+					const HandPose& monoPose= frame.whatIfFused.poses[sideIndex];
+					if (truthPose.tracked && truthPose.hasWorldPose && truthPose.stereoTriangulated &&
+						monoPose.tracked && monoPose.hasWorldPose)
+					{
+						writeCsvRow(csv, recordingName, frameIndex, sideIndex, truthPose, monoPose, geometry,
+									frame.whatIfPerCamera[cameraIndex], config);
+					}
+				}
+			}
 			if (frame.bHasWhatIfDiagnostics)
 			{
 				for (const FusionDiagnostics::Cluster& cluster : frame.whatIfDiagnostics.clusters)

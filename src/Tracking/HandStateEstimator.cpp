@@ -259,7 +259,7 @@ float HandStateEstimator::meanResidualPx(const std::vector<glm::vec2>& residuals
 
 int HandStateEstimator::solve(const Pose& start, const Pose& anchor,
 							  const std::array<float, kStateDim>& priorSigma,
-							  const glm::vec3* monoRayDir,
+							  const glm::vec3* monoRayDir, const MonoDepthAnchor* depthAnchor,
 							  const HandStateEstimatorConfig::AnglePrior& anglePrior,
 							  const HandSkeleton& skeleton, const std::vector<FitView>& views,
 							  Pose& outPose) const
@@ -397,6 +397,23 @@ int HandStateEstimator::solve(const Pose& start, const Pose& anchor,
 				const double w= invSigma * invSigma;
 				normal[i * kStateDim + i]+= w;
 				rhs[i]-= w * (double)priorResidual[i];
+			}
+
+			// Single-view depth anchor: one scalar residual on the palm's
+			// along-ray coordinate, r = dot(palm, ray) - targetAlong, linear
+			// in the position block (accumulated on the lower triangle)
+			if (depthAnchor != nullptr && depthAnchor->sigma > 0.f)
+			{
+				const double invSigma= 1.0 / (double)depthAnchor->sigma;
+				const double w= invSigma * invSigma;
+				const double residual=
+					(double)glm::dot(pose.palmPositionWorld, depthAnchor->ray) - (double)depthAnchor->targetAlong;
+				for (int i= 0; i < 3; ++i)
+				{
+					for (int j= 0; j <= i; ++j)
+						normal[i * kStateDim + j]+= w * (double)depthAnchor->ray[i] * (double)depthAnchor->ray[j];
+					rhs[i]-= w * (double)depthAnchor->ray[i] * residual;
+				}
 			}
 		}
 
@@ -637,6 +654,21 @@ HandStateEstimator::UpdateResult HandStateEstimator::update(eHandSide side,
 		}
 	}
 
+	// A side that has not been fitted from two views has no stereo depth to
+	// hold: pull its along-ray coordinate toward the view's own lift instead
+	// (see monoDepthAnchorSigmaM)
+	MonoDepthAnchor depthAnchor;
+	bool bDepthAnchor= false;
+	if (bMonoRay && !state.bDepthObserved && m_config.monoDepthAnchorSigmaM > 0.f &&
+		views[0].observation->hasLiftPalm)
+	{
+		depthAnchor.ray= monoRay;
+		depthAnchor.targetAlong= glm::dot(views[0].observation->liftPalmWorld, monoRay);
+		depthAnchor.sigma= m_config.monoDepthAnchorSigmaM;
+		bDepthAnchor= true;
+	}
+	result.bDepthAnchored= bDepthAnchor;
+
 	std::vector<glm::vec2> residuals;
 	if (!evalPixelResiduals(anchor, skeleton, views, residuals))
 		return holdOrDrop(); // predicted geometry behind a camera
@@ -644,7 +676,8 @@ HandStateEstimator::UpdateResult HandStateEstimator::update(eHandSide side,
 
 	Pose fitted;
 	result.iterations= solve(anchor, anchor, priorSigma, bMonoRay ? &monoRay : nullptr,
-							 m_config.anglePrior[(int)side], skeleton, views, fitted);
+							 bDepthAnchor ? &depthAnchor : nullptr, m_config.anglePrior[(int)side],
+							 skeleton, views, fitted);
 
 	if (!evalPixelResiduals(fitted, skeleton, views, residuals))
 		return holdOrDrop();
@@ -664,6 +697,8 @@ HandStateEstimator::UpdateResult HandStateEstimator::update(eHandSide side,
 	state.pose= fitted;
 	state.bValid= true;
 	state.lastUpdateTimestampMs= nowTimestampMs;
+	if (views.size() >= 2)
+		state.bDepthObserved= true;
 
 	outPose= state.pose;
 	result.bUpdated= true;

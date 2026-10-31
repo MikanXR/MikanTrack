@@ -597,6 +597,11 @@ static int runHandEstimatorTest(const TestArgs& args)
 				const auto points1= projectTruth(truth, skeleton, cam1, 0.f, 0);
 				std::vector<HandStateEstimator::Observation> observations;
 				observations.push_back(makeObservation(0, cam0, timestampMs, points0));
+				// The camera's lift carries the same drift; a side that has
+				// seen stereo must ignore it (the anchor is for sides that
+				// never did, case (n))
+				observations.back().hasLiftPalm= true;
+				observations.back().liftPalmWorld= observed.palmPositionWorld;
 				if (!bMono)
 					observations.push_back(makeObservation(1, cam1, timestampMs, points1));
 
@@ -627,6 +632,70 @@ static int runHandEstimatorTest(const TestArgs& args)
 			MIKAN_LOG_ERROR("test-handestimator")
 				<< "FAILED: (h) negative control - the isotropic prior was expected to drift, so "
 				   "this scenario no longer exercises the anisotropic hold";
+			result= 1;
+		}
+	}
+
+	// -- (n) Mono from the start: the view's lift anchors the depth -----
+	// A side never fitted from two views has no stereo depth to hold, so the
+	// scale one camera's landmarks suggest would become the depth. The
+	// camera's own lift anchors the along-ray coordinate instead: here the
+	// landmarks describe a hand 40 mm farther along the ray than the lift
+	// reports, the state is seeded at the landmarks' depth, and the anchor
+	// must pull it toward the lift. The anchor-off run is the negative
+	// control, and the sigma is deliberately tight so the mechanism shows
+	// against pixel-consistent landmarks (the shipped sigma is tuned on
+	// recordings, where the landmarks are not consistent with any depth).
+	{
+		auto runMonoSequence= [&](float anchorSigmaM) {
+			HandStateEstimatorConfig monoConfig= config;
+			monoConfig.monoDepthAnchorSigmaM= anchorSigmaM;
+			HandStateEstimator estimator;
+			estimator.configure(monoConfig);
+
+			const HandStateEstimator::Pose lift= truthPose(30);
+			const glm::vec3 cam0Pos= glm::vec3(glm::dvec3(cam0.markerFromCamera[3]));
+			const glm::vec3 viewRay= glm::normalize(lift.palmPositionWorld - cam0Pos);
+			HandStateEstimator::Pose observed= lift;
+			observed.palmPositionWorld+= viewRay * 0.04f;
+			const auto points0= projectTruth(observed, skeleton, cam0, 0.f, 0);
+
+			HandStateEstimator::Pose output;
+			glm::vec3 lateralErrorM(0.f);
+			for (int frame= 0; frame < 30; ++frame)
+			{
+				const double timestampMs= 1000.0 + kFrameMs * frame;
+				std::vector<HandStateEstimator::Observation> observations;
+				observations.push_back(makeObservation(0, cam0, timestampMs, points0));
+				observations.back().hasLiftPalm= true;
+				observations.back().liftPalmWorld= lift.palmPositionWorld;
+				estimator.update(eHandSide::Right, observations, timestampMs,
+								 frame == 0 ? &observed : nullptr, skeleton, output);
+			}
+			const glm::vec3 error= output.palmPositionWorld - lift.palmPositionWorld;
+			const float along= glm::dot(error, viewRay);
+			lateralErrorM= error - along * viewRay;
+			return std::make_pair(fabsf(along) * 1000.f, glm::length(lateralErrorM) * 1000.f);
+		};
+
+		const auto anchored= runMonoSequence(0.005f);
+		const auto control= runMonoSequence(0.f);
+		MIKAN_LOG_INFO("test-handestimator")
+			<< "(n) 40 mm mono scale bias from a cold seed: depth error " << anchored.first
+			<< " mm anchored (lateral " << anchored.second << " mm) vs " << control.first
+			<< " mm without the anchor";
+		if (anchored.first > 0.6f * control.first || anchored.second > 5.f)
+		{
+			MIKAN_LOG_ERROR("test-handestimator")
+				<< "FAILED: (n) the lift anchor must pull a never-stereo side's depth toward the lift "
+				   "along the ray without moving it laterally";
+			result= 1;
+		}
+		if (control.first < 30.f)
+		{
+			MIKAN_LOG_ERROR("test-handestimator")
+				<< "FAILED: (n) negative control - without the anchor the fit was expected to keep the "
+				   "landmarks' depth, so this scenario no longer exercises the anchor";
 			result= 1;
 		}
 	}

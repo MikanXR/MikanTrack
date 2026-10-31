@@ -222,6 +222,20 @@ Single-camera support (one front webcam at the desk, avatar output) started as a
 
 Learned: the monocular path's weak point is not resolution or coverage but two signs and a scale, each of which stereo had been quietly fixing. The gates (palm p50 3 cm, p90 8 cm, flips 2 percent, fingers 10 degrees) failed as written, and the number that matters most is the view-dependent depth bias, because it is systematic: a bias can be calibrated out where noise cannot. Coverage in this measurement is optimistic by one mechanism, the masked camera's recorded landmarks include hands it found through cross-camera search hints.
 
+The per-frame view (the tool's CSV) then placed the bias. The front camera labeled the left hand correctly (right-hand probability 0.04), its own PnP lift of the same pixels sat only 4 cm deep, and the estimator's fit reached a 2.6 px residual against those pixels where the stereo truth itself only reached 10.6 px: the camera's landmarks are inconsistent with the true hand, and a fit with 20 free angles can satisfy them over a range of depths, so it settles wherever the valley bottoms out. With no stereo depth to hold, the along-ray prior was leashing the state to its own drift. The fix is a depth anchor: a side that has never been fitted from two views pulls its along-ray coordinate toward the view's own lift, the landmark model's self-consistent depth. Sigma was chosen by header-patching the three recordings:
+
+| Anchor sigma | Palm p50 / p90 cm | Elbow root flips | Left palm along-ray p50 | Right palm rot p90 |
+|---|---|---|---|---|
+| off | 8.0 / 20.7 | 8.2 % | +15.7 cm | 110 deg |
+| 5 mm | 4.0 / 9.8 | 1.1 % | +4.6 cm | 44 deg |
+| 10 mm | 3.8 / 8.2 | 1.5 % | +6.7 cm | 21 deg |
+| 20 mm | 4.5 / 11.4 | 2.3 % | +10.5 cm | 21 deg |
+| 40 mm | 7.6 / 16.2 | 4.4 % | +13.6 cm | 21 deg |
+
+10 mm shipped: the flips clear their gate, the mono palm steps match the truth's, and the palmar flip disappears with the depth freedom that fed it. Tighter follows the lift's frame-to-frame noise (6 cm spread on a still hand), looser lets the pixels drift the palm deep again. What remains is the lift's own bias in that view, about 4 to 7 cm on the left hand, which keeps palm p50 and p90 just over their gates.
+
+Learned: a prior that leashes a state to its own prediction holds nothing when the state was never right, and in a single view the pixels are indifferent to the depth-versus-articulation trade. The absolute reference has to come from somewhere, and the model's self-consistent 2.5D is a better one than the free fit, even though it is a view-dependent opinion.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

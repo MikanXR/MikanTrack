@@ -323,6 +323,9 @@ struct FusionConfig
 	// Scale on the fitted angle prior's precision (see AnglePriorConfig);
 	// 1 = trust the fitted distribution as-is, smaller = softer
 	float estimatorAnglePriorWeight= 0.3f;
+	// Sigma (m) of the single-view depth anchor on a side that has not yet
+	// been fitted from two views (see HandStateEstimatorConfig); 0 disables
+	float estimatorMonoDepthAnchorSigmaM= 0.01f;
 };
 
 // Declared here (rather than each caller assembling its own) so the live

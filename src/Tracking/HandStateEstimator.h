@@ -60,6 +60,18 @@ struct HandStateEstimatorConfig
 	// returns was a measured 106 mm pop (recording 2026-08-15_22-38-17 frame
 	// 581). The continuous form of the classic tri position hold.
 	float monoDepthPriorFactor= 0.2f;
+	// A side that has never been fitted from two views has no stereo depth
+	// for the along-ray hold to protect, and the free-angle fit then settles
+	// wherever one camera's landmarks and articulation agree, which is a
+	// scale, not a depth (measured 16 cm deep of stereo truth from a front
+	// camera, with the same camera's PnP lift 4 cm deep). Until a second
+	// view arrives, the palm's along-ray coordinate is pulled toward that
+	// lift, the landmark model's own self-consistent depth, with this sigma
+	// (meters). 0 disables. Silent once a side has seen stereo, so a mono
+	// stretch in a multi-camera rig still holds the stereo depth. 10 mm is
+	// the replay A/B's choice: tighter follows the lift's frame noise, looser
+	// lets the pixels drift the palm deep again.
+	float monoDepthAnchorSigmaM= 0.01f;
 	// Per-landmark Huber threshold: residuals beyond this get down-weighted
 	// linearly, so a single slipped landmark cannot drag the whole hand
 	float huberDeltaPx= 10.f;
@@ -159,6 +171,11 @@ public:
 		float cx= 0.f;
 		float cy= 0.f;
 		const std::array<glm::vec3, HAND_LANDMARK_COUNT>* imagePoints= nullptr;
+		// This camera's own single-view lift of the palm (world space), the
+		// depth anchor of a side that has not seen stereo (see
+		// monoDepthAnchorSigmaM)
+		bool hasLiftPalm= false;
+		glm::vec3 liftPalmWorld{0.f};
 	};
 
 	// Palm transform + RAW angles (pre rest-offset: FK-consistent, the space
@@ -188,6 +205,9 @@ public:
 		// The fit exceeded the residual guard and the PREVIOUS state was
 		// streamed instead (bad-fit hold; a streak of these drops the state)
 		bool bHeldBadFit= false;
+		// The fit pulled the palm depth toward the single view's lift (a side
+		// that has not yet been fitted from two views)
+		bool bDepthAnchored= false;
 	};
 
 	void configure(const HandStateEstimatorConfig& config);
@@ -238,6 +258,18 @@ private:
 		Pose pose;
 		// Consecutive fits over the residual guard (see maxBadFitStreak)
 		int badFitStreak= 0;
+		// A fit with two or more views has established this state's depth;
+		// until then a single view's lift anchors it (see monoDepthAnchorSigmaM)
+		bool bDepthObserved= false;
+	};
+
+	// Single-view depth anchor for solve(): the palm's coordinate along the
+	// view ray is pulled toward targetAlong with this sigma
+	struct MonoDepthAnchor
+	{
+		glm::vec3 ray{0.f};
+		float targetAlong= 0.f;
+		float sigma= 0.f;
 	};
 
 	// A view whose rows enter the fit, with the world->camera transform and
@@ -274,7 +306,8 @@ private:
 	// that (world) direction, priorSigma laterally (single-camera fits).
 	// anglePrior is the side's fitted prior (ignored when not present).
 	int solve(const Pose& start, const Pose& anchor, const std::array<float, kStateDim>& priorSigma,
-			  const glm::vec3* monoRayDir, const HandStateEstimatorConfig::AnglePrior& anglePrior,
+			  const glm::vec3* monoRayDir, const MonoDepthAnchor* depthAnchor,
+			  const HandStateEstimatorConfig::AnglePrior& anglePrior,
 			  const HandSkeleton& skeleton, const std::vector<FitView>& views, Pose& outPose) const;
 
 	HandStateEstimatorConfig m_config;

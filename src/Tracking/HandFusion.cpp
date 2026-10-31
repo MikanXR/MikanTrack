@@ -1236,6 +1236,10 @@ void HandFusion::applyEstimator(eHandSide side, HandCluster& cluster, TrackedHan
 		observation.cx= candidate.camera->cx;
 		observation.cy= candidate.camera->cy;
 		observation.imagePoints= &candidate.hand->imagePoints;
+		// The camera's own lift, the depth anchor of a side that has not yet
+		// been fitted from two views
+		observation.hasLiftPalm= candidate.pose->hasWorldPose;
+		observation.liftPalmWorld= candidate.pose->palmPositionWorld;
 		observations.push_back(observation);
 
 		freshestTimestampMs= std::max(freshestTimestampMs, candidate.camera->timestampMs);

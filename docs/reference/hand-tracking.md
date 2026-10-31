@@ -106,6 +106,8 @@ The priors and guards:
 
 - single-camera fits make the position prior anisotropic via `monoDepthPriorFactor` (0.2): tight along the observing camera's view ray, normal laterally. A mono fit's only depth signal is apparent scale, which carries the per-camera bias stereo exists to remove.
 
+- a side that has never been fitted from two views has no stereo depth for that hold to protect, and a free-angle fit to one camera's landmarks settles at a scale rather than a depth (measured 16 cm deep of the stereo truth from a front camera, where the same camera's PnP lift sat 4 cm deep). Until a second view arrives, the palm's along-ray coordinate is pulled toward that camera's own lift with `monoDepthAnchorSigmaM` (10 mm, `fusion.estimatorMonoDepthAnchorSigmaM` in the config, 0 disables). The anchor goes silent for good once the side has seen stereo, so a mono stretch in a multi-camera rig still holds the stereo depth. This is the single-camera rig's depth path, and `--replay-mono-baseline` is how it is measured.
+
 - one-sided quadratic joint-limit penalties (`jointLimitsEnabled`, `jointLimitSigmaRad`, limits from `angleLimits`) cost nothing inside the anatomical range and absorb single-finger landmark snaps.
 
 - a weak DIP-PIP coupling residual (`couplingSigmaRad`) pulls distal toward 0.67 times intermediate, superseded automatically by a fitted angle prior.
