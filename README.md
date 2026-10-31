@@ -192,8 +192,9 @@ holding `project.json` plus that project's `recordings/` and `dumps/`. The app
 starts at a menu (Resume / New Project / Load Project), so several setups (say
 a dual-camera and a triple-camera rig) can coexist and be switched or shared
 without disturbing each other. **New Project** runs a guided setup: pick the
-tracking variant (two overhead cameras, with or without wrist Joy-Cons, or
-overhead pair + front camera), assign camera devices, print and measure the
+tracking variant (two overhead cameras, with or without wrist Joy-Cons,
+overhead pair + front camera, or a single front camera, which needs a VRM
+avatar loaded first), assign camera devices, print and measure the
 calibration patterns, and the calibration wizards below run in the right order.
 Cancelling the guided setup (after a confirmation) deletes the new project again, and Resume returns to whatever
 project came before it.

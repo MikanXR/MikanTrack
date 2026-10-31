@@ -316,6 +316,7 @@ bool App::loadAvatar(const std::filesystem::path& path)
 	identity.sha256= m_avatarModel->sha256Hex;
 	identity.faceMap= AvatarFaceMap::build(*m_avatarModel);
 	m_visionThread->setAvatarIdentity(identity);
+	applyAvatarElbowSeed();
 	return true;
 }
 
@@ -330,6 +331,31 @@ void App::rebuildAvatarSkeleton()
 		MIKAN_LOG_WARNING("App::rebuildAvatarSkeleton") << warning;
 }
 
+void App::applyAvatarElbowSeed()
+{
+	// The solver reads the seed from the config rather than the avatar, so a
+	// recording carries it and replays with it. Written only on change, so
+	// reloading the same avatar leaves the config clean.
+	bool bChanged= false;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		glm::vec3 seed(0.f);
+		if (m_avatarSkeleton != nullptr)
+		{
+			const float upperArmLength= m_avatarSkeleton->getUpperArmLength((eHandSide)sideIndex);
+			if (upperArmLength > 1e-3f)
+				seed= m_avatarRig.sides[sideIndex].elbowHintOffset / upperArmLength;
+		}
+		if (m_config->body.elbowSeedPerUpperArm[sideIndex] != seed)
+		{
+			m_config->body.elbowSeedPerUpperArm[sideIndex]= seed;
+			bChanged= true;
+		}
+	}
+	if (bChanged)
+		m_config->markDirty();
+}
+
 void App::setAvatarRig(const AvatarRigSettings& rig)
 {
 	if (m_avatarModel == nullptr)
@@ -342,6 +368,7 @@ void App::setAvatarRig(const AvatarRigSettings& rig)
 	if (bMappingChanged)
 		rebuildAvatarSkeleton();
 	m_visionThread->setAvatarSkeleton(m_avatarSkeleton, m_avatarRig);
+	applyAvatarElbowSeed();
 
 	if (!m_bAvatarRigDirty)
 		m_avatarRigSecondsSinceDirty= 0.f;
@@ -381,6 +408,9 @@ void App::clearAvatar()
 	++m_avatarGeneration;
 	m_visionThread->setAvatarSkeleton(nullptr, m_avatarRig);
 	m_visionThread->setAvatarIdentity(VisionThread::AvatarIdentity());
+	// The elbow seed outlives its avatar on purpose: closing a project clears
+	// the avatar after the save, and zeroing the seed there would dirty the
+	// saved config every time, while the seed itself is only a prior
 }
 
 void App::loadConfiguredAvatar()

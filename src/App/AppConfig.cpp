@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include "glm/geometric.hpp"
 #include "nlohmann/json.hpp"
 
 #include "AvatarRetarget.h"
@@ -341,6 +342,12 @@ BodyDimensions makeBodyDimensions(const AppConfig& config)
 	dimensions.shoulderWidthMeters= config.body.shoulderWidthMeters;
 	dimensions.headWidthMeters= config.body.headWidthMeters;
 	dimensions.noseForwardMeters= config.body.noseForwardMeters;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const glm::vec3& seed= config.body.elbowSeedPerUpperArm[sideIndex];
+		dimensions.elbowSeedOffsetMeters[sideIndex]= seed * dimensions.upperArmLengthMeters;
+		dimensions.bHasElbowSeed[sideIndex]= glm::length(seed) > 1e-4f;
+	}
 	return dimensions;
 }
 
@@ -597,6 +604,26 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.body.shoulderWidthMeters= bd.value("shoulderWidthMeters", 0.40f);
 	config.body.headWidthMeters= bd.value("headWidthMeters", 0.15f);
 	config.body.noseForwardMeters= bd.value("noseForwardMeters", 0.11f);
+	config.body.elbowSeedPerUpperArm= {glm::vec3(0.f), glm::vec3(0.f)};
+	if (bd.contains("elbowSeedPerUpperArm") && bd["elbowSeedPerUpperArm"].is_array() &&
+		bd["elbowSeedPerUpperArm"].size() == 2)
+	{
+		const json& seeds= bd["elbowSeedPerUpperArm"];
+		bool bValid= true;
+		for (const json& seed : seeds)
+		{
+			bValid&= seed.is_array() && seed.size() == 3 &&
+				seed[0].is_number() && seed[1].is_number() && seed[2].is_number();
+		}
+		if (bValid)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const json& seed= seeds[sideIndex];
+				config.body.elbowSeedPerUpperArm[sideIndex]= glm::vec3((float)seed[0], (float)seed[1], (float)seed[2]);
+			}
+		}
+	}
 
 	const json& rec= j.value("recording", json::object());
 	config.recording.recordRawFrames= rec.value("recordRawFrames", false);
@@ -725,6 +752,11 @@ std::string AppConfig::toJsonString() const
 		{"shoulderWidthMeters", body.shoulderWidthMeters},
 		{"headWidthMeters", body.headWidthMeters},
 		{"noseForwardMeters", body.noseForwardMeters},
+		{"elbowSeedPerUpperArm",
+		 json::array({
+			 json::array({body.elbowSeedPerUpperArm[0].x, body.elbowSeedPerUpperArm[0].y, body.elbowSeedPerUpperArm[0].z}),
+			 json::array({body.elbowSeedPerUpperArm[1].x, body.elbowSeedPerUpperArm[1].y, body.elbowSeedPerUpperArm[1].z}),
+		 })},
 	};
 
 	j["recording"]= {

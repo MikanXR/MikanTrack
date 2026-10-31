@@ -1003,14 +1003,22 @@ void VisionThread::runCalibrationCaptures()
 	// Rest-pose capture: the zero reference is the RAW multi-view angles of
 	// the fuse that just ran (stereo-quality only - a monocular pose carries
 	// the model's view-dependent bias, which is exactly what a zero reference
-	// must not bake in)
+	// must not bake in). A one-camera rig has no other view: its output
+	// carries that bias for good, so its zero is the fit's own angles, and
+	// the bias cancels at rest.
 	if (m_bRestPoseCaptureRequested.exchange(false))
 	{
+		const bool bSingleCamera= m_cameras.size() == 1;
 		RestPoseCapture fusedCapture;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			fusedCapture.bCaptured[sideIndex]=
 				m_fusion.getLastRawTriangulatedAngles((eHandSide)sideIndex, fusedCapture.angles[sideIndex]);
+			if (!fusedCapture.bCaptured[sideIndex] && bSingleCamera)
+			{
+				fusedCapture.bCaptured[sideIndex]=
+					m_fusion.getLastRawFittedAngles((eHandSide)sideIndex, fusedCapture.angles[sideIndex]);
+			}
 		}
 
 		std::lock_guard<std::mutex> lock(m_restPoseMutex);

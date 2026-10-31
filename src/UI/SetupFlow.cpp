@@ -4,6 +4,7 @@
 
 #include "App.h"
 #include "AppConfig.h"
+#include "AvatarTypes.h"
 #include "BodyCalibrationWizard.h"
 #include "ExtrinsicsWizard.h"
 #include "HandCalibrationWizard.h"
@@ -11,10 +12,13 @@
 #include "MainWindow.h"
 #include "MountingWizard.h"
 #include "LocText.h"
+#include "PathUtils.h"
 #include "PatternExport.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
 #include "VisionThread.h"
+
+#include "tinyfiledialogs.h"
 
 static constexpr float k_promptWrapWidth= 440.f;
 static const ImVec4 k_colorGood(0.4f, 1.f, 0.5f, 1.f);
@@ -57,6 +61,9 @@ void SetupFlow::update()
 		case eStep::TrackingSetup:
 			updateTrackingSetupPrompt();
 			break;
+		case eStep::AvatarLoad:
+			updateAvatarLoadPrompt();
+			break;
 		case eStep::CameraSelection:
 			updateCameraSelectionPrompt();
 			break;
@@ -77,7 +84,15 @@ void SetupFlow::update()
 
 int SetupFlow::getRequiredCameraCount() const
 {
-	return m_trackingSetup == eTrackingSetup::TriCameraFront ? 3 : 2;
+	switch (m_trackingSetup)
+	{
+		case eTrackingSetup::SingleFront:
+			return 1;
+		case eTrackingSetup::TriCameraFront:
+			return 3;
+		default:
+			return 2;
+	}
 }
 
 void SetupFlow::transitionTo(eStep step)
@@ -162,6 +177,9 @@ void SetupFlow::updateTrackingSetupPrompt()
 	ImGui::RadioButton(locLabel("setupFlow.triCameraFrontRadio"), &setup,
 					   (int)eTrackingSetup::TriCameraFront);
 	ImGui::TextDisabled("%s", locText("setupFlow.triCameraFrontHint"));
+	ImGui::RadioButton(locLabel("setupFlow.singleFrontRadio"), &setup,
+					   (int)eTrackingSetup::SingleFront);
+	ImGui::TextDisabled("%s", locText("setupFlow.singleFrontHint"));
 	m_trackingSetup= (eTrackingSetup)setup;
 	ImGui::PopTextWrapPos();
 
@@ -169,8 +187,82 @@ void SetupFlow::updateTrackingSetupPrompt()
 	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();
+		transitionTo(m_trackingSetup == eTrackingSetup::SingleFront ? eStep::AvatarLoad
+																	: eStep::CameraSelection);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
+void SetupFlow::updateAvatarLoadPrompt()
+{
+	if (!beginCenteredModal(locWindowTitle("windows.modalLoadAvatar")))
+		return;
+
+	AppConfig* config= m_app->getConfig();
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.avatarLoadPrompt"));
+	ImGui::PopTextWrapPos();
+	ImGui::Spacing();
+
+	if (ImGui::Button(locLabel("setupFlow.chooseAvatarButton"), ImVec2(-1, 0)))
+	{
+		// Seed the dialog at the shipped samples the first time, at the
+		// current model afterwards
+		std::string defaultPath= (PathUtils::getModulePath() / "models" / "avatars" / "").string();
+		if (!config->avatar.modelPath.empty())
+			defaultPath= m_app->resolveAvatarPath(config->avatar.modelPath).string();
+
+		const char* filterPatterns[]= {"*.vrm"};
+		const char* selectedPath= tinyfd_openFileDialog(
+			locText("avatarPanel.browseDialogTitle"), defaultPath.c_str(), 1, filterPatterns,
+			locText("avatarPanel.browseDialogFilterDescription"), 0);
+		if (selectedPath != nullptr)
+		{
+			const std::filesystem::path path= PathUtils::utf8ToPath(selectedPath);
+			if (m_app->loadAvatar(path))
+			{
+				config->avatar.modelPath= PathUtils::pathToUtf8(path);
+				config->markDirty();
+			}
+		}
+	}
+
+	const std::shared_ptr<const AvatarModel> avatarModel= m_app->getAvatarModel();
+	const std::string& loadError= m_app->getAvatarLoadError();
+	if (avatarModel != nullptr)
+	{
+		std::string shownName= avatarModel->meta.name;
+		if (shownName.empty())
+			shownName= PathUtils::pathToUtf8(
+				PathUtils::utf8ToPath(config->avatar.modelPath).filename());
+		ImGui::TextColored(k_colorGood, locText("setupFlow.avatarLoadedFmt"), shownName.c_str());
+	}
+	else if (!loadError.empty())
+	{
+		ImGui::PushTextWrapPos(k_promptWrapWidth);
+		ImGui::TextColored(k_colorWait, locText("setupFlow.avatarLoadErrorFmt"), loadError.c_str());
+		ImGui::PopTextWrapPos();
+	}
+	else
+	{
+		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.noAvatarLoaded"));
+	}
+
+	ImGui::Separator();
+	ImGui::BeginDisabled(avatarModel == nullptr);
+	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
 		transitionTo(eStep::CameraSelection);
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
 	{
@@ -196,7 +288,8 @@ void SetupFlow::updateCameraSelectionPrompt()
 	for (int slotIndex= 0; slotIndex < requiredCameras; ++slotIndex)
 	{
 		const bool bFrontCamera=
-			m_trackingSetup == eTrackingSetup::TriCameraFront && slotIndex == 2;
+			(m_trackingSetup == eTrackingSetup::TriCameraFront && slotIndex == 2) ||
+			(m_trackingSetup == eTrackingSetup::SingleFront && slotIndex == 0);
 		const std::string label= bFrontCamera
 			? locFormat("setupFlow.frontCameraLabel")
 			: locFormat("setupFlow.overheadCameraLabelFmt", slotIndex + 1);
@@ -342,6 +435,8 @@ void SetupFlow::applyCameraSelection()
 	// runs the body-pose stage; dual variants leave body pose off everywhere
 	if (m_trackingSetup == eTrackingSetup::TriCameraFront)
 		config->camera(2).bodyPose.enabled= true;
+	else if (m_trackingSetup == eTrackingSetup::SingleFront)
+		config->camera(0).bodyPose.enabled= true;
 	config->imu.enabled= m_trackingSetup == eTrackingSetup::DualOverheadJoyCons;
 
 	config->markDirty();
@@ -544,11 +639,13 @@ void SetupFlow::updateRunningWizardStep()
 			break;
 		case eStep::HandCalibRunning:
 			// The JoyCon variant calibrates the IMU mounting next; the
-			// tri-camera variant measures the body on its front camera; the
-			// plain dual variant has neither (body pose stays off by design)
+			// tri-camera and single-front variants measure the body on their
+			// front camera; the plain dual variant has neither (body pose
+			// stays off by design)
 			if (m_trackingSetup == eTrackingSetup::DualOverheadJoyCons)
 				transitionTo(eStep::MountingRunning);
-			else if (m_trackingSetup == eTrackingSetup::TriCameraFront)
+			else if (m_trackingSetup == eTrackingSetup::TriCameraFront ||
+					 m_trackingSetup == eTrackingSetup::SingleFront)
 				transitionTo(eStep::BodyCalibRunning);
 			else
 				finish();

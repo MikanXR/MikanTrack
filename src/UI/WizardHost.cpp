@@ -117,7 +117,7 @@ void WizardHost::update(float deltaSeconds, const std::vector<VisionPreviewFrame
 			break;
 		case eWizardKind::Hand:
 			// Also leaves tracking running: both stages measure the tracked hands
-			if (!m_handCalibrationWizard->update(deltaSeconds, fused))
+			if (!m_handCalibrationWizard->update(deltaSeconds, previews, fused))
 				m_handCalibrationWizard->exit();
 			break;
 		default:

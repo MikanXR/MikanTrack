@@ -16,7 +16,10 @@ class VideoPreviewPanel;
 
 // Guided new-project setup: a chain of modal prompts and the existing
 // calibration wizards in dependency order (cameras, intrinsics per camera,
-// extrinsics, hands, then IMU mounting or body measurement by variant).
+// extrinsics, hands, then IMU mounting or body measurement by variant). The
+// single-front variant loads its VRM avatar first, then runs one camera that
+// does body pose, measures the hands against the desk plane, and ends with
+// the body wizard.
 // Runs inside the normal tracking UI so the wizards keep
 // their preview-panel plumbing; the prompts are modals drawn on top, and
 // manual wizard launches are suppressed while the flow is active.
@@ -33,12 +36,14 @@ public:
 		DualOverhead,
 		DualOverheadJoyCons,
 		TriCameraFront,
+		SingleFront,
 	};
 
 	enum class eStep
 	{
 		Inactive,
 		TrackingSetup,
+		AvatarLoad, // single-front variant only
 		CameraSelection,
 		CharucoPrint,
 		IntrinsicsRunning, // loops over every camera
@@ -46,7 +51,7 @@ public:
 		ExtrinsicsRunning,
 		HandCalibRunning,
 		MountingRunning,  // JoyCon variant only
-		BodyCalibRunning, // tri-camera variant only
+		BodyCalibRunning, // tri-camera and single-front variants
 		ConfirmCancel,
 	};
 
@@ -80,6 +85,7 @@ private:
 	void requestDiscardProject();
 
 	void updateTrackingSetupPrompt();
+	void updateAvatarLoadPrompt();
 	void updateCameraSelectionPrompt();
 	void updateCharucoPrintPrompt();
 	void updateArucoPrintPrompt();

@@ -134,6 +134,10 @@ private:
 	void loadConfiguredAvatar();
 	// Applies m_avatarRig's mapping to the model and rebuilds the skeleton
 	void rebuildAvatarSkeleton();
+	// Writes the loaded avatar's elbow hint, over its upper-arm length, into
+	// the body config's elbow seed. Only on load and rig edits: the seed
+	// stays in the config when the avatar is cleared.
+	void applyAvatarElbowSeed();
 	void updateAvatarRigAutoSave(float deltaSeconds);
 	void saveAvatarRigIfDirty();
 	// Mutable here only so the rig's mapping can be reapplied on the main

@@ -585,8 +585,11 @@ void BodyPoseSolver::solveFromObservation(
 		}
 
 		// Both candidates are anatomically valid now, so this only decides
-		// WHICH valid arm: continuity when there is any, else the desk prior -
-		// hands reach toward the camera, so the elbow trails behind the wrist.
+		// WHICH valid arm. Continuity first, when there is any. Without it, the
+		// avatar's elbow hint when one is configured: the rig author states
+		// where that arm rests, so the candidate nearest the shoulder plus the
+		// seed wins. The desk prior is the last resort: hands reach toward the
+		// camera, so the elbow trails behind the wrist.
 		// Continuity predicts from the RAW held direction, never the smoothed
 		// one: a lagging predictor keeps endorsing the pose the arm has already
 		// left, which is how a fast movement seeds the wrong root.
@@ -607,6 +610,12 @@ void BodyPoseSolver::solveFromObservation(
 			{
 				const glm::vec3 predicted= wristWorld + arm.forearmDirRawWorld * forearmLength;
 				chosen= glm::length(candidates[0] - predicted) <= glm::length(candidates[1] - predicted)
+					? 0 : 1;
+			}
+			else if (arm.bHasShoulder && dimensions.bHasElbowSeed[sideIndex])
+			{
+				const glm::vec3 seed= arm.shoulderPositionWorld + dimensions.elbowSeedOffsetMeters[sideIndex];
+				chosen= glm::length(candidates[0] - seed) <= glm::length(candidates[1] - seed)
 					? 0 : 1;
 			}
 			else

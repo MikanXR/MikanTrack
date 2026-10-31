@@ -28,6 +28,11 @@ struct BodyDimensions
 	// collapses the forward direction (its whole signal is that it sits
 	// closer to the camera than the ears do).
 	float noseForwardMeters= 0.11f;
+	// Per side (left, right): where the elbow sits when the arm has no
+	// history, relative to the shoulder, in the world frame. Breaks the tie
+	// between two valid elbow candidates before the camera-distance prior.
+	bool bHasElbowSeed[2]= {false, false};
+	glm::vec3 elbowSeedOffsetMeters[2]{};
 };
 
 // Post-fusion world-space solve for the vision body pose: takes the fused

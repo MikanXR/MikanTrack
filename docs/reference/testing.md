@@ -58,6 +58,8 @@ Side effects of a batch run: each test overwrites its own `.log` next to the exe
 
 - `--test-bonecalib`: `HandBoneCalibrator`. Noise-free recovery of known phalanx and base lengths from triangulated landmark samples, recovery under 4 mm landmark noise with the length bias and spread reported, the object model PnP builds from a calibrated skeleton, and the minimum-sample gate.
 
+- `--test-deskhand`: `DeskHandCalibrator`, the one-camera bone path. A flat synthetic hand on the raised desk plane seen by a calibrated camera recovers its skeleton to within a hundredth of a millimetre and a lift depth scale of 1, a hand tilted 40 degrees off the desk is refused by the flatness gate, and a landmark model whose articulation disagrees with the pixels (curled model points under a flat hand) measures a lift depth scale away from 1 with a small spread, which is the bias the scale exists to calibrate out.
+
 - `--test-angleprior`: `AnglePriorCalibrator`. Samples a known generative model with two latent synergy factors and checks the calibrator recovers the mean and the correlation structure, since the structure is what makes a coordinated pose change cheap and an uncorrelated single-DoF snap expensive under the Mahalanobis metric. Also covers the minimum-sample gate and the variance floor that keeps an unexercised DoF soft.
 
 - `--test-roiquality`: `HandRoiQuality` and the per-camera `LumaFlickerTracker`. Uniform and clipped ROIs, noise separated from sharpness, resolution independence across a scaled frame, a degenerate ROI rejected, and flicker instability measured on a rippling frame against a steady one.

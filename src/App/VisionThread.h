@@ -141,7 +141,7 @@ public:
 
 	// The captured rest angles for both sides (RAW multi-view angles from the
 	// fuse that serviced the capture; a side is only captured when it was
-	// stereo-quality at that moment)
+	// stereo-quality at that moment, or fitted at all on a one-camera rig)
 	struct RestPoseCapture
 	{
 		std::array<std::array<FingerAngles, FINGER_COUNT>, 2> angles{};

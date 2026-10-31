@@ -53,6 +53,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-bodypose`: body-pose solver: rays + known lengths, root choice, hold, gates
 - `--test-bonecalib`: hand bone calibration from triangulated landmarks
 - `--test-charuco`: Charuco board finder + synthetic intrinsics recovery
+- `--test-deskhand`: desk-plane hand calibration: bones from one camera, flatness gates, lift depth scale
 - `--test-dump`: diagnostic dump writer + schema
 - `--test-extrinsics`: Aruco marker pose + table-plane raycast
 - `--test-framerecorder`: raw frame recording: round trip, naming, overflow drops

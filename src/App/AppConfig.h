@@ -256,6 +256,14 @@ struct BodyConfig
 	float headWidthMeters= 0.15f;
 	// Ear-axis midpoint to nose tip, which fixes head yaw and pitch
 	float noseForwardMeters= 0.11f;
+	// Per side (left, right): where the elbow sits when the solver has no
+	// history, relative to the shoulder, as a multiple of the upper-arm
+	// length, in the torso frame (+X facing, +Y the user's left, +Z up). That
+	// coincides with the world frame for a user facing the marker's FORWARD
+	// label. Written from the loaded avatar's rig (its elbowHintOffset over its
+	// upper-arm length), so every project that loads that avatar seeds the
+	// same way and a recording replays with it. Zero = no seed.
+	std::array<glm::vec3, 2> elbowSeedPerUpperArm{};
 };
 
 // Tracking recordings store landmarks, which are abstract enough to share.
