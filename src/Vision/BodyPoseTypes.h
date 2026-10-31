@@ -74,9 +74,13 @@ struct BodyPoseObservation
 	// estimates derive their confidence from measured stability instead.
 	float confidence= 0.f;
 
-	// Undistorted full-frame px; z is model-relative depth (hip-centered,
-	// x/y-pixel scale)
+	// Undistorted full-frame px. z is the landmark's depth relative to the
+	// hip midpoint, meters, positive away from the camera, when hasDepth;
+	// zero otherwise. A relative depth: the hips' own distance is not in it.
 	std::array<glm::vec3, POSE_LANDMARK_COUNT> imagePoints{};
+	// True when the backend carries a depth axis (the whole-body 3D model),
+	// so imagePoints[].z means something
+	bool hasDepth= false;
 
 	// Bit per landmark: which slots this backend actually fills. The 33-slot
 	// BlazePose layout is the canonical index space, so a backend with a

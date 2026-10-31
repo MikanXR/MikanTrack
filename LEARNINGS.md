@@ -240,6 +240,16 @@ The lift's own bias then got its calibration: a per-camera, per-side depth scale
 
 Learned: a systematic bias calibrates out, but measure first whether it is a constant of the device or a function of the input. This one is both, a device-sized mean with a pose-sized swing around it, so the wizard's single-pose measurement buys the mean and nothing more, and the swing is the next model's problem, not another calibration's.
 
+## 20. The whole-body model's depth: a sign at best on the desk view
+
+The direct retarget plan for a monitor webcam rests on a monocular 3D body model, RTMW3D-X (133 COCO-WholeBody keypoints, each with a depth relative to the hip midpoint, the same SimCC family as the body model already in use). Before any solver was written it went in as a selectable backend with its depth carried through observations and recordings, and `--gate-direct` measured it against the stereo rig on the three raw-frame tri-camera takes, re-running the model over the front camera's frames and comparing its arm directions with the faithful replay's arms in that camera's frame. The lift from pixels plus relative depth needs a root depth, so each arm was lifted at the root depth that best fit the truth (the model's own error with the scale solved away), at the depth the pixel shoulder width implies (what the live mode would have), and with every relative depth zeroed (a planar model).
+
+- The planar side held up: shoulders within 3 to 11 px of the rig's, wrists within 13 to 15 px, the live root depth within 3 cm of the fitted one at the median, inference 12 to 14 ms per frame on DirectML.
+- The depth axis did not. On these takes the forearms point at the camera: the known forearm length over the pixel span requires about 0.22 m of depth from elbow to wrist, and the rig's replay carries 0.22 to 0.26 m. The model reported 0.05 to 0.07 m on the left arm and 0.01 to 0.02 m with the wrong sign on the right. Upper arms read 0.00 to 0.03 m against 0.07 to 0.17 m. Direction error came out at 20 degrees for the upper arm and 60 degrees for the forearm at the median, within a few degrees of the planar lift's.
+- The takes are a hard case for the model: the camera looks down steeply from above the desk, the head is cut off at the top of the frame, and the subject fills the frame at 0.8 m, far from the standing, distant, full-body views the depth head was trained on. The monitor-webcam view the mode is for keeps the head in frame and looks down less, so the number is a first measurement, not the gate.
+
+Learned: a model's depth is as out-of-distribution as its view, and on a desk view the one thing it gave reliably was the planar landmark. The webcam vtuber tools never needed the depth: a known segment length against its pixel span fixes the depth magnitude of every segment, and all that is left to decide is the sign, which is where a weak depth estimate can still earn its keep. The direct mode's solver takes that shape, and the gate waits for a take from the webcam position.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

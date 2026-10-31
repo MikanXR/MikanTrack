@@ -58,18 +58,19 @@ Three steps, in order:
 
 ## Models (`models/`)
 
-`InitialSetup_x64.bat` downloads four model files into `models/`. `hand_landmark.onnx`, `palm_detection.onnx`, and `person_detection.onnx` come from the OpenCV Zoo project's ONNX conversions of the MediaPipe models, fetched from Hugging Face. `rtmpose_body.onnx` comes from an OpenMMLab MMDeploy SDK zip; only its `end2end.onnx` is extracted and renamed. The setup script also fetches `rtm_demo.jpg` into the repo root, a reference photo the `--test-posemodel` numeric cross-check scores its RTMPose decode against; if it is missing, that check is skipped rather than failed.
+`InitialSetup_x64.bat` downloads five model files into `models/`. `hand_landmark.onnx`, `palm_detection.onnx`, and `person_detection.onnx` come from the OpenCV Zoo project's ONNX conversions of the MediaPipe models, fetched from Hugging Face. `rtmpose_body.onnx` comes from an OpenMMLab MMDeploy SDK zip; only its `end2end.onnx` is extracted and renamed. `rtmw3d_wholebody.onnx` is the RTMW3D-X torch export published on Hugging Face (369 MB; OpenMMLab ships no SDK bundle for it). The setup script also fetches `rtm_demo.jpg` into the repo root, a reference photo the `--test-posemodel` numeric cross-check scores its RTMPose decode against; if it is missing, that check is skipped rather than failed.
 
 | Model file | Consumed by |
 |---|---|
 | `palm_detection.onnx` | `src/Vision/PalmDetector.h`/`.cpp` |
 | `hand_landmark.onnx` | `src/Vision/HandLandmarkModel.h`/`.cpp` |
 | `person_detection.onnx` | `src/Vision/PoseDetector.h`/`.cpp` |
-| `rtmpose_body.onnx` | `src/Vision/RtmPoseBodyModel.h`/`.cpp` |
+| `rtmpose_body.onnx` | `src/Vision/RtmPoseModel.h`/`.cpp` |
+| `rtmw3d_wholebody.onnx` | `src/Vision/RtmPoseModel.h`/`.cpp` |
 
 `InitialSetup_x64.bat` also fetches the two CC0 VRoid Studio sample avatars into `models/avatars/` (`fem_vroid.vrm`, `masc_vroid.vrm`, about 12 MB each, skipped when already present). They ride the same post-build `models/` copy, are read by `--test-vrm-samples`, and can be loaded from the Avatar panel by their relative path.
 
-Each model's exact tensor input/output contract (shapes, layout, normalization, decode math) is documented as a comment block directly above its wrapper class in the corresponding header, not in this doc. Read `PalmDetector.h`, `PoseDetector.h`, `HandLandmarkModel.h`, or `RtmPoseBodyModel.h` before changing how a model is invoked.
+Each model's exact tensor input/output contract (shapes, layout, normalization, decode math) is documented as a comment block directly above its wrapper class in the corresponding header, not in this doc. Read `PalmDetector.h`, `PoseDetector.h`, `HandLandmarkModel.h`, or `RtmPoseModel.h` before changing how a model is invoked.
 
 ---
 

@@ -163,6 +163,10 @@ struct AnglePriorConfig
 struct BodyPoseCameraConfig
 {
 	bool enabled= false;
+	// Which landmark model runs on this camera: "rtmpose" (RTMPose-m body,
+	// 17 planar keypoints) or "rtmw3d" (RTMW3D-X whole body with a depth
+	// per keypoint). See eBodyPoseBackend.
+	std::string backend= "rtmpose";
 	// Pose models run every Nth frame on this camera
 	int poseFrameDivider= 2;
 	// Rebuild the region of interest from the image every Nth model frame,

@@ -140,7 +140,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   different pose model would have done better - that model's input is gone.
   Ticking "Also record raw camera frames" in the Timeline panel additionally
   writes the exact images the models consumed as JPEGs beside the recording,
-  which makes `MikanTrack --replay-bodypose <file> [camera]`
+  which makes `MikanTrack --replay-bodypose <file> [camera] [backend]`
   a real measurement (per-joint scores, 2D jitter, box source, inference
   cost) rather than a live impression. **This is video of your room**, which
   is why it defaults off and is a local choice; it costs roughly 3-6 MB per

@@ -615,6 +615,30 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 			const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
 			bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
 
+			if (bodyPose.enabled)
+			{
+				const bool bWholeBody= bodyPose.backend == "rtmw3d";
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
+				if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
+									  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
+														 : "trackingPanel.bodyBackendRtmPose")))
+				{
+					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
+					{
+						bodyPose.backend= "rtmpose";
+						bChanged= true;
+					}
+					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
+					{
+						bodyPose.backend= "rtmw3d";
+						bChanged= true;
+					}
+					ImGui::EndCombo();
+				}
+				ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
+			}
+
 			ImGui::PopID();
 		}
 

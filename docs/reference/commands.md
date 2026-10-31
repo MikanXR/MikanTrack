@@ -85,7 +85,8 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--export-board`: writes + opens the printable Charuco board PNG
 - `--export-marker`: writes + opens the printable origin Aruco marker PNG
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
-- `--replay-bodypose`: re-run body pose over a recording's raw frames
+- `--gate-direct`: whole-body 3D arm directions on one camera's raw frames against the stereo rig's output, the single-camera direct mode's gate
+- `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
 - `--replay-extrinsics`: A/B a candidate extrinsics config against a recording
 - `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates

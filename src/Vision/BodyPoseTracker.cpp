@@ -37,13 +37,57 @@ static constexpr int k_cocoToPoseLandmark[COCO_KEYPOINT_COUNT]= {
 	28, // right ankle
 };
 
+// The whole-body model's extra keypoints that have a BlazePose slot: the eye
+// corners and mouth corners from the face block, and per hand the pinky and
+// index knuckles and the thumb's second knuckle, which is what BlazePose
+// means by its hand slots. The remaining face and hand points have no slot
+// and stay with the model result.
+struct WholeBodySlot
+{
+	int keypoint;
+	int landmark;
+};
+static constexpr WholeBodySlot k_wholeBodyExtraSlots[]= {
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_LEFT_EYE_INNER, 1},
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_LEFT_EYE_OUTER, 3},
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_RIGHT_EYE_INNER, 4},
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_RIGHT_EYE_OUTER, 6},
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_MOUTH_LEFT, 9},
+	{WHOLEBODY_FACE_START + WHOLEBODY_FACE_MOUTH_RIGHT, 10},
+	{WHOLEBODY_LEFT_HAND_START + WHOLEBODY_HAND_PINKY_MCP, 17},
+	{WHOLEBODY_RIGHT_HAND_START + WHOLEBODY_HAND_PINKY_MCP, 18},
+	{WHOLEBODY_LEFT_HAND_START + WHOLEBODY_HAND_INDEX_MCP, 19},
+	{WHOLEBODY_RIGHT_HAND_START + WHOLEBODY_HAND_INDEX_MCP, 20},
+	{WHOLEBODY_LEFT_HAND_START + WHOLEBODY_HAND_THUMB_MCP, 21},
+	{WHOLEBODY_RIGHT_HAND_START + WHOLEBODY_HAND_THUMB_MCP, 22},
+};
+
+const char* bodyPoseBackendToString(eBodyPoseBackend backend)
+{
+	switch (backend)
+	{
+	case eBodyPoseBackend::Rtmw3dWholeBody:
+		return "rtmw3d";
+	case eBodyPoseBackend::RtmPoseBody:
+	default:
+		return "rtmpose";
+	}
+}
+
+eBodyPoseBackend bodyPoseBackendFromString(const std::string& name)
+{
+	return name == "rtmw3d" ? eBodyPoseBackend::Rtmw3dWholeBody : eBodyPoseBackend::RtmPoseBody;
+}
+
 bool BodyPoseTracker::load(const std::string& modelDir, const std::string& preferredEp,
 						   const BodyPoseTrackerConfig& config)
 {
 	setConfig(config);
 
+	const char* landmarkModelFile=
+		config.backend == eBodyPoseBackend::Rtmw3dWholeBody ? "/rtmw3d_wholebody.onnx" : "/rtmpose_body.onnx";
 	m_bLoaded= m_detector.load(modelDir + "/person_detection.onnx", preferredEp) &&
-		m_landmarkModel.load(modelDir + "/rtmpose_body.onnx", preferredEp);
+		m_landmarkModel.load(modelDir + landmarkModelFile, preferredEp);
 
 	if (!m_bLoaded)
 	{
@@ -57,7 +101,10 @@ bool BodyPoseTracker::load(const std::string& modelDir, const std::string& prefe
 
 void BodyPoseTracker::setConfig(const BodyPoseTrackerConfig& config)
 {
+	const eBodyPoseBackend loadedBackend= m_config.backend;
 	m_config= config;
+	if (m_bLoaded)
+		m_config.backend= loadedBackend;
 	m_config.frameDivider= std::max(config.frameDivider, 1);
 	m_config.detectorIntervalFrames= std::max(config.detectorIntervalFrames, 1);
 }
@@ -132,6 +179,35 @@ eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, bool bForceD
 	return eBodyBoxSource::FullFrame;
 }
 
+void BodyPoseTracker::fillObservation(BodyPoseObservation& outObservation) const
+{
+	const RtmPoseResult& result= m_landmarkResult;
+	outObservation.hasDepth= result.hasDepth;
+
+	// SimCC peaks are not probabilities; they are reported as-is and clamped
+	// so downstream visibility gates keep their [0,1] meaning
+	auto fill= [&](int keypoint, int landmark) {
+		const float score= std::clamp(result.scores[keypoint], 0.f, 1.f);
+		outObservation.imagePoints[landmark]= result.points[keypoint];
+		outObservation.visibility[landmark]= score;
+		outObservation.providedMask|= 1ull << landmark;
+		return score;
+	};
+
+	// The observation's confidence is the body's: the mean over the 17 COCO
+	// keypoints, whichever backend ran, so the two backends read alike
+	float scoreSum= 0.f;
+	for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
+		scoreSum+= fill(keypoint, k_cocoToPoseLandmark[keypoint]);
+	outObservation.confidence= scoreSum / (float)COCO_KEYPOINT_COUNT;
+
+	if (result.keypointCount >= WHOLEBODY_KEYPOINT_COUNT)
+	{
+		for (const WholeBodySlot& slot : k_wholeBodyExtraSlots)
+			fill(slot.keypoint, slot.landmark);
+	}
+}
+
 void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outObservation)
 {
 	const int64_t frameIndex= m_frameIndex++;
@@ -160,9 +236,12 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 		m_landmarkModel.estimate(bgrFrame, boxMin, boxMax, m_landmarkResult);
 		if (m_landmarkResult.valid)
 		{
-			// Next frame's box is the confident keypoints' extent. No
+			// Next frame's box is the confident BODY keypoints' extent. No
 			// full-body assumption is involved, so a truncated subject simply
-			// produces a smaller box instead of a fabricated one.
+			// produces a smaller box instead of a fabricated one. The whole
+			// body model's face and hand points stay out of it: they sit
+			// inside the body's extent when present and would only add their
+			// own misses.
 			glm::vec2 trackedMin(FLT_MAX);
 			glm::vec2 trackedMax(-FLT_MAX);
 			int confidentCount= 0;
@@ -170,8 +249,9 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 			{
 				if (m_landmarkResult.scores[keypoint] < m_config.keypointScoreThreshold)
 					continue;
-				trackedMin= glm::min(trackedMin, m_landmarkResult.points[keypoint]);
-				trackedMax= glm::max(trackedMax, m_landmarkResult.points[keypoint]);
+				const glm::vec2 point(m_landmarkResult.points[keypoint]);
+				trackedMin= glm::min(trackedMin, point);
+				trackedMax= glm::max(trackedMax, point);
 				confidentCount++;
 			}
 
@@ -192,20 +272,7 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 			outObservation.valid= true;
 			outObservation.boxSource= boxSource;
 			outObservation.modelFrameIndex= m_modelFrameIndex;
-
-			// SimCC peaks are not probabilities; they are reported as-is and
-			// clamped so downstream visibility gates keep their [0,1] meaning
-			float scoreSum= 0.f;
-			for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
-			{
-				const int landmark= k_cocoToPoseLandmark[keypoint];
-				const float score= std::clamp(m_landmarkResult.scores[keypoint], 0.f, 1.f);
-				outObservation.imagePoints[landmark]= glm::vec3(m_landmarkResult.points[keypoint], 0.f);
-				outObservation.visibility[landmark]= score;
-				outObservation.providedMask|= 1ull << landmark;
-				scoreSum+= score;
-			}
-			outObservation.confidence= scoreSum / (float)COCO_KEYPOINT_COUNT;
+			fillObservation(outObservation);
 		}
 		else
 		{

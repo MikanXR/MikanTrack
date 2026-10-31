@@ -136,6 +136,17 @@ rmdir /S /Q rtmpose_tmp
 del rtmpose_body.zip
 :skip_rtmpose
 
+:: ------------------------------------------------ RTMW3D whole-body model
+:: OpenMMLab RTMW3D-X (cocktail14, 384x288), the single-camera direct mode's
+:: backend: 133 COCO-WholeBody keypoints with a root-relative depth each
+:: (Apache-2.0). The torch ONNX export published on Hugging Face; OpenMMLab
+:: ships no SDK bundle for this one. 369 MB.
+IF EXIST models\rtmw3d_wholebody.onnx goto skip_rtmw3d
+echo "Downloading RTMW3D whole-body model..."
+curl -L "https://huggingface.co/Soykaf/RTMW3D-x/resolve/main/onnx/rtmw3d-x_8xb64_cocktail14-384x288-b0a0eab7_20240626.onnx?download=true" --output models\rtmw3d_wholebody.onnx
+IF %ERRORLEVEL% NEQ 0 goto model_failure
+:skip_rtmw3d
+
 IF EXIST rtm_demo.jpg goto skip_rtm_demo
 echo "Downloading pose reference image..."
 curl -L https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg --output rtm_demo.jpg

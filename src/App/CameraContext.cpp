@@ -120,8 +120,16 @@ void CameraContext::configure(const AppConfig& config)
 	if (profile.bodyPose.enabled)
 	{
 		BodyPoseTrackerConfig trackerConfig;
+		trackerConfig.backend= bodyPoseBackendFromString(profile.bodyPose.backend);
 		trackerConfig.frameDivider= profile.bodyPose.poseFrameDivider;
 		trackerConfig.detectorIntervalFrames= profile.bodyPose.detectorIntervalFrames;
+
+		// A backend change is a different model file: the tracker reloads
+		if (m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded() &&
+			m_bodyPoseTracker->getBackend() != trackerConfig.backend)
+		{
+			m_bodyPoseTracker= nullptr;
+		}
 
 		if (m_bodyPoseTracker == nullptr)
 		{
