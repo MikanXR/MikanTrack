@@ -77,6 +77,21 @@ public:
 		// the same recorded hands (--replay-extrinsics).
 		bool bOverrideExtrinsics= false;
 		std::vector<ExtrinsicsConfig> extrinsicsOverride;
+		// Cameras that take part in the pass, indexed by camera; empty = all.
+		// A disabled camera is as if it never popped a frame: its mirror stays
+		// invalid, so fusion, the body solver and the no-world decision see
+		// only the remaining cameras. This is how a tri-camera recording
+		// replays as its front camera alone (--replay-mono-baseline).
+		std::vector<bool> cameraEnabled;
+		// Off = the recorded IMU forearm output is not overlaid, so the body
+		// solver fills every side from the camera (a cameras-only pass)
+		bool bApplyRecordedImu= true;
+
+		bool isCameraEnabled(int cameraIndex) const
+		{
+			return cameraEnabled.empty() ||
+				(cameraIndex >= 0 && cameraIndex < (int)cameraEnabled.size() && cameraEnabled[cameraIndex]);
+		}
 	};
 
 	// Loads and parses the whole file (header + frames; a missing footer is

@@ -87,6 +87,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--replay-bodypose`: re-run body pose over a recording's raw frames
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
 - `--replay-extrinsics`: A/B a candidate extrinsics config against a recording
+- `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates
 - `--replay-popmetrics`: pop statistics of a recording: baseline vs hand estimator
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
 - `--replay-verify`: re-runs a recording and verifies every frame checksum

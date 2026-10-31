@@ -22,6 +22,7 @@ MikanTrack went from empty repo to a working multi-camera hand tracker between l
 | seed_fix | Aug 12 | Cross-camera seeding instrumentation + fixes | Kept, seeding now unconditional |
 | body_pose | Aug 12-14 | Opt-in per-camera body pose (elbows, shoulders, head) | Kept; landmark model swapped BlazePose -> RTMPose |
 | biomech | Aug 15-16 | Angle-space multi-view state estimator + biomechanical priors | Live-verified, made permanent; superseded holds/hysteresis/one-euro deleted |
+| mono-camera | Oct 30 | Single-camera baseline: tri-camera recordings replayed as the front camera alone | Measured; gates failed on a front-camera left-hand depth bias and mono palmar flips, which open the single-camera work |
 
 ## 1. ONNX Runtime + DirectML instead of the MediaPipe framework
 
@@ -209,6 +210,17 @@ The left elbow spent the last 2.5 seconds of a session parked at shoulder height
 The second half of the fix was tried, measured, and thrown away. If continuity can take a wrong root, it seems obvious that the image should be able to take it back: let the elbow ray overrule the held choice when the other circle point is decisively nearer it for several consecutive frames. It fires correctly on the recording that motivated it, where the correct point sat 10-19 mm from the ray against the held point's 24-32 mm for 35 straight frames. On an earlier recording, with both elbows plainly down in the frames, the same ray preferred the shoulder-height root for 7 consecutive frames by 15-36 mm - and there is nothing to threshold on, because the two cases' margins and their absolute fits overlap. Shipping it would have cost that arm 32 jumps over 100 mm to buy nothing anywhere else in the corpus.
 
 Learned: never put a smoothing filter in the feedback path of a discrete decision - smoothing is for what you publish, not for what you decide from, and a lagging predictor does not merely delay a decision, it can latch the wrong one permanently. And an arbiter has to be shown to arbitrate: the elbow ray is the only new evidence each frame, which made it look like the natural tiebreaker, but measured against ground truth it is right often enough to convince and wrong often enough to be unusable.
+
+## 19. The single-camera baseline: measure before building
+
+Single-camera support (one front webcam at the desk, avatar output) started as a measurement rather than a feature. The replay engine grew a camera mask, so a tri-camera recording replays as its front camera alone with no IMU overlay, and `--replay-mono-baseline` scores that pass against the stereo-triangulated output of the same frames. Three recordings, about 30 seconds in total, with calibrated hand skeletons:
+
+- Fingers passed their gate (angle error p50 8 degrees). Lateral palm error was under 1 cm everywhere, and shoulders and head matched to zero, since they hang off their own rays and widths, not the wrist.
+- The right palm sat 1.6 cm deep of truth at the median. The left palm sat 16 cm deep, consistently, with lateral error of half a centimeter: a pure along-ray scale bias, and only from the front camera. Replayed as either overhead camera alone, the same left hand lands within 4 cm. The front camera's view of the left hand is what the hand model shrinks, not the left skeleton.
+- One recording's right hand ran palm-flipped for most of its length (orientation error p50 85 degrees, finger error p90 65 degrees). With one view the palmar sign has no second camera to overrule it.
+- Elbow root flips (elbow more than 15 cm from the truth elbow on a model frame) ran 8 percent. On the right arm the median elbow error was 1.7 cm, so the flips follow the wrist's depth excursions rather than the bone-circle choice itself.
+
+Learned: the monocular path's weak point is not resolution or coverage but two signs and a scale, each of which stereo had been quietly fixing. The gates (palm p50 3 cm, p90 8 cm, flips 2 percent, fingers 10 degrees) failed as written, and the number that matters most is the view-dependent depth bias, because it is systematic: a bias can be calibrated out where noise cannot. Coverage in this measurement is optimistic by one mechanism, the masked camera's recorded landmarks include hands it found through cross-camera search hints.
 
 ## Cross-cutting lessons
 

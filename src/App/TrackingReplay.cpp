@@ -207,6 +207,8 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 			const int cameraIndex= fresh.cameraIndex;
 			if (cameraIndex < 0 || cameraIndex >= cameraCount)
 				continue;
+			if (bWhatIf && !whatIfParams->isCameraEnabled(cameraIndex))
+				continue;
 
 			const CameraProfile& profile= m_recordedConfig.camera(cameraIndex);
 			CameraFrameResult& mirror= m_mirrors[cameraIndex];
@@ -281,20 +283,37 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		}
 
 		// Fusion stage over ALL cameras' mirrors (fresh or stale), exactly
-		// like the live candidate vector
-		TrackingFrameResult fused;
-		if (recorded.bFused)
+		// like the live candidate vector. A camera mask narrows the vector
+		// and re-decides the no-world passthrough the way the live loop
+		// would have with only those cameras (any valid mirror with
+		// extrinsics fuses); without a mask the recorded decision stands.
+		candidates.clear();
+		const CameraFrameResult* passthrough= nullptr;
+		bool bFuse= recorded.bFused;
+		if (bWhatIf && !whatIfParams->cameraEnabled.empty())
+			bFuse= false;
+		for (const CameraFrameResult& mirror : m_mirrors)
 		{
-			candidates.clear();
-			for (const CameraFrameResult& mirror : m_mirrors)
-				candidates.push_back(&mirror);
+			if (bWhatIf && !whatIfParams->isCameraEnabled(mirror.cameraIndex))
+				continue;
+			candidates.push_back(&mirror);
+			if (passthrough == nullptr)
+				passthrough= &mirror;
+			if (bWhatIf && !whatIfParams->cameraEnabled.empty() && recorded.bFused &&
+				mirror.valid && mirror.hasExtrinsics)
+				bFuse= true;
+		}
+
+		TrackingFrameResult fused;
+		if (bFuse)
+		{
 			m_fusion.fuse(candidates, recorded.nowTimestampMs, fused);
 		}
 		else
 		{
 			// No-world passthrough: camera 0's result, reconstructed from the
 			// REPLAYED mirror so the checksum still verifies this frame
-			fused= m_mirrors.empty() ? TrackingFrameResult() : m_mirrors[0].result;
+			fused= passthrough == nullptr ? TrackingFrameResult() : passthrough->result;
 		}
 
 		if (!bWhatIf)
@@ -323,18 +342,19 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		// solver, which fills only sides the IMU didn't claim. Re-running the
 		// solver (rather than replaying its output) is what makes solver
 		// changes A/B-able against old recordings.
+		const bool bApplyImu= !bWhatIf || whatIfParams->bApplyRecordedImu;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			HandPose& pose= fused.poses[sideIndex];
 			const RecordedImuOutput& imu= recorded.imu[sideIndex];
-			pose.hasForearmPose= imu.hasForearmPose;
-			if (imu.hasForearmPose)
+			pose.hasForearmPose= bApplyImu && imu.hasForearmPose;
+			if (pose.hasForearmPose)
 			{
 				pose.forearmOrientationWorld= imu.forearmOrientationWorld;
 				pose.forearmConfidence= imu.forearmConfidence;
 			}
 		}
-		if (recorded.bFused)
+		if (bFuse)
 			m_bodyPoseSolver.solve(candidates, makeBodyDimensions(m_recordedConfig), fused);
 
 		if (bWhatIf)

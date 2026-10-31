@@ -317,6 +317,61 @@ static int runReplayTest(const TestArgs& args)
 		}
 	}
 
+	// -- (c2) Camera mask: one camera alone still tracks but never
+	// triangulates, the masked camera's mirror stays untouched, and an
+	// all-enabled mask reproduces the faithful pass bit-exactly ---------
+	{
+		TrackingReplay::WhatIfParams params= replay.makeDefaultWhatIfParams();
+		params.cameraEnabled= {true, false};
+		replay.runWhatIf(params);
+
+		int monoTracked= 0;
+		int monoStereo= 0;
+		int maskedCameraTracked= 0;
+		for (int frameIdx= 0; frameIdx < replay.getFrameCount(); ++frameIdx)
+		{
+			const TrackingReplay::ReplayFrame& frame= replay.getFrame(frameIdx);
+			if (!frame.bHasWhatIf)
+				continue;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const HandPose& pose= frame.whatIfFused.poses[sideIndex];
+				if (pose.tracked && pose.hasWorldPose)
+					++monoTracked;
+				if (pose.tracked && pose.stereoTriangulated)
+					++monoStereo;
+				if (frame.whatIfPerCamera.size() > 1 && frame.whatIfPerCamera[1].hands[sideIndex].tracked)
+					++maskedCameraTracked;
+			}
+		}
+		MIKAN_LOG_INFO("test-replay")
+			<< "(c2) masked pass tracked=" << monoTracked << " stereo=" << monoStereo
+			<< " maskedCameraTracked=" << maskedCameraTracked;
+		if (monoTracked == 0 || monoStereo != 0 || maskedCameraTracked != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay")
+				<< "(c2) FAILED: one camera alone must track monocularly and the masked camera must stay idle";
+			result= 1;
+		}
+
+		params.cameraEnabled= {true, true};
+		replay.runWhatIf(params);
+		int mismatches= 0;
+		for (int frameIdx= 0; frameIdx < replay.getFrameCount(); ++frameIdx)
+		{
+			const TrackingReplay::ReplayFrame& frame= replay.getFrame(frameIdx);
+			if (frame.bHasWhatIf &&
+				TrackingRecording::computeFusedChecksum(frame.whatIfFused) != frame.recorded->checksum)
+				++mismatches;
+		}
+		MIKAN_LOG_INFO("test-replay") << "(c2) all-enabled mask checksum mismatches=" << mismatches;
+		if (mismatches != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(c2) FAILED: an all-enabled mask must equal the faithful pass";
+			result= 1;
+		}
+	}
+
 	// -- (d) Corrupted checksum must be reported -------------------
 	{
 		const std::string corruptPath=
