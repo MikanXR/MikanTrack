@@ -5,6 +5,7 @@
 
 #include "glm/ext/vector_double3.hpp"
 
+#include "NeutralCaptureControl.h"
 #include "TrackingTypes.h"
 
 class AppConfig;
@@ -55,12 +56,8 @@ struct TrackingPanelState
 	// Mean per-landmark deviation over the window, mm; -1 = too few samples
 	float holdStillDeviationMm[2]= {-1.f, -1.f};
 
-	// Direct retarget neutral capture: seconds left before the capture request
-	// goes to the vision thread; <= 0 idle
-	float directNeutralCountdown= 0.f;
-	// Whether the last neutral capture measured the camera tilt (else the
-	// slider value was kept)
-	bool directTiltMeasured= false;
+	// Direct retarget neutral capture
+	NeutralCaptureControl directNeutral;
 };
 
 // Small side panels: tracking/fusion options and OSC output settings.

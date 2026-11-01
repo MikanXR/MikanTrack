@@ -40,6 +40,11 @@ public:
 	// with the config and the open devices
 	void refreshDevicePanelState();
 
+	// The window's copies of the vision thread's latest output (the thread's
+	// fetch is one-shot, so other readers on the main thread read these)
+	const TrackingFrameResult& getLatestFused() const { return m_latestFused; }
+	const AvatarPose& getLatestDirectPose() const { return m_latestDirectPose; }
+
 private:
 	// The MainMenu app state: draws the startup menu and dispatches its
 	// actions to App

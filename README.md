@@ -193,9 +193,11 @@ starts at a menu (Resume / New Project / Load Project), so several setups (say
 a dual-camera and a triple-camera rig) can coexist and be switched or shared
 without disturbing each other. **New Project** runs a guided setup: pick the
 tracking variant (two overhead cameras, with or without wrist Joy-Cons,
-overhead pair + front camera, or a single front camera, which needs a VRM
-avatar loaded first), assign camera devices, print and measure the
-calibration patterns, and the calibration wizards below run in the right order.
+overhead pair + front camera, a single front camera that drives a VRM avatar
+directly with no marker, or a single camera over the desk, the single-camera
+variants needing the avatar loaded first), assign camera devices, print and
+measure the calibration patterns, and the calibration wizards below run in the
+right order; the single front camera ends with a neutral-pose capture instead.
 Cancelling the guided setup (after a confirmation) deletes the new project again, and Resume returns to whatever
 project came before it.
 On first run an existing `%APPDATA%/MikanTrack/config.json` is migrated into a

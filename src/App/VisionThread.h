@@ -111,14 +111,6 @@ public:
 	void requestFaceAnchorCapture() { m_bFaceAnchorCaptureRequested= true; }
 	bool fetchFaceAnchorCapture(glm::quat& outAnchor);
 
-	// Direct retarget: captures the solver's current filtered measurements
-	// as the neutral pose, and while the phone streams captures the face
-	// anchor with it (fetched separately, above). The UI fetches the capture
-	// and persists it in the direct config. False from fetch until a capture
-	// lands; a request with no solved torso is dropped.
-	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
-	bool fetchNeutralCapture(DirectNeutralCapture& outCapture);
-
 	// Rest-pose calibration: captures what EVERY camera currently reports for
 	// each tracked hand. Per camera because the model landmarks are
 	// view-dependent - one camera's rest angles do not zero another's.
@@ -160,6 +152,22 @@ public:
 	};
 	// Fetches a completed capture; returns false if none is pending
 	bool fetchRestPoseCapture(RestPoseCapture& outFused);
+
+	// Direct retarget: captures the solver's current filtered measurements
+	// as the neutral pose, with the hand angles the direct camera reads at
+	// the same instant as the finger rest zero (the direct stage runs no
+	// fuse, so the rest-pose capture above has nothing to read there), and
+	// while the phone streams captures the face anchor with it (fetched
+	// separately, above). The UI fetches the capture and persists it in the
+	// direct config. False from fetch until a capture lands; a request with
+	// no solved torso is dropped.
+	struct NeutralCapture
+	{
+		DirectNeutralCapture direct;
+		RestPoseCapture rest;
+	};
+	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
+	bool fetchNeutralCapture(NeutralCapture& outCapture);
 
 	// Hand bone calibration: measures the user's own skeleton from the
 	// stereo-triangulated landmarks over a sampling window. Unlike the rest
@@ -400,7 +408,7 @@ private:
 	AvatarPose m_directPose;
 	std::atomic_bool m_bNeutralCaptureRequested{false};
 	std::mutex m_neutralCaptureMutex;
-	DirectNeutralCapture m_capturedNeutral;
+	NeutralCapture m_capturedNeutral;
 	bool m_bNeutralCaptureReady= false;
 
 	// Rest-pose capture handoff

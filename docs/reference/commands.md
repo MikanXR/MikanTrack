@@ -71,6 +71,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
 - `--test-direct-retarget`: direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism
+- `--test-setup-flow`: guided setup: the step chain of every tracking variant
 - `--test-vrm`: VRM loader and rest skeleton on synthetic in-memory files, both VRM generations
 
 ### Hardware (need a camera or controller physically connected to mean anything)

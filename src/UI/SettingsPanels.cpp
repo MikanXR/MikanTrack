@@ -24,8 +24,6 @@
 // hand needs to get back into position), then the sampling window
 static constexpr float k_holdStillCountdownSeconds= 3.f;
 static constexpr float k_holdStillSampleSeconds= 3.f;
-// Direct retarget neutral capture: time to settle into the pose
-static constexpr float k_directNeutralCountdownSeconds= 3.f;
 // A side needs at least this many fused samples for its deviation to mean
 // anything (one second at 30fps)
 static constexpr int k_holdStillMinSamples= 30;
@@ -716,12 +714,13 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 
 		// A countdown left running while the mode is switched off would fire a
 		// capture nobody is waiting for
+		NeutralCaptureControl& neutral= panelState.directNeutral;
 		if (!direct.enabled)
-			panelState.directNeutralCountdown= 0.f;
+			neutral.reset();
 
-		ImGui::BeginDisabled(panelState.directNeutralCountdown > 0.f || !direct.enabled);
+		ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
 		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
-			panelState.directNeutralCountdown= k_directNeutralCountdownSeconds;
+			neutral.start();
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
 		ImGui::EndDisabled();
 
@@ -736,48 +735,24 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 				direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
 				direct.neutralWrist= {glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
 				direct.neutralForearmTwistRadians= {0.f, 0.f};
-				panelState.directTiltMeasured= false;
 				bChanged= true;
 			}
 		}
 
-		if (panelState.directNeutralCountdown > 0.f)
+		bChanged|= neutral.update(ImGui::GetIO().DeltaTime, visionThread, config);
+		if (neutral.isCountingDown())
 		{
-			panelState.directNeutralCountdown-= ImGui::GetIO().DeltaTime;
-			if (panelState.directNeutralCountdown <= 0.f)
-			{
-				panelState.directNeutralCountdown= 0.f;
-				visionThread->requestNeutralCapture();
-			}
-			else
-			{
-				ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
-								   (int)ceilf(panelState.directNeutralCountdown));
-				ImGui::ProgressBar(1.f - panelState.directNeutralCountdown / k_directNeutralCountdownSeconds,
-								   ImVec2(-1, 4), "");
-			}
+			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
+							   (int)ceilf(neutral.getRemainingSeconds()));
+			ImGui::ProgressBar(1.f - neutral.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
+							   ImVec2(-1, 4), "");
 		}
 
 		if (!direct.neutralPresent)
 			ImGui::TextDisabled("%s", locText("trackingPanel.directStatusNone"));
 		else
-			ImGui::TextDisabled("%s", locText(panelState.directTiltMeasured ? "trackingPanel.directStatusMeasured"
-																			: "trackingPanel.directStatusKept"));
-
-		DirectNeutralCapture capture;
-		if (visionThread->fetchNeutralCapture(capture))
-		{
-			direct.neutralPresent= capture.neutral.present;
-			direct.neutralTorso= capture.neutral.torso;
-			direct.neutralShoulderMidpoint= capture.neutral.shoulderMidpoint;
-			direct.neutralHead= capture.neutral.head;
-			direct.neutralWrist= capture.neutral.wrist;
-			direct.neutralForearmTwistRadians= capture.neutral.forearmTwist;
-			if (capture.bTiltMeasured)
-				direct.cameraTiltDegrees= glm::degrees(capture.cameraTiltRadians);
-			panelState.directTiltMeasured= capture.bTiltMeasured;
-			bChanged= true;
-		}
+			ImGui::TextDisabled("%s", locText(neutral.wasTiltMeasured() ? "trackingPanel.directStatusMeasured"
+																	   : "trackingPanel.directStatusKept"));
 	}
 
 	// -- Hand calibration: one wizard, in the only order that works -----
@@ -789,9 +764,19 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 					config->fusedRestAngles.present[0] ? locText("common.yes") : locText("common.no"),
 					config->fusedRestAngles.present[1] ? locText("common.yes") : locText("common.no"));
 
-		if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
-			panelState.bLaunchHandCalibrationWizard= true;
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
+		// The wizard measures bones against the desk marker or by stereo and
+		// zeroes the fingers from the fuse, none of which a direct project
+		// runs: there the neutral capture zeroes the fingers
+		if (config->direct.enabled)
+		{
+			ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));
+		}
+		else
+		{
+			if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
+				panelState.bLaunchHandCalibrationWizard= true;
+			ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
+		}
 
 		const bool bAnyHandCalibration= config->handSkeleton.present[0] ||
 			config->handSkeleton.present[1] || config->fusedRestAngles.present[0] ||

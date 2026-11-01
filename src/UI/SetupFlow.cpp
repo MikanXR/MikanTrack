@@ -1,5 +1,7 @@
 #include "SetupFlow.h"
 
+#include <cmath>
+
 #include "imgui.h"
 
 #include "App.h"
@@ -73,6 +75,9 @@ void SetupFlow::update()
 		case eStep::ArucoPrint:
 			updateArucoPrintPrompt();
 			break;
+		case eStep::NeutralCapture:
+			updateNeutralCapturePrompt();
+			break;
 		case eStep::ConfirmCancel:
 			updateConfirmCancelPrompt();
 			break;
@@ -82,17 +87,63 @@ void SetupFlow::update()
 	}
 }
 
-int SetupFlow::getRequiredCameraCount() const
+int SetupFlow::getRequiredCameraCount(eTrackingSetup setup)
 {
-	switch (m_trackingSetup)
+	switch (setup)
 	{
 		case eTrackingSetup::SingleFront:
+		case eTrackingSetup::SingleDesk:
 			return 1;
 		case eTrackingSetup::TriCameraFront:
 			return 3;
 		default:
 			return 2;
 	}
+}
+
+SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
+{
+	const bool bSingleCamera= setup == eTrackingSetup::SingleFront || setup == eTrackingSetup::SingleDesk;
+	switch (completed)
+	{
+		case eStep::TrackingSetup:
+			return bSingleCamera ? eStep::AvatarLoad : eStep::CameraSelection;
+		case eStep::AvatarLoad:
+			return eStep::CameraSelection;
+		case eStep::CameraSelection:
+			return eStep::CharucoPrint;
+		case eStep::CharucoPrint:
+			return eStep::IntrinsicsRunning;
+		case eStep::IntrinsicsRunning:
+			// The direct retarget has no world to calibrate: the camera is
+			// the world, and the neutral capture is its only reference
+			return setup == eTrackingSetup::SingleFront ? eStep::NeutralCapture : eStep::ArucoPrint;
+		case eStep::ArucoPrint:
+			return eStep::ExtrinsicsRunning;
+		case eStep::ExtrinsicsRunning:
+			return eStep::HandCalibRunning;
+		case eStep::HandCalibRunning:
+			// The JoyCon variant calibrates the IMU mounting next; the
+			// tri-camera and single-desk variants measure the body on their
+			// body-pose camera; the plain dual variant has neither (body pose
+			// stays off by design)
+			if (setup == eTrackingSetup::DualOverheadJoyCons)
+				return eStep::MountingRunning;
+			if (setup == eTrackingSetup::TriCameraFront || setup == eTrackingSetup::SingleDesk)
+				return eStep::BodyCalibRunning;
+			return eStep::Inactive;
+		default:
+			return eStep::Inactive;
+	}
+}
+
+void SetupFlow::advanceFrom(eStep completed)
+{
+	const eStep next= nextStep(m_trackingSetup, completed);
+	if (next == eStep::Inactive)
+		finish();
+	else
+		transitionTo(next);
 }
 
 void SetupFlow::transitionTo(eStep step)
@@ -108,7 +159,7 @@ void SetupFlow::transitionTo(eStep step)
 			// Size the config and capture slots up front, so each device can
 			// stream a live preview the moment it is picked (a name alone
 			// rarely says which physical camera is which)
-			const int requiredCameras= getRequiredCameraCount();
+			const int requiredCameras= getRequiredCameraCount(m_trackingSetup);
 			while ((int)config->cameras.size() < requiredCameras)
 				config->cameras.emplace_back();
 			for (int slotIndex= 0; slotIndex < requiredCameras; ++slotIndex)
@@ -135,6 +186,12 @@ void SetupFlow::transitionTo(eStep step)
 			break;
 		case eStep::ArucoPrint:
 			m_arucoMarkerLengthMM= (float)config->camera(0).extrinsics.markerLengthMM;
+			break;
+		case eStep::NeutralCapture:
+			// The direct stage picks up the intrinsics just calibrated, so
+			// the avatar follows the user through the capture
+			m_neutralCapture.reset();
+			m_app->getVisionThread()->requestConfigRefresh();
 			break;
 		default:
 			break;
@@ -180,6 +237,9 @@ void SetupFlow::updateTrackingSetupPrompt()
 	ImGui::RadioButton(locLabel("setupFlow.singleFrontRadio"), &setup,
 					   (int)eTrackingSetup::SingleFront);
 	ImGui::TextDisabled("%s", locText("setupFlow.singleFrontHint"));
+	ImGui::RadioButton(locLabel("setupFlow.singleDeskRadio"), &setup,
+					   (int)eTrackingSetup::SingleDesk);
+	ImGui::TextDisabled("%s", locText("setupFlow.singleDeskHint"));
 	m_trackingSetup= (eTrackingSetup)setup;
 	ImGui::PopTextWrapPos();
 
@@ -187,8 +247,7 @@ void SetupFlow::updateTrackingSetupPrompt()
 	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();
-		transitionTo(m_trackingSetup == eTrackingSetup::SingleFront ? eStep::AvatarLoad
-																	: eStep::CameraSelection);
+		advanceFrom(eStep::TrackingSetup);
 	}
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
@@ -260,7 +319,7 @@ void SetupFlow::updateAvatarLoadPrompt()
 	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();
-		transitionTo(eStep::CameraSelection);
+		advanceFrom(eStep::AvatarLoad);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -278,7 +337,7 @@ void SetupFlow::updateCameraSelectionPrompt()
 		return;
 
 	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
-	const int requiredCameras= getRequiredCameraCount();
+	const int requiredCameras= getRequiredCameraCount(m_trackingSetup);
 
 	ImGui::PushTextWrapPos(k_promptWrapWidth);
 	ImGui::TextUnformatted(locText("setupFlow.pickCameraPrompt"));
@@ -383,7 +442,7 @@ void SetupFlow::updateCameraSelectionPrompt()
 	{
 		ImGui::CloseCurrentPopup();
 		applyCameraSelection();
-		transitionTo(eStep::CharucoPrint);
+		advanceFrom(eStep::CameraSelection);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -420,7 +479,7 @@ void SetupFlow::applyCameraSelection()
 {
 	AppConfig* config= m_app->getConfig();
 	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
-	const int requiredCameras= getRequiredCameraCount();
+	const int requiredCameras= getRequiredCameraCount(m_trackingSetup);
 
 	// The devices were already opened and streamed as they were picked (for
 	// the live previews); this persists what is open as the project's cameras
@@ -431,12 +490,28 @@ void SetupFlow::applyCameraSelection()
 		profile.video.deviceName= videoCapture->getCurrentDeviceFriendlyName(slotIndex);
 	}
 
-	// The front camera is the one that sees the user upright, so it alone
-	// runs the body-pose stage; dual variants leave body pose off everywhere
-	if (m_trackingSetup == eTrackingSetup::TriCameraFront)
-		config->camera(2).bodyPose.enabled= true;
-	else if (m_trackingSetup == eTrackingSetup::SingleFront)
-		config->camera(0).bodyPose.enabled= true;
+	// The camera that sees the user upright runs the body-pose stage: the
+	// tri-camera front, or the one camera of either single variant. The
+	// direct variant drives the avatar from that camera with the whole-body
+	// model, whose depth the solver reads. Dual variants leave body pose off
+	// everywhere.
+	switch (m_trackingSetup)
+	{
+		case eTrackingSetup::TriCameraFront:
+			config->camera(2).bodyPose.enabled= true;
+			break;
+		case eTrackingSetup::SingleDesk:
+			config->camera(0).bodyPose.enabled= true;
+			break;
+		case eTrackingSetup::SingleFront:
+			config->camera(0).bodyPose.enabled= true;
+			config->camera(0).bodyPose.backend= "rtmw3d";
+			config->direct.enabled= true;
+			config->direct.cameraIndex= 0;
+			break;
+		default:
+			break;
+	}
 	config->imu.enabled= m_trackingSetup == eTrackingSetup::DualOverheadJoyCons;
 
 	config->markDirty();
@@ -481,7 +556,7 @@ void SetupFlow::updateCharucoPrintPrompt()
 		config->charucoBoard.markerLengthMM= m_boardMarkerLengthMM;
 		config->markDirty();
 		ImGui::CloseCurrentPopup();
-		transitionTo(eStep::IntrinsicsRunning);
+		advanceFrom(eStep::CharucoPrint);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -523,7 +598,76 @@ void SetupFlow::updateArucoPrintPrompt()
 			config->camera(cameraIndex).extrinsics.markerLengthMM= m_arucoMarkerLengthMM;
 		config->markDirty();
 		ImGui::CloseCurrentPopup();
-		transitionTo(eStep::ExtrinsicsRunning);
+		advanceFrom(eStep::ArucoPrint);
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
+void SetupFlow::updateNeutralCapturePrompt()
+{
+	if (!beginCenteredModal(locWindowTitle("windows.modalNeutralCapture")))
+		return;
+
+	AppConfig* config= m_app->getConfig();
+	VisionThread* visionThread= m_app->getVisionThread();
+	DirectConfig& direct= config->direct;
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.neutralPrompt"));
+	ImGui::PopTextWrapPos();
+	ImGui::Spacing();
+
+	// The capture needs a solved torso, which the window's copy of the
+	// thread's output shows: the direct pose exists once the solver runs on
+	// the avatar, the body observation once the camera sees the user
+	const bool bTracking= m_mainWindow->getLatestDirectPose().valid && m_mainWindow->getLatestFused().body.valid;
+	ImGui::TextColored(bTracking ? k_colorGood : k_colorWait, "%s",
+					   locText(bTracking ? "setupFlow.neutralTrackingReady" : "setupFlow.neutralTrackingWaiting"));
+
+	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
+									  locText("trackingPanel.directTiltFmt"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+
+	ImGui::BeginDisabled(m_neutralCapture.isCountingDown() || !bTracking);
+	const char* captureKey= direct.neutralPresent ? "setupFlow.neutralRecaptureButton" : "setupFlow.neutralCaptureButton";
+	if (ImGui::Button(locLabel(captureKey), ImVec2(-1, 0)))
+		m_neutralCapture.start();
+	ImGui::EndDisabled();
+
+	bChanged|= m_neutralCapture.update(ImGui::GetIO().DeltaTime, visionThread, config);
+	if (m_neutralCapture.isCountingDown())
+	{
+		ImGui::TextColored(k_colorWait, locText("trackingPanel.directCountdownFmt"),
+						   (int)ceilf(m_neutralCapture.getRemainingSeconds()));
+		ImGui::ProgressBar(1.f - m_neutralCapture.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
+						   ImVec2(-1, 4), "");
+	}
+
+	if (!direct.neutralPresent)
+		ImGui::TextDisabled("%s", locText("trackingPanel.directStatusNone"));
+	else
+		ImGui::TextDisabled("%s", locText(m_neutralCapture.wasTiltMeasured() ? "trackingPanel.directStatusMeasured"
+																			  : "trackingPanel.directStatusKept"));
+
+	if (bChanged)
+	{
+		config->markDirty();
+		visionThread->requestConfigRefresh();
+	}
+
+	ImGui::Separator();
+	ImGui::BeginDisabled(!direct.neutralPresent);
+	if (ImGui::Button(locLabel("setupFlow.neutralFinishButton"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		advanceFrom(eStep::NeutralCapture);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -625,36 +769,14 @@ void SetupFlow::updateRunningWizardStep()
 		return;
 	}
 
-	switch (m_step)
+	if (m_step == eStep::IntrinsicsRunning)
 	{
-		case eStep::IntrinsicsRunning:
-			++m_intrinsicsCameraIndex;
-			if (m_intrinsicsCameraIndex < (int)m_app->getConfig()->cameraCount())
-				m_bWizardLaunched= false; // same step, next camera
-			else
-				transitionTo(eStep::ArucoPrint);
-			break;
-		case eStep::ExtrinsicsRunning:
-			transitionTo(eStep::HandCalibRunning);
-			break;
-		case eStep::HandCalibRunning:
-			// The JoyCon variant calibrates the IMU mounting next; the
-			// tri-camera and single-front variants measure the body on their
-			// front camera; the plain dual variant has neither (body pose
-			// stays off by design)
-			if (m_trackingSetup == eTrackingSetup::DualOverheadJoyCons)
-				transitionTo(eStep::MountingRunning);
-			else if (m_trackingSetup == eTrackingSetup::TriCameraFront ||
-					 m_trackingSetup == eTrackingSetup::SingleFront)
-				transitionTo(eStep::BodyCalibRunning);
-			else
-				finish();
-			break;
-		case eStep::MountingRunning:
-		case eStep::BodyCalibRunning:
-			finish();
-			break;
-		default:
-			break;
+		++m_intrinsicsCameraIndex;
+		if (m_intrinsicsCameraIndex < (int)m_app->getConfig()->cameraCount())
+		{
+			m_bWizardLaunched= false; // same step, next camera
+			return;
+		}
 	}
+	advanceFrom(m_step);
 }
