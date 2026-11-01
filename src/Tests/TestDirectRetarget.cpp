@@ -233,9 +233,7 @@ void captureNeutral(Rig& rig, const Camera& camera, DirectRetarget& solver, doub
 		solver.solve(frame, camera.model, noPhone, ioTimestampMs, *rig.skeleton, rig.config, pose);
 		ioTimestampMs+= 33.0;
 	}
-	DirectNeutralCapture capture;
-	solver.captureNeutral(capture);
-	rig.config.neutral= capture.neutral;
+	solver.captureNeutral(rig.config.neutral);
 }
 
 // Posed world directions of the arm bones for one side
@@ -313,8 +311,7 @@ static int runDirectRetargetTest(const TestArgs&)
 
 	// (b) Neutral: captured then solved, the torso, head and wrists sit at
 	// identity, the arm directions come back through the tilt conversion,
-	// the chain keeps the avatar's lengths, and the tilt estimate reads the
-	// camera's pitch off the torso
+	// and the chain keeps the avatar's lengths
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
@@ -322,11 +319,6 @@ static int runDirectRetargetTest(const TestArgs&)
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		check(rig.config.neutral.present, "(b) the neutral capture measured a torso");
-
-		DirectNeutralCapture capture;
-		solver.captureNeutral(capture);
-		check(capture.bTiltMeasured && nearlyEqual(glm::degrees(capture.cameraTiltRadians), kTiltDegrees, 1.f),
-			  "(b) the hips in frame measure the camera's tilt");
 
 		const User user= makeNeutralUser();
 		AvatarPose pose;
@@ -358,11 +350,40 @@ static int runDirectRetargetTest(const TestArgs&)
 			bLengths&= glm::length(wristPx - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
 		check(bArms, "(b) hanging upper arms and forward forearms come back within 3 degrees");
-		check(bWrists, "(b) the neutral wrist is the avatar's rest wrist");
+		check(bWrists, "(b) a straight wrist is the avatar's rest wrist");
 		check(bLengths, "(b) the chain keeps the avatar's lengths with the wrist on its pixel");
 		// The finger bones are placed, at identity for zero angles
 		check(pose.bones[(int)B::LeftIndexProximal].present && pose.bones[(int)B::RightLittleDistal].present,
 			  "(b) the finger bones are placed");
+
+		// A hand unseen at the capture has no reference to miss: seen straight
+		// afterwards it poses the rest wrist like the other
+		{
+			User unseen= makeNeutralUser();
+			unseen.bHandTracked[0]= false;
+			DirectRetarget later;
+			Rig laterRig= makeRig(kTiltDegrees);
+			for (int repeat= 0; repeat < 3; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, unseen, *laterRig.skeleton, timestampMs, 20 + repeat);
+				later.solve(frame, camera.model, noPhone, timestampMs, *laterRig.skeleton, laterRig.config, pose);
+				timestampMs+= 33.0;
+			}
+			later.captureNeutral(laterRig.config.neutral);
+			for (int repeat= 0; repeat < 3; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *laterRig.skeleton, timestampMs, 30 + repeat);
+				later.solve(frame, camera.model, noPhone, timestampMs, *laterRig.skeleton, laterRig.config, pose);
+				timestampMs+= 33.0;
+			}
+			bool bRestWrists= laterRig.config.neutral.present;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const ArmDirections arm= posedArm(*laterRig.skeleton, pose, sideIndex);
+				bRestWrists&= nearlySameRotation(arm.handInForearm, restHandInForearm(*laterRig.skeleton, sideIndex), 1e-3f);
+			}
+			check(bRestWrists, "(b) a hand unseen at the capture poses the rest wrist once seen straight");
+		}
 	}
 
 	// (c) The depth sign: a forearm pointing away from the camera takes the
@@ -684,8 +705,6 @@ static int runDirectRetargetTest(const TestArgs&)
 		config.direct.neutralTorso= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
 		config.direct.neutralShoulderMidpoint= glm::vec3(-0.8f, 0.01f, -0.2f);
 		config.direct.neutralHead= glm::angleAxis(-0.2f, glm::vec3(0.f, 1.f, 0.f));
-		config.direct.neutralWrist[1]= glm::angleAxis(0.4f, glm::vec3(1.f, 0.f, 0.f));
-		config.direct.neutralForearmTwistRadians[0]= 0.25f;
 		const std::string text= config.toJsonString();
 		AppConfig loaded;
 		const bool bLoaded= loaded.loadFromJsonString(text);
@@ -693,17 +712,17 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bLoaded && direct.enabled && direct.cameraIndex == 2 && nearlyEqual(direct.cameraTiltDegrees, 12.5f, 1e-5f) &&
 				  direct.neutralPresent && nearlySameRotation(direct.neutralTorso, config.direct.neutralTorso, 1e-5f) &&
 				  glm::length(direct.neutralShoulderMidpoint - config.direct.neutralShoulderMidpoint) < 1e-5f &&
-				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f) &&
-				  nearlySameRotation(direct.neutralWrist[1], config.direct.neutralWrist[1], 1e-5f) &&
-				  nearlySameRotation(direct.neutralWrist[0], glm::quat(1.f, 0.f, 0.f, 0.f), 1e-5f) &&
-				  nearlyEqual(direct.neutralForearmTwistRadians[0], 0.25f, 1e-5f),
+				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f),
 			  "(i) the direct section round-trips through the project JSON");
+		AppConfig fresh;
+		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f) &&
+				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f),
+			  "(i) a fresh config tilts the camera 10 degrees down, with or without a direct section");
 
 		AvatarRigSettings rig;
 		rig.sides[1].curlGain= 1.5f;
 		const DirectRetargetConfig solverConfig= makeDirectRetargetConfig(loaded, rig);
 		check(nearlyEqual(solverConfig.cameraTiltRadians, glm::radians(12.5f), 1e-5f) && solverConfig.neutral.present &&
-				  nearlyEqual(solverConfig.neutral.forearmTwist[0], 0.25f, 1e-5f) &&
 				  nearlyEqual(solverConfig.sides[1].curlGain, 1.5f, 1e-5f) &&
 				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f),
 			  "(i) makeDirectRetargetConfig carries the section, the body lengths and the rig onto the solver");

@@ -718,6 +718,7 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 		if (!direct.enabled)
 			neutral.reset();
 
+		NeutralCaptureControl::drawHandLines(fusedResult);
 		ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
 		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
 			neutral.start();
@@ -733,8 +734,6 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 				direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
 				direct.neutralShoulderMidpoint= glm::vec3(0.f);
 				direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
-				direct.neutralWrist= {glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
-				direct.neutralForearmTwistRadians= {0.f, 0.f};
 				bChanged= true;
 			}
 		}
@@ -748,11 +747,7 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 							   ImVec2(-1, 4), "");
 		}
 
-		if (!direct.neutralPresent)
-			ImGui::TextDisabled("%s", locText("trackingPanel.directStatusNone"));
-		else
-			ImGui::TextDisabled("%s", locText(neutral.wasTiltMeasured() ? "trackingPanel.directStatusMeasured"
-																	   : "trackingPanel.directStatusKept"));
+		neutral.drawStatus(direct);
 	}
 
 	// -- Hand calibration: one wizard, in the only order that works -----

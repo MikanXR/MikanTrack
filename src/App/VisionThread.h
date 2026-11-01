@@ -163,7 +163,7 @@ public:
 	// no solved torso is dropped.
 	struct NeutralCapture
 	{
-		DirectNeutralCapture direct;
+		DirectNeutralPose neutral;
 		RestPoseCapture rest;
 	};
 	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }

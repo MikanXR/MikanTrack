@@ -258,33 +258,6 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			m_torso.solvedTimestampMs= timestampMs;
 			bTorsoFresh= true;
 
-			// The torso's up direction for the tilt estimate, from the hips
-			// one torso length below the shoulder midpoint on their ray
-			m_torso.bHasUpAxis= false;
-			const int leftHipIndex= (int)ePoseLandmark::LEFT_HIP;
-			const int rightHipIndex= (int)ePoseLandmark::RIGHT_HIP;
-			if (usable(leftHipIndex) && usable(rightHipIndex))
-			{
-				const glm::vec3 hipPx= 0.5f * (body.imagePoints[leftHipIndex] + body.imagePoints[rightHipIndex]);
-				const float hipZ= 0.5f * (body.imagePoints[leftHipIndex].z + body.imagePoints[rightHipIndex].z);
-				const float shoulderZ=
-					0.5f * (body.imagePoints[leftShoulderIndex].z + body.imagePoints[rightShoulderIndex].z);
-				RaySphereHit hit;
-				if (BodyPoseSolver::intersectRaySphere(k_origin, rayThrough(hipPx.x, hipPx.y), m_torso.midpoint,
-													   torsoLength, hit))
-				{
-					// Undecided, the hips sit farther: a camera above the
-					// screen looks down on the torso
-					const int hipSign= depthSignBetween(shoulderZ, hipZ);
-					const glm::vec3 hips= pickCrossing(hit, cameraForward, m_torso.midpoint, hipSign == 0 ? 1 : hipSign);
-					const glm::vec3 up= safeNormalize(m_torso.midpoint - hips);
-					if (glm::dot(up, up) > 0.f)
-					{
-						m_torso.upAxis= up;
-						m_torso.bHasUpAxis= true;
-					}
-				}
-			}
 		}
 	}
 	const bool bTorsoUsable= m_torso.valid && (timestampMs - m_torso.solvedTimestampMs) <= kMaxHoldMs;
@@ -590,24 +563,23 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				filter.reset();
 		}
 
-		// Forearm roll: the measured twist less the neutral one, plus the
-		// rig's trim; an arm whose hand was never seen rolls only by the trim
+		// Forearm roll: the measured twist against the avatar's rest palm,
+		// plus the rig's trim; an arm whose hand was never seen rolls only
+		// by the trim
 		float twist= sideConfig.forearmRollTrimRadians;
 		if (arm.bHandMeasured)
-			twist+= wrapAngle(arm.twist - (config.neutral.present ? config.neutral.forearmTwist[sideIndex] : 0.f));
+			twist+= arm.twist;
 		chainDelta= glm::angleAxis(twist, forearmDirection) * chainDelta;
 		placeBone(outPose, skeleton, lowerArmBone, chainDelta);
 
-		// The hand bone: the wrist's rotation away from neutral, applied in
-		// the avatar's trimmed rest palm frame under the posed forearm, so
-		// the neutral wrist is the avatar's rest wrist
+		// The hand bone: the measured wrist, applied in the avatar's trimmed
+		// rest palm frame under the posed forearm. A straight wrist is the
+		// avatar's rest wrist: the user's hands carry no reference, since a
+		// single view's palm at one instant is too unsure to be subtracted
+		// from every later frame.
 		glm::quat relative(1.f, 0.f, 0.f, 0.f);
 		if (arm.bHandMeasured)
-		{
-			relative= config.neutral.present ? glm::inverse(config.neutral.wrist[sideIndex]) * arm.wristRotation
-											 : arm.wristRotation;
-			relative= limitRotationAngle(relative, kWristLimitRadians);
-		}
+			relative= limitRotationAngle(arm.wristRotation, kWristLimitRadians);
 		const glm::quat restLowerArm= skeleton.getBone(lowerArmBone).restRotationWorld;
 		const glm::quat trimmedRestPalm=
 			glm::quat_cast(glm::mat3(handRest.palmFrameWorld)) * glm::quat(sideConfig.handTrimRadians);
@@ -621,32 +593,17 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	}
 }
 
-bool DirectRetarget::captureNeutral(DirectNeutralCapture& outCapture) const
+bool DirectRetarget::captureNeutral(DirectNeutralPose& outNeutral) const
 {
-	outCapture= DirectNeutralCapture();
+	outNeutral= DirectNeutralPose();
 	if (!m_torso.valid)
 		return false;
 
 	// Back to the level frame, so the references survive a tilt edit
 	const glm::quat levelFromTilted= glm::inverse(worldFromCamera(m_tiltRadians) * glm::inverse(worldFromCamera(0.f)));
-	DirectNeutralPose& neutral= outCapture.neutral;
-	neutral.present= true;
-	neutral.torso= levelFromTilted * m_torso.lineFrame;
-	neutral.shoulderMidpoint= levelFromTilted * m_torso.midpoint;
-	neutral.head= m_head.bMeasured ? levelFromTilted * m_head.frame : glm::quat(1.f, 0.f, 0.f, 0.f);
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-	{
-		const ArmState& arm= m_arms[sideIndex];
-		neutral.wrist[sideIndex]= arm.bHandMeasured ? arm.wristRotation : glm::quat(1.f, 0.f, 0.f, 0.f);
-		neutral.forearmTwist[sideIndex]= arm.bHandMeasured ? arm.twist : 0.f;
-	}
-
-	if (m_torso.bHasUpAxis)
-	{
-		// An upright torso measured as leaning forward or back by some angle
-		// means the tilt is off by that angle
-		outCapture.bTiltMeasured= true;
-		outCapture.cameraTiltRadians= m_tiltRadians + atan2f(m_torso.upAxis.x, m_torso.upAxis.z);
-	}
+	outNeutral.present= true;
+	outNeutral.torso= levelFromTilted * m_torso.lineFrame;
+	outNeutral.shoulderMidpoint= levelFromTilted * m_torso.midpoint;
+	outNeutral.head= m_head.bMeasured ? levelFromTilted * m_head.frame : glm::quat(1.f, 0.f, 0.f, 0.f);
 	return true;
 }

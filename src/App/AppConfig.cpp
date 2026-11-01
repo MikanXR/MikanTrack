@@ -371,8 +371,6 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.neutral.torso= config.direct.neutralTorso;
 	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
 	direct.neutral.head= config.direct.neutralHead;
-	direct.neutral.wrist= config.direct.neutralWrist;
-	direct.neutral.forearmTwist= config.direct.neutralForearmTwistRadians;
 	direct.userShoulderWidthMeters= config.body.shoulderWidthMeters;
 	direct.headWidthMeters= config.body.headWidthMeters;
 	direct.noseForwardMeters= config.body.noseForwardMeters;
@@ -701,17 +699,13 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.direct= DirectConfig();
 	config.direct.enabled= dr.value("enabled", false);
 	config.direct.cameraIndex= dr.value("cameraIndex", 0);
-	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", 0.f);
+	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", config.direct.cameraTiltDegrees);
 	if (dr.value("neutralPresent", false))
 	{
 		DirectConfig& direct= config.direct;
 		direct.neutralPresent= quatFromJson(dr, "neutralTorso", direct.neutralTorso) &&
 			vec3FromJson(dr, "neutralShoulderMidpoint", direct.neutralShoulderMidpoint);
 		quatFromJson(dr, "neutralHead", direct.neutralHead);
-		quatFromJson(dr, "neutralWristLeft", direct.neutralWrist[0]);
-		quatFromJson(dr, "neutralWristRight", direct.neutralWrist[1]);
-		direct.neutralForearmTwistRadians[0]= dr.value("neutralForearmTwistLeft", 0.f);
-		direct.neutralForearmTwistRadians[1]= dr.value("neutralForearmTwistRight", 0.f);
 	}
 
 	const json& hs= j.value("handScale", json::object());
@@ -857,10 +851,6 @@ std::string AppConfig::toJsonString() const
 			directJson["neutralTorso"]= quatToJson(direct.neutralTorso);
 			directJson["neutralShoulderMidpoint"]= vec3ToJson(direct.neutralShoulderMidpoint);
 			directJson["neutralHead"]= quatToJson(direct.neutralHead);
-			directJson["neutralWristLeft"]= quatToJson(direct.neutralWrist[0]);
-			directJson["neutralWristRight"]= quatToJson(direct.neutralWrist[1]);
-			directJson["neutralForearmTwistLeft"]= direct.neutralForearmTwistRadians[0];
-			directJson["neutralForearmTwistRight"]= direct.neutralForearmTwistRadians[1];
 		}
 		j["direct"]= directJson;
 	}

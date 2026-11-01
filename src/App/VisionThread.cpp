@@ -1096,7 +1096,7 @@ void VisionThread::runCalibrationCaptures()
 	if (m_bNeutralCaptureRequested.exchange(false))
 	{
 		NeutralCapture capture;
-		if (m_directRetarget.captureNeutral(capture.direct))
+		if (m_directRetarget.captureNeutral(capture.neutral))
 		{
 			const int cameraIndex= m_config->direct.cameraIndex;
 			if (cameraIndex >= 0 && cameraIndex < (int)m_cameras.size())

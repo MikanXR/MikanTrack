@@ -44,22 +44,9 @@ struct DirectNeutralPose
 	glm::quat torso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 shoulderMidpoint{0.f};
 	// The head frame while looking at the screen; identity when the capture
-	// could not see the face (looking straight at the camera)
+	// could not see the face (looking straight at the camera). The hands
+	// carry no reference: a straight wrist is the avatar's rest wrist.
 	glm::quat head{1.f, 0.f, 0.f, 0.f};
-	// Per side: the palm in the measured forearm frame (identity = a straight
-	// wrist) and the palm normal's roll about the forearm against the
-	// avatar's rest palm, radians
-	std::array<glm::quat, 2> wrist{glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
-	std::array<float, 2> forearmTwist{0.f, 0.f};
-};
-
-// What one capture measured: the neutral pose plus the camera tilt the torso
-// implied, when the hips were in frame to imply one
-struct DirectNeutralCapture
-{
-	DirectNeutralPose neutral;
-	bool bTiltMeasured= false;
-	float cameraTiltRadians= 0.f;
 };
 
 struct DirectRetargetConfig
@@ -108,7 +95,7 @@ public:
 
 	// The current filtered measurements as a neutral pose. False when no
 	// torso has been solved yet.
-	bool captureNeutral(DirectNeutralCapture& outCapture) const;
+	bool captureNeutral(DirectNeutralPose& outNeutral) const;
 
 	// The solved arm chain of the last frame, world space, for overlays and
 	// tools
@@ -146,10 +133,6 @@ private:
 		glm::vec3 shoulder[2]{};
 		glm::vec3 midpoint{0.f};
 		glm::quat lineFrame{1.f, 0.f, 0.f, 0.f}; // the shoulder line's frame, world, no lean
-		// The torso's up direction when the hips were in frame, for the tilt
-		// estimate
-		bool bHasUpAxis= false;
-		glm::vec3 upAxis{0.f, 0.f, 1.f};
 		OneEuroFilterVec3 shoulderFilter[2];
 	};
 	struct HeadState

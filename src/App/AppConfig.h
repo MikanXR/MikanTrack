@@ -313,16 +313,14 @@ struct DirectConfig
 	bool enabled= false;
 	// The camera whose landmarks drive the avatar
 	int cameraIndex= 0;
-	// The camera's downward pitch, degrees, positive looking down. The
-	// neutral capture estimates it from the torso when the hips are in frame.
-	float cameraTiltDegrees= 0.f;
+	// The camera's downward pitch, degrees, positive looking down, set by
+	// the user alone (a webcam on top of the monitor by default; nothing
+	// measures it)
+	float cameraTiltDegrees= 10.f;
 	bool neutralPresent= false;
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};
 	glm::quat neutralHead{1.f, 0.f, 0.f, 0.f};
-	// Indexed by eHandSide
-	std::array<glm::quat, 2> neutralWrist{glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
-	std::array<float, 2> neutralForearmTwistRadians{0.f, 0.f};
 };
 
 struct FusionConfig
