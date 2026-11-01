@@ -25,14 +25,30 @@
 //   planar   the oracle depth with every relative depth zeroed, what a 2D
 //            model gives, so the depth axis's contribution is visible
 // An elbow flip is a bend vector (elbow off the shoulder-wrist line) pointing
-// against the truth's, with both bends past kBendMinMeters. The stage 2
-// solver turns these directions into bone rotations; the gate numbers are
-// set from this tool's first measurement.
+// against the truth's, with both bends past kBendMinMeters.
+//
+// The gates cover what the truth measures independently of the model: the
+// stereo wrist and the shoulder solved from its own rays and width. The
+// truth elbow is not that: without an IMU it comes from the body solver,
+// which picks a point on the bone circle by the body-pose camera's own 2D
+// elbow, the same landmark under test, so the direction numbers and bend
+// flips are reported but not gated until a take with the IMUs worn sets
+// them. The limits are from the 2026-10-31 webcam-position take (head in
+// frame, shallow tilt, hands raised toward the camera at 0.45 m): shoulders
+// 9 px, wrists 58 px, live root depth 7 cm, depth sign 80 percent pooled.
 
 namespace
 {
 constexpr float kScoreGate= 0.3f;
 constexpr float kBendMinMeters= 0.05f;
+// A wrist this much nearer or farther than the shoulder, by the truth, is a
+// depth sign worth asking the model for
+constexpr float kDepthSignMinMeters= 0.1f;
+
+constexpr float kShoulderPxP50Gate= 15.f;
+constexpr float kWristPxP50Gate= 80.f;
+constexpr float kRootDepthErrCmP50Gate= 10.f;
+constexpr float kDepthSignAgreePctGate= 75.f;
 
 struct Stats
 {
@@ -92,6 +108,12 @@ struct SideStats
 	Stats wristPx;
 	// Root depth: the live estimate against the oracle
 	Stats rootDepthErrCm;
+	// The model's wrist depth relative to its shoulder against the truth's,
+	// on frames where the truth separates them by kDepthSignMinMeters: does
+	// the sign agree, and how much of the difference does the model report
+	int depthSignFrames= 0;
+	int depthSignAgree= 0;
+	Stats wristDepthScale;
 	// Direction steps between consecutive model frames, the oracle lift, for
 	// the model and for the truth
 	Stats modelUpperArmStepDeg;
@@ -110,6 +132,9 @@ struct SideStats
 		elbowPx.append(other.elbowPx);
 		wristPx.append(other.wristPx);
 		rootDepthErrCm.append(other.rootDepthErrCm);
+		depthSignFrames+= other.depthSignFrames;
+		depthSignAgree+= other.depthSignAgree;
+		wristDepthScale.append(other.wristDepthScale);
 		modelUpperArmStepDeg.append(other.modelUpperArmStepDeg);
 		modelForearmStepDeg.append(other.modelForearmStepDeg);
 		truthUpperArmStepDeg.append(other.truthUpperArmStepDeg);
@@ -271,6 +296,10 @@ void logSide(const char* tag, const char* name, const SideStats& side)
 						<< ", wrist " << side.wristPx.p50() << " (p90 " << side.wristPx.p90()
 						<< "), live root depth err p50 " << side.rootDepthErrCm.p50() << " p90 "
 						<< side.rootDepthErrCm.p90() << " cm (" << side.rootDepthErrCm.count() << " frames)";
+	const float signPct=
+		side.depthSignFrames > 0 ? 100.f * (float)side.depthSignAgree / (float)side.depthSignFrames : 0.f;
+	MIKAN_LOG_INFO(tag) << "    wrist depth against the shoulder: sign agrees on " << side.depthSignAgree << "/"
+						<< side.depthSignFrames << " (" << signPct << "%), scale p50 " << side.wristDepthScale.p50();
 	MIKAN_LOG_INFO(tag) << "    step between model frames, upper arm model p50 " << side.modelUpperArmStepDeg.p50()
 						<< " truth " << side.truthUpperArmStepDeg.p50() << " deg, forearm model "
 						<< side.modelForearmStepDeg.p50() << " truth " << side.truthForearmStepDeg.p50() << " deg";
@@ -492,6 +521,21 @@ static int runGateDirectModeTool(const TestArgs& args)
 					side.rootDepthErrCm.add(std::fabs(liveRootDepth - oracleRootDepth) * 100.f);
 				}
 
+				// Relative depths lift as root + relative on unit-z rays, so
+				// the model's wrist-to-shoulder depth difference is its own,
+				// whatever root depth is chosen
+				{
+					const float truthDepthDelta= truth.wrist.z - truth.shoulder.z;
+					const float modelDepthDelta= modelArm.relativeDepth[2] - modelArm.relativeDepth[0];
+					if (std::fabs(truthDepthDelta) >= kDepthSignMinMeters)
+					{
+						side.depthSignFrames++;
+						if ((modelDepthDelta < 0.f) == (truthDepthDelta < 0.f))
+							side.depthSignAgree++;
+						side.wristDepthScale.add(modelDepthDelta / truthDepthDelta);
+					}
+				}
+
 				float planarPx[3]= {0.f, 0.f, 0.f};
 				{
 					const glm::vec3* truthJoints[3]= {&truth.shoulder, &truth.elbow, &truth.wrist};
@@ -563,6 +607,40 @@ static int runGateDirectModeTool(const TestArgs& args)
 	all.append(pooled[1]);
 	logSide(tag, "Both", all);
 
+	// Gates over everything, both sides pooled
+	if (all.modelArmFrames == 0)
+	{
+		MIKAN_LOG_ERROR(tag) << "No arm compared on any frame; nothing to gate";
+		return 1;
+	}
+	const float signPct=
+		all.depthSignFrames > 0 ? 100.f * (float)all.depthSignAgree / (float)all.depthSignFrames : 0.f;
+	struct Gate
+	{
+		const char* name;
+		float value;
+		float limit;
+		bool bAtMost;
+	};
+	const Gate gates[]= {
+		{"shoulder px p50", all.shoulderPx.p50(), kShoulderPxP50Gate, true},
+		{"wrist px p50", all.wristPx.p50(), kWristPxP50Gate, true},
+		{"live root depth err cm p50", all.rootDepthErrCm.p50(), kRootDepthErrCmP50Gate, true},
+		{"wrist depth sign agreement %", signPct, kDepthSignAgreePctGate, false},
+	};
+	bool bAllPassed= true;
+	for (const Gate& gate : gates)
+	{
+		const bool bPassed= gate.bAtMost ? gate.value <= gate.limit : gate.value >= gate.limit;
+		bAllPassed= bAllPassed && bPassed;
+		MIKAN_LOG_INFO(tag) << "  gate " << gate.name << ": " << gate.value << " (" << (gate.bAtMost ? "at most " : "at least ")
+							<< gate.limit << ") " << (bPassed ? "pass" : "FAIL");
+	}
+	if (!bAllPassed)
+	{
+		MIKAN_LOG_ERROR(tag) << "Gate(s) failed";
+		return 1;
+	}
 	return result;
 }
 
