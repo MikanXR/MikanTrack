@@ -303,6 +303,28 @@ struct AvatarConfig
 	float rootYawDegrees= 0.f;
 };
 
+// The single-camera direct retarget: one camera's landmarks posed straight
+// onto the loaded avatar with no world calibration, the camera being the
+// world. The neutral capture is the user's rest (sitting square, hands
+// resting), the zero every relative rotation is measured from, stored in the
+// camera-fixed frame at zero tilt.
+struct DirectConfig
+{
+	bool enabled= false;
+	// The camera whose landmarks drive the avatar
+	int cameraIndex= 0;
+	// The camera's downward pitch, degrees, positive looking down. The
+	// neutral capture estimates it from the torso when the hips are in frame.
+	float cameraTiltDegrees= 0.f;
+	bool neutralPresent= false;
+	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
+	glm::vec3 neutralShoulderMidpoint{0.f};
+	glm::quat neutralHead{1.f, 0.f, 0.f, 0.f};
+	// Indexed by eHandSide
+	std::array<glm::quat, 2> neutralWrist{glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
+	std::array<float, 2> neutralForearmTwistRadians{0.f, 0.f};
+};
+
 struct FusionConfig
 {
 	// A camera's last result older than this is excluded from fusion
@@ -366,6 +388,11 @@ struct AvatarRetargetConfig;
 struct AvatarRigSettings;
 AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
 
+// And for the direct retarget: the vision thread, the 3D view's replay feed
+// and the gate tool all solve from this one mapping
+struct DirectRetargetConfig;
+DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+
 class AppConfig
 {
 public:
@@ -382,6 +409,7 @@ public:
 	BodyConfig body;
 	RecordingConfig recording;
 	AvatarConfig avatar;
+	DirectConfig direct;
 	// Rest-pose zero for the stereo-TRIANGULATED path (one set, not per
 	// camera: triangulated geometry has no per-camera model bias to fold in).
 	// Captured alongside the per-camera rest angles.

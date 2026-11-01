@@ -205,7 +205,7 @@ const char* boneName(eVmcBone bone)
 {
 	// Unity HumanBodyBones spelling, which is what a VMC receiver matches on
 	static const char* k_names[VMC_BONE_COUNT]= {
-		"Head",
+		"Head", "Spine", "Chest", "UpperChest", "Neck",
 
 		"LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
 		"RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand",

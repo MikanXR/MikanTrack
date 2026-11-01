@@ -6,6 +6,7 @@
 #include "imgui.h"
 
 #include "glm/gtc/quaternion.hpp"
+#include "glm/trigonometric.hpp"
 
 #include "App.h"
 #include "AppConfig.h"
@@ -23,6 +24,8 @@
 // hand needs to get back into position), then the sampling window
 static constexpr float k_holdStillCountdownSeconds= 3.f;
 static constexpr float k_holdStillSampleSeconds= 3.f;
+// Direct retarget neutral capture: time to settle into the pose
+static constexpr float k_directNeutralCountdownSeconds= 3.f;
 // A side needs at least this many fused samples for its deviation to mean
 // anything (one second at 30fps)
 static constexpr int k_holdStillMinSamples= 30;
@@ -670,6 +673,111 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.headWidthTooltip"));
 		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.noseForward"), &config->body.noseForwardMeters, 0.05f, 0.18f, "%.2f m");
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.noseForwardTooltip"));
+	}
+
+	ImGui::SeparatorText(locText("trackingPanel.directSection"));
+	{
+		DirectConfig& direct= config->direct;
+		ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
+
+		bChanged|= ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+
+		// A shrinking camera list must not leave the index dangling
+		const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
+		if (direct.cameraIndex < 0 || direct.cameraIndex > lastCameraIndex)
+		{
+			direct.cameraIndex= std::clamp(direct.cameraIndex, 0, lastCameraIndex);
+			bChanged= true;
+		}
+		if (config->cameraCount() > 1)
+		{
+			const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
+			if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
+			{
+				for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+				{
+					ImGui::PushID(cameraIndex);
+					const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+					if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex))
+					{
+						direct.cameraIndex= cameraIndex;
+						bChanged= true;
+					}
+					ImGui::PopID();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
+									  locText("trackingPanel.directTiltFmt"));
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+
+		// A countdown left running while the mode is switched off would fire a
+		// capture nobody is waiting for
+		if (!direct.enabled)
+			panelState.directNeutralCountdown= 0.f;
+
+		ImGui::BeginDisabled(panelState.directNeutralCountdown > 0.f || !direct.enabled);
+		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
+			panelState.directNeutralCountdown= k_directNeutralCountdownSeconds;
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
+		ImGui::EndDisabled();
+
+		if (direct.neutralPresent)
+		{
+			ImGui::SameLine();
+			if (ImGui::Button(locLabel("trackingPanel.directClear")))
+			{
+				direct.neutralPresent= false;
+				direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
+				direct.neutralShoulderMidpoint= glm::vec3(0.f);
+				direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+				direct.neutralWrist= {glm::quat(1.f, 0.f, 0.f, 0.f), glm::quat(1.f, 0.f, 0.f, 0.f)};
+				direct.neutralForearmTwistRadians= {0.f, 0.f};
+				panelState.directTiltMeasured= false;
+				bChanged= true;
+			}
+		}
+
+		if (panelState.directNeutralCountdown > 0.f)
+		{
+			panelState.directNeutralCountdown-= ImGui::GetIO().DeltaTime;
+			if (panelState.directNeutralCountdown <= 0.f)
+			{
+				panelState.directNeutralCountdown= 0.f;
+				visionThread->requestNeutralCapture();
+			}
+			else
+			{
+				ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
+								   (int)ceilf(panelState.directNeutralCountdown));
+				ImGui::ProgressBar(1.f - panelState.directNeutralCountdown / k_directNeutralCountdownSeconds,
+								   ImVec2(-1, 4), "");
+			}
+		}
+
+		if (!direct.neutralPresent)
+			ImGui::TextDisabled("%s", locText("trackingPanel.directStatusNone"));
+		else
+			ImGui::TextDisabled("%s", locText(panelState.directTiltMeasured ? "trackingPanel.directStatusMeasured"
+																			: "trackingPanel.directStatusKept"));
+
+		DirectNeutralCapture capture;
+		if (visionThread->fetchNeutralCapture(capture))
+		{
+			direct.neutralPresent= capture.neutral.present;
+			direct.neutralTorso= capture.neutral.torso;
+			direct.neutralShoulderMidpoint= capture.neutral.shoulderMidpoint;
+			direct.neutralHead= capture.neutral.head;
+			direct.neutralWrist= capture.neutral.wrist;
+			direct.neutralForearmTwistRadians= capture.neutral.forearmTwist;
+			if (capture.bTiltMeasured)
+				direct.cameraTiltDegrees= glm::degrees(capture.cameraTiltRadians);
+			panelState.directTiltMeasured= capture.bTiltMeasured;
+			bChanged= true;
+		}
 	}
 
 	// -- Hand calibration: one wizard, in the only order that works -----

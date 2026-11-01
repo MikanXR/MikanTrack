@@ -1,0 +1,718 @@
+#include "TestCommon.h"
+
+#include "glm/gtx/quaternion.hpp"
+
+#include "AvatarRetarget.h"
+#include "AvatarRig.h"
+#include "AvatarSkeleton.h"
+#include "DirectRetarget.h"
+#include "MathGLM.h"
+#include "SyntheticAvatar.h"
+
+// The direct retarget on the shared synthetic rig, seen by a synthetic
+// pinhole pitched down at a synthetic user built from the avatar's own
+// lengths: the neutral capture zeroes the torso, head and wrists, the arm
+// directions come back through the tilt conversion, the depth sign picks the
+// near and the far crossing, the fallback keeps an unseen elbow's wrist on
+// its ray, a lost hand holds, a gap rests, and two solvers agree frame for
+// frame.
+
+namespace
+{
+using B= eHumanoidBone;
+using namespace SyntheticAvatar;
+
+constexpr float kTiltDegrees= 10.f;
+// The model's relative depth arrives compressed (measured 0.6 of truth on
+// the webcam take); the solver may read only its sign
+constexpr float kModelDepthScale= 0.6f;
+constexpr float kDirectionToleranceRadians= 3.f * glm::pi<float>() / 180.f;
+// The torso length the synthetic rig is authored with (shoulder height
+// above the hips), which the user below is built to
+constexpr float kTorsoLength= 0.4f;
+
+struct Camera
+{
+	DirectCameraModel model;
+	glm::quat worldFromCamera{1.f, 0.f, 0.f, 0.f};
+	glm::quat cameraFromWorld{1.f, 0.f, 0.f, 0.f};
+};
+
+Camera makeCamera(float tiltDegrees)
+{
+	Camera camera;
+	camera.model.fx= 300.f;
+	camera.model.fy= 300.f;
+	camera.model.cx= 320.f;
+	camera.model.cy= 240.f;
+	camera.model.width= 640;
+	camera.model.height= 480;
+	camera.worldFromCamera= DirectRetarget::worldFromCamera(glm::radians(tiltDegrees));
+	camera.cameraFromWorld= glm::inverse(camera.worldFromCamera);
+	return camera;
+}
+
+glm::vec3 toCamera(const Camera& camera, const glm::vec3& world)
+{
+	return camera.cameraFromWorld * world;
+}
+
+glm::vec2 project(const Camera& camera, const glm::vec3& world)
+{
+	const glm::vec3 c= toCamera(camera, world);
+	return glm::vec2(camera.model.fx * c.x / c.z + camera.model.cx, camera.model.fy * c.y / c.z + camera.model.cy);
+}
+
+// A palm frame from its finger direction and its palmar normal
+glm::quat makePalm(const glm::vec3& x, const glm::vec3& z)
+{
+	const glm::vec3 xUnit= glm::normalize(x);
+	const glm::vec3 zUnit= glm::normalize(z - xUnit * glm::dot(z, xUnit));
+	return glm::quat_cast(glm::mat3(xUnit, glm::cross(zUnit, xUnit), zUnit));
+}
+
+// The palm a single view lifts when it guesses the hand's depth direction
+// wrong: mirrored along the view ray through it, the normal flipped so the
+// frame stays right-handed
+glm::quat mirrorPalmAlongRay(const glm::quat& palm, const glm::vec3& rayDirection)
+{
+	const glm::vec3 ray= glm::normalize(rayDirection);
+	const glm::vec3 x= palm * glm::vec3(1.f, 0.f, 0.f);
+	const glm::vec3 z= palm * glm::vec3(0.f, 0.f, 1.f);
+	return makePalm(x - 2.f * glm::dot(x, ray) * ray, -(z - 2.f * glm::dot(z, ray) * ray));
+}
+
+// The user in the direct world (the camera at the origin, the user facing
+// +X from 0.8 m away, the camera a quarter meter above the shoulders),
+// built from the avatar's lengths
+struct User
+{
+	glm::vec3 shoulder[2];
+	glm::vec3 elbow[2];
+	glm::vec3 wrist[2];
+	glm::vec3 hip[2];
+	glm::vec3 ear[2];
+	glm::vec3 nose;
+	glm::quat palm[2];
+	bool bHandTracked[2]= {true, true};
+	bool bElbowSeen[2]= {true, true};
+	std::array<std::array<FingerAngles, FINGER_COUNT>, 2> fingers{};
+};
+
+User makeNeutralUser()
+{
+	User user;
+	const float x= -0.8f;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const float sy= sideIndex == 0 ? 1.f : -1.f;
+		user.shoulder[sideIndex]= glm::vec3(x, sy * 0.5f * kShoulderWidth, -0.25f);
+		// Arms hanging, forearms forward onto the desk, palms down
+		user.elbow[sideIndex]= user.shoulder[sideIndex] + glm::vec3(0.f, 0.f, -kUpperArmLength);
+		user.wrist[sideIndex]= user.elbow[sideIndex] + glm::vec3(kForearmLength, 0.f, 0.f);
+		user.hip[sideIndex]= glm::vec3(x, sy * 0.08f, -0.25f - kTorsoLength);
+		user.ear[sideIndex]= glm::vec3(x, sy * 0.075f, 0.05f);
+		user.palm[sideIndex]= makePalm(glm::vec3(1.f, 0.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
+	}
+	user.nose= glm::vec3(x + 0.11f, 0.f, 0.05f);
+	return user;
+}
+
+void setLandmark(BodyPoseObservation& body, const Camera& camera, int index, const glm::vec3& world,
+				 float hipDepth, bool bSeen)
+{
+	const glm::vec2 px= bSeen ? project(camera, world) : glm::vec2(-100.f, -100.f);
+	const float depth= toCamera(camera, world).z;
+	body.imagePoints[index]= glm::vec3(px.x, px.y, (depth - hipDepth) * kModelDepthScale);
+	body.visibility[index]= bSeen ? 1.f : 0.1f;
+	body.providedMask|= 1ull << index;
+}
+
+TrackingFrameResult makeFrame(const Camera& camera, const User& user, const AvatarSkeleton& skeleton,
+							  double timestampMs, int64_t frameIndex)
+{
+	TrackingFrameResult frame;
+	frame.frameIndex= frameIndex;
+	frame.timestampMs= timestampMs;
+	frame.frameWidth= camera.model.width;
+	frame.frameHeight= camera.model.height;
+
+	BodyPoseObservation& body= frame.body;
+	body.valid= true;
+	body.boxSource= eBodyBoxSource::Detector;
+	body.modelFrameIndex= frameIndex;
+	body.confidence= 1.f;
+	body.hasDepth= true;
+	const float hipDepth= toCamera(camera, 0.5f * (user.hip[0] + user.hip[1])).z;
+	setLandmark(body, camera, (int)ePoseLandmark::NOSE, user.nose, hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_EAR, user.ear[0], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_EAR, user.ear[1], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_SHOULDER, user.shoulder[0], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_SHOULDER, user.shoulder[1], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_ELBOW, user.elbow[0], hipDepth, user.bElbowSeen[0]);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_ELBOW, user.elbow[1], hipDepth, user.bElbowSeen[1]);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_WRIST, user.wrist[0], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_WRIST, user.wrist[1], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_HIP, user.hip[0], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_HIP, user.hip[1], hipDepth, true);
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		TrackedHand& hand= frame.hands[sideIndex];
+		HandPose& pose= frame.poses[sideIndex];
+		hand.side= (eHandSide)sideIndex;
+		pose.side= (eHandSide)sideIndex;
+		if (!user.bHandTracked[sideIndex])
+			continue;
+		hand.tracked= true;
+		hand.presence= 1.f;
+		const glm::vec2 wristPx= project(camera, user.wrist[sideIndex]);
+		hand.imagePoints[0]= glm::vec3(wristPx.x, wristPx.y, 0.f);
+		pose.tracked= true;
+		pose.presence= 1.f;
+		pose.confidence= 1.f;
+		pose.hasCameraPose= true;
+		pose.palmOrientationCamera= camera.cameraFromWorld * user.palm[sideIndex];
+		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]);
+		pose.fingers= user.fingers[sideIndex];
+		pose.skeleton= skeleton.getHand((eHandSide)sideIndex).skeleton;
+	}
+	return frame;
+}
+
+float angleBetween(const glm::vec3& a, const glm::vec3& b)
+{
+	const float d= glm::dot(glm::normalize(a), glm::normalize(b));
+	return acosf(std::clamp(d, -1.f, 1.f));
+}
+
+float rotationAngle(const glm::quat& q)
+{
+	const glm::quat unit= glm::normalize(q);
+	return 2.f * acosf(std::min(std::fabs(unit.w), 1.f));
+}
+
+bool nearlySameRotation(const glm::quat& a, const glm::quat& b, float toleranceRadians)
+{
+	return rotationAngle(glm::inverse(a) * b) <= toleranceRadians;
+}
+
+bool nearlyEqual(float a, float b, float tolerance)
+{
+	return std::fabs(a - b) <= tolerance;
+}
+
+struct Rig
+{
+	AvatarModel model;
+	std::unique_ptr<AvatarSkeleton> skeleton;
+	DirectRetargetConfig config;
+};
+
+Rig makeRig(float tiltDegrees)
+{
+	Rig rig;
+	rig.model= makeModel(eVrmVersion::Vrm1, false);
+	rig.skeleton= std::make_unique<AvatarSkeleton>(rig.model);
+	rig.config.cameraTiltRadians= glm::radians(tiltDegrees);
+	// The user's shoulders are the avatar's, so the head keeps its size
+	rig.config.userShoulderWidthMeters= kShoulderWidth;
+	return rig;
+}
+
+// Runs the neutral frame a few times (the filters settle on repeats of one
+// pose), captures it, and installs it in the config
+void captureNeutral(Rig& rig, const Camera& camera, DirectRetarget& solver, double& ioTimestampMs)
+{
+	const User user= makeNeutralUser();
+	const TrackingFrameResult::HeadPose noPhone;
+	AvatarPose pose;
+	for (int repeat= 0; repeat < 3; ++repeat)
+	{
+		const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, ioTimestampMs, repeat);
+		solver.solve(frame, camera.model, noPhone, ioTimestampMs, *rig.skeleton, rig.config, pose);
+		ioTimestampMs+= 33.0;
+	}
+	DirectNeutralCapture capture;
+	solver.captureNeutral(capture);
+	rig.config.neutral= capture.neutral;
+}
+
+// Posed world directions of the arm bones for one side
+struct ArmDirections
+{
+	glm::vec3 upper;
+	glm::vec3 forearm;
+	glm::quat handInForearm; // the hand's rotation relative to the forearm's
+};
+
+ArmDirections posedArm(const AvatarSkeleton& skeleton, const AvatarPose& pose, int sideIndex)
+{
+	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
+	computePosedBones(skeleton, pose, posed);
+	const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+	const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+	const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+	ArmDirections out;
+	out.upper= posed[(int)lower].positionWorld - posed[(int)upper].positionWorld;
+	out.forearm= posed[(int)hand].positionWorld - posed[(int)lower].positionWorld;
+	out.handInForearm= glm::inverse(posed[(int)lower].rotationWorld) * posed[(int)hand].rotationWorld;
+	return out;
+}
+
+glm::quat restHandInForearm(const AvatarSkeleton& skeleton, int sideIndex)
+{
+	const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+	const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+	return glm::inverse(skeleton.getBone(lower).restRotationWorld) * skeleton.getBone(hand).restRotationWorld;
+}
+
+bool samePose(const AvatarPose& a, const AvatarPose& b)
+{
+	if (a.valid != b.valid)
+		return false;
+	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+	{
+		if (a.bones[index].present != b.bones[index].present)
+			return false;
+		if (std::memcmp(&a.bones[index].deltaWorld, &b.bones[index].deltaWorld, sizeof(glm::quat)) != 0)
+			return false;
+	}
+	return true;
+}
+} // namespace
+
+static int runDirectRetargetTest(const TestArgs&)
+{
+	int failures= 0;
+	auto check= [&](bool bCondition, const char* name) {
+		if (bCondition)
+		{
+			MIKAN_LOG_INFO("test-direct-retarget") << "PASS " << name;
+		}
+		else
+		{
+			MIKAN_LOG_ERROR("test-direct-retarget") << "FAIL " << name;
+			failures++;
+		}
+	};
+	const TrackingFrameResult::HeadPose noPhone;
+
+	// (a) The conversion: a level camera sees the user's left on its right
+	// and the user's up as image up; the tilt turns a point ahead of a
+	// pitched camera into one below the horizon
+	{
+		const glm::quat level= DirectRetarget::worldFromCamera(0.f);
+		check(glm::length(level * glm::vec3(1.f, 0.f, 0.f) - glm::vec3(0.f, 1.f, 0.f)) < 1e-5f &&
+				  glm::length(level * glm::vec3(0.f, -1.f, 0.f) - glm::vec3(0.f, 0.f, 1.f)) < 1e-5f &&
+				  glm::length(level * glm::vec3(0.f, 0.f, 1.f) - glm::vec3(-1.f, 0.f, 0.f)) < 1e-5f,
+			  "(a) a level camera's right is world +Y, its up world +Z, its forward world -X");
+		const glm::vec3 ahead= DirectRetarget::worldFromCamera(glm::radians(kTiltDegrees)) * glm::vec3(0.f, 0.f, 1.f);
+		check(ahead.z < -0.1f && ahead.x < -0.9f, "(a) a camera pitched down looks down in the world");
+	}
+
+	// (b) Neutral: captured then solved, the torso, head and wrists sit at
+	// identity, the arm directions come back through the tilt conversion,
+	// the chain keeps the avatar's lengths, and the tilt estimate reads the
+	// camera's pitch off the torso
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+		check(rig.config.neutral.present, "(b) the neutral capture measured a torso");
+
+		DirectNeutralCapture capture;
+		solver.captureNeutral(capture);
+		check(capture.bTiltMeasured && nearlyEqual(glm::degrees(capture.cameraTiltRadians), kTiltDegrees, 1.f),
+			  "(b) the hips in frame measure the camera's tilt");
+
+		const User user= makeNeutralUser();
+		AvatarPose pose;
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 10 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+		}
+		check(pose.valid && pose.bones[(int)B::Hips].present && pose.bones[(int)B::Spine].present &&
+				  rotationAngle(pose.bones[(int)B::Spine].deltaWorld) < 1e-3f &&
+				  rotationAngle(pose.bones[(int)B::Neck].deltaWorld) < 1e-3f,
+			  "(b) the neutral torso leaves the spine at identity");
+		check(pose.bones[(int)B::Head].present && rotationAngle(pose.bones[(int)B::Head].deltaWorld) < 1e-3f,
+			  "(b) the neutral head is identity");
+		bool bArms= true;
+		bool bWrists= true;
+		bool bLengths= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const ArmDirections arm= posedArm(*rig.skeleton, pose, sideIndex);
+			bArms&= angleBetween(arm.upper, user.elbow[sideIndex] - user.shoulder[sideIndex]) < kDirectionToleranceRadians;
+			bArms&= angleBetween(arm.forearm, user.wrist[sideIndex] - user.elbow[sideIndex]) < kDirectionToleranceRadians;
+			bWrists&= nearlySameRotation(arm.handInForearm, restHandInForearm(*rig.skeleton, sideIndex), 1e-3f);
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bLengths&= chain.valid && nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f) &&
+				nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
+			const glm::vec2 wristPx= project(camera, chain.wrist);
+			bLengths&= glm::length(wristPx - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bArms, "(b) hanging upper arms and forward forearms come back within 3 degrees");
+		check(bWrists, "(b) the neutral wrist is the avatar's rest wrist");
+		check(bLengths, "(b) the chain keeps the avatar's lengths with the wrist on its pixel");
+		// The finger bones are placed, at identity for zero angles
+		check(pose.bones[(int)B::LeftIndexProximal].present && pose.bones[(int)B::RightLittleDistal].present,
+			  "(b) the finger bones are placed");
+	}
+
+	// (c) The depth sign: a forearm pointing away from the camera takes the
+	// far crossing, toward it the near one, on the same wrist pixel geometry
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			// Elbow out to the side so the backward forearm clears the torso
+			user.elbow[sideIndex]= user.shoulder[sideIndex] +
+				glm::normalize(glm::vec3(0.f, sideIndex == 0 ? 0.6f : -0.6f, -0.8f)) * kUpperArmLength;
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::vec3(-kForearmLength, 0.f, 0.f);
+			user.palm[sideIndex]= makePalm(glm::vec3(-1.f, 0.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
+		}
+		AvatarPose pose;
+		solver.reset();
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 20 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+		}
+		bool bAway= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const ArmDirections arm= posedArm(*rig.skeleton, pose, sideIndex);
+			bAway&= angleBetween(arm.forearm, glm::vec3(-1.f, 0.f, 0.f)) < kDirectionToleranceRadians;
+			bAway&= angleBetween(arm.upper, user.elbow[sideIndex] - user.shoulder[sideIndex]) < kDirectionToleranceRadians;
+		}
+		check(bAway, "(c) a forearm pointing away from the camera takes the far crossing");
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::vec3(kForearmLength, 0.f, 0.f);
+			user.palm[sideIndex]= makePalm(glm::vec3(1.f, 0.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
+		}
+		solver.reset();
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 30 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+		}
+		bool bToward= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bToward&= angleBetween(posedArm(*rig.skeleton, pose, sideIndex).forearm, glm::vec3(1.f, 0.f, 0.f)) <
+				kDirectionToleranceRadians;
+		check(bToward, "(c) a forearm pointing at the camera takes the near crossing");
+	}
+
+	// (d) An unseen elbow: the wrist stays on its ray within reach and both
+	// bones keep their lengths
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.bElbowSeen[sideIndex]= false;
+			user.elbow[sideIndex]= user.shoulder[sideIndex] +
+				glm::normalize(glm::vec3(0.6f, sideIndex == 0 ? 0.2f : -0.2f, 0.8f)) * kUpperArmLength;
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::vec3(kForearmLength, 0.f, 0.f);
+		}
+		AvatarPose pose;
+		solver.reset();
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 40 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+		}
+		bool bFallback= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bFallback&= chain.valid;
+			bFallback&= nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f);
+			bFallback&= nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
+			bFallback&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+			bFallback&= glm::length(chain.wrist - chain.shoulder) <= kUpperArmLength + kForearmLength + 1e-4f;
+		}
+		check(bFallback, "(d) an unseen elbow keeps the wrist on its ray within reach with both lengths");
+	}
+
+	// (e) A lost hand: the body model's wrist keeps the arm placed and the
+	// fingers hold their last angles
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				user.fingers[sideIndex][finger].proximal= 1.f;
+		AvatarPose curled;
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 50 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, curled);
+			timestampMs+= 33.0;
+		}
+		check(rotationAngle(curled.bones[(int)B::LeftIndexProximal].deltaWorld) > 0.5f,
+			  "(e) curled fingers bend the finger bones");
+
+		user.bHandTracked[0]= false;
+		user.bHandTracked[1]= false;
+		// The arm moves while the hand is lost, and stays long enough for the
+		// position filters to settle on the new wrist
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.8f, 0.f, 0.6f)) * kForearmLength;
+		AvatarPose lost;
+		for (int repeat= 0; repeat < 40; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 60 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, lost);
+			timestampMs+= 33.0;
+		}
+		bool bPlaced= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bPlaced&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bPlaced, "(e) the body model's wrist keeps the arm placed through a hand dropout");
+		bool bHeld= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			// The finger bend relative to the hand is what holds; the hand
+			// itself followed the arm
+			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+			const B index= sideIndex == 0 ? B::LeftIndexProximal : B::RightIndexProximal;
+			const glm::quat before= glm::inverse(curled.bones[(int)hand].deltaWorld) * curled.bones[(int)index].deltaWorld;
+			const glm::quat after= glm::inverse(lost.bones[(int)hand].deltaWorld) * lost.bones[(int)index].deltaWorld;
+			bHeld&= nearlySameRotation(before, after, 1e-3f);
+		}
+		check(bHeld, "(e) the fingers hold their last angles while the hand is lost");
+	}
+
+	// (f) A short dropout holds, a gap past the hold rests, and tracking
+	// returns without a jump from the gap
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		AvatarPose tracked;
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 70 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, tracked);
+			timestampMs+= 33.0;
+		}
+
+		TrackingFrameResult empty;
+		empty.timestampMs= timestampMs;
+		AvatarPose held;
+		solver.solve(empty, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, held);
+		check(samePose(tracked, held), "(f) a frame with nothing seen holds the last pose");
+
+		timestampMs+= 700.0;
+		empty.timestampMs= timestampMs;
+		AvatarPose rest;
+		solver.solve(empty, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, rest);
+		bool bRest= rest.valid;
+		int presentCount= 0;
+		for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+		{
+			if (!rest.bones[index].present)
+				continue;
+			++presentCount;
+			bRest&= rotationAngle(rest.bones[index].deltaWorld) < 1e-6f;
+		}
+		check(bRest && presentCount > 10, "(f) past the hold every placed bone rests at identity");
+
+		timestampMs+= 33.0;
+		AvatarPose back;
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 80 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, back);
+			timestampMs+= 33.0;
+		}
+		bool bBack= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const ArmDirections arm= posedArm(*rig.skeleton, back, sideIndex);
+			bBack&= angleBetween(arm.forearm, user.wrist[sideIndex] - user.elbow[sideIndex]) < kDirectionToleranceRadians;
+		}
+		check(bBack, "(f) tracking returns after the gap");
+	}
+
+	// (g) Two solvers over the same frames produce identical poses
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solverA;
+		DirectRetarget solverB;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solverA, timestampMs);
+		solverA.reset();
+
+		bool bSame= true;
+		User user= makeNeutralUser();
+		for (int step= 0; step < 12; ++step)
+		{
+			const float phase= (float)step * 0.2f;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.wrist[sideIndex]= user.elbow[sideIndex] +
+					glm::normalize(glm::vec3(1.f, 0.3f * sinf(phase), 0.4f * cosf(phase))) * kForearmLength;
+				user.fingers[sideIndex][1].proximal= 0.5f + 0.4f * sinf(phase);
+			}
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 90 + step);
+			AvatarPose poseA;
+			AvatarPose poseB;
+			solverA.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, poseA);
+			solverB.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, poseB);
+			bSame&= samePose(poseA, poseB);
+			timestampMs+= 33.0;
+		}
+		check(bSame, "(g) two solvers agree bit for bit over a moving sequence");
+	}
+
+	// (h) The phone head wins over the camera head while it streams
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		TrackingFrameResult::HeadPose phone;
+		phone.valid= true;
+		phone.orientationWorld= glm::angleAxis(glm::radians(30.f), glm::vec3(0.f, 0.f, 1.f));
+		AvatarPose pose;
+		const TrackingFrameResult frame= makeFrame(camera, makeNeutralUser(), *rig.skeleton, timestampMs, 100);
+		solver.solve(frame, camera.model, phone, timestampMs, *rig.skeleton, rig.config, pose);
+		check(nearlySameRotation(pose.bones[(int)B::Head].deltaWorld, phone.orientationWorld, 1e-4f),
+			  "(h) the phone head drives the head bone while it streams");
+	}
+
+	// (j) A palm lifted on the wrong depth guess (mirrored along its view
+	// ray) solves the same wrist and twist as the true palm: the forearm
+	// picks the mirror
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		// The wrist bent 30 degrees up and the palm rolled 20 degrees
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const glm::quat bend= glm::angleAxis(glm::radians(-30.f), glm::vec3(0.f, 1.f, 0.f)) *
+				glm::angleAxis(glm::radians(20.f), glm::vec3(1.f, 0.f, 0.f));
+			user.palm[sideIndex]= makePalm(bend * glm::vec3(1.f, 0.f, 0.f), bend * glm::vec3(0.f, 0.f, -1.f));
+		}
+		AvatarPose truePose;
+		solver.reset();
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 110 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, truePose);
+			timestampMs+= 33.0;
+		}
+		User mirrored= user;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			mirrored.palm[sideIndex]= mirrorPalmAlongRay(user.palm[sideIndex], user.wrist[sideIndex]);
+		AvatarPose mirroredPose;
+		solver.reset();
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, mirrored, *rig.skeleton, timestampMs, 120 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, mirroredPose);
+			timestampMs+= 33.0;
+		}
+		bool bBent= true;
+		bool bSame= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const ArmDirections trueArm= posedArm(*rig.skeleton, truePose, sideIndex);
+			const ArmDirections mirroredArm= posedArm(*rig.skeleton, mirroredPose, sideIndex);
+			bBent&= !nearlySameRotation(trueArm.handInForearm, restHandInForearm(*rig.skeleton, sideIndex),
+										glm::radians(10.f));
+			bSame&= nearlySameRotation(trueArm.handInForearm, mirroredArm.handInForearm, 1e-3f);
+			const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+			bSame&= nearlySameRotation(truePose.bones[(int)lower].deltaWorld, mirroredPose.bones[(int)lower].deltaWorld,
+									   1e-3f);
+		}
+		check(bBent, "(j) a bent wrist leaves the rest wrist");
+		check(bSame, "(j) a palm mirrored along its view ray solves the same wrist and forearm roll");
+	}
+
+	// (i) The config section round-trips through the project JSON
+	{
+		AppConfig config;
+		config.direct.enabled= true;
+		config.direct.cameraIndex= 2;
+		config.direct.cameraTiltDegrees= 12.5f;
+		config.direct.neutralPresent= true;
+		config.direct.neutralTorso= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
+		config.direct.neutralShoulderMidpoint= glm::vec3(-0.8f, 0.01f, -0.2f);
+		config.direct.neutralHead= glm::angleAxis(-0.2f, glm::vec3(0.f, 1.f, 0.f));
+		config.direct.neutralWrist[1]= glm::angleAxis(0.4f, glm::vec3(1.f, 0.f, 0.f));
+		config.direct.neutralForearmTwistRadians[0]= 0.25f;
+		const std::string text= config.toJsonString();
+		AppConfig loaded;
+		const bool bLoaded= loaded.loadFromJsonString(text);
+		const DirectConfig& direct= loaded.direct;
+		check(bLoaded && direct.enabled && direct.cameraIndex == 2 && nearlyEqual(direct.cameraTiltDegrees, 12.5f, 1e-5f) &&
+				  direct.neutralPresent && nearlySameRotation(direct.neutralTorso, config.direct.neutralTorso, 1e-5f) &&
+				  glm::length(direct.neutralShoulderMidpoint - config.direct.neutralShoulderMidpoint) < 1e-5f &&
+				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f) &&
+				  nearlySameRotation(direct.neutralWrist[1], config.direct.neutralWrist[1], 1e-5f) &&
+				  nearlySameRotation(direct.neutralWrist[0], glm::quat(1.f, 0.f, 0.f, 0.f), 1e-5f) &&
+				  nearlyEqual(direct.neutralForearmTwistRadians[0], 0.25f, 1e-5f),
+			  "(i) the direct section round-trips through the project JSON");
+
+		AvatarRigSettings rig;
+		rig.sides[1].curlGain= 1.5f;
+		const DirectRetargetConfig solverConfig= makeDirectRetargetConfig(loaded, rig);
+		check(nearlyEqual(solverConfig.cameraTiltRadians, glm::radians(12.5f), 1e-5f) && solverConfig.neutral.present &&
+				  nearlyEqual(solverConfig.neutral.forearmTwist[0], 0.25f, 1e-5f) &&
+				  nearlyEqual(solverConfig.sides[1].curlGain, 1.5f, 1e-5f) &&
+				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f),
+			  "(i) makeDirectRetargetConfig carries the section, the body lengths and the rig onto the solver");
+	}
+
+	MIKAN_LOG_INFO("test-direct-retarget") << (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
+	return failures == 0 ? 0 : 1;
+}
+
+MIKAN_REGISTER_TEST("--test-direct-retarget",
+					"Direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism",
+					eTestCategory::SelfTest, runDirectRetargetTest);

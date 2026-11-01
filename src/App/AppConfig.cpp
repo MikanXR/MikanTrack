@@ -14,6 +14,7 @@
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "BodyPoseSolver.h" // BodyDimensions
+#include "DirectRetarget.h"
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
 #include "Logger.h"
@@ -24,6 +25,34 @@ static constexpr int k_configVersion= 2;
 static constexpr float k_autoSaveCooldownSeconds= 3.f;
 
 // -- json helpers ----
+static json quatToJson(const glm::quat& q)
+{
+	return json::array({q.x, q.y, q.z, q.w});
+}
+
+static bool quatFromJson(const json& parent, const char* key, glm::quat& outQuat)
+{
+	if (!parent.contains(key) || !parent[key].is_array() || parent[key].size() != 4)
+		return false;
+	const json& q= parent[key];
+	outQuat= glm::quat((float)q[3], (float)q[0], (float)q[1], (float)q[2]);
+	return true;
+}
+
+static json vec3ToJson(const glm::vec3& v)
+{
+	return json::array({v.x, v.y, v.z});
+}
+
+static bool vec3FromJson(const json& parent, const char* key, glm::vec3& outVec)
+{
+	if (!parent.contains(key) || !parent[key].is_array() || parent[key].size() != 3)
+		return false;
+	const json& v= parent[key];
+	outVec= glm::vec3((float)v[0], (float)v[1], (float)v[2]);
+	return true;
+}
+
 static json matrix3dToJson(const MikanMatrix3d& m)
 {
 	return json::array({m.x0, m.x1, m.x2, m.y0, m.y1, m.y2, m.z0, m.z1, m.z2});
@@ -332,6 +361,31 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		side.thumbPronationRad= glm::radians(rigSide.thumbPronationDegrees);
 	}
 	return retarget;
+}
+
+DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
+{
+	DirectRetargetConfig direct;
+	direct.cameraTiltRadians= glm::radians(config.direct.cameraTiltDegrees);
+	direct.neutral.present= config.direct.neutralPresent;
+	direct.neutral.torso= config.direct.neutralTorso;
+	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
+	direct.neutral.head= config.direct.neutralHead;
+	direct.neutral.wrist= config.direct.neutralWrist;
+	direct.neutral.forearmTwist= config.direct.neutralForearmTwistRadians;
+	direct.userShoulderWidthMeters= config.body.shoulderWidthMeters;
+	direct.headWidthMeters= config.body.headWidthMeters;
+	direct.noseForwardMeters= config.body.noseForwardMeters;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		direct.bHasRestAngles[sideIndex]= config.fusedRestAngles.present[sideIndex];
+		direct.restAngles[sideIndex]= config.fusedRestAngles.angles[sideIndex];
+	}
+	// The rig adjustments are the position retarget's, one mapping
+	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
+	direct.headTrimRadians= retarget.headTrimRadians;
+	direct.sides= retarget.sides;
+	return direct;
 }
 
 BodyDimensions makeBodyDimensions(const AppConfig& config)
@@ -643,6 +697,23 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	}
 	config.avatar.rootYawDegrees= av.value("rootYawDegrees", 0.f);
 
+	const json& dr= j.value("direct", json::object());
+	config.direct= DirectConfig();
+	config.direct.enabled= dr.value("enabled", false);
+	config.direct.cameraIndex= dr.value("cameraIndex", 0);
+	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", 0.f);
+	if (dr.value("neutralPresent", false))
+	{
+		DirectConfig& direct= config.direct;
+		direct.neutralPresent= quatFromJson(dr, "neutralTorso", direct.neutralTorso) &&
+			vec3FromJson(dr, "neutralShoulderMidpoint", direct.neutralShoulderMidpoint);
+		quatFromJson(dr, "neutralHead", direct.neutralHead);
+		quatFromJson(dr, "neutralWristLeft", direct.neutralWrist[0]);
+		quatFromJson(dr, "neutralWristRight", direct.neutralWrist[1]);
+		direct.neutralForearmTwistRadians[0]= dr.value("neutralForearmTwistLeft", 0.f);
+		direct.neutralForearmTwistRadians[1]= dr.value("neutralForearmTwistRight", 0.f);
+	}
+
 	const json& hs= j.value("handScale", json::object());
 	config.handScale.present= hs.value("present", false);
 	config.handScale.refLengthMeters= hs.value("refLengthMeters", 0.08);
@@ -773,6 +844,26 @@ std::string AppConfig::toJsonString() const
 		{"rootPosition", json::array({avatar.rootPositionWorld.x, avatar.rootPositionWorld.y, avatar.rootPositionWorld.z})},
 		{"rootYawDegrees", avatar.rootYawDegrees},
 	};
+
+	{
+		json directJson= {
+			{"enabled", direct.enabled},
+			{"cameraIndex", direct.cameraIndex},
+			{"cameraTiltDegrees", direct.cameraTiltDegrees},
+			{"neutralPresent", direct.neutralPresent},
+		};
+		if (direct.neutralPresent)
+		{
+			directJson["neutralTorso"]= quatToJson(direct.neutralTorso);
+			directJson["neutralShoulderMidpoint"]= vec3ToJson(direct.neutralShoulderMidpoint);
+			directJson["neutralHead"]= quatToJson(direct.neutralHead);
+			directJson["neutralWristLeft"]= quatToJson(direct.neutralWrist[0]);
+			directJson["neutralWristRight"]= quatToJson(direct.neutralWrist[1]);
+			directJson["neutralForearmTwistLeft"]= direct.neutralForearmTwistRadians[0];
+			directJson["neutralForearmTwistRight"]= direct.neutralForearmTwistRadians[1];
+		}
+		j["direct"]= directJson;
+	}
 
 	j["handScale"]= {
 		{"present", handScale.present},

@@ -7,50 +7,14 @@
 #include "glm/gtc/constants.hpp"
 #include "glm/gtc/quaternion.hpp"
 
+#include "AvatarRetargetMath.h"
 #include "AvatarSkeleton.h"
-#include "HandPoseModel.h"
 #include "MathGLM.h"
 
 namespace
 {
 using B= eHumanoidBone;
-
-glm::vec3 safeNormalize(const glm::vec3& v)
-{
-	const float lengthSquared= glm::dot(v, v);
-	return lengthSquared > 1e-12f ? v / std::sqrt(lengthSquared) : glm::vec3(0.f);
-}
-
-// Signed angle from a to b about axis (all unit length, a and b perpendicular
-// to axis)
-float signedAngle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& axis)
-{
-	return atan2f(glm::dot(glm::cross(a, b), axis), glm::dot(a, b));
-}
-
-glm::vec3 projectPerpendicular(const glm::vec3& v, const glm::vec3& unitAxis)
-{
-	return v - unitAxis * glm::dot(v, unitAxis);
-}
-
-float wrapAngle(float radians)
-{
-	while (radians > glm::pi<float>())
-		radians-= glm::two_pi<float>();
-	while (radians < -glm::pi<float>())
-		radians+= glm::two_pi<float>();
-	return radians;
-}
-
-eHumanoidBone sideBone(int sideIndex, B left, B right)
-{
-	return sideIndex == 0 ? left : right;
-}
-
-eHumanoidBone fingerBone(int sideIndex, int finger, int phalanx)
-{
-	return (eHumanoidBone)((int)firstHumanoidFingerBone(sideIndex) + finger * 3 + phalanx);
-}
+using namespace AvatarRetargetMath;
 
 // Rest geometry under the root placement, which every delta is measured from
 struct RootedRest
@@ -63,13 +27,6 @@ struct RootedRest
 	glm::vec3 offset(B bone) const { return rotation * skeleton->getBone(bone).restOffsetFromParentWorld; }
 	glm::vec3 direction(B bone) const { return safeNormalize(offset(bone)); }
 };
-
-// A bone whose own twist is not measured: swing the parent-posed rest
-// direction onto the measured one and chain the result
-glm::quat swingTo(const glm::quat& parentDelta, const glm::vec3& rootedRestDirection, const glm::vec3& worldDirection)
-{
-	return glm_shortest_arc(parentDelta * rootedRestDirection, worldDirection) * parentDelta;
-}
 
 // Elbow on the circle where the upper-arm sphere about the shoulder meets
 // the forearm sphere about the wrist, at the point nearest the pole. A wrist
@@ -343,67 +300,7 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 			bone.deltaWorld= handDelta;
 		}
 
-		// Fingers: the measured angles played through the forward kinematics
-		// on the AVATAR's hand skeleton, then each phalanx swung from its
-		// rest direction relative to the bone before it, so the roll of the
-		// hand carries down the chain
-		const glm::vec3 restPalmCenter(hand.palmFrameWorld[3]);
-		const glm::vec3 restHandPosition= skeleton.getBone(handBone).restPositionWorld;
-		const glm::quat posedPalmRotation= handDelta * rest.rotation * restPalmRotation;
-		glm::mat4 palmTransform= glm::mat4_cast(posedPalmRotation);
-		palmTransform[3]= glm::vec4(handPosition + handDelta * (rest.rotation * (restPalmCenter - restHandPosition)), 1.f);
-
-		// The rig's gains scale the measured angles first. Then a rig with
-		// fewer bones than the measured finger folds the bends past its last
-		// bone into that bone, so a fist still closes on a two-bone finger.
-		std::array<FingerAngles, FINGER_COUNT> angles= pose.fingers;
-		for (int finger= 0; finger < FINGER_COUNT; ++finger)
-		{
-			FingerAngles& fingerAngles= angles[finger];
-			fingerAngles.lateral*= sideConfig.splayGain;
-			fingerAngles.proximal*= sideConfig.curlGain;
-			fingerAngles.intermediate*= sideConfig.curlGain;
-			fingerAngles.distal*= sideConfig.curlGain;
-			switch (hand.fingerBoneCount[finger])
-			{
-			case 1:
-				fingerAngles.proximal+= fingerAngles.intermediate + fingerAngles.distal;
-				fingerAngles.intermediate= 0.f;
-				fingerAngles.distal= 0.f;
-				break;
-			case 2:
-				fingerAngles.intermediate+= fingerAngles.distal;
-				fingerAngles.distal= 0.f;
-				break;
-			default:
-				break;
-			}
-		}
-
-		std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
-		HandPoseModel::buildFingerJoints(palmTransform, hand.skeleton, angles, joints,
-										 sideConfig.bThumbPronationOverride ? &sideConfig.thumbPronationRad : nullptr);
-
-		for (int finger= 0; finger < FINGER_COUNT; ++finger)
-		{
-			// A disabled finger stays absent and follows the hand at rest
-			if (!sideConfig.fingerEnabled[finger])
-				continue;
-			glm::quat fingerDelta= handDelta;
-			for (int index= 0; index < hand.fingerBoneCount[finger]; ++index)
-			{
-				const glm::vec3 direction= safeNormalize(joints[finger][index + 1] - joints[finger][index]);
-				if (glm::dot(direction, direction) > 0.f)
-				{
-					fingerDelta=
-						swingTo(fingerDelta, rest.rotation * hand.restPhalanxDirWorld[finger][index], direction);
-				}
-				AvatarPose::Bone& bone=
-					outPose.bones[(int)fingerBone(sideIndex, finger, hand.fingerSlots[finger][index])];
-				bone.present= true;
-				bone.deltaWorld= fingerDelta;
-			}
-		}
+		solveFingerBones(skeleton, sideIndex, rest.rotation, handDelta, handPosition, pose.fingers, sideConfig, outPose);
 	}
 }
 

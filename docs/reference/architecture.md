@@ -50,6 +50,7 @@ Where a frame goes, one `VisionThread::threadLoop` iteration (`src/App/VisionThr
 - `runFusionStage`
 - `runImuStage`
 - `runBodySolveStage`
+- `runDirectStage`, in place of the three stages above while the direct mode is on
 - `runOutputStage`
 - `runCalibrationCaptures`
 - `runDiagnosticsStage`
@@ -62,12 +63,12 @@ Step by step:
 4. With more than one camera, `seedSearchHints` projects the previous iteration's fused world poses into this camera's image as pipeline search hints. Seeding happens here, immediately before inference, because `setSearchHints` replaces the hint queue and hints are only consumed inside `process()`.
 5. `HandTrackingPipeline::process` produces 2D hand landmarks. The opt-in `BodyPoseTracker` then runs on the same undistorted frame. `LandmarkTo3D::process` lifts landmarks into camera space, and `applyWorldTransform` (`SpaceTransforms`) moves them into world space when extrinsics are present. The camera's result becomes its `CameraContext`'s last result (the fusion input) and its preview is published latest-wins.
 6. `FaceService::update` drains the phone face stream. If no camera produced a frame, a face sample no frame has carried yet still goes out through `runFaceOnlyOutput`, which repeats the last output with the new face (see [face.md](./face.md)). The loop then services any pending diagnostic dump, sleeps 2 ms, and continues.
-7. Every camera's `lastResult` becomes a fusion candidate. When any candidate has a valid world pose, `HandFusion::fuse` runs (internally driving `HandStateEstimator`); otherwise camera 0's camera-space result passes through unchanged.
+7. Every camera's `lastResult` becomes a fusion candidate. When any candidate has a valid world pose, `HandFusion::fuse` runs (internally driving `HandStateEstimator`); otherwise camera 0's camera-space result passes through unchanged. With the direct mode on (`direct.enabled` and its camera present) `runDirectStage` stands in for steps 7 to 11: the direct camera's result is the output, recorded as a passthrough of that camera, which replay rebuilds from that camera's mirror (see [avatar.md](./avatar.md)).
 8. Recording tap: the fused output is snapshotted and checksummed immediately after `fuse`, before the IMU forearm fill and before the body solver. Replay checksums at this same point, which is the invariant that makes recorded and replayed checksums comparable.
 9. `ImuService` drains every buffered inertial sample, takes the fused palm orientation as a yaw anchor, and publishes the forearm orientation onto the poses. The IMU EKF output is recorded separately; it is never replayed.
 10. `BodyPoseSolver::solve` runs after the IMU fill (IMU wins for sides it claims), producing elbows, shoulders, and head.
 11. Fusion bookkeeping: seed state for the next iteration, dominant-camera and per-camera observation-confidence publishes, and the stereo auto hand-scale EMA.
-12. The live face sample goes onto the frame, the phone's head rotation replacing the camera head. `OscStreamer::sendFrame` streams the frame (with an avatar, retargeting the resolved poses onto its skeleton first), then the fused result is published latest-wins for the main thread.
+12. The live face sample goes onto the frame, the phone's head rotation replacing the camera head. In the direct mode the direct retarget then solves its pose from the output (after the face stage, so the phone head reaches it). `OscStreamer::sendFrame` streams the frame (with an avatar, retargeting the resolved poses onto its skeleton first, or streaming the direct pose as it is), then the fused result and the direct pose are published latest-wins for the main thread.
 13. The tail of the loop services calibration captures (bone calibration window, rest pose), records the diagnostics history ring, assembles the recording frame and hands it to the writer thread, and services dump requests.
 
 The loop watches itself: `eVisionPhase` names the phases (`ConfigRefresh`, `Capture`, `Imu`, `Fusion`, `Face`, `Osc`, `Diagnostics`), and any iteration exceeding `k_hitchThresholdMs` (50 ms, `VisionThread.cpp`) logs a per-phase millisecond breakdown attributing the hitch to the worst phase (`reportHitchIfSlow`). A hitch starves every camera at once, so the symptom downstream is a synchronized multi-camera tracking gap that would otherwise look like a USB fault. Inside the capture phase, `CameraContext::process` also times each of its steps on every frame and publishes them on the result as `captureTimings` (see [debugging.md](./debugging.md)).
@@ -101,7 +102,7 @@ Settings live in two files:
 
 A project is a folder under `%USERPROFILE%/Documents/MikanTrack/<name>/` holding `project.json` plus that project's `recordings/` and `dumps/`. `ProjectManager` (`src/App/ProjectManager.h`/`.cpp`) creates and loads projects. Loading applies the file into the existing `AppConfig` object IN PLACE (after resetting it to defaults), because the UI panels, wizards, and the vision thread all hold raw pointers to that object. The vision thread is always stopped before the config mutates (`App::activateProject` / `App::returnToMainMenu` are the only mutation points), since it reads the config without synchronization. Headless tools that want the active project's config go through `ProjectManager::loadActiveProjectConfig`.
 
-The free functions `makeHandFusionConfig` and `makeBodyDimensions` (declared in `AppConfig.h`) are the single mappings from an `AppConfig` to the fusion config and body dimensions. They exist so the live vision thread, the replay engine, and the replay self-test cannot assemble different configs from the same source.
+The free functions `makeHandFusionConfig`, `makeBodyDimensions`, `makeAvatarRetargetConfig` and `makeDirectRetargetConfig` (declared in `AppConfig.h`) are the single mappings from an `AppConfig` to the fusion config, the body dimensions and the two avatar retargets' configs. They exist so the live vision thread, the replay engine, the window and the self-tests cannot assemble different configs from the same source.
 
 ---
 

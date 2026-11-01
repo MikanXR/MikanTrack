@@ -136,14 +136,27 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 	return m_cameras[cameraIndex]->fetchPreviewFrame(outFrame);
 }
 
-bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult)
+bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
 	if (!m_bFusedFresh)
 		return false;
 
 	outResult= m_fusedResult;
+	if (outDirectPose != nullptr)
+		*outDirectPose= m_fusedDirectPose;
 	m_bFusedFresh= false;
+	return true;
+}
+
+bool VisionThread::fetchNeutralCapture(DirectNeutralCapture& outCapture)
+{
+	std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
+	if (!m_bNeutralCaptureReady)
+		return false;
+
+	outCapture= m_capturedNeutral;
+	m_bNeutralCaptureReady= false;
 	return true;
 }
 
@@ -426,6 +439,9 @@ void VisionThread::refreshConfigOnThread()
 		m_imuService->setConfig(imuConfig);
 	}
 
+	// Direct retarget: the solver config follows the project and the rig
+	m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
+
 	// OSC
 	applyOscConfigOnThread();
 }
@@ -531,18 +547,26 @@ void VisionThread::threadLoop()
 			continue;
 		}
 
-		runFusionStage(iteration);
-		lapPhase(eVisionPhase::Fusion);
-
-		if (iteration.bAnyWorldCandidate)
+		if (isDirectModeActive())
 		{
-			runImuStage(iteration);
-			lapPhase(eVisionPhase::Imu);
-
-			// The body solve and the fusion bookkeeping belong to the fusion
-			// phase
-			runBodySolveStage(iteration);
+			runDirectStage(iteration);
 			lapPhase(eVisionPhase::Fusion);
+		}
+		else
+		{
+			runFusionStage(iteration);
+			lapPhase(eVisionPhase::Fusion);
+
+			if (iteration.bAnyWorldCandidate)
+			{
+				runImuStage(iteration);
+				lapPhase(eVisionPhase::Imu);
+
+				// The body solve and the fusion bookkeeping belong to the
+				// fusion phase
+				runBodySolveStage(iteration);
+				lapPhase(eVisionPhase::Fusion);
+			}
 		}
 
 		runOutputStage(iteration);
@@ -614,6 +638,13 @@ void VisionThread::servicePendingRequests()
 				m_avatar= m_pendingAvatar;
 			if (bIdentityChanged)
 				m_avatarIdentity= m_pendingAvatarIdentity;
+		}
+		if (bSkeletonChanged)
+		{
+			// A new skeleton means new lengths: the direct solver starts over
+			// on them with the rig that came with it
+			m_directRetarget.reset();
+			m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
 		}
 		applyOscConfigOnThread();
 	}
@@ -697,6 +728,55 @@ void VisionThread::runFusionStage(IterationState& iteration)
 			iteration.recordFrame.checksum= TrackingRecording::computeFusedChecksum(iteration.outputResult);
 		}
 	}
+}
+
+bool VisionThread::isDirectModeActive() const
+{
+	const int cameraIndex= m_config->direct.cameraIndex;
+	return m_config->direct.enabled && cameraIndex >= 0 && cameraIndex < (int)m_cameras.size();
+}
+
+void VisionThread::runDirectStage(IterationState& iteration)
+{
+	// Every camera still feeds the diagnostics; the output is the direct
+	// camera's result as it stands, camera space, no fusion
+	for (const std::unique_ptr<CameraContext>& context : m_cameras)
+		iteration.fusionCandidates.push_back(&context->getLastResult());
+	iteration.bDirect= true;
+	iteration.outputResult= m_cameras[m_config->direct.cameraIndex]->getLastResult().result;
+	m_lastFusedForHints= TrackingFrameResult(); // camera-space - can't project
+	m_dominantCamera[0]= -1;
+	m_dominantCamera[1]= -1;
+
+	// Recording: a passthrough of the direct camera, which replay rebuilds
+	// from that camera's mirror under the recorded config
+	iteration.bRecordingThisFrame= m_recorder != nullptr && m_recorder->isRecording();
+	if (iteration.bRecordingThisFrame)
+	{
+		iteration.recordFrame.bFused= false;
+		TrackingRecording::snapshotFusedOutput(iteration.outputResult, iteration.recordFrame.outPoses);
+		iteration.recordFrame.checksum= TrackingRecording::computeFusedChecksum(iteration.outputResult);
+	}
+}
+
+void VisionThread::solveDirectPose(IterationState& iteration)
+{
+	m_directPose.clear();
+	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
+	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
+		return;
+
+	DirectCameraModel cameraModel;
+	cameraModel.fx= camera.fx;
+	cameraModel.fy= camera.fy;
+	cameraModel.cx= camera.cx;
+	cameraModel.cy= camera.cy;
+	cameraModel.width= camera.result.frameWidth;
+	cameraModel.height= camera.result.frameHeight;
+	// The only head on a camera-space result is the phone's, which the face
+	// stage just placed on the output when it streams
+	m_directRetarget.solve(camera.result, cameraModel, iteration.outputResult.head, camera.result.timestampMs,
+						   *m_avatar.skeleton, m_directConfig, m_directPose);
 }
 
 void VisionThread::runImuStage(IterationState& iteration)
@@ -860,13 +940,22 @@ void VisionThread::runOutputStage(IterationState& iteration)
 		m_lastCameraOutputMs= iteration.outputResult.timestampMs;
 	applyFaceToOutput(iteration.outputResult, steadyNowMs(), iteration.bAnyNewResult);
 
+	// In direct mode the streamer and the window take the solver's pose: a
+	// camera frame solves a fresh one, a face-only frame repeats the last
+	if (iteration.bDirect)
+		solveDirectPose(iteration);
+	const bool bDirectPose= isDirectModeActive();
+	if (!bDirectPose)
+		m_directPose.clear();
+
 	if (m_oscStreamer != nullptr)
-		m_oscStreamer->sendFrame(iteration.outputResult);
+		m_oscStreamer->sendFrame(iteration.outputResult, bDirectPose ? &m_directPose : nullptr);
 
 	// Publish the result (latest-wins)
 	{
 		std::lock_guard<std::mutex> lock(m_fusedMutex);
 		m_fusedResult= iteration.outputResult;
+		m_fusedDirectPose= m_directPose;
 		m_bFusedFresh= true;
 	}
 	m_lastOutputResult= iteration.outputResult;
@@ -997,6 +1086,35 @@ void VisionThread::runCalibrationCaptures()
 				m_bBoneCalibrationReady= true;
 			}
 			m_bBoneCalibrationActive= false;
+		}
+	}
+
+	// Neutral capture for the direct retarget: the solver's filtered
+	// measurements, and the phone head's anchor while it streams, so looking
+	// at the screen reads as the identity head on both sources
+	if (m_bNeutralCaptureRequested.exchange(false))
+	{
+		DirectNeutralCapture capture;
+		if (m_directRetarget.captureNeutral(capture))
+		{
+			{
+				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
+				m_capturedNeutral= capture;
+				m_bNeutralCaptureReady= true;
+			}
+			FaceSample sample;
+			const double nowMs= steadyNowMs();
+			if (m_faceService != nullptr && m_faceService->isStreaming(nowMs) && m_faceService->getLatestSample(sample) &&
+				sample.faceTracked && sample.hasHead)
+			{
+				std::lock_guard<std::mutex> lock(m_faceAnchorMutex);
+				m_capturedFaceAnchor= faceHeadAnchorFromWorld(glm::quat(1.f, 0.f, 0.f, 0.f), sample.headEulerDegrees);
+				m_bFaceAnchorReady= true;
+			}
+		}
+		else
+		{
+			MIKAN_MT_LOG_WARNING("VisionThread") << "Neutral capture skipped: no torso solved yet";
 		}
 	}
 

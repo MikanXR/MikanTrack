@@ -249,10 +249,12 @@ With the face stream on (Tracking panel, Face section), the blendshapes go out
 under the loaded avatar's own expression names, and the phone's head rotation
 drives the `Head` bone. With no avatar loaded they go out as the 52 ARKit names.
 
-Bones streamed, using Unity's `HumanBodyBones` names: `Head`, both
-`Shoulder`/`UpperArm`/`LowerArm`/`Hand`, and all 30 finger bones. Everything
-else (spine, neck, legs, eyes, jaw) is left alone, because this rig does not
-measure it and a receiver holds an unstreamed bone at the avatar's rest pose.
+Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,
+`Chest`, `UpperChest`, `Neck`, both `Shoulder`/`UpperArm`/`LowerArm`/`Hand`,
+and all 30 finger bones. The torso and neck bones go out only when the direct
+retarget places them (a lean); the position retarget never does. A bone not
+sent stays at the receiver's rest pose, and legs, eyes and jaw are never
+streamed.
 
 **Identity means the avatar's rest pose.** Streamed rotations are
 parent-relative and measured against a VRM-style rest: a T-pose with the palms

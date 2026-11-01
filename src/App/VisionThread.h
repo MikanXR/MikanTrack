@@ -11,6 +11,7 @@
 #include "BodyPoseSolver.h"
 #include "CameraContext.h"
 #include "DiagnosticDump.h"
+#include "DirectRetarget.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
 #include "HandBoneCalibrator.h"
@@ -64,9 +65,11 @@ public:
 	// Returns false if nothing new arrived since the last call.
 	bool fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFrame);
 
-	// Copies the newest fused (world-space, smoothed) tracking result.
-	// Returns false if nothing new arrived since the last call.
-	bool fetchFusedResult(TrackingFrameResult& outResult);
+	// Copies the newest fused (world-space, smoothed) tracking result, and
+	// in direct mode the avatar pose the direct retarget solved for it (an
+	// invalid pose otherwise). Returns false if nothing new arrived since
+	// the last call.
+	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
 	int getDominantCamera(eHandSide side) const { return m_dominantCamera[(int)side].load(); }
@@ -107,6 +110,14 @@ public:
 	// the UI and persisted in the face config.
 	void requestFaceAnchorCapture() { m_bFaceAnchorCaptureRequested= true; }
 	bool fetchFaceAnchorCapture(glm::quat& outAnchor);
+
+	// Direct retarget: captures the solver's current filtered measurements
+	// as the neutral pose, and while the phone streams captures the face
+	// anchor with it (fetched separately, above). The UI fetches the capture
+	// and persists it in the direct config. False from fetch until a capture
+	// lands; a request with no solved torso is dropped.
+	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
+	bool fetchNeutralCapture(DirectNeutralCapture& outCapture);
 
 	// Rest-pose calibration: captures what EVERY camera currently reports for
 	// each tracked hand. Per camera because the model landmarks are
@@ -254,6 +265,9 @@ private:
 		// The frame's output: fused world space, or camera 0's camera-space
 		// passthrough when no calibrated camera contributed
 		TrackingFrameResult outputResult;
+		// Direct mode this iteration: the output is the direct camera's result
+		// and the direct retarget poses the avatar from it
+		bool bDirect= false;
 		// The recording record under assembly, live only while recording
 		bool bRecordingThisFrame= false;
 		RecordedFrame recordFrame;
@@ -269,6 +283,14 @@ private:
 	// Cross-camera fusion (or the camera-space passthrough) and the fused
 	// checksum tap
 	void runFusionStage(IterationState& iteration);
+	// Direct mode: the direct camera's result as the output (the camera is
+	// the world), recorded as a passthrough of that camera, in place of the
+	// fusion, IMU and body-solve stages
+	bool isDirectModeActive() const;
+	void runDirectStage(IterationState& iteration);
+	// The direct retarget over the direct camera's result, after the face
+	// stage so the phone head reaches it; an invalid pose without a skeleton
+	void solveDirectPose(IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
@@ -368,7 +390,18 @@ private:
 	// Fused result handoff (mutex-guarded, latest-wins)
 	std::mutex m_fusedMutex;
 	TrackingFrameResult m_fusedResult;
+	AvatarPose m_fusedDirectPose;
 	bool m_bFusedFresh= false;
+
+	// Direct retarget (single camera, no world calibration): the solver and
+	// its pose for the frame, and the neutral capture handoff
+	DirectRetarget m_directRetarget;
+	DirectRetargetConfig m_directConfig;
+	AvatarPose m_directPose;
+	std::atomic_bool m_bNeutralCaptureRequested{false};
+	std::mutex m_neutralCaptureMutex;
+	DirectNeutralCapture m_capturedNeutral;
+	bool m_bNeutralCaptureReady= false;
 
 	// Rest-pose capture handoff
 	std::atomic_bool m_bRestPoseCaptureRequested{false};

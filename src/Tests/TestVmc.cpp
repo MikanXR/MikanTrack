@@ -3,9 +3,12 @@
 #include "glm/matrix.hpp"
 
 #include "AvatarFaceMap.h"
+#include "AvatarRetarget.h"
+#include "AvatarSkeleton.h"
 #include "AvatarTypes.h"
 #include "FaceHead.h"
 #include "OscStreamer.h"
+#include "SyntheticAvatar.h"
 
 // Synthetic tests for the VMC retarget. The whole conversion is pure, so every
 // case here is exact: a hand at the rest pose must emit identity rotations, and
@@ -678,7 +681,8 @@ static int runVmcTest(const TestArgs&)
 				boneNames.push_back(message.strings[0]);
 		}
 		check(bBonesWellFormed, "every bone message is ,sfffffff");
-		check(boneNames.size() == 39, "a fully tracked frame streams the head and all 38 body bones");
+		check(boneNames.size() == 39,
+			  "a measured-length frame streams 39 bones: the head, 8 arm bones and 30 finger bones");
 
 		std::sort(boneNames.begin(), boneNames.end());
 		check(std::adjacent_find(boneNames.begin(), boneNames.end()) == boneNames.end(),
@@ -731,6 +735,129 @@ static int runVmcTest(const TestArgs&)
 		check(strcmp(boneName(eVmcBone::LeftLittleDistal), "LeftLittleDistal") == 0 &&
 				  strcmp(boneName(eVmcBone::RightThumbProximal), "RightThumbProximal") == 0,
 			  "finger bones use Unity's HumanBodyBones spelling");
+	}
+
+	// (i2) The torso and neck bones. They only go out when a pose places them,
+	// which the direct retarget does and the position retarget never does.
+	{
+		check(strcmp(boneName(eVmcBone::Spine), "Spine") == 0 && strcmp(boneName(eVmcBone::Chest), "Chest") == 0 &&
+				  strcmp(boneName(eVmcBone::UpperChest), "UpperChest") == 0 &&
+				  strcmp(boneName(eVmcBone::Neck), "Neck") == 0,
+			  "torso and neck bones use Unity's HumanBodyBones spelling");
+		check(humanoidBoneForVmc(eVmcBone::Spine) == eHumanoidBone::Spine &&
+				  humanoidBoneForVmc(eVmcBone::Chest) == eHumanoidBone::Chest &&
+				  humanoidBoneForVmc(eVmcBone::UpperChest) == eHumanoidBone::UpperChest &&
+				  humanoidBoneForVmc(eVmcBone::Neck) == eHumanoidBone::Neck,
+			  "torso and neck VMC bones name the matching humanoid bones");
+
+		// The synthetic rig has a spine, chest and neck but no upper chest
+		const AvatarModel model= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
+		OscStreamerConfig config;
+		config.maxRateHz= 0.f;
+		config.avatarSkeleton= std::make_shared<AvatarSkeleton>(model);
+		OscStreamer streamer;
+		streamer.setConfig(config);
+
+		// A direct pose leaning 20 degrees about up, torso chain at one world
+		// delta, with one arm placed at identity
+		const glm::quat lean= glm::angleAxis(glm::radians(20.f), glm::vec3(0.f, 0.f, 1.f));
+		AvatarPose pose;
+		pose.valid= true;
+		for (eHumanoidBone torsoBone : {eHumanoidBone::Spine, eHumanoidBone::Chest, eHumanoidBone::Neck})
+		{
+			pose.bones[(int)torsoBone].present= true;
+			pose.bones[(int)torsoBone].deltaWorld= lean;
+		}
+		pose.bones[(int)eHumanoidBone::LeftUpperArm].present= true;
+
+		auto decodeFrame= [&streamer](const AvatarPose* directPose, std::vector<DecodedMessage>& outMessages) {
+			TrackingFrameResult emptyFrame;
+			std::vector<std::vector<uint8_t>> packets;
+			streamer.encodeFrame(emptyFrame, packets, directPose);
+			outMessages.clear();
+			bool bWellFormed= !packets.empty();
+			for (const std::vector<uint8_t>& packet : packets)
+				bWellFormed&= decodeBundle(packet, outMessages);
+			return bWellFormed;
+		};
+		auto findBone= [](const std::vector<DecodedMessage>& messages, const char* name) -> const DecodedMessage* {
+			for (const DecodedMessage& message : messages)
+			{
+				if (message.address == "/VMC/Ext/Bone/Pos" && !message.strings.empty() && message.strings[0] == name &&
+					message.floats.size() == 7)
+					return &message;
+			}
+			return nullptr;
+		};
+
+		std::vector<DecodedMessage> messages;
+		check(decodeFrame(&pose, messages), "a direct pose frame is complete bundles");
+
+		const DecodedMessage* spine= findBone(messages, "Spine");
+		const DecodedMessage* neck= findBone(messages, "Neck");
+		check(spine != nullptr && neck != nullptr && findBone(messages, "Chest") != nullptr,
+			  "a direct pose streams the torso bones it placed");
+		check(findBone(messages, "UpperChest") == nullptr, "an upper chest the pose never placed is not streamed");
+		check(findBone(messages, "LeftUpperArm") != nullptr, "a direct pose streams the arm it placed");
+
+		bool bFingerStreamed= false;
+		for (const DecodedMessage& message : messages)
+		{
+			if (message.address != "/VMC/Ext/Bone/Pos" || message.strings.empty())
+				continue;
+			const std::string& name= message.strings[0];
+			bFingerStreamed|= name.find("Thumb") != std::string::npos || name.find("Index") != std::string::npos ||
+							  name.find("Middle") != std::string::npos || name.find("Ring") != std::string::npos ||
+							  name.find("Little") != std::string::npos;
+		}
+		check(!bFingerStreamed, "a direct pose that placed no fingers streams none");
+
+		// The spine hangs off the unplaced hips, so it carries the whole lean
+		const glm::quat expectedSpine= worldToUnityRotation(lean);
+		check(spine != nullptr &&
+				  fabsf(fabsf(glm::dot(glm::quat(spine->floats[6], spine->floats[3], spine->floats[4], spine->floats[5]),
+									   expectedSpine)) - 1.f) < 1e-4f,
+			  "the spine carries the lean as its local rotation");
+		// The arm hangs off the leaned chest, so it undoes the lean locally
+		const DecodedMessage* upperArm= findBone(messages, "LeftUpperArm");
+		const glm::quat expectedArm= worldToUnityRotation(glm::inverse(lean));
+		check(upperArm != nullptr &&
+				  fabsf(fabsf(glm::dot(glm::quat(upperArm->floats[6], upperArm->floats[3], upperArm->floats[4],
+												 upperArm->floats[5]),
+									   expectedArm)) - 1.f) < 1e-4f,
+			  "an arm measured against the leaned chest streams relative to it");
+
+		const DecodedMessage* ok= findMessage(messages, "/VMC/Ext/OK");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 1, "a direct pose with an arm reports tracking");
+
+		AvatarPose torsoOnly= pose;
+		torsoOnly.bones[(int)eHumanoidBone::LeftUpperArm].present= false;
+		decodeFrame(&torsoOnly, messages);
+		ok= findMessage(messages, "/VMC/Ext/OK");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 0, "a direct pose with no arm reports not tracking");
+
+		// The position path never places the torso
+		decodeFrame(nullptr, messages);
+		check(findBone(messages, "Spine") == nullptr && findBone(messages, "Neck") == nullptr,
+			  "with no direct pose the torso bones are not streamed");
+
+		// No skeleton, no bones, but the rest of the frame still goes out
+		OscStreamerConfig bareConfig;
+		bareConfig.maxRateHz= 0.f;
+		OscStreamer bareStreamer;
+		bareStreamer.setConfig(bareConfig);
+		TrackingFrameResult emptyFrame;
+		std::vector<std::vector<uint8_t>> packets;
+		bareStreamer.encodeFrame(emptyFrame, packets, &pose);
+		messages.clear();
+		for (const std::vector<uint8_t>& packet : packets)
+			decodeBundle(packet, messages);
+		bool bAnyBone= false;
+		for (const DecodedMessage& message : messages)
+			bAnyBone|= message.address == "/VMC/Ext/Bone/Pos";
+		check(!bAnyBone && findMessage(messages, "/VMC/Ext/OK") != nullptr &&
+				  findMessage(messages, "/VMC/Ext/T") != nullptr && findMessage(messages, "/VMC/Ext/Root/Pos") != nullptr,
+			  "a direct pose with no avatar skeleton streams no bones but the rest of the frame");
 	}
 
 	// (j) The face stream and the avatar announcement on the wire. The names

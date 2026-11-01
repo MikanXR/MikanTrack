@@ -1,6 +1,11 @@
 #include "TestCommon.h"
 
+#include "AvatarRetarget.h"
+#include "AvatarRig.h"
+#include "AvatarSkeleton.h"
+#include "DirectRetarget.h"
 #include "FrameRecorder.h"
+#include "SyntheticAvatar.h"
 
 // Direct-mode gate: re-runs the whole-body 3D model over a recording's raw
 // frames from one camera and measures what the single-camera direct mode
@@ -26,6 +31,16 @@
 //            model gives, so the depth axis's contribution is visible
 // An elbow flip is a bend vector (elbow off the shoulder-wrist line) pointing
 // against the truth's, with both bends past kBendMinMeters.
+//
+// The retarget comparison runs both avatar solvers on the shared synthetic
+// rig: the position retarget over the replayed fused frame is the
+// reference, the direct retarget over this camera's recorded hands and the
+// re-run observation (with the recording's direct config, neutral or not)
+// is the candidate. The posed upper-arm and forearm directions are compared
+// in the direct world (the reference's carried through the camera's
+// extrinsics and the direct conversion), the wrist as the hand's rotation
+// in the forearm, the fingers as the proximal bones' rotation in the hand.
+// Reported, not gated.
 //
 // The gates cover what the truth measures independently of the model: the
 // stereo wrist and the shoulder solved from its own rays and width. The
@@ -120,6 +135,21 @@ struct SideStats
 	Stats modelForearmStepDeg;
 	Stats truthUpperArmStepDeg;
 	Stats truthForearmStepDeg;
+	// The retargeted bones: direct against position, see the header comment
+	int retargetFrames= 0;
+	Stats retargetUpperArmDeg;
+	Stats retargetForearmDeg;
+	Stats retargetWristDeg;
+	Stats retargetFingerDeg;
+	// The inputs behind them: the camera's own palm frame and raw finger
+	// angles against the fused ones, so a retarget gap can be read as the
+	// single view's or the solver's
+	Stats inputPalmDeg;
+	// The nearer of the camera's palm and its mirror along the view ray (the
+	// lift's wrong depth guess, which the solver undoes by the forearm): what
+	// remains is the single view's palm error proper
+	Stats inputPalmMirrorDeg;
+	Stats inputFingerDeg;
 
 	void append(const SideStats& other)
 	{
@@ -139,6 +169,14 @@ struct SideStats
 		modelForearmStepDeg.append(other.modelForearmStepDeg);
 		truthUpperArmStepDeg.append(other.truthUpperArmStepDeg);
 		truthForearmStepDeg.append(other.truthForearmStepDeg);
+		retargetFrames+= other.retargetFrames;
+		retargetUpperArmDeg.append(other.retargetUpperArmDeg);
+		retargetForearmDeg.append(other.retargetForearmDeg);
+		retargetWristDeg.append(other.retargetWristDeg);
+		retargetFingerDeg.append(other.retargetFingerDeg);
+		inputPalmDeg.append(other.inputPalmDeg);
+		inputPalmMirrorDeg.append(other.inputPalmMirrorDeg);
+		inputFingerDeg.append(other.inputFingerDeg);
 	}
 };
 
@@ -227,6 +265,123 @@ float angleBetweenDeg(const glm::vec3& a, const glm::vec3& b)
 	return glm::degrees(acosf(std::max(-1.f, std::min(1.f, glm::dot(a, b) / lengths))));
 }
 
+float rotationAngleDeg(const glm::quat& q)
+{
+	const glm::quat unit= glm::normalize(q);
+	return glm::degrees(2.f * acosf(std::min(std::fabs(unit.w), 1.f)));
+}
+
+// Both retargets over one frame, their posed bones compared per side
+struct RetargetComparison
+{
+	const AvatarSkeleton* skeleton= nullptr;
+	AvatarRetargetConfig referenceConfig;
+	DirectRetargetConfig directConfig;
+	AvatarRetarget reference;
+	DirectRetarget direct;
+	// Marker world to the direct world: through the camera, then the direct
+	// conversion at the recording's tilt
+	glm::quat directFromMarker{1.f, 0.f, 0.f, 0.f};
+
+	void compare(const TrackingFrameResult& fused, const TrackingFrameResult& cameraInput,
+				 const DirectCameraModel& cameraModel, const BodyDimensions& dimensions,
+				 std::array<SideStats, 2>& sides)
+	{
+		using B= eHumanoidBone;
+		AvatarPose referencePose;
+		AvatarPose directPose;
+		reference.solve(fused, dimensions, *skeleton, referenceConfig, referencePose);
+		direct.solve(cameraInput, cameraModel, TrackingFrameResult::HeadPose(), cameraInput.timestampMs, *skeleton,
+					 directConfig, directPose);
+		std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> referencePosed;
+		std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> directPosed;
+		computePosedBones(*skeleton, referencePose, referencePosed);
+		computePosedBones(*skeleton, directPose, directPosed);
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+			const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+			if (!referencePose.bones[(int)hand].present || !directPose.bones[(int)hand].present)
+				continue;
+			SideStats& side= sides[sideIndex];
+			side.retargetFrames++;
+
+			const glm::vec3 referenceUpper=
+				directFromMarker * (referencePosed[(int)lower].positionWorld - referencePosed[(int)upper].positionWorld);
+			const glm::vec3 referenceForearm=
+				directFromMarker * (referencePosed[(int)hand].positionWorld - referencePosed[(int)lower].positionWorld);
+			const glm::vec3 directUpper= directPosed[(int)lower].positionWorld - directPosed[(int)upper].positionWorld;
+			const glm::vec3 directForearm= directPosed[(int)hand].positionWorld - directPosed[(int)lower].positionWorld;
+			side.retargetUpperArmDeg.add(angleBetweenDeg(referenceUpper, directUpper));
+			side.retargetForearmDeg.add(angleBetweenDeg(referenceForearm, directForearm));
+
+			const glm::quat referenceWrist=
+				glm::inverse(referencePosed[(int)lower].rotationWorld) * referencePosed[(int)hand].rotationWorld;
+			const glm::quat directWrist=
+				glm::inverse(directPosed[(int)lower].rotationWorld) * directPosed[(int)hand].rotationWorld;
+			side.retargetWristDeg.add(rotationAngleDeg(glm::inverse(referenceWrist) * directWrist));
+
+			float fingerSum= 0.f;
+			int fingerCount= 0;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				const int proximal= (int)firstHumanoidFingerBone(sideIndex) + finger * 3;
+				if (!referencePose.bones[proximal].present || !directPose.bones[proximal].present)
+					continue;
+				const glm::quat referenceLocal=
+					glm::inverse(referencePosed[(int)hand].rotationWorld) * referencePosed[proximal].rotationWorld;
+				const glm::quat directLocal=
+					glm::inverse(directPosed[(int)hand].rotationWorld) * directPosed[proximal].rotationWorld;
+				fingerSum+= rotationAngleDeg(glm::inverse(referenceLocal) * directLocal);
+				fingerCount++;
+			}
+			if (fingerCount > 0)
+				side.retargetFingerDeg.add(fingerSum / (float)fingerCount);
+
+			// The inputs: the camera's palm frame through the direct conversion
+			// against the fused palm carried the same way, and the camera's raw
+			// finger angles less the rest zero against the fused angles
+			const HandPose& cameraPose= cameraInput.poses[sideIndex];
+			const HandPose& fusedPose= fused.poses[sideIndex];
+			if (cameraPose.tracked && cameraPose.hasCameraPose && fusedPose.tracked && fusedPose.hasWorldPose)
+			{
+				const glm::quat cameraPalm=
+					DirectRetarget::worldFromCamera(directConfig.cameraTiltRadians) * cameraPose.palmOrientationCamera;
+				const glm::quat fusedPalm= directFromMarker * fusedPose.palmOrientationWorld;
+				side.inputPalmDeg.add(rotationAngleDeg(glm::inverse(fusedPalm) * cameraPalm));
+				const glm::vec3 viewRay= glm::normalize(
+					DirectRetarget::worldFromCamera(directConfig.cameraTiltRadians) * cameraPose.palmPositionCamera);
+				const glm::vec3 palmX= cameraPalm * glm::vec3(1.f, 0.f, 0.f);
+				const glm::vec3 palmZ= cameraPalm * glm::vec3(0.f, 0.f, 1.f);
+				const glm::vec3 mirroredX= palmX - 2.f * glm::dot(palmX, viewRay) * viewRay;
+				const glm::vec3 mirroredZ= -(palmZ - 2.f * glm::dot(palmZ, viewRay) * viewRay);
+				const glm::quat mirroredPalm= glm::quat_cast(glm::mat3(mirroredX, glm::cross(mirroredZ, mirroredX), mirroredZ));
+				side.inputPalmMirrorDeg.add(std::min(rotationAngleDeg(glm::inverse(fusedPalm) * cameraPalm),
+													  rotationAngleDeg(glm::inverse(fusedPalm) * mirroredPalm)));
+				float angleSum= 0.f;
+				for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				{
+					FingerAngles cameraAngles= cameraPose.fingers[finger];
+					if (directConfig.bHasRestAngles[sideIndex])
+					{
+						const FingerAngles& rest= directConfig.restAngles[sideIndex][finger];
+						cameraAngles.proximal-= rest.proximal;
+						cameraAngles.intermediate-= rest.intermediate;
+						cameraAngles.distal-= rest.distal;
+					}
+					const FingerAngles& fusedAngles= fusedPose.fingers[finger];
+					angleSum+= std::fabs(cameraAngles.proximal - fusedAngles.proximal) +
+						std::fabs(cameraAngles.intermediate - fusedAngles.intermediate) +
+						std::fabs(cameraAngles.distal - fusedAngles.distal);
+				}
+				side.inputFingerDeg.add(glm::degrees(angleSum / (float)(FINGER_COUNT * 3)));
+			}
+		}
+	}
+};
+
 void accumulateLift(const Arm& model, const Arm& truth, LiftStats& stats)
 {
 	stats.upperArmDeg.add(angleBetweenDeg(model.upperArm(), truth.upperArm()));
@@ -303,6 +458,19 @@ void logSide(const char* tag, const char* name, const SideStats& side)
 	MIKAN_LOG_INFO(tag) << "    step between model frames, upper arm model p50 " << side.modelUpperArmStepDeg.p50()
 						<< " truth " << side.truthUpperArmStepDeg.p50() << " deg, forearm model "
 						<< side.modelForearmStepDeg.p50() << " truth " << side.truthForearmStepDeg.p50() << " deg";
+	if (side.retargetFrames > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    direct retarget vs position retarget on " << side.retargetFrames
+							<< " frames: upper arm p50 " << side.retargetUpperArmDeg.p50() << " p90 "
+							<< side.retargetUpperArmDeg.p90() << " deg, forearm p50 " << side.retargetForearmDeg.p50()
+							<< " p90 " << side.retargetForearmDeg.p90() << " deg, wrist p50 " << side.retargetWristDeg.p50()
+							<< " p90 " << side.retargetWristDeg.p90() << " deg, finger bend p50 "
+							<< side.retargetFingerDeg.p50() << " deg";
+		MIKAN_LOG_INFO(tag) << "    their inputs, camera vs fused: palm frame p50 " << side.inputPalmDeg.p50()
+							<< " p90 " << side.inputPalmDeg.p90() << " deg (nearest mirror p50 "
+							<< side.inputPalmMirrorDeg.p50() << " deg), finger angle p50 " << side.inputFingerDeg.p50()
+							<< " deg (" << side.inputPalmDeg.count() << " frames)";
+	}
 }
 
 void writeCsvHeader(std::ofstream& csv)
@@ -400,6 +568,23 @@ static int runGateDirectModeTool(const TestArgs& args)
 		}
 		const BodyDimensions dimensions= makeBodyDimensions(config);
 
+		// The retarget comparison on the shared synthetic rig under the
+		// recording's own config, default rig settings
+		const AvatarModel avatarModel= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
+		const AvatarSkeleton skeleton(avatarModel);
+		const AvatarRigSettings rigSettings;
+		RetargetComparison comparison;
+		comparison.skeleton= &skeleton;
+		comparison.referenceConfig= makeAvatarRetargetConfig(config, rigSettings);
+		comparison.directConfig= makeDirectRetargetConfig(config, rigSettings);
+		comparison.directFromMarker= DirectRetarget::worldFromCamera(comparison.directConfig.cameraTiltRadians) *
+			glm::quat_cast(glm::mat3(geometry.cameraFromWorld));
+		DirectCameraModel cameraModel;
+		cameraModel.fx= geometry.fx;
+		cameraModel.fy= geometry.fy;
+		cameraModel.cx= geometry.cx;
+		cameraModel.cy= geometry.cy;
+
 		BodyPoseTrackerConfig trackerConfig;
 		trackerConfig.backend= eBodyPoseBackend::Rtmw3dWholeBody;
 		trackerConfig.frameDivider= 1;
@@ -451,6 +636,16 @@ static int runGateDirectModeTool(const TestArgs& args)
 			tracker.process(image, observation);
 			inferenceMs.add(
 				(float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+			// The retargets: the camera's recorded hands with the observation
+			// just run, against the replayed fused frame
+			if (observation.valid && cameraIndex < (int)frame.perCamera.size() && frame.perCameraValid[cameraIndex])
+			{
+				TrackingFrameResult cameraInput= frame.perCamera[cameraIndex];
+				cameraInput.body= observation;
+				cameraModel.width= cameraInput.frameWidth > 0 ? cameraInput.frameWidth : image.cols;
+				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
+				comparison.compare(frame.replayedFused, cameraInput, cameraModel, dimensions, sides);
+			}
 			if (!observation.valid || !observation.hasDepth)
 				continue;
 

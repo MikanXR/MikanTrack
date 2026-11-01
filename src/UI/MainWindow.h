@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "AvatarRetarget.h"
+#include "DirectRetarget.h"
 #include "Scene3dPanel.h" // SceneGizmos
 #include "SettingsPanels.h" // TrackingPanelState
 #include "VisionThread.h"    // VisionPreviewFrame
@@ -73,6 +74,8 @@ private:
 	// the UI still has data when no new frame arrived this tick)
 	std::vector<VisionPreviewFrame> m_latestPreviews;
 	TrackingFrameResult m_latestFused;
+	// The direct retarget's pose for that result, valid only in direct mode
+	AvatarPose m_latestDirectPose;
 
 	TrackingPanelState m_trackingPanelState;
 
@@ -80,12 +83,20 @@ private:
 	// scene shows (live, replay, or a preview pose); the OSC streamer runs its own on the
 	// vision thread over the resolved poses
 	AvatarRetarget m_avatarRetarget;
+	// The replay twin of the vision thread's direct retarget, solving a
+	// direct-mode recording's camera frames under its recorded config
+	DirectRetarget m_directRetarget;
 	AvatarPose m_avatarPose;
 	// Which feed the display retarget last solved (live, replay, or a
 	// preview pose), so a switch resets its root follow
 	int m_avatarPoseFeed= -1;
 	// Poses the scene's avatar and fills the elbow hint gizmos from it
 	void updateDisplayAvatar(SceneGizmos& outGizmos);
+	// A direct-mode recording's frame through the window's direct retarget
+	// into m_avatarPose; false when the recording is not direct mode or the
+	// frame cannot be solved
+	bool solveReplayDirectPose(const class AppConfig& recordedConfig, const AvatarSkeleton& skeleton,
+							   const AvatarRigSettings& rig);
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
 
