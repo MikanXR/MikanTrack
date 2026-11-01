@@ -96,6 +96,10 @@ struct User
 	glm::quat palm[2];
 	bool bHandTracked[2]= {true, true};
 	bool bElbowSeen[2]= {true, true};
+	bool bWristSeen[2]= {true, true};
+	// Where the hand slot sits relative to the wrist's true pixel: a slot
+	// on something else in the scene
+	glm::vec2 handPixelOffset[2]{};
 	std::array<std::array<FingerAngles, FINGER_COUNT>, 2> fingers{};
 };
 
@@ -151,8 +155,8 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_SHOULDER, user.shoulder[1], hipDepth, true);
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_ELBOW, user.elbow[0], hipDepth, user.bElbowSeen[0]);
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_ELBOW, user.elbow[1], hipDepth, user.bElbowSeen[1]);
-	setLandmark(body, camera, (int)ePoseLandmark::LEFT_WRIST, user.wrist[0], hipDepth, true);
-	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_WRIST, user.wrist[1], hipDepth, true);
+	setLandmark(body, camera, (int)ePoseLandmark::LEFT_WRIST, user.wrist[0], hipDepth, user.bWristSeen[0]);
+	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_WRIST, user.wrist[1], hipDepth, user.bWristSeen[1]);
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_HIP, user.hip[0], hipDepth, true);
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_HIP, user.hip[1], hipDepth, true);
 
@@ -166,7 +170,7 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 			continue;
 		hand.tracked= true;
 		hand.presence= 1.f;
-		const glm::vec2 wristPx= project(camera, user.wrist[sideIndex]);
+		const glm::vec2 wristPx= project(camera, user.wrist[sideIndex]) + user.handPixelOffset[sideIndex];
 		hand.imagePoints[0]= glm::vec3(wristPx.x, wristPx.y, 0.f);
 		pose.tracked= true;
 		pose.presence= 1.f;
@@ -693,6 +697,78 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bBent, "(j) a bent wrist leaves the rest wrist");
 		check(bSame, "(j) a palm mirrored along its view ray solves the same wrist and forearm roll");
+	}
+
+	// (k) A hand slot the body model disagrees with is not the hand: beside
+	// an unseen body wrist the arm rests once the hold passes, beside a seen
+	// one the body wrist places the arm, and the slot's palm and fingers
+	// stay out until it is back where the body says the wrist is
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		// The slot on something in the scene well away from the wrists, which
+		// themselves sit below the frame
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.bWristSeen[sideIndex]= false;
+			user.handPixelOffset[sideIndex]= glm::vec2(250.f, -200.f);
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				user.fingers[sideIndex][finger].proximal= 1.f;
+		}
+		auto run= [&](User& frameUser, int firstFrame, int frameCount, AvatarPose& outPose) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame=
+					makeFrame(camera, frameUser, *rig.skeleton, timestampMs, firstFrame + repeat);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
+				timestampMs+= 33.0;
+			}
+		};
+		// The finger bend relative to the hand, wherever the arm put it
+		auto indexBend= [](const AvatarPose& pose, int sideIndex) {
+			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+			const B index= sideIndex == 0 ? B::LeftIndexProximal : B::RightIndexProximal;
+			return rotationAngle(glm::inverse(pose.bones[(int)hand].deltaWorld) * pose.bones[(int)index].deltaWorld);
+		};
+
+		AvatarPose phantom;
+		run(user, 50, 40, phantom);
+		bool bRested= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+			bRested&= !solver.getArmChain(sideIndex).valid;
+			bRested&= rotationAngle(phantom.bones[(int)upper].deltaWorld) < 1e-3f;
+			bRested&= indexBend(phantom, sideIndex) < 1e-3f;
+		}
+		check(bRested, "(k) a hand slot beside an unseen body wrist rests the arm and its fingers");
+
+		// The body sees the wrists again, the slot still elsewhere
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		AvatarPose bodyPlaced;
+		run(user, 100, 40, bodyPlaced);
+		bool bPlaced= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bPlaced&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+			bPlaced&= indexBend(bodyPlaced, sideIndex) < 1e-3f;
+		}
+		check(bPlaced, "(k) the body wrist places the arm past a disagreeing hand slot, its fingers at rest");
+
+		// The slot back on the wrist: the hand is seen and its fingers bend
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.handPixelOffset[sideIndex]= glm::vec2(0.f);
+		AvatarPose seen;
+		run(user, 150, 3, seen);
+		check(indexBend(seen, 0) > 0.5f && indexBend(seen, 1) > 0.5f,
+			  "(k) a hand slot on the body wrist is the hand");
 	}
 
 	// (i) The config section round-trips through the project JSON

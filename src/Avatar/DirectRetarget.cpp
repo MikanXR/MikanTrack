@@ -25,6 +25,10 @@ constexpr float kMinVisibility= 0.5f;
 // model places a joint it cannot see somewhere plausible inside the image,
 // and that somewhere is not where the joint is
 constexpr float kFrameMarginPx= 16.f;
+// A hand slot farther than this from the body model's wrist, in shoulder
+// widths, is not the hand: the palm detector runs over the whole frame and
+// fires on hand-shaped things in the scene
+constexpr float kHandAgreementShoulderWidths= 0.5f;
 // The model's relative depth decides a segment's near-or-far choice only
 // when the two landmarks differ by at least this much; below it the choice
 // carries over from the last frame
@@ -233,10 +237,13 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 
 	// -- Torso: both shoulders at the depth a known width implies --
 	bool bTorsoFresh= false;
+	float shoulderWidthPx= 0.f;
 	if (usable(leftShoulderIndex) && usable(rightShoulderIndex))
 	{
 		const glm::vec3 leftRay= landmarkRay(leftShoulderIndex);
 		const glm::vec3 rightRay= landmarkRay(rightShoulderIndex);
+		shoulderWidthPx= glm::distance(glm::vec2(body.imagePoints[leftShoulderIndex]),
+									   glm::vec2(body.imagePoints[rightShoulderIndex]));
 
 		// The depth at which the rays sit a shoulder width apart. The torso
 		// reads as square to the camera: the model's relative depth is too
@@ -365,19 +372,28 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		const float forearm= skeleton.getForearmLength(side);
 		const float reach= upperArm + forearm;
 
-		// The wrist pixel: the hand model's wrist when it tracks the hand,
-		// else the body model's, which keeps the arm placed through a hand
-		// dropout
+		// The hand slot is the hand only where the body model agrees: the
+		// palm detector runs over the whole frame and fires on hand-shaped
+		// things in the scene, while the body model places the wrist by the
+		// whole figure and reports one it cannot see as unseen. Agreement is
+		// measured in shoulder widths, so it scales with the user's distance.
+		const glm::vec2 handWristPx(hand.imagePoints[0].x, hand.imagePoints[0].y);
+		const glm::vec2 bodyWristPx(body.imagePoints[wristIndex].x, body.imagePoints[wristIndex].y);
+		const bool bHandSeen= hand.tracked && usable(wristIndex) && shoulderWidthPx > 0.f &&
+			glm::distance(handWristPx, bodyWristPx) <= kHandAgreementShoulderWidths * shoulderWidthPx;
+
+		// The wrist pixel: the hand model's wrist while the hand is seen, else
+		// the body model's, which keeps the arm placed through a hand dropout
 		bool bWristPixel= false;
 		glm::vec2 wristPx(0.f);
-		if (hand.tracked)
+		if (bHandSeen)
 		{
-			wristPx= glm::vec2(hand.imagePoints[0].x, hand.imagePoints[0].y);
+			wristPx= handWristPx;
 			bWristPixel= true;
 		}
 		else if (usable(wristIndex))
 		{
-			wristPx= glm::vec2(body.imagePoints[wristIndex].x, body.imagePoints[wristIndex].y);
+			wristPx= bodyWristPx;
 			bWristPixel= true;
 		}
 
@@ -478,11 +494,12 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 
 		// The hand: the palm frame in the world, its normal's roll about the
 		// forearm against the avatar's rest palm, and the palm in the
-		// measured forearm frame (the wrist). Held through a hand dropout.
+		// measured forearm frame (the wrist). Held through a hand dropout, a
+		// slot the body disagrees with counting as one.
 		const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
 		const glm::vec3 restPalmNormal=
 			safeNormalize(projectPerpendicular(chainDelta * glm::vec3(handRest.palmFrameWorld[2]), forearmDirection));
-		if (pose.tracked && pose.hasCameraPose)
+		if (bHandSeen && pose.tracked && pose.hasCameraPose)
 		{
 			const glm::quat palmRaw= glm::normalize(worldFromCam * pose.palmOrientationCamera);
 			glm::vec3 palmXRaw= palmRaw * glm::vec3(1.f, 0.f, 0.f);
