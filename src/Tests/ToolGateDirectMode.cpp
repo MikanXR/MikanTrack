@@ -3,8 +3,10 @@
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
+#include "BodyPoseSolver.h"
 #include "DirectRetarget.h"
 #include "FrameRecorder.h"
+#include "KalidokitStyleRetarget.h"
 #include "SyntheticAvatar.h"
 
 // Direct-mode gate: re-runs the whole-body 3D model over a recording's raw
@@ -18,7 +20,10 @@
 //   --gate-direct <recording.jsonl>... [cameraIndex] [frames.csv]
 //
 // cameraIndex defaults to the recording's body-pose camera. The raw frames
-// beside the recording are required (raw frame recording is opt-in).
+// beside the recording are required (raw frame recording is opt-in). A
+// recording without the camera's extrinsics (a direct-mode take) has no
+// stereo truth: it runs the retarget candidates alone and reports the two
+// truth-free metrics below, with nothing gated.
 //
 // The model's depth is relative to the hips, so lifting its pixels into
 // camera space needs a root depth. Three lifts are measured for each arm:
@@ -32,15 +37,22 @@
 // An elbow flip is a bend vector (elbow off the shoulder-wrist line) pointing
 // against the truth's, with both bends past kBendMinMeters.
 //
-// The retarget comparison runs both avatar solvers on the shared synthetic
+// The retarget comparison runs the avatar solvers on the shared synthetic
 // rig: the position retarget over the replayed fused frame is the
-// reference, the direct retarget over this camera's recorded hands and the
-// re-run observation (with the recording's direct config, neutral or not)
-// is the candidate. The posed upper-arm and forearm directions are compared
-// in the direct world (the reference's carried through the camera's
-// extrinsics and the direct conversion), the wrist as the hand's rotation
-// in the forearm, the fingers as the proximal bones' rotation in the hand.
-// Reported, not gated.
+// reference, and two candidates run over this camera's recorded hands and
+// the re-run observation (with the recording's direct config, neutral or
+// not): the direct retarget, and the Kalidokit-style baseline (the webcam
+// vtuber tools' pattern, KalidokitStyleRetarget). Against the reference,
+// the posed upper-arm and forearm directions are compared in the direct
+// world (the reference's carried through the camera's extrinsics and the
+// direct conversion), the wrist as the hand's rotation in the forearm, the
+// fingers as the proximal bones' rotation in the hand. Two metrics need no
+// truth: the posed avatar's shoulder, elbow and wrist projected into the
+// camera (the avatar's shoulder midpoint on the model's shoulders at the
+// depth the avatar's width implies, the solver's own placement) against
+// the model's landmarks, the 2D match the mono mode is for; and the
+// rotation of each arm bone between consecutive frames, the jitter. All
+// reported, not gated.
 //
 // The gates cover what the truth measures independently of the model: the
 // stereo wrist and the shoulder solved from its own rays and width. The
@@ -64,6 +76,19 @@ constexpr float kShoulderPxP50Gate= 15.f;
 constexpr float kWristPxP50Gate= 80.f;
 constexpr float kRootDepthErrCmP50Gate= 10.f;
 constexpr float kDepthSignAgreePctGate= 75.f;
+
+// The retarget candidates
+enum eCandidate
+{
+	kDirect= 0,
+	kBaseline= 1,
+	kCandidateCount= 2
+};
+const char* kCandidateNames[kCandidateCount]= {"direct retarget", "kalidokit-style"};
+// A landmark the solvers read: the direct solver's admission rule
+constexpr float kSolverMinVisibility= 0.5f;
+constexpr float kSolverFrameMarginPx= 16.f;
+constexpr float kSolverHandAgreementShoulderWidths= 0.5f;
 
 struct Stats
 {
@@ -135,12 +160,40 @@ struct SideStats
 	Stats modelForearmStepDeg;
 	Stats truthUpperArmStepDeg;
 	Stats truthForearmStepDeg;
-	// The retargeted bones: direct against position, see the header comment
-	int retargetFrames= 0;
-	Stats retargetUpperArmDeg;
-	Stats retargetForearmDeg;
-	Stats retargetWristDeg;
-	Stats retargetFingerDeg;
+	// The retargeted bones per candidate, see the header comment
+	struct Candidate
+	{
+		// Against the reference
+		int frames= 0;
+		Stats upperArmDeg;
+		Stats forearmDeg;
+		Stats wristDeg;
+		Stats fingerDeg;
+		// Without one: the posed joints against the model's landmarks, and
+		// the bones' rotation between consecutive frames
+		Stats reprojectShoulderPx;
+		Stats reprojectElbowPx;
+		Stats reprojectWristPx;
+		Stats stepUpperArmDeg;
+		Stats stepForearmDeg;
+		Stats stepHandDeg;
+
+		void append(const Candidate& other)
+		{
+			frames+= other.frames;
+			upperArmDeg.append(other.upperArmDeg);
+			forearmDeg.append(other.forearmDeg);
+			wristDeg.append(other.wristDeg);
+			fingerDeg.append(other.fingerDeg);
+			reprojectShoulderPx.append(other.reprojectShoulderPx);
+			reprojectElbowPx.append(other.reprojectElbowPx);
+			reprojectWristPx.append(other.reprojectWristPx);
+			stepUpperArmDeg.append(other.stepUpperArmDeg);
+			stepForearmDeg.append(other.stepForearmDeg);
+			stepHandDeg.append(other.stepHandDeg);
+		}
+	};
+	std::array<Candidate, kCandidateCount> candidates{};
 	// The inputs behind them: the camera's own palm frame and raw finger
 	// angles against the fused ones, so a retarget gap can be read as the
 	// single view's or the solver's
@@ -169,11 +222,8 @@ struct SideStats
 		modelForearmStepDeg.append(other.modelForearmStepDeg);
 		truthUpperArmStepDeg.append(other.truthUpperArmStepDeg);
 		truthForearmStepDeg.append(other.truthForearmStepDeg);
-		retargetFrames+= other.retargetFrames;
-		retargetUpperArmDeg.append(other.retargetUpperArmDeg);
-		retargetForearmDeg.append(other.retargetForearmDeg);
-		retargetWristDeg.append(other.retargetWristDeg);
-		retargetFingerDeg.append(other.retargetFingerDeg);
+		for (int candidate= 0; candidate < kCandidateCount; ++candidate)
+			candidates[candidate].append(other.candidates[candidate]);
 		inputPalmDeg.append(other.inputPalmDeg);
 		inputPalmMirrorDeg.append(other.inputPalmMirrorDeg);
 		inputFingerDeg.append(other.inputFingerDeg);
@@ -279,73 +329,213 @@ struct RetargetComparison
 	DirectRetargetConfig directConfig;
 	AvatarRetarget reference;
 	DirectRetarget direct;
+	KalidokitStyleRetarget baseline;
 	// Marker world to the direct world: through the camera, then the direct
 	// conversion at the recording's tilt
 	glm::quat directFromMarker{1.f, 0.f, 0.f, 0.f};
 
-	void compare(const TrackingFrameResult& fused, const TrackingFrameResult& cameraInput,
+	// Each candidate's previous pose, for the step
+	std::array<AvatarPose, kCandidateCount> lastPoses{};
+
+	// This frame's truth-free numbers per side and candidate, for the CSV
+	struct FrameCandidate
+	{
+		bool bReproject[3]= {false, false, false}; // shoulder, elbow, wrist
+		float reprojectPx[3]= {0.f, 0.f, 0.f};
+		bool bStep= false;
+		float stepDeg[3]= {0.f, 0.f, 0.f}; // upper arm, forearm, hand
+	};
+	std::array<std::array<FrameCandidate, kCandidateCount>, 2> frame{};
+
+	// bHaveTruth: the fused frame carries the stereo rig's world poses, so
+	// the reference can be solved
+	void compare(const TrackingFrameResult& fused, bool bHaveTruth, const TrackingFrameResult& cameraInput,
 				 const DirectCameraModel& cameraModel, const BodyDimensions& dimensions,
 				 std::array<SideStats, 2>& sides)
 	{
 		using B= eHumanoidBone;
+		frame= {};
 		AvatarPose referencePose;
-		AvatarPose directPose;
-		reference.solve(fused, dimensions, *skeleton, referenceConfig, referencePose);
+		if (bHaveTruth)
+			reference.solve(fused, dimensions, *skeleton, referenceConfig, referencePose);
+		std::array<AvatarPose, kCandidateCount> poses;
 		direct.solve(cameraInput, cameraModel, TrackingFrameResult::HeadPose(), cameraInput.timestampMs, *skeleton,
-					 directConfig, directPose);
+					 directConfig, poses[kDirect]);
+		baseline.solve(cameraInput, cameraModel, *skeleton, directConfig, poses[kBaseline]);
 		std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> referencePosed;
-		std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> directPosed;
+		std::array<std::array<AvatarPosedBone, HUMANOID_BONE_COUNT>, kCandidateCount> posed;
 		computePosedBones(*skeleton, referencePose, referencePosed);
-		computePosedBones(*skeleton, directPose, directPosed);
+		for (int candidate= 0; candidate < kCandidateCount; ++candidate)
+			computePosedBones(*skeleton, poses[candidate], posed[candidate]);
+
+		// The avatar's shoulder midpoint on the model's shoulders: the rays
+		// at the depth the avatar's width implies, in the direct world, the
+		// placement the direct solver itself uses
+		const BodyPoseObservation& body= cameraInput.body;
+		auto usable= [&](int index) {
+			if (!body.valid || !body.isProvided(index) || body.visibility[index] < kSolverMinVisibility)
+				return false;
+			const glm::vec3& point= body.imagePoints[index];
+			return point.x >= kSolverFrameMarginPx && point.y >= kSolverFrameMarginPx &&
+				point.x <= (float)cameraModel.width - kSolverFrameMarginPx &&
+				point.y <= (float)cameraModel.height - kSolverFrameMarginPx;
+		};
+		const glm::quat worldFromCam= DirectRetarget::worldFromCamera(directConfig.cameraTiltRadians);
+		auto rayThrough= [&](int index) {
+			const glm::vec3& point= body.imagePoints[index];
+			return worldFromCam *
+				glm::normalize(glm::vec3((point.x - cameraModel.cx) / cameraModel.fx,
+										 (point.y - cameraModel.cy) / cameraModel.fy, 1.f));
+		};
+		bool bHaveMidpoint= false;
+		glm::vec3 midpoint(0.f);
+		{
+			const int leftIndex= (int)ePoseLandmark::LEFT_SHOULDER;
+			const int rightIndex= (int)ePoseLandmark::RIGHT_SHOULDER;
+			if (usable(leftIndex) && usable(rightIndex))
+			{
+				const glm::vec3 leftRay= rayThrough(leftIndex);
+				const glm::vec3 rightRay= rayThrough(rightIndex);
+				const float depth= BodyPoseSolver::depthFromKnownSeparation(leftRay, rightRay, skeleton->getShoulderWidth());
+				if (depth > 0.f)
+				{
+					midpoint= 0.5f * (leftRay + rightRay) * depth;
+					bHaveMidpoint= true;
+				}
+			}
+		}
+		const glm::quat camFromWorld= glm::inverse(worldFromCam);
+		const float shoulderWidthPx= bHaveMidpoint
+			? glm::distance(glm::vec2(body.imagePoints[(int)ePoseLandmark::LEFT_SHOULDER]),
+							glm::vec2(body.imagePoints[(int)ePoseLandmark::RIGHT_SHOULDER]))
+			: 0.f;
 
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
 			const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
 			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
-			if (!referencePose.bones[(int)hand].present || !directPose.bones[(int)hand].present)
-				continue;
-			SideStats& side= sides[sideIndex];
-			side.retargetFrames++;
-
-			const glm::vec3 referenceUpper=
-				directFromMarker * (referencePosed[(int)lower].positionWorld - referencePosed[(int)upper].positionWorld);
-			const glm::vec3 referenceForearm=
-				directFromMarker * (referencePosed[(int)hand].positionWorld - referencePosed[(int)lower].positionWorld);
-			const glm::vec3 directUpper= directPosed[(int)lower].positionWorld - directPosed[(int)upper].positionWorld;
-			const glm::vec3 directForearm= directPosed[(int)hand].positionWorld - directPosed[(int)lower].positionWorld;
-			side.retargetUpperArmDeg.add(angleBetweenDeg(referenceUpper, directUpper));
-			side.retargetForearmDeg.add(angleBetweenDeg(referenceForearm, directForearm));
-
-			const glm::quat referenceWrist=
-				glm::inverse(referencePosed[(int)lower].rotationWorld) * referencePosed[(int)hand].rotationWorld;
-			const glm::quat directWrist=
-				glm::inverse(directPosed[(int)lower].rotationWorld) * directPosed[(int)hand].rotationWorld;
-			side.retargetWristDeg.add(rotationAngleDeg(glm::inverse(referenceWrist) * directWrist));
-
-			float fingerSum= 0.f;
-			int fingerCount= 0;
-			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			const int landmarks[3]= {
+				sideIndex == 0 ? (int)ePoseLandmark::LEFT_SHOULDER : (int)ePoseLandmark::RIGHT_SHOULDER,
+				sideIndex == 0 ? (int)ePoseLandmark::LEFT_ELBOW : (int)ePoseLandmark::RIGHT_ELBOW,
+				sideIndex == 0 ? (int)ePoseLandmark::LEFT_WRIST : (int)ePoseLandmark::RIGHT_WRIST,
+			};
+			// The pixels the joints are measured against: the model's landmarks,
+			// the wrist's being the hand model's wrist where the direct solver
+			// admits it (tracked, within half a shoulder width of a seen body
+			// wrist), since that is the hand the user sees
+			glm::vec2 targetPx[3];
+			bool bTarget[3];
+			for (int i= 0; i < 3; ++i)
 			{
-				const int proximal= (int)firstHumanoidFingerBone(sideIndex) + finger * 3;
-				if (!referencePose.bones[proximal].present || !directPose.bones[proximal].present)
-					continue;
-				const glm::quat referenceLocal=
-					glm::inverse(referencePosed[(int)hand].rotationWorld) * referencePosed[proximal].rotationWorld;
-				const glm::quat directLocal=
-					glm::inverse(directPosed[(int)hand].rotationWorld) * directPosed[proximal].rotationWorld;
-				fingerSum+= rotationAngleDeg(glm::inverse(referenceLocal) * directLocal);
-				fingerCount++;
+				bTarget[i]= usable(landmarks[i]);
+				targetPx[i]= glm::vec2(body.imagePoints[landmarks[i]]);
 			}
-			if (fingerCount > 0)
-				side.retargetFingerDeg.add(fingerSum / (float)fingerCount);
+			{
+				const TrackedHand& trackedHand= cameraInput.hands[sideIndex];
+				const glm::vec2 handWristPx(trackedHand.imagePoints[0]);
+				if (trackedHand.tracked && bTarget[2] && shoulderWidthPx > 0.f &&
+					glm::distance(handWristPx, targetPx[2]) <= kSolverHandAgreementShoulderWidths * shoulderWidthPx)
+					targetPx[2]= handWristPx;
+			}
+			SideStats& side= sides[sideIndex];
+			const bool bReference= bHaveTruth && referencePose.bones[(int)hand].present;
+
+			for (int candidate= 0; candidate < kCandidateCount; ++candidate)
+			{
+				const AvatarPose& pose= poses[candidate];
+				const std::array<AvatarPosedBone, HUMANOID_BONE_COUNT>& candidatePosed= posed[candidate];
+				SideStats::Candidate& stats= side.candidates[candidate];
+				FrameCandidate& frameStats= frame[sideIndex][candidate];
+				if (!pose.bones[(int)hand].present)
+					continue;
+
+				// The posed joints into the camera against the model's landmarks
+				if (bHaveMidpoint)
+				{
+					const glm::vec3 posedMidpoint= 0.5f *
+						(candidatePosed[(int)B::LeftUpperArm].positionWorld + candidatePosed[(int)B::RightUpperArm].positionWorld);
+					const glm::vec3 offset= midpoint - posedMidpoint;
+					const B joints[3]= {upper, lower, hand};
+					Stats* jointStats[3]= {&stats.reprojectShoulderPx, &stats.reprojectElbowPx, &stats.reprojectWristPx};
+					for (int i= 0; i < 3; ++i)
+					{
+						if (!bTarget[i])
+							continue;
+						const glm::vec3 inCamera= camFromWorld * (candidatePosed[(int)joints[i]].positionWorld + offset);
+						if (inCamera.z < 1e-3f)
+							continue;
+						const glm::vec2 px(cameraModel.fx * inCamera.x / inCamera.z + cameraModel.cx,
+										   cameraModel.fy * inCamera.y / inCamera.z + cameraModel.cy);
+						const float error= glm::length(px - targetPx[i]);
+						jointStats[i]->add(error);
+						frameStats.bReproject[i]= true;
+						frameStats.reprojectPx[i]= error;
+					}
+				}
+
+				// The step from the previous frame's bones
+				const AvatarPose& last= lastPoses[candidate];
+				if (last.valid && last.bones[(int)hand].present)
+				{
+					const B bones[3]= {upper, lower, hand};
+					Stats* stepStats[3]= {&stats.stepUpperArmDeg, &stats.stepForearmDeg, &stats.stepHandDeg};
+					for (int i= 0; i < 3; ++i)
+					{
+						const float step= rotationAngleDeg(
+							glm::inverse(last.bones[(int)bones[i]].deltaWorld) * pose.bones[(int)bones[i]].deltaWorld);
+						stepStats[i]->add(step);
+						frameStats.stepDeg[i]= step;
+					}
+					frameStats.bStep= true;
+				}
+
+				if (!bReference)
+					continue;
+				stats.frames++;
+
+				const glm::vec3 referenceUpper= directFromMarker *
+					(referencePosed[(int)lower].positionWorld - referencePosed[(int)upper].positionWorld);
+				const glm::vec3 referenceForearm= directFromMarker *
+					(referencePosed[(int)hand].positionWorld - referencePosed[(int)lower].positionWorld);
+				const glm::vec3 candidateUpper=
+					candidatePosed[(int)lower].positionWorld - candidatePosed[(int)upper].positionWorld;
+				const glm::vec3 candidateForearm=
+					candidatePosed[(int)hand].positionWorld - candidatePosed[(int)lower].positionWorld;
+				stats.upperArmDeg.add(angleBetweenDeg(referenceUpper, candidateUpper));
+				stats.forearmDeg.add(angleBetweenDeg(referenceForearm, candidateForearm));
+
+				const glm::quat referenceWrist=
+					glm::inverse(referencePosed[(int)lower].rotationWorld) * referencePosed[(int)hand].rotationWorld;
+				const glm::quat candidateWrist=
+					glm::inverse(candidatePosed[(int)lower].rotationWorld) * candidatePosed[(int)hand].rotationWorld;
+				stats.wristDeg.add(rotationAngleDeg(glm::inverse(referenceWrist) * candidateWrist));
+
+				float fingerSum= 0.f;
+				int fingerCount= 0;
+				for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				{
+					const int proximal= (int)firstHumanoidFingerBone(sideIndex) + finger * 3;
+					if (!referencePose.bones[proximal].present || !pose.bones[proximal].present)
+						continue;
+					const glm::quat referenceLocal=
+						glm::inverse(referencePosed[(int)hand].rotationWorld) * referencePosed[proximal].rotationWorld;
+					const glm::quat candidateLocal=
+						glm::inverse(candidatePosed[(int)hand].rotationWorld) * candidatePosed[proximal].rotationWorld;
+					fingerSum+= rotationAngleDeg(glm::inverse(referenceLocal) * candidateLocal);
+					fingerCount++;
+				}
+				if (fingerCount > 0)
+					stats.fingerDeg.add(fingerSum / (float)fingerCount);
+			}
 
 			// The inputs: the camera's palm frame through the direct conversion
 			// against the fused palm carried the same way, and the camera's raw
 			// finger angles less the rest zero against the fused angles
 			const HandPose& cameraPose= cameraInput.poses[sideIndex];
 			const HandPose& fusedPose= fused.poses[sideIndex];
-			if (cameraPose.tracked && cameraPose.hasCameraPose && fusedPose.tracked && fusedPose.hasWorldPose)
+			if (bReference && cameraPose.tracked && cameraPose.hasCameraPose && fusedPose.tracked &&
+				fusedPose.hasWorldPose)
 			{
 				const glm::quat cameraPalm=
 					DirectRetarget::worldFromCamera(directConfig.cameraTiltRadians) * cameraPose.palmOrientationCamera;
@@ -379,6 +569,7 @@ struct RetargetComparison
 				side.inputFingerDeg.add(glm::degrees(angleSum / (float)(FINGER_COUNT * 3)));
 			}
 		}
+		lastPoses= poses;
 	}
 };
 
@@ -397,25 +588,6 @@ void accumulateLift(const Arm& model, const Arm& truth, LiftStats& stats)
 		if (glm::dot(modelBend, truthBend) < 0.f)
 			stats.bendFlips++;
 	}
-}
-
-// The root depth at which the lifted shoulders sit the configured width
-// apart: |a * root + b| = width, the positive root of the quadratic
-bool solveRootDepthFromShoulders(const glm::vec3& leftRay, float leftDepth, const glm::vec3& rightRay,
-								 float rightDepth, float shoulderWidthMeters, float& outRootDepth)
-{
-	const glm::vec3 a= leftRay - rightRay;
-	const glm::vec3 b= leftRay * leftDepth - rightRay * rightDepth;
-	const float qa= glm::dot(a, a);
-	const float qb= 2.f * glm::dot(a, b);
-	const float qc= glm::dot(b, b) - shoulderWidthMeters * shoulderWidthMeters;
-	if (qa < 1e-12f)
-		return false;
-	const float discriminant= qb * qb - 4.f * qa * qc;
-	if (discriminant < 0.f)
-		return false;
-	outRootDepth= (-qb + sqrtf(discriminant)) / (2.f * qa);
-	return outRootDepth > 0.f;
 }
 
 int defaultCameraIndex(const AppConfig& config)
@@ -438,12 +610,53 @@ void logLift(const char* tag, const char* name, const LiftStats& stats)
 						<< " (" << flipPct << "%)";
 }
 
+// The retarget candidates: against the reference where there was one, then
+// the two truth-free metrics
+void logCandidates(const char* tag, const SideStats& side)
+{
+	for (int candidate= 0; candidate < kCandidateCount; ++candidate)
+	{
+		const SideStats::Candidate& stats= side.candidates[candidate];
+		if (stats.frames > 0)
+		{
+			MIKAN_LOG_INFO(tag) << "    " << kCandidateNames[candidate] << " vs position retarget on " << stats.frames
+								<< " frames: upper arm p50 " << stats.upperArmDeg.p50() << " p90 " << stats.upperArmDeg.p90()
+								<< " deg, forearm p50 " << stats.forearmDeg.p50() << " p90 " << stats.forearmDeg.p90()
+								<< " deg, wrist p50 " << stats.wristDeg.p50() << " p90 " << stats.wristDeg.p90()
+								<< " deg, finger bend p50 " << stats.fingerDeg.p50() << " deg";
+		}
+		if (stats.stepUpperArmDeg.count() > 0 || stats.reprojectWristPx.count() > 0)
+		{
+			MIKAN_LOG_INFO(tag) << "    " << kCandidateNames[candidate] << " posed reprojection px p50 (p90): shoulder "
+								<< stats.reprojectShoulderPx.p50() << " (" << stats.reprojectShoulderPx.p90() << "), elbow "
+								<< stats.reprojectElbowPx.p50() << " (" << stats.reprojectElbowPx.p90() << "), wrist "
+								<< stats.reprojectWristPx.p50() << " (" << stats.reprojectWristPx.p90() << ") on "
+								<< stats.reprojectShoulderPx.count() << "/" << stats.reprojectElbowPx.count() << "/"
+								<< stats.reprojectWristPx.count() << " frames; step deg p50 (p90): upper arm "
+								<< stats.stepUpperArmDeg.p50() << " (" << stats.stepUpperArmDeg.p90() << "), forearm "
+								<< stats.stepForearmDeg.p50() << " (" << stats.stepForearmDeg.p90() << "), hand "
+								<< stats.stepHandDeg.p50() << " (" << stats.stepHandDeg.p90() << ") on "
+								<< stats.stepUpperArmDeg.count() << " frames";
+		}
+	}
+	if (side.inputPalmDeg.count() > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    their inputs, camera vs fused: palm frame p50 " << side.inputPalmDeg.p50()
+							<< " p90 " << side.inputPalmDeg.p90() << " deg (nearest mirror p50 "
+							<< side.inputPalmMirrorDeg.p50() << " deg), finger angle p50 " << side.inputFingerDeg.p50()
+							<< " deg (" << side.inputPalmDeg.count() << " frames)";
+	}
+}
+
 void logSide(const char* tag, const char* name, const SideStats& side)
 {
 	MIKAN_LOG_INFO(tag) << "  " << name << ": truth arm on " << side.truthArmFrames
 						<< " model frames, model arm on " << side.modelArmFrames;
 	if (side.modelArmFrames == 0)
+	{
+		logCandidates(tag, side);
 		return;
+	}
 	logLift(tag, "oracle", side.oracle);
 	logLift(tag, "live  ", side.live);
 	logLift(tag, "planar", side.planar);
@@ -458,20 +671,11 @@ void logSide(const char* tag, const char* name, const SideStats& side)
 	MIKAN_LOG_INFO(tag) << "    step between model frames, upper arm model p50 " << side.modelUpperArmStepDeg.p50()
 						<< " truth " << side.truthUpperArmStepDeg.p50() << " deg, forearm model "
 						<< side.modelForearmStepDeg.p50() << " truth " << side.truthForearmStepDeg.p50() << " deg";
-	if (side.retargetFrames > 0)
-	{
-		MIKAN_LOG_INFO(tag) << "    direct retarget vs position retarget on " << side.retargetFrames
-							<< " frames: upper arm p50 " << side.retargetUpperArmDeg.p50() << " p90 "
-							<< side.retargetUpperArmDeg.p90() << " deg, forearm p50 " << side.retargetForearmDeg.p50()
-							<< " p90 " << side.retargetForearmDeg.p90() << " deg, wrist p50 " << side.retargetWristDeg.p50()
-							<< " p90 " << side.retargetWristDeg.p90() << " deg, finger bend p50 "
-							<< side.retargetFingerDeg.p50() << " deg";
-		MIKAN_LOG_INFO(tag) << "    their inputs, camera vs fused: palm frame p50 " << side.inputPalmDeg.p50()
-							<< " p90 " << side.inputPalmDeg.p90() << " deg (nearest mirror p50 "
-							<< side.inputPalmMirrorDeg.p50() << " deg), finger angle p50 " << side.inputFingerDeg.p50()
-							<< " deg (" << side.inputPalmDeg.count() << " frames)";
-	}
+	logCandidates(tag, side);
 }
+
+// The columns after recording, frame and side that need the stereo truth
+constexpr int kCsvTruthColumns= 12 + 2 * 3 * 3;
 
 void writeCsvHeader(std::ofstream& csv)
 {
@@ -481,7 +685,24 @@ void writeCsvHeader(std::ofstream& csv)
 	for (const char* source : {"truth", "model"})
 		for (const char* joint : joints)
 			csv << "," << source << joint << "X," << source << joint << "Y," << source << joint << "Z";
+	const char* candidates[kCandidateCount]= {"direct", "baseline"};
+	for (const char* candidate : candidates)
+		csv << "," << candidate << "ReprojShoulderPx," << candidate << "ReprojElbowPx," << candidate
+			<< "ReprojWristPx," << candidate << "StepUpperDeg," << candidate << "StepForearmDeg," << candidate
+			<< "StepHandDeg";
 	csv << "\n";
+}
+
+// The candidates' columns: a number not measured this frame is written as -1
+void writeCsvCandidates(std::ofstream& csv, const std::array<RetargetComparison::FrameCandidate, kCandidateCount>& frame)
+{
+	for (const RetargetComparison::FrameCandidate& candidate : frame)
+	{
+		for (int i= 0; i < 3; ++i)
+			csv << "," << (candidate.bReproject[i] ? candidate.reprojectPx[i] : -1.f);
+		for (int i= 0; i < 3; ++i)
+			csv << "," << (candidate.bStep ? candidate.stepDeg[i] : -1.f);
+	}
 }
 } // namespace
 
@@ -519,6 +740,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 	}
 
 	int result= 0;
+	bool bAnyTruth= false;
 	std::array<SideStats, 2> pooled{};
 	Stats pooledInferenceMs;
 	for (const std::string& path : recordings)
@@ -542,13 +764,16 @@ static int runGateDirectModeTool(const TestArgs& args)
 			continue;
 		}
 		const CameraProfile& profile= config.camera(cameraIndex);
-		if (!profile.intrinsics.present || !profile.extrinsics.present)
+		if (!profile.intrinsics.present)
 		{
-			MIKAN_LOG_ERROR(tag) << path << ": camera " << cameraIndex
-								 << " has no intrinsics or extrinsics, nothing to compare in";
+			MIKAN_LOG_ERROR(tag) << path << ": camera " << cameraIndex << " has no intrinsics, nothing to compare in";
 			result= 1;
 			continue;
 		}
+		// Without extrinsics there is no stereo truth to carry into the camera:
+		// the retarget candidates run alone
+		const bool bHaveTruth= profile.extrinsics.present;
+		bAnyTruth= bAnyTruth || bHaveTruth;
 		const std::string frameDirectory= TrackingRecording::makeFrameDirectoryPath(path);
 		if (!std::filesystem::exists(frameDirectory))
 		{
@@ -558,7 +783,8 @@ static int runGateDirectModeTool(const TestArgs& args)
 		}
 
 		CameraGeometry geometry;
-		geometry.cameraFromWorld= glm::inverse(profile.extrinsics.markerFromCamera);
+		if (bHaveTruth)
+			geometry.cameraFromWorld= glm::inverse(profile.extrinsics.markerFromCamera);
 		{
 			const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
 			geometry.fx= (float)cameraMatrix.x0;
@@ -638,13 +864,30 @@ static int runGateDirectModeTool(const TestArgs& args)
 				(float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 			// The retargets: the camera's recorded hands with the observation
 			// just run, against the replayed fused frame
+			bool bCompared= false;
 			if (observation.valid && cameraIndex < (int)frame.perCamera.size() && frame.perCameraValid[cameraIndex])
 			{
 				TrackingFrameResult cameraInput= frame.perCamera[cameraIndex];
 				cameraInput.body= observation;
 				cameraModel.width= cameraInput.frameWidth > 0 ? cameraInput.frameWidth : image.cols;
 				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
-				comparison.compare(frame.replayedFused, cameraInput, cameraModel, dimensions, sides);
+				comparison.compare(frame.replayedFused, bHaveTruth, cameraInput, cameraModel, dimensions, sides);
+				bCompared= true;
+			}
+			if (!bHaveTruth)
+			{
+				if (bCompared && csv.is_open())
+				{
+					for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+					{
+						csv << recordingName << "," << frameIndex << "," << sideIndex;
+						for (int column= 0; column < kCsvTruthColumns; ++column)
+							csv << ",-1";
+						writeCsvCandidates(csv, comparison.frame[sideIndex]);
+						csv << "\n";
+					}
+				}
+				continue;
 			}
 			if (!observation.valid || !observation.hasDepth)
 				continue;
@@ -658,7 +901,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 				if (observation.isProvided(leftSlot) && observation.isProvided(rightSlot) &&
 					observation.visibility[leftSlot] >= kScoreGate && observation.visibility[rightSlot] >= kScoreGate)
 				{
-					bHaveLiveRoot= solveRootDepthFromShoulders(
+					bHaveLiveRoot= KalidokitStyleRetarget::solveRootDepthFromShoulders(
 						geometry.rayAtUnitDepth(glm::vec2(observation.imagePoints[leftSlot])),
 						observation.imagePoints[leftSlot].z,
 						geometry.rayAtUnitDepth(glm::vec2(observation.imagePoints[rightSlot])),
@@ -776,6 +1019,10 @@ static int runGateDirectModeTool(const TestArgs& args)
 						for (const glm::vec3* joint : armJoints)
 							csv << "," << joint->x << "," << joint->y << "," << joint->z;
 					}
+					if (bCompared)
+						writeCsvCandidates(csv, comparison.frame[sideIndex]);
+					else
+						writeCsvCandidates(csv, std::array<RetargetComparison::FrameCandidate, kCandidateCount>{});
 					csv << "\n";
 				}
 			}
@@ -802,7 +1049,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 	all.append(pooled[1]);
 	logSide(tag, "Both", all);
 
-	// Gates over everything, both sides pooled
+	// Gates over everything, both sides pooled; a run without stereo truth
+	// has reported the truth-free metrics and has nothing to gate
+	if (!bAnyTruth)
+	{
+		MIKAN_LOG_INFO(tag) << "No stereo truth in these recordings: reprojection and step only, nothing gated";
+		return result;
+	}
 	if (all.modelArmFrames == 0)
 	{
 		MIKAN_LOG_ERROR(tag) << "No arm compared on any frame; nothing to gate";
