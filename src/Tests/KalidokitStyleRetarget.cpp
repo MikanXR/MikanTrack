@@ -47,6 +47,7 @@ bool KalidokitStyleRetarget::solveRootDepthFromShoulders(const glm::vec3& leftRa
 void KalidokitStyleRetarget::reset()
 {
 	m_bones= {};
+	m_palmarMemory= {};
 }
 
 void KalidokitStyleRetarget::solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
@@ -215,27 +216,20 @@ void KalidokitStyleRetarget::solve(const TrackingFrameResult& camera, const Dire
 			outPose.bones[boneIndex]= bone;
 	}
 
-	// The fingers on the slerped hand: the camera's raw angles less the rest
-	// zero, through the shared forward kinematics, each bone slerped like
-	// the rest
+	// The fingers on the slerped hand: the single view's angles as the
+	// direct solver measures them, through the shared forward kinematics,
+	// each bone slerped like the rest
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const HandPose& pose= camera.poses[sideIndex];
 		const B handBone= sideBone(sideIndex, B::LeftHand, B::RightHand);
 		if (!pose.tracked || !outPose.bones[(int)handBone].present)
-			continue;
-		std::array<FingerAngles, FINGER_COUNT> angles= pose.fingers;
-		if (config.bHasRestAngles[sideIndex])
 		{
-			for (int finger= 0; finger < FINGER_COUNT; ++finger)
-			{
-				const FingerAngles& rest= config.restAngles[sideIndex][finger];
-				angles[finger].lateral-= rest.lateral;
-				angles[finger].proximal-= rest.proximal;
-				angles[finger].intermediate-= rest.intermediate;
-				angles[finger].distal-= rest.distal;
-			}
+			m_palmarMemory[sideIndex].reset();
+			continue;
 		}
+		std::array<FingerAngles, FINGER_COUNT> angles;
+		DirectRetarget::measureMonoFingers(camera.hands[sideIndex], m_palmarMemory[sideIndex], angles);
 		solveFingerBones(skeleton, sideIndex, glm::quat(1.f, 0.f, 0.f, 0.f), outPose.bones[(int)handBone].deltaWorld,
 						 skeleton.getBone(handBone).restPositionWorld, angles, config.sides[sideIndex], outPose);
 		// The finger bones slerp like the rest

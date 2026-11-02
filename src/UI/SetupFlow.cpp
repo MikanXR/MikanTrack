@@ -630,7 +630,6 @@ void SetupFlow::updateNeutralCapturePrompt()
 	const bool bTracking= m_mainWindow->getLatestDirectPose().valid && m_mainWindow->getLatestFused().body.valid;
 	ImGui::TextColored(bTracking ? k_colorGood : k_colorWait, "%s",
 					   locText(bTracking ? "setupFlow.neutralTrackingReady" : "setupFlow.neutralTrackingWaiting"));
-	NeutralCaptureControl::drawHandLines(m_mainWindow->getLatestFused());
 
 	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
 									  locText("trackingPanel.directTiltFmt"));

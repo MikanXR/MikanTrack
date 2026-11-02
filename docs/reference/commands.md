@@ -98,6 +98,10 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--vrm-info`: prints what the loader reads from a VRM file and the derived skeleton
 - `--test-imupair`: solves the transform between two rigidly coupled IMUs from a dump (categorized as a Tool despite the `--test-` name, since it takes a dump file argument rather than running standalone)
 
+Python, no build needed:
+
+- `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
+
 ---
 
 ## Token stats

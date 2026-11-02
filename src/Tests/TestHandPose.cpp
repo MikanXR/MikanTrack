@@ -313,6 +313,56 @@ static int runHandPoseTest(const TestArgs& args)
 		}
 	}
 
+	// The metacarpal zero (the single view's convention, no capture): a
+	// hand whose fingers continue their own metacarpals reads zero on every
+	// angle, and a finger splayed past its metacarpal reads that splay
+	{
+		HandSkeleton fanned= skeleton;
+		const glm::vec3 wristInPalm(-skeleton.baseInPalm[(int)eFinger::Middle].x, 0.f, 0.f);
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		{
+			const glm::vec3 metacarpal= skeleton.baseInPalm[finger] - wristInPalm;
+			fanned.neutralDirInPalm[finger]= glm::normalize(glm::vec3(metacarpal.x, metacarpal.y, 0.f));
+		}
+		auto measure= [&](const std::array<FingerAngles, FINGER_COUNT>& anglesIn,
+						  std::array<FingerAngles, FINGER_COUNT>& anglesOut) {
+			std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
+			HandPoseModel::buildFingerJoints(glm::mat4(1.f), fanned, anglesIn, joints);
+			std::array<glm::vec3, HAND_LANDMARK_COUNT> fannedPoints{};
+			fannedPoints[(int)eHandLandmark::WRIST]= wristInPalm;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				for (int joint= 0; joint < 4; ++joint)
+					fannedPoints[FINGER_JOINTS[finger][joint]]= joints[finger][joint];
+			HandPoseModel::computeMetacarpalFingerAngles(fannedPoints, eHandSide::Right, anglesOut);
+		};
+		std::array<FingerAngles, FINGER_COUNT> open{};
+		std::array<FingerAngles, FINGER_COUNT> openMeasured{};
+		measure(open, openMeasured);
+		float maxOpen= 0.f;
+		for (const FingerAngles& angles : openMeasured)
+		{
+			maxOpen= std::max(maxOpen, fabsf(angles.lateral));
+			maxOpen= std::max(maxOpen, fabsf(angles.proximal));
+			maxOpen= std::max(maxOpen, fabsf(angles.intermediate));
+			maxOpen= std::max(maxOpen, fabsf(angles.distal));
+		}
+		std::array<FingerAngles, FINGER_COUNT> splayed{};
+		splayed[(int)eFinger::Index].lateral= 0.2f;
+		splayed[(int)eFinger::Ring].proximal= 0.4f;
+		std::array<FingerAngles, FINGER_COUNT> splayedMeasured{};
+		measure(splayed, splayedMeasured);
+		const float splayError= fabsf(splayedMeasured[(int)eFinger::Index].lateral - 0.2f);
+		const float bendError= fabsf(splayedMeasured[(int)eFinger::Ring].proximal - 0.4f);
+		MIKAN_LOG_INFO("test-handpose") << "metacarpal zero: open max rad=" << maxOpen
+			<< " splay error rad=" << splayError << " bend error rad=" << bendError;
+		if (maxOpen > 1e-4f || splayError > 1e-3f || bendError > 1e-3f)
+		{
+			MIKAN_LOG_ERROR("test-handpose")
+				<< "FAILED: against the metacarpal zero an open hand reads zero and a splay reads itself";
+			result= 1;
+		}
+	}
+
 	// FK reprojection: rebuild the hand from ONLY palm pose + skeleton +
 	// angles, project into a synthetic camera, and compare against the
 	// projection of the original 3D landmarks. End-to-end check that the

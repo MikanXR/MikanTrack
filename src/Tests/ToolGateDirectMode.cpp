@@ -345,6 +345,8 @@ struct RetargetComparison
 
 	// Each candidate's previous pose, for the step
 	std::array<AvatarPose, kCandidateCount> lastPoses{};
+	// The input finger comparison's palmar memory per hand
+	std::array<HandPoseModel::PalmarSideMemory, 2> inputPalmarMemory{};
 
 	// This frame's truth-free numbers per side and candidate, for the CSV
 	struct FrameCandidate
@@ -561,8 +563,10 @@ struct RetargetComparison
 			}
 
 			// The inputs: the camera's palm frame through the direct conversion
-			// against the fused palm carried the same way, and the camera's raw
-			// finger angles less the rest zero against the fused angles
+			// against the fused palm carried the same way, and the single view's
+			// finger angles as the direct solver measures them against the
+			// fused angles (their zeros differ: the fused ones carry the rest
+			// capture, so this is a spread, not an error)
 			const HandPose& cameraPose= cameraInput.poses[sideIndex];
 			const HandPose& fusedPose= fused.poses[sideIndex];
 			if (bReference && cameraPose.tracked && cameraPose.hasCameraPose && fusedPose.tracked &&
@@ -582,16 +586,12 @@ struct RetargetComparison
 				side.inputPalmMirrorDeg.add(std::min(rotationAngleDeg(glm::inverse(fusedPalm) * cameraPalm),
 													  rotationAngleDeg(glm::inverse(fusedPalm) * mirroredPalm)));
 				float angleSum= 0.f;
+				std::array<FingerAngles, FINGER_COUNT> monoAngles;
+				DirectRetarget::measureMonoFingers(cameraInput.hands[sideIndex], inputPalmarMemory[sideIndex],
+												   monoAngles);
 				for (int finger= 0; finger < FINGER_COUNT; ++finger)
 				{
-					FingerAngles cameraAngles= cameraPose.fingers[finger];
-					if (directConfig.bHasRestAngles[sideIndex])
-					{
-						const FingerAngles& rest= directConfig.restAngles[sideIndex][finger];
-						cameraAngles.proximal-= rest.proximal;
-						cameraAngles.intermediate-= rest.intermediate;
-						cameraAngles.distal-= rest.distal;
-					}
+					const FingerAngles& cameraAngles= monoAngles[finger];
 					const FingerAngles& fusedAngles= fusedPose.fingers[finger];
 					angleSum+= std::fabs(cameraAngles.proximal - fusedAngles.proximal) +
 						std::fabs(cameraAngles.intermediate - fusedAngles.intermediate) +

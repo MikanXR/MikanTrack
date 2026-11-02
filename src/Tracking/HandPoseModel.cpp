@@ -210,13 +210,16 @@ HandPoseModel::NeutralDirections HandPoseModel::makeDefaultNeutralDirections(con
 	return neutralDirs;
 }
 
-void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
-										const NeutralDirections& neutralDirs,
-										std::array<FingerAngles, FINGER_COUNT>& outAngles,
-										PalmarSideMemory* ioMemory)
+namespace
 {
-	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
-	const glm::mat3 palmRotation= glm::mat3(palmFrame);
+// The angle extraction over a palm frame already built and each finger's
+// rest direction already in the points' space (unit, any tilt out of the
+// palm plane allowed): the shared body of the two public conventions
+void computeFingerAnglesAgainst(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points,
+								const glm::mat4& palmFrame,
+								const std::array<glm::vec3, FINGER_COUNT>& neutralWorlds,
+								std::array<FingerAngles, FINGER_COUNT>& outAngles)
+{
 	const glm::vec3 palmY= glm::vec3(palmFrame[1]);
 	const glm::vec3 palmZ= glm::vec3(palmFrame[2]);
 	const glm::vec3& wrist= points[(int)eHandLandmark::WRIST];
@@ -232,10 +235,10 @@ void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMAR
 		const int* joints= FINGER_JOINTS[finger];
 		const glm::vec3& base= points[joints[0]];
 
-		// Rest direction for this finger, brought into the points' space.
-		// Its palm-plane projection is the zero for lateral; the full
-		// direction is the zero for proximal.
-		const glm::vec3 neutralWorld= safeNormalize(palmRotation * neutralDirs[finger]);
+		// Rest direction for this finger in the points' space. Its palm-plane
+		// projection is the zero for lateral; the full direction is the zero
+		// for proximal.
+		const glm::vec3& neutralWorld= neutralWorlds[finger];
 		const glm::vec3 neutralInPlane=
 			safeNormalize(neutralWorld - palmZ * glm::dot(neutralWorld, palmZ));
 
@@ -278,6 +281,36 @@ void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMAR
 		outAngles[finger].intermediate= -signedAngle(proximalBone, intermediateBone, flexHinge);
 		outAngles[finger].distal= -signedAngle(intermediateBone, distalBone, flexHinge);
 	}
+}
+} // namespace
+
+void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
+										const NeutralDirections& neutralDirs,
+										std::array<FingerAngles, FINGER_COUNT>& outAngles,
+										PalmarSideMemory* ioMemory)
+{
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::mat3 palmRotation= glm::mat3(palmFrame);
+	std::array<glm::vec3, FINGER_COUNT> neutralWorlds;
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		neutralWorlds[finger]= safeNormalize(palmRotation * neutralDirs[finger]);
+	computeFingerAnglesAgainst(points, palmFrame, neutralWorlds, outAngles);
+}
+
+void HandPoseModel::computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points,
+												  eHandSide side, std::array<FingerAngles, FINGER_COUNT>& outAngles,
+												  PalmarSideMemory* ioMemory)
+{
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::vec3 palmZ= glm::vec3(palmFrame[2]);
+	const glm::vec3& wrist= points[(int)eHandLandmark::WRIST];
+	std::array<glm::vec3, FINGER_COUNT> neutralWorlds;
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		const glm::vec3 metacarpal= points[FINGER_JOINTS[finger][0]] - wrist;
+		neutralWorlds[finger]= safeNormalize(metacarpal - palmZ * glm::dot(metacarpal, palmZ));
+	}
+	computeFingerAnglesAgainst(points, palmFrame, neutralWorlds, outAngles);
 }
 
 void HandPoseModel::computeSkeleton(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,

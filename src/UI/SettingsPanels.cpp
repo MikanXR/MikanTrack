@@ -718,7 +718,6 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 		if (!direct.enabled)
 			neutral.reset();
 
-		NeutralCaptureControl::drawHandLines(fusedResult);
 		ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
 		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
 			neutral.start();
@@ -761,7 +760,7 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 
 		// The wizard measures bones against the desk marker or by stereo and
 		// zeroes the fingers from the fuse, none of which a direct project
-		// runs: there the neutral capture zeroes the fingers
+		// runs or needs
 		if (config->direct.enabled)
 		{
 			ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));

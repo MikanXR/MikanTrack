@@ -45,4 +45,7 @@ private:
 	// Every bone placed so far, the slerp's state; a bone unseen this frame
 	// keeps it
 	std::array<AvatarPose::Bone, HUMANOID_BONE_COUNT> m_bones{};
+	// The finger measurement's palmar memory per hand, as the direct solver
+	// keeps one
+	std::array<HandPoseModel::PalmarSideMemory, 2> m_palmarMemory{};
 };

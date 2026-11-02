@@ -6,6 +6,7 @@
 #include "glm/ext/vector_float3.hpp"
 
 #include "AvatarRetarget.h"
+#include "HandPoseModel.h"
 #include "OneEuroFilter.h"
 #include "TrackingTypes.h"
 
@@ -65,10 +66,6 @@ struct DirectRetargetConfig
 	float userShoulderWidthMeters= 0.40f;
 	float headWidthMeters= 0.15f;
 	float noseForwardMeters= 0.11f;
-	// The hand model's rest zero (the fused rest angles), subtracted from the
-	// raw per-camera angles the way fusion does on the stereo path
-	bool bHasRestAngles[2]= {false, false};
-	std::array<std::array<FingerAngles, FINGER_COUNT>, 2> restAngles{};
 	// The rig's head trim, applied under the measured head the way the
 	// position retarget applies it
 	glm::vec3 headTrimRadians{0.f};
@@ -87,6 +84,15 @@ public:
 	// like the avatar's rest and their left lands on +Y, then the camera's
 	// downward tilt undone about world +Y. The camera is the origin.
 	static glm::quat worldFromCamera(float tiltRadians);
+
+	// The finger angles a single view reads with no zero captured from the
+	// user: the hand model's own 3D landmarks against each finger's
+	// metacarpal, less the bend the model reads on a straight finger facing
+	// the camera (kFingerOpenBias, kThumbOpenBias), each bend floored at
+	// zero. The lateral is the splay past the hand's own fan, unbiased. One
+	// palmar memory per hand, reset when the hand is lost.
+	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
+								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 
 	void reset();
 
@@ -127,6 +133,13 @@ public:
 	// The running median's window, frames with a seen elbow
 	static constexpr int kPnpScaleSamples= 90;
 
+	// The hand model's bend on a straight finger facing the camera, radians
+	// (proximal, intermediate, distal): 10, 25 and 16 degrees for the four
+	// fingers, 21, 10 and 0.5 for the thumb, the medians over held open hands
+	static constexpr float kFingerOpenBias[3]= {0.1745f, 0.4363f, 0.2793f};
+	static constexpr float kThumbOpenBias[3]= {0.3665f, 0.1745f, 0.0087f};
+	static constexpr float kMinBendRadians= 0.f;
+
 private:
 	void configureFilters();
 
@@ -149,6 +162,9 @@ private:
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm
 		glm::quat wristRotation{1.f, 0.f, 0.f, 0.f}; // palm in the measured forearm frame
 		std::array<FingerAngles, FINGER_COUNT> fingers{};
+		// Which side of the hand model's palm plane is the palmar one,
+		// carried between frames of one tracked hand
+		HandPoseModel::PalmarSideMemory palmarMemory;
 		// The filtered palm frame the hold compares against, and how many
 		// consecutive frames the raw palm has jumped away from it
 		bool bPalmFiltered= false;

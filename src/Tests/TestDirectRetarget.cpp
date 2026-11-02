@@ -187,6 +187,34 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]) * user.pnpDepthScale[sideIndex];
 		pose.fingers= user.fingers[sideIndex];
 		pose.skeleton= skeleton.getHand((eHandSide)sideIndex).skeleton;
+
+		// The hand model's own 3D landmarks, what the solver measures the
+		// fingers from: the avatar's hand skeleton posed by the user's
+		// angles against each finger's metacarpal, with the bend the model
+		// reads on a straight finger added, so the measurement recovers the
+		// user's angles. In the palm frame, the wrist on -X of the middle base.
+		HandSkeleton synth= pose.skeleton;
+		const glm::vec3 wristInPalm(-synth.baseInPalm[(int)eFinger::Middle].x, 0.f, 0.f);
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		{
+			const glm::vec3 metacarpal= synth.baseInPalm[finger] - wristInPalm;
+			synth.neutralDirInPalm[finger]= glm::normalize(glm::vec3(metacarpal.x, metacarpal.y, 0.f));
+		}
+		std::array<FingerAngles, FINGER_COUNT> biased= user.fingers[sideIndex];
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		{
+			const float* bias=
+				finger == (int)eFinger::Thumb ? DirectRetarget::kThumbOpenBias : DirectRetarget::kFingerOpenBias;
+			biased[finger].proximal+= bias[0];
+			biased[finger].intermediate+= bias[1];
+			biased[finger].distal+= bias[2];
+		}
+		std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
+		HandPoseModel::buildFingerJoints(glm::mat4(1.f), synth, biased, joints);
+		hand.modelPoints[(int)eHandLandmark::WRIST]= wristInPalm;
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			for (int joint= 0; joint < 4; ++joint)
+				hand.modelPoints[FINGER_JOINTS[finger][joint]]= joints[finger][joint];
 	}
 	return frame;
 }
@@ -496,8 +524,10 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bDepth, "(d) the model's depth places an unseen elbow's wrist within 5 percent");
 	}
 
-	// (e) A lost hand: the body model's wrist keeps the arm placed and the
-	// fingers hold their last angles
+	// (e) An open hand poses the avatar's rest fingers with no zero captured
+	// from the user, curled fingers bend them, and a lost hand: the body
+	// model's wrist keeps the arm placed and the fingers hold their last
+	// angles
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
@@ -506,6 +536,31 @@ static int runDirectRetargetTest(const TestArgs&)
 		captureNeutral(rig, camera, solver, timestampMs);
 
 		User user= makeNeutralUser();
+		AvatarPose open;
+		for (int repeat= 0; repeat < 3; ++repeat)
+		{
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 40 + repeat);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, open);
+			timestampMs+= 33.0;
+		}
+		bool bRestFingers= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				for (int phalanx= 0; phalanx < 3; ++phalanx)
+				{
+					const AvatarPose::Bone& bone=
+						open.bones[(int)firstHumanoidFingerBone(sideIndex) + finger * 3 + phalanx];
+					if (!bone.present)
+						continue;
+					bRestFingers&= nearlySameRotation(bone.deltaWorld, open.bones[(int)hand].deltaWorld, 1e-3f);
+				}
+			}
+		}
+		check(bRestFingers, "(e) an open hand poses the avatar's rest fingers");
+
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			for (int finger= 0; finger < FINGER_COUNT; ++finger)
 				user.fingers[sideIndex][finger].proximal= 1.f;

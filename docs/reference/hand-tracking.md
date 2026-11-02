@@ -65,6 +65,7 @@ The solved camera-space points are then multiplied by that camera's per-side `li
 
 - `computePalmFrame`: palm center origin, +X toward the fingers, +Z out of the palmar surface, +Y completing right-handed (Ultraleap-compatible)
 - `computeFingerAngles`: per finger a `FingerAngles` of [`lateral`, `proximal`, `intermediate`, `distal`], all zero in the rest pose, with the two distal bends measured relative to their parent bone
+- `computeMetacarpalFingerAngles`: the same angles against each finger's own metacarpal as the zero instead of the skeleton's neutral directions, so a relaxed open hand reads zero with no capture: the single-camera direct retarget's convention (avatar.md), never the wire's
 - `computeSkeleton`: `HandSkeleton`, finger base positions in the palm frame plus phalanx lengths and the flat-hand neutral directions
 - `buildFingerJoints`: forward kinematics that exactly inverts `computeFingerAngles` given the same skeleton
 

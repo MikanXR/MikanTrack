@@ -1090,27 +1090,13 @@ void VisionThread::runCalibrationCaptures()
 	}
 
 	// Neutral capture for the direct retarget: the solver's filtered
-	// measurements, the direct camera's hand angles as the finger zero, and
-	// the phone head's anchor while it streams, so looking at the screen
-	// reads as the identity head on both sources
+	// measurements, and the phone head's anchor while it streams, so looking
+	// at the screen reads as the identity head on both sources
 	if (m_bNeutralCaptureRequested.exchange(false))
 	{
 		NeutralCapture capture;
 		if (m_directRetarget.captureNeutral(capture.neutral))
 		{
-			const int cameraIndex= m_config->direct.cameraIndex;
-			if (cameraIndex >= 0 && cameraIndex < (int)m_cameras.size())
-			{
-				const TrackingFrameResult& cameraResult= m_cameras[cameraIndex]->getLastResult().result;
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					const HandPose& pose= cameraResult.poses[sideIndex];
-					if (!pose.tracked)
-						continue;
-					capture.rest.angles[sideIndex]= pose.fingers;
-					capture.rest.bCaptured[sideIndex]= true;
-				}
-			}
 			{
 				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
 				m_capturedNeutral= capture;

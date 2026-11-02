@@ -3,15 +3,12 @@
 class AppConfig;
 class VisionThread;
 struct DirectConfig;
-struct TrackingFrameResult;
 
 // The direct retarget's neutral capture as the Tracking panel and the guided
 // setup share it: a settle countdown, the capture request to the vision
-// thread at zero, then the landed capture written into the project: the
-// neutral references into the direct config, and the hand angles the direct
-// camera saw at the same instant as the finger rest zero of the hands it
-// saw. The per-hand lines and the status are drawn here too, since both
-// callers show the same; the countdown and the buttons stay with them.
+// thread at zero, then the landed capture written into the project as the
+// direct config's neutral references. The status is drawn here too, since
+// both callers show the same; the countdown and the buttons stay with them.
 class NeutralCaptureControl
 {
 public:
@@ -31,15 +28,11 @@ public:
 	bool isCountingDown() const { return m_countdownSeconds > 0.f; }
 	float getRemainingSeconds() const { return m_countdownSeconds; }
 
-	// Which hands the camera sees now, so the user knows whose finger zero
-	// a capture will take. latest: the window's copy of the thread's output.
-	static void drawHandLines(const TrackingFrameResult& latest);
-	// No neutral, a neutral loaded with the project, or the one captured
-	// this session with the hands it zeroed
+	// No neutral, a neutral loaded with the project, or one captured this
+	// session
 	void drawStatus(const DirectConfig& direct) const;
 
 private:
 	float m_countdownSeconds= 0.f;
 	bool m_bCapturedThisSession= false;
-	bool m_bHandZeroed[2]= {false, false};
 };

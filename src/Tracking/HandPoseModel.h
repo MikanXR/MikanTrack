@@ -78,6 +78,18 @@ void computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& point
 						 std::array<FingerAngles, FINGER_COUNT>& outAngles,
 						 PalmarSideMemory* ioMemory= nullptr);
 
+// The same angles against a zero that needs no capture: each finger's rest
+// direction is its own metacarpal (base minus wrist, in the palm plane), so
+// the hand's natural fan is not an angle, a relaxed open hand reads zero
+// lateral on every finger, and a spread hand reads its splay. The thumb's
+// zero is the same metacarpal the flat-hand default gives it. Taken from
+// the points rather than a skeleton so the zero and the angles share one
+// palm frame whatever palmar side the memory settles on. Not a wire
+// convention: the stereo path keeps the flat-hand neutral above.
+void computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
+								   std::array<FingerAngles, FINGER_COUNT>& outAngles,
+								   PalmarSideMemory* ioMemory= nullptr);
+
 // Skeleton geometry (finger base positions in the palm frame + phalanx
 // lengths) from a metric landmark set. neutralDirInPalm is filled with the
 // flat-hand default; overwrite it with a captured rest pose if there is one.

@@ -154,17 +154,14 @@ public:
 	bool fetchRestPoseCapture(RestPoseCapture& outFused);
 
 	// Direct retarget: captures the solver's current filtered measurements
-	// as the neutral pose, with the hand angles the direct camera reads at
-	// the same instant as the finger rest zero (the direct stage runs no
-	// fuse, so the rest-pose capture above has nothing to read there), and
-	// while the phone streams captures the face anchor with it (fetched
-	// separately, above). The UI fetches the capture and persists it in the
-	// direct config. False from fetch until a capture lands; a request with
-	// no solved torso is dropped.
+	// as the neutral pose (the fingers need no zero there), and while the
+	// phone streams captures the face anchor with it (fetched separately,
+	// above). The UI fetches the capture and persists it in the direct
+	// config. False from fetch until a capture lands; a request with no
+	// solved torso is dropped.
 	struct NeutralCapture
 	{
 		DirectNeutralPose neutral;
-		RestPoseCapture rest;
 	};
 	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
 	bool fetchNeutralCapture(NeutralCapture& outCapture);

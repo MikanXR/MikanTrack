@@ -374,11 +374,6 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.userShoulderWidthMeters= config.body.shoulderWidthMeters;
 	direct.headWidthMeters= config.body.headWidthMeters;
 	direct.noseForwardMeters= config.body.noseForwardMeters;
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-	{
-		direct.bHasRestAngles[sideIndex]= config.fusedRestAngles.present[sideIndex];
-		direct.restAngles[sideIndex]= config.fusedRestAngles.angles[sideIndex];
-	}
 	// The rig adjustments are the position retarget's, one mapping
 	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
 	direct.headTrimRadians= retarget.headTrimRadians;

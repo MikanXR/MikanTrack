@@ -185,6 +185,20 @@ glm::quat DirectRetarget::worldFromCamera(float tiltRadians)
 	return glm::angleAxis(-tiltRadians, glm::vec3(0.f, 1.f, 0.f)) * glm::quat_cast(k_levelWorldFromCamera);
 }
 
+void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
+										std::array<FingerAngles, FINGER_COUNT>& outAngles)
+{
+	HandPoseModel::computeMetacarpalFingerAngles(hand.modelPoints, hand.side, outAngles, &ioMemory);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		const float* bias= finger == (int)eFinger::Thumb ? kThumbOpenBias : kFingerOpenBias;
+		FingerAngles& angles= outAngles[finger];
+		angles.proximal= std::max(angles.proximal - bias[0], kMinBendRadians);
+		angles.intermediate= std::max(angles.intermediate - bias[1], kMinBendRadians);
+		angles.distal= std::max(angles.distal - bias[2], kMinBendRadians);
+	}
+}
+
 void DirectRetarget::reset()
 {
 	m_bHasTime= false;
@@ -758,18 +772,12 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				}
 			}
 
-			// Fingers: the raw angles less the rest zero, filtered
+			// Fingers: the single view's angles, filtered
+			std::array<FingerAngles, FINGER_COUNT> measured;
+			measureMonoFingers(hand, arm.palmarMemory, measured);
 			for (int finger= 0; finger < FINGER_COUNT; ++finger)
 			{
-				FingerAngles angles= pose.fingers[finger];
-				if (config.bHasRestAngles[sideIndex])
-				{
-					const FingerAngles& rest= config.restAngles[sideIndex][finger];
-					angles.lateral-= rest.lateral;
-					angles.proximal-= rest.proximal;
-					angles.intermediate-= rest.intermediate;
-					angles.distal-= rest.distal;
-				}
+				const FingerAngles& angles= measured[finger];
 				OneEuroFilter* filters= &arm.fingerFilters[finger * 4];
 				arm.fingers[finger].lateral= filters[0].filter(angles.lateral, dtSeconds);
 				arm.fingers[finger].proximal= filters[1].filter(angles.proximal, dtSeconds);
@@ -785,6 +793,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			arm.palmZFilter.reset();
 			arm.bPalmFiltered= false;
 			arm.palmJumpFrames= 0;
+			arm.palmarMemory.reset();
 			for (OneEuroFilter& filter : arm.fingerFilters)
 				filter.reset();
 		}
