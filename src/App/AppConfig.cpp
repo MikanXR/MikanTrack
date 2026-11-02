@@ -371,9 +371,12 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.neutral.torso= config.direct.neutralTorso;
 	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
 	direct.neutral.head= config.direct.neutralHead;
-	direct.userShoulderWidthMeters= config.body.shoulderWidthMeters;
-	direct.headWidthMeters= config.body.headWidthMeters;
-	direct.noseForwardMeters= config.body.noseForwardMeters;
+	const BodyDimensions dimensions= makeBodyDimensions(config);
+	direct.userShoulderWidthMeters= dimensions.shoulderWidthMeters;
+	direct.headWidthMeters= dimensions.headWidthMeters;
+	direct.noseForwardMeters= dimensions.noseForwardMeters;
+	direct.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
+	direct.userForearmLengthMeters= dimensions.forearmLengthMeters;
 	// The rig adjustments are the position retarget's, one mapping
 	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
 	direct.headTrimRadians= retarget.headTrimRadians;

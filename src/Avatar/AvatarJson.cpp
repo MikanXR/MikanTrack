@@ -49,6 +49,7 @@ json armToJson(const DirectRetarget::SolveState::Arm& arm)
 		{"depthHigh", arm.depthHigh},
 		{"modelDepthDelta", arm.modelDepthDelta},
 		{"pnpDistance", arm.pnpDistance},
+		{"liftDepth", arm.liftDepth},
 		{"chosenDepth", arm.chosenDepth},
 		{"chosenCost", arm.chosenCost},
 		{"chosenElbowPx", arm.chosenElbowPx},

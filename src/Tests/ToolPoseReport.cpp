@@ -247,11 +247,13 @@ int runPoseReportTool(const TestArgs& args)
 			armJson["depthInterval"]= {arm.depthLow, arm.depthHigh};
 			armJson["modelDepthDelta"]= arm.modelDepthDelta;
 			armJson["pnpDistance"]= arm.pnpDistance;
+			armJson["liftDepth"]= arm.liftDepth;
 			MIKAN_LOG_INFO(kTag) << sideName << " arm: elbow bend " << elbowBend << " deg (180 straight), wrist bend "
 								 << wristBend << " deg, wrist distance " << arm.filteredDepth << " (chosen "
 								 << arm.chosenDepth << ", reach " << arm.depthLow << " to " << arm.depthHigh
 								 << ", model depth delta " << arm.modelDepthDelta << ", lift distance "
-								 << arm.pnpDistance << " x " << arm.pnpScale.scale << "), elbow "
+								 << arm.pnpDistance << " scored at " << arm.liftDepth << ", measured scale "
+								 << arm.pnpScale.scale << "), elbow "
 								 << (arm.bElbowSeen ? "seen" : "unseen") << ", hand "
 								 << (arm.bHandSeen ? "seen" : "unseen") << ", chosen elbow miss "
 								 << arm.chosenElbowPx << " px";

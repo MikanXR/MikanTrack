@@ -75,7 +75,11 @@ constexpr float kModelDepthSigmaReach= 0.3f;
 // nearest the rig's hint wins ties: the squared distance over the reach,
 // times this
 constexpr float kElbowDriftPenalty= 0.5f;
-// The hand lift's depth against the chain's is measured, not yet scored:
+// The hand lift's wrist distance, in the avatar's units through the length
+// ratio, is the one metric cue the single view has: the candidate's
+// distance from it, over this fraction of it
+constexpr float kLiftDepthSigmaFraction= 0.15f;
+// The lift's depth against the chain's is also measured, for the report:
 // the scale stays within these multiples of the avatar-to-user length
 // ratio, and is sampled only while the arm is bent enough that the elbow's
 // reprojection fixed the wrist's distance
@@ -467,8 +471,9 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		const B upperArmBone= sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm);
 		const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
 		const B handBone= sideBone(sideIndex, B::LeftHand, B::RightHand);
-		const float upperArm= skeleton.getUpperArmLength(side);
-		const float forearm= skeleton.getForearmLength(side);
+		// The chain in the user's proportions, in the avatar's units
+		const float upperArm= config.userUpperArmLengthMeters * lengthScale;
+		const float forearm= config.userForearmLengthMeters * lengthScale;
 		const float reach= upperArm + forearm;
 		// Before any sample the hand lift's depth is trusted at the length
 		// ratio, the scale a correct lift would measure
@@ -554,11 +559,13 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 
 			if (bInterval)
 			{
-				// The hand lift's wrist distance, measured against the chain
+				// The hand lift's wrist distance, scored in the avatar's units
+				// and measured against the chain
 				const float pnpDistanceRaw= (bHandSeen && pose.tracked && pose.hasCameraPose)
 					? glm::length(pose.palmPositionCamera)
 					: 0.f;
 				const bool bPnp= pnpDistanceRaw > 1e-3f;
+				const float liftDepth= pnpDistanceRaw * lengthScale;
 				// The model's shoulder-to-wrist depth, decompressed and in the
 				// avatar's units
 				const bool bModelDepth= body.hasDepth;
@@ -569,6 +576,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				armState.depthHigh= depthHigh;
 				armState.modelDepthDelta= modelDepthDelta;
 				armState.pnpDistance= pnpDistanceRaw;
+				armState.liftDepth= liftDepth;
 				auto feasible= [&](float depth) {
 					return depth >= depthLow && depth <= depthHigh && glm::length(wristRay * depth - shoulder) >= minReach;
 				};
@@ -579,7 +587,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 					float elbowPx= 0.f;
 					bool valid= false;
 				};
-				auto score= [&](float depth, bool bWithMotion) {
+				auto score= [&](float depth, bool bWithMotion, bool bWithLift) {
 					Scored out;
 					if (!feasible(depth))
 						return out;
@@ -610,14 +618,19 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 							(kModelDepthSigmaReach * reach);
 						out.cost+= ratio * ratio;
 					}
+					if (bWithLift && bPnp)
+					{
+						const float ratio= (depth - liftDepth) / (kLiftDepthSigmaFraction * liftDepth);
+						out.cost+= ratio * ratio;
+					}
 					return out;
 				};
 				// The best of the even candidates and the last distance, refined
 				// by halving the spacing around it
-				auto choose= [&](bool bWithMotion) {
+				auto choose= [&](bool bWithMotion, bool bWithLift) {
 					Scored best;
 					auto consider= [&](float depth) {
-						const Scored scored= score(depth, bWithMotion);
+						const Scored scored= score(depth, bWithMotion, bWithLift);
 						if (scored.valid && (!best.valid || scored.cost < best.cost))
 							best= scored;
 					};
@@ -639,13 +652,14 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 
 				// The lift's scale is measured where the elbow fixes the wrist's
 				// distance on its own: this frame's geometry and the model's
-				// prior, without the frame before (neither the chain's motion
-				// nor the elbow's pull toward where it was). A nearly straight
-				// arm fixes nothing: its bone circle has collapsed, and the one
-				// elbow it allows reprojects wherever the line of sight puts it.
+				// prior, without the lift itself and without the frame before
+				// (neither the chain's motion nor the elbow's pull toward where
+				// it was). A nearly straight arm fixes nothing: its bone circle
+				// has collapsed, and the one elbow it allows reprojects wherever
+				// the line of sight puts it.
 				if (bElbowSeen && bPnp)
 				{
-					const Scored geometry= choose(false);
+					const Scored geometry= choose(false, false);
 					if (geometry.valid && geometry.elbowPx < kElbowPixelSigma &&
 						glm::length(wristRay * geometry.depth - shoulder) < kPnpSampleMaxReach * reach)
 					{
@@ -657,7 +671,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 					}
 				}
 				// The choice: every term
-				const Scored chosen= choose(true);
+				const Scored chosen= choose(true, true);
 
 				if (chosen.valid)
 				{

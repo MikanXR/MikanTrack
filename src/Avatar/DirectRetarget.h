@@ -67,6 +67,14 @@ struct DirectRetargetConfig
 	float userShoulderWidthMeters= 0.40f;
 	float headWidthMeters= 0.15f;
 	float noseForwardMeters= 0.11f;
+	// The user's arm lengths in the body model's landmark space (the
+	// shoulder landmark sits inboard of the joint, so the upper arm runs
+	// longer than the anatomical one), the same lengths the body solver
+	// uses; the arm chain is solved with these through the ratio, so the
+	// elbow's reprojection fixes the wrist's distance with the user's
+	// proportions, and the avatar's bones take the chain's directions
+	float userUpperArmLengthMeters= 0.42f;
+	float userForearmLengthMeters= 0.25f;
 	// The rig's head trim, applied under the measured head the way the
 	// position retarget applies it
 	glm::vec3 headTrimRadians{0.f};
@@ -146,6 +154,7 @@ public:
 			float depthHigh= 0.f;
 			float modelDepthDelta= 0.f; // the model's shoulder-to-wrist depth, avatar units
 			float pnpDistance= 0.f;     // the hand lift's wrist distance, zero without one
+			float liftDepth= 0.f;       // the same in the avatar's units, the scorer's pull
 			float chosenDepth= 0.f;     // the scorer's choice this frame
 			float chosenCost= 0.f;
 			float chosenElbowPx= 0.f; // the chosen elbow's miss from its ray

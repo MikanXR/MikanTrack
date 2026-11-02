@@ -254,8 +254,11 @@ Rig makeRig(float tiltDegrees)
 	rig.model= makeModel(eVrmVersion::Vrm1, false);
 	rig.skeleton= std::make_unique<AvatarSkeleton>(rig.model);
 	rig.config.cameraTiltRadians= glm::radians(tiltDegrees);
-	// The user's shoulders are the avatar's, so the head keeps its size
+	// The user's shoulders and arms are the avatar's, so the head keeps its
+	// size and the chain the avatar's lengths
 	rig.config.userShoulderWidthMeters= kShoulderWidth;
+	rig.config.userUpperArmLengthMeters= kUpperArmLength;
+	rig.config.userForearmLengthMeters= kForearmLength;
 	return rig;
 }
 
@@ -842,7 +845,8 @@ static int runDirectRetargetTest(const TestArgs&)
 
 	// (l) The scorer: with the model's depth withheld, a seen elbow picks
 	// the wrist distance whose elbow reprojects; the hand lift's depth scale
-	// is measured against those frames; and with the elbow unseen and no
+	// is measured against those frames, free of the lift's own pull; with
+	// the elbow unseen the lift's distance places the wrist; and with no
 	// depth cue at all the wrist keeps its distance
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
@@ -906,20 +910,41 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bScale, "(l) the lift's depth scale converges on the measured ratio over seen-elbow frames");
 
-		// The elbow drops out of view and the wrist moves with nothing to
-		// say how far: it keeps its distance along the new ray
+		// The elbow drops out of view and the wrist moves, the lift reading
+		// its true distance: the wrist lands on the new ray at the lift's
+		// distance, a different one from the distance it held
 		const float heldDepth= glm::length(user.wrist[0]);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			user.bElbowSeen[sideIndex]= false;
+			user.pnpDepthScale[sideIndex]= 1.f;
 			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.6f, 0.f, -0.8f)) * kForearmLength;
 		}
-		run(260, 40, pose);
+		run(260, 80, pose);
+		bool bLift= std::fabs(glm::length(user.wrist[0]) - heldDepth) > 0.05f * heldDepth;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const float truth= glm::length(user.wrist[sideIndex]);
+			bLift&= chain.valid && nearlyEqual(glm::length(chain.wrist), truth, 0.05f * truth);
+			bLift&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bLift, "(l) with the elbow unseen the lift's distance places the wrist on its new ray");
+
+		// The hands drop out too and the wrist moves again with nothing to
+		// say how far: it keeps its distance along the new ray
+		const float liftDepth= glm::length(user.wrist[0]);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.bHandTracked[sideIndex]= false;
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.3f, 0.f, -0.95f)) * kForearmLength;
+		}
+		run(340, 40, pose);
 		bool bHeld= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
-			bHeld&= chain.valid && nearlyEqual(glm::length(chain.wrist), heldDepth, 0.05f * heldDepth);
+			bHeld&= chain.valid && nearlyEqual(glm::length(chain.wrist), liftDepth, 0.05f * liftDepth);
 			bHeld&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
 		check(bHeld, "(l) with the elbow unseen and no depth cue the wrist keeps its distance on its new ray");
@@ -1060,7 +1085,10 @@ static int runDirectRetargetTest(const TestArgs&)
 		const DirectRetargetConfig solverConfig= makeDirectRetargetConfig(loaded, rig);
 		check(nearlyEqual(solverConfig.cameraTiltRadians, glm::radians(12.5f), 1e-5f) && solverConfig.neutral.present &&
 				  nearlyEqual(solverConfig.sides[1].curlGain, 1.5f, 1e-5f) &&
-				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f),
+				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f) &&
+				  nearlyEqual(solverConfig.userUpperArmLengthMeters,
+							  loaded.body.shoulderWidthMeters * loaded.body.upperArmPerShoulderWidth, 1e-5f) &&
+				  nearlyEqual(solverConfig.userForearmLengthMeters, loaded.body.forearmLengthMeters, 1e-5f),
 			  "(i) makeDirectRetargetConfig carries the section, the body lengths and the rig onto the solver");
 	}
 
