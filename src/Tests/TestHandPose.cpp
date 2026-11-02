@@ -109,6 +109,23 @@ static int runHandPoseTest(const TestArgs& args)
 		result= 1;
 	}
 
+	// The base bone exactly on the palm normal, where its projection has
+	// no length to read a lateral from: the finger's bend plane carries it
+	std::array<FingerAngles, FINGER_COUNT> anglesOnNormal{};
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		anglesOnNormal[finger].lateral= finger == (int)eFinger::Thumb ? 0.f : 0.3f - 0.15f * (float)finger;
+		anglesOnNormal[finger].proximal= glm::half_pi<float>();
+		anglesOnNormal[finger].intermediate= 1.0f;
+		anglesOnNormal[finger].distal= 0.6f;
+	}
+	if (roundTrip(anglesOnNormal, "base bone on the palm normal (lateral from the bend plane)") > 0.02f)
+	{
+		MIKAN_LOG_ERROR("test-handpose") << "FAILED: on-normal round-trip error too large "
+											"(the lateral did not come from the bend plane)";
+		result= 1;
+	}
+
 	// Thumb opposition: large MCP/IP flexion must round-trip AND must
 	// actually sweep the thumb tip ACROSS the palm toward the pinky
 	// (the pronated-hinge behavior; on the finger-style hinge this

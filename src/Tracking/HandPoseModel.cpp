@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "glm/ext/vector_float2.hpp"
 #include "glm/geometric.hpp"
 #include "glm/gtc/constants.hpp"
 #include "glm/gtc/quaternion.hpp"
@@ -247,21 +248,49 @@ void computeFingerAnglesAgainst(const std::array<glm::vec3, HAND_LANDMARK_COUNT>
 		const glm::vec3 intermediateBone= safeNormalize(points[joints[2]] - points[joints[1]]);
 		const glm::vec3 distalBone= safeNormalize(points[joints[3]] - points[joints[2]]);
 
-		// Lateral: signed splay of the proximal bone's palm-plane projection
-		// vs the rest direction, about palm +Z. Positive is counter-clockwise
-		// about +Z (toward palm +Y). (The projection degenerates only at
-		// exactly 90 degrees of proximal curl, where lateral is visually
-		// meaningless anyway - safeNormalize guards it.) A projection
-		// pointing back toward the wrist is a curl past 90 degrees (a fist
-		// seen from the front), never a splay, so the lateral folds by a half
-		// turn to stay within a quarter turn: the hinge stays on the finger's
-		// side and the proximal bend reads past 90 instead of the later
-		// joints reading negative about a reversed hinge.
-		const glm::vec3 proximalInPlane=
-			safeNormalize(proximalBone - palmZ * glm::dot(proximalBone, palmZ));
-		float lateral= signedAngle(neutralInPlane, proximalInPlane, palmZ);
-		if (glm::dot(proximalInPlane, neutralInPlane) < 0.f)
-			lateral+= lateral > 0.f ? -glm::pi<float>() : glm::pi<float>();
+		// Lateral: signed splay about palm +Z, positive counter-clockwise
+		// about +Z (toward palm +Y), from two readings of the same angle
+		// blended by how well each is conditioned. The first is the proximal
+		// bone's palm-plane projection against the rest direction, sharp on
+		// a straight finger and gone on one curled to the palm normal, where
+		// the projection is landmark noise. The second is the finger's own
+		// bend plane: the intermediate bone turns about the lateral hinge,
+		// so the normal of the proximal and intermediate bones is that hinge
+		// (negated for a curl), sharp on a curled finger and gone on a
+		// straight one. Each reading's weight is the square of the length
+		// that made it (the projection's, the cross product's), the inverse
+		// of its angular variance, and the blend is the vector mean. The
+		// thumb bends about a pronated hinge, so it reads the projection
+		// alone. Either reading pointing back toward the wrist is a curl past
+		// 90 degrees (a fist seen from the front), never a splay, so it folds
+		// by a half turn to stay within a quarter turn: the hinge stays on
+		// the finger's side and the proximal bend reads past 90 instead of
+		// the later joints reading negative about a reversed hinge.
+		const glm::vec3 hingeAtZero= safeNormalize(glm::cross(neutralInPlane, -palmZ));
+		auto foldToQuarterTurn= [](float angle) {
+			if (angle > glm::half_pi<float>())
+				return angle - glm::pi<float>();
+			if (angle < -glm::half_pi<float>())
+				return angle + glm::pi<float>();
+			return angle;
+		};
+		const glm::vec3 proximalInPlaneRaw= proximalBone - palmZ * glm::dot(proximalBone, palmZ);
+		const float projectionLength= glm::length(proximalInPlaneRaw);
+		const float lateralFromProjection=
+			foldToQuarterTurn(signedAngle(neutralInPlane, safeNormalize(proximalInPlaneRaw), palmZ));
+		glm::vec2 lateralVector= glm::vec2(std::cos(lateralFromProjection), std::sin(lateralFromProjection)) *
+			(projectionLength * projectionLength);
+		if (finger != (int)eFinger::Thumb)
+		{
+			const glm::vec3 bendNormalRaw= -glm::cross(proximalBone, intermediateBone);
+			const glm::vec3 hingeInPlaneRaw= bendNormalRaw - palmZ * glm::dot(bendNormalRaw, palmZ);
+			const float hingeLength= glm::length(hingeInPlaneRaw);
+			const float lateralFromBendPlane=
+				foldToQuarterTurn(signedAngle(hingeAtZero, safeNormalize(hingeInPlaneRaw), palmZ));
+			lateralVector+= glm::vec2(std::cos(lateralFromBendPlane), std::sin(lateralFromBendPlane)) *
+				(hingeLength * hingeLength);
+		}
+		const float lateral= glm::length(lateralVector) > 1e-8f ? std::atan2(lateralVector.y, lateralVector.x) : 0.f;
 
 		// ONE fixed hinge axis per finger, exactly as the FK side builds it:
 		// from the post-lateral direction. All three bend angles are measured
