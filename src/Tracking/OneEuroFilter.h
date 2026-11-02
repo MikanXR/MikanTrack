@@ -2,6 +2,7 @@
 
 #include <array>
 
+#include "glm/ext/vector_float2.hpp"
 #include "glm/ext/vector_float3.hpp"
 
 #include "TrackingTypes.h"
@@ -25,6 +26,18 @@ private:
 	bool m_bInitialized= false;
 	float m_lastValue= 0.f;
 	float m_lastDerivative= 0.f;
+};
+
+// One-euro filter applied per component of a glm::vec2 series
+class OneEuroFilterVec2
+{
+public:
+	void configure(float minCutoff, float beta, float dCutoff);
+	glm::vec2 filter(const glm::vec2& value, float dtSeconds);
+	void reset();
+
+private:
+	std::array<OneEuroFilter, 2> m_axisFilters;
 };
 
 // One-euro filter applied per component of a glm::vec3 series

@@ -314,6 +314,75 @@ bool BodyPoseSolver::solveElbowOnBoneCircle(
 	return true;
 }
 
+bool BodyPoseSolver::solveElbowOnBoneCircleNear(
+	const glm::vec3& shoulder, const glm::vec3& wrist,
+	float upperArmLength, float forearmLength,
+	const glm::vec3& rayOrigin, const glm::vec3& rayDir, float raySigma,
+	const glm::vec3& target, float targetSigma, glm::vec3& outElbow)
+{
+	BoneCircleGeometry circle;
+	if (!computeBoneCircle(shoulder, wrist, upperArmLength, forearmLength, circle))
+		return false;
+	if (circle.bDegenerate)
+	{
+		outElbow= circle.center;
+		return true;
+	}
+
+	const float rayWeight= raySigma > 0.f ? 1.f / (raySigma * raySigma) : 0.f;
+	const float targetWeight= targetSigma > 0.f ? 1.f / (targetSigma * targetSigma) : 0.f;
+	auto pointAt= [&](float angle) {
+		return circle.center + (circle.planeX * cosf(angle) + circle.planeY * sinf(angle)) * circle.radius;
+	};
+	auto cost= [&](const glm::vec3& point) {
+		const glm::vec3 fromOrigin= point - rayOrigin;
+		const glm::vec3 perpendicular= fromOrigin - rayDir * glm::dot(fromOrigin, rayDir);
+		const glm::vec3 fromTarget= point - target;
+		return rayWeight * glm::dot(perpendicular, perpendicular) + targetWeight * glm::dot(fromTarget, fromTarget);
+	};
+
+	// The sum of two degree-2 trigonometric polynomials around the circle is
+	// one, so at most two minima: sample, then sharpen each by ternary search
+	constexpr int kCircleSamples= 64;
+	constexpr int kRefineSteps= 24;
+	float sampled[kCircleSamples];
+	for (int i= 0; i < kCircleSamples; ++i)
+		sampled[i]= cost(pointAt(glm::two_pi<float>() * (float)i / (float)kCircleSamples));
+
+	bool bFound= false;
+	float bestCost= 0.f;
+	for (int i= 0; i < kCircleSamples; ++i)
+	{
+		const int previous= (i + kCircleSamples - 1) % kCircleSamples;
+		const int next= (i + 1) % kCircleSamples;
+		if (sampled[i] > sampled[previous] || sampled[i] > sampled[next])
+			continue;
+
+		const float step= glm::two_pi<float>() / (float)kCircleSamples;
+		float low= step * (float)(i - 1);
+		float high= step * (float)(i + 1);
+		for (int refine= 0; refine < kRefineSteps; ++refine)
+		{
+			const float third= (high - low) / 3.f;
+			const float a= low + third;
+			const float b= high - third;
+			if (cost(pointAt(a)) < cost(pointAt(b)))
+				high= b;
+			else
+				low= a;
+		}
+		const glm::vec3 candidate= pointAt(0.5f * (low + high));
+		const float candidateCost= cost(candidate);
+		if (!bFound || candidateCost < bestCost)
+		{
+			outElbow= candidate;
+			bestCost= candidateCost;
+			bFound= true;
+		}
+	}
+	return bFound;
+}
+
 void BodyPoseSolver::reset()
 {
 	for (JitterTracker& tracker : m_jitter)

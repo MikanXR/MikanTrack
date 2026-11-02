@@ -51,8 +51,10 @@
 // camera (the avatar's shoulder midpoint on the model's shoulders at the
 // depth the avatar's width implies, the solver's own placement) against
 // the model's landmarks, the 2D match the mono mode is for; and the
-// rotation of each arm bone between consecutive frames, the jitter. All
-// reported, not gated.
+// rotation of each arm bone between consecutive frames, the jitter. For
+// the direct retarget alone: its wrist's distance along the view ray against
+// the reference's, the one quantity its scorer chooses, and the hand lift's
+// depth scale it measured over the take. All reported, not gated.
 //
 // The gates cover what the truth measures independently of the model: the
 // stereo wrist and the shoulder solved from its own rays and width. The
@@ -194,6 +196,11 @@ struct SideStats
 		}
 	};
 	std::array<Candidate, kCandidateCount> candidates{};
+	// The direct retarget's wrist along its view ray against the reference's
+	// shoulder-to-wrist vector on that ray, cm in the user's units: the
+	// magnitude, and signed (positive when the solver put the wrist too far)
+	Stats directWristDepthErrCm;
+	Stats directWristDepthBiasCm;
 	// The inputs behind them: the camera's own palm frame and raw finger
 	// angles against the fused ones, so a retarget gap can be read as the
 	// single view's or the solver's
@@ -224,6 +231,8 @@ struct SideStats
 		truthForearmStepDeg.append(other.truthForearmStepDeg);
 		for (int candidate= 0; candidate < kCandidateCount; ++candidate)
 			candidates[candidate].append(other.candidates[candidate]);
+		directWristDepthErrCm.append(other.directWristDepthErrCm);
+		directWristDepthBiasCm.append(other.directWristDepthBiasCm);
 		inputPalmDeg.append(other.inputPalmDeg);
 		inputPalmMirrorDeg.append(other.inputPalmMirrorDeg);
 		inputFingerDeg.append(other.inputFingerDeg);
@@ -505,6 +514,28 @@ struct RetargetComparison
 				stats.upperArmDeg.add(angleBetweenDeg(referenceUpper, candidateUpper));
 				stats.forearmDeg.add(angleBetweenDeg(referenceForearm, candidateForearm));
 
+				// The direct solver's wrist along its view ray against the
+				// reference's shoulder-to-wrist vector on the same ray, in the
+				// user's units
+				if (candidate == kDirect)
+				{
+					const DirectRetarget::ArmChain& chain= direct.getArmChain(sideIndex);
+					const float lengthScale= directConfig.userShoulderWidthMeters > 1e-3f
+						? skeleton->getShoulderWidth() / directConfig.userShoulderWidthMeters
+						: 1.f;
+					if (chain.valid && glm::length(chain.wrist) > 1e-4f && lengthScale > 1e-4f)
+					{
+						const glm::vec3 ray= glm::normalize(chain.wrist);
+						const float referenceAlong=
+							glm::dot(directFromMarker * (referencePosed[(int)hand].positionWorld -
+														 referencePosed[(int)upper].positionWorld),
+									 ray);
+						const float errorCm= (glm::dot(chain.wrist - chain.shoulder, ray) - referenceAlong) / lengthScale * 100.f;
+						side.directWristDepthBiasCm.add(errorCm);
+						side.directWristDepthErrCm.add(std::fabs(errorCm));
+					}
+				}
+
 				const glm::quat referenceWrist=
 					glm::inverse(referencePosed[(int)lower].rotationWorld) * referencePosed[(int)hand].rotationWorld;
 				const glm::quat candidateWrist=
@@ -638,6 +669,13 @@ void logCandidates(const char* tag, const SideStats& side)
 								<< stats.stepHandDeg.p50() << " (" << stats.stepHandDeg.p90() << ") on "
 								<< stats.stepUpperArmDeg.count() << " frames";
 		}
+	}
+	if (side.directWristDepthErrCm.count() > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    direct retarget wrist along its ray vs reference: error p50 "
+							<< side.directWristDepthErrCm.p50() << " p90 " << side.directWristDepthErrCm.p90()
+							<< " cm, signed p50 " << side.directWristDepthBiasCm.p50() << " cm on "
+							<< side.directWristDepthErrCm.count() << " frames";
 	}
 	if (side.inputPalmDeg.count() > 0)
 	{
@@ -1035,6 +1073,18 @@ static int runGateDirectModeTool(const TestArgs& args)
 		{
 			logSide(tag, sideIndex == 0 ? "Left" : "Right", sides[sideIndex]);
 			pooled[sideIndex].append(sides[sideIndex]);
+		}
+		{
+			// The hand lift's depth scale the direct retarget measured over
+			// the take, against the length ratio a correct lift would give
+			const DirectRetarget::PnpScale left= comparison.direct.getPnpScale(0);
+			const DirectRetarget::PnpScale right= comparison.direct.getPnpScale(1);
+			const float lengthScale= comparison.directConfig.userShoulderWidthMeters > 1e-3f
+				? skeleton.getShoulderWidth() / comparison.directConfig.userShoulderWidthMeters
+				: 1.f;
+			MIKAN_LOG_INFO(tag) << "  direct retarget hand lift depth scale at the end: left " << left.scale << " ("
+								<< left.sampleCount << " samples), right " << right.scale << " (" << right.sampleCount
+								<< " samples), length ratio " << lengthScale;
 		}
 		pooledInferenceMs.append(inferenceMs);
 	}

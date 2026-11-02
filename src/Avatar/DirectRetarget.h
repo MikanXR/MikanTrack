@@ -14,11 +14,15 @@ class AvatarSkeleton;
 // The single-camera direct retarget: one camera's hand landmarks and
 // whole-body observation become avatar bone rotations with no world
 // calibration. The camera is the world, the avatar's own bone lengths are
-// the scale, and every segment is placed where its known length meets the
-// ray through its landmark, with the model's relative depth deciding only
-// which of the two meeting points is real. Pure math over the frame it is
-// given plus filter and hold state advanced on frame timestamps, so a
-// replayed recording poses identically.
+// the scale, and every joint sits on the ray through its landmark, so the
+// posed avatar reprojects onto what the camera saw. The one thing a single
+// view cannot see, the wrist's distance along its ray, is scored over the
+// reach the arm allows: the elbow's reprojection, the model's relative
+// depth and the last frame's chain each pull on it, and the hand lift's
+// depth is measured against the result. Pixels are filtered lightly and
+// depths heavily, so pixel noise never becomes a depth jump. Pure math over
+// the frame it is given plus filter and hold state advanced on frame
+// timestamps, so a replayed recording poses identically.
 
 // The undistorted pinhole the landmarks live in
 struct DirectCameraModel
@@ -108,6 +112,21 @@ public:
 	};
 	const ArmChain& getArmChain(int sideIndex) const { return m_arms[sideIndex].chain; }
 
+	// The hand lift's depth against the chain's, as measured so far: the
+	// factor the lift's wrist distance would be multiplied by to match the
+	// chain, and how many frames with a seen elbow set it. Before any sample
+	// it is the avatar-to-user length ratio. A measurement the gate tool
+	// reports; the score does not read it.
+	struct PnpScale
+	{
+		float scale= 1.f;
+		int sampleCount= 0;
+	};
+	PnpScale getPnpScale(int sideIndex) const;
+
+	// The running median's window, frames with a seen elbow
+	static constexpr int kPnpScaleSamples= 90;
+
 private:
 	void configureFilters();
 
@@ -115,13 +134,30 @@ private:
 	{
 		ArmChain chain;
 		double solvedTimestampMs= -1.0;
+		// The wrist's distance along its ray as the scorer chose it last
+		// frame, before the depth filter: the smoothness term's anchor and a
+		// candidate of its own
+		float lastChosenDepth= 0.f;
+		// The hand lift's depth scale (see PnpScale): the ring of samples,
+		// and the median over them
+		std::array<float, kPnpScaleSamples> pnpScaleSamples{};
+		int pnpScaleSampleCount= 0;
+		int pnpScaleNextSample= 0;
+		float pnpScale= 1.f;
 		// The hand as last measured, held while the hand model loses it
 		bool bHandMeasured= false;
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm
 		glm::quat wristRotation{1.f, 0.f, 0.f, 0.f}; // palm in the measured forearm frame
 		std::array<FingerAngles, FINGER_COUNT> fingers{};
-		OneEuroFilterVec3 elbowFilter;
-		OneEuroFilterVec3 wristFilter;
+		// The filtered palm frame the hold compares against, and how many
+		// consecutive frames the raw palm has jumped away from it
+		bool bPalmFiltered= false;
+		glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
+		int palmJumpFrames= 0;
+		// Pixels lightly, the depth heavily, the palm axes as directions
+		OneEuroFilterVec2 elbowPixelFilter;
+		OneEuroFilterVec2 wristPixelFilter;
+		OneEuroFilter depthFilter;
 		OneEuroFilterVec3 palmXFilter;
 		OneEuroFilterVec3 palmZFilter;
 		std::array<OneEuroFilter, FINGER_COUNT * 4> fingerFilters;
@@ -133,15 +169,17 @@ private:
 		glm::vec3 shoulder[2]{};
 		glm::vec3 midpoint{0.f};
 		glm::quat lineFrame{1.f, 0.f, 0.f, 0.f}; // the shoulder line's frame, world, no lean
-		OneEuroFilterVec3 shoulderFilter[2];
+		OneEuroFilterVec2 shoulderPixelFilter[2];
+		OneEuroFilter depthFilter;
 	};
 	struct HeadState
 	{
 		bool bMeasured= false; // by the camera; the phone head never lands here
 		double solvedTimestampMs= -1.0;
 		glm::quat frame{1.f, 0.f, 0.f, 0.f};
-		OneEuroFilterVec3 leftFilter;
-		OneEuroFilterVec3 forwardFilter;
+		OneEuroFilterVec2 nosePixelFilter;
+		OneEuroFilterVec2 earPixelFilter[2];
+		OneEuroFilter depthFilter;
 	};
 
 	bool m_bHasTime= false;

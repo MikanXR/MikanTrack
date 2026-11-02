@@ -40,6 +40,23 @@ float OneEuroFilter::filter(float value, float dtSeconds)
 	return m_lastValue;
 }
 
+void OneEuroFilterVec2::configure(float minCutoff, float beta, float dCutoff)
+{
+	for (OneEuroFilter& axisFilter : m_axisFilters)
+		axisFilter.configure(minCutoff, beta, dCutoff);
+}
+
+glm::vec2 OneEuroFilterVec2::filter(const glm::vec2& value, float dtSeconds)
+{
+	return glm::vec2(m_axisFilters[0].filter(value.x, dtSeconds), m_axisFilters[1].filter(value.y, dtSeconds));
+}
+
+void OneEuroFilterVec2::reset()
+{
+	for (OneEuroFilter& axisFilter : m_axisFilters)
+		axisFilter.reset();
+}
+
 void OneEuroFilterVec3::configure(float minCutoff, float beta, float dCutoff)
 {
 	for (OneEuroFilter& axisFilter : m_axisFilters)

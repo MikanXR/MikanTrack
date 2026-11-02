@@ -149,6 +149,20 @@ public:
 		float upperArmLength, float forearmLength,
 		const glm::vec3& target, glm::vec3& outElbow);
 
+	// The bone circle point that agrees with a camera ray AND stays near a
+	// target: the sum of the squared distance to the ray's line over
+	// raySigma and the squared distance to the target over targetSigma,
+	// minimized around the circle. Where the ray grazes the circle its
+	// nearest point is sharp and wins; where the ray pierces the circle's
+	// plane near its center every point is about as near the ray, and the
+	// target decides rather than noise. A non-positive sigma drops its term.
+	// Same sampling as the ray-only solve, so replay matches.
+	static bool solveElbowOnBoneCircleNear(
+		const glm::vec3& shoulder, const glm::vec3& wrist,
+		float upperArmLength, float forearmLength,
+		const glm::vec3& rayOrigin, const glm::vec3& rayDir, float raySigma,
+		const glm::vec3& target, float targetSigma, glm::vec3& outElbow);
+
 private:
 	// The bone circle itself, shared by the ray-picked and target-picked
 	// solves above. bDegenerate marks a straight (or folded) arm, where the

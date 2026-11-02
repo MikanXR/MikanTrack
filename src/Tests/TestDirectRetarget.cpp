@@ -7,15 +7,18 @@
 #include "AvatarSkeleton.h"
 #include "DirectRetarget.h"
 #include "MathGLM.h"
+#include "OneEuroFilter.h"
 #include "SyntheticAvatar.h"
 
 // The direct retarget on the shared synthetic rig, seen by a synthetic
 // pinhole pitched down at a synthetic user built from the avatar's own
 // lengths: the neutral capture zeroes the torso, head and wrists, the arm
-// directions come back through the tilt conversion, the depth sign picks the
-// near and the far crossing, the fallback keeps an unseen elbow's wrist on
-// its ray, a lost hand holds, a gap rests, and two solvers agree frame for
-// frame.
+// directions come back through the tilt conversion, the model's depth and
+// the elbow's reprojection pick the wrist's distance, the model's depth
+// places an unseen elbow's wrist and the hand lift's depth is measured
+// against the seen elbow's, a lost hand holds, a palm flip is held out,
+// pixel jitter stays out of the depth, a gap rests, and two solvers agree
+// frame for frame.
 
 namespace
 {
@@ -97,6 +100,10 @@ struct User
 	bool bHandTracked[2]= {true, true};
 	bool bElbowSeen[2]= {true, true};
 	bool bWristSeen[2]= {true, true};
+	// Whether the body model reports its relative depth
+	bool bModelDepth= true;
+	// The hand lift's wrist distance as a multiple of the truth
+	float pnpDepthScale[2]= {1.f, 1.f};
 	// Where the hand slot sits relative to the wrist's true pixel: a slot
 	// on something else in the scene
 	glm::vec2 handPixelOffset[2]{};
@@ -146,7 +153,7 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 	body.boxSource= eBodyBoxSource::Detector;
 	body.modelFrameIndex= frameIndex;
 	body.confidence= 1.f;
-	body.hasDepth= true;
+	body.hasDepth= user.bModelDepth;
 	const float hipDepth= toCamera(camera, 0.5f * (user.hip[0] + user.hip[1])).z;
 	setLandmark(body, camera, (int)ePoseLandmark::NOSE, user.nose, hipDepth, true);
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_EAR, user.ear[0], hipDepth, true);
@@ -177,7 +184,7 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 		pose.confidence= 1.f;
 		pose.hasCameraPose= true;
 		pose.palmOrientationCamera= camera.cameraFromWorld * user.palm[sideIndex];
-		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]);
+		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]) * user.pnpDepthScale[sideIndex];
 		pose.fingers= user.fingers[sideIndex];
 		pose.skeleton= skeleton.getHand((eHandSide)sideIndex).skeleton;
 	}
@@ -444,8 +451,8 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bToward, "(c) a forearm pointing at the camera takes the near crossing");
 	}
 
-	// (d) An unseen elbow: the wrist stays on its ray within reach and both
-	// bones keep their lengths
+	// (d) An unseen elbow: the wrist stays on its ray within reach, both
+	// bones keep their lengths, and the model's depth places the wrist
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
@@ -480,6 +487,13 @@ static int runDirectRetargetTest(const TestArgs&)
 			bFallback&= glm::length(chain.wrist - chain.shoulder) <= kUpperArmLength + kForearmLength + 1e-4f;
 		}
 		check(bFallback, "(d) an unseen elbow keeps the wrist on its ray within reach with both lengths");
+		bool bDepth= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float truth= glm::length(user.wrist[sideIndex]);
+			bDepth&= nearlyEqual(glm::length(solver.getArmChain(sideIndex).wrist), truth, 0.05f * truth);
+		}
+		check(bDepth, "(d) the model's depth places an unseen elbow's wrist within 5 percent");
 	}
 
 	// (e) A lost hand: the body model's wrist keeps the arm placed and the
@@ -771,6 +785,197 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(k) a hand slot on the body wrist is the hand");
 	}
 
+	// (l) The scorer: with the model's depth withheld, a seen elbow picks
+	// the wrist distance whose elbow reprojects; the hand lift's depth scale
+	// is measured against those frames; and with the elbow unseen and no
+	// depth cue at all the wrist keeps its distance
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		// The elbow forward and out, the forearm swung out and up: a bend
+		// that no straight arm along a line of sight can mimic. The hands
+		// are not tracked, so only the elbow's reprojection decides.
+		User user= makeNeutralUser();
+		user.bModelDepth= false;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float sy= sideIndex == 0 ? 1.f : -1.f;
+			user.bHandTracked[sideIndex]= false;
+			user.elbow[sideIndex]= user.shoulder[sideIndex] + glm::normalize(glm::vec3(0.4f, sy * 0.6f, -0.7f)) * kUpperArmLength;
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.5f, sy * 0.7f, 0.5f)) * kForearmLength;
+		}
+		auto run= [&](int firstFrame, int frameCount, AvatarPose& outPose) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto depthWithin= [&](float fraction) {
+			bool bWithin= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const float truth= glm::length(user.wrist[sideIndex]);
+				bWithin&= nearlyEqual(glm::length(solver.getArmChain(sideIndex).wrist), truth, fraction * truth);
+			}
+			return bWithin;
+		};
+
+		AvatarPose pose;
+		solver.reset();
+		run(200, 3, pose);
+		bool bElbowPicks= depthWithin(0.05f);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bElbowPicks&= angleBetween(posedArm(*rig.skeleton, pose, sideIndex).forearm,
+									   user.wrist[sideIndex] - user.elbow[sideIndex]) < kDirectionToleranceRadians;
+		check(bElbowPicks, "(l) a seen elbow picks the wrist distance whose elbow reprojects, without the model's depth");
+
+		// The hands tracked with a lift that reads 1.3 times too far, for 40
+		// frames of seen elbow
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.bHandTracked[sideIndex]= true;
+			user.pnpDepthScale[sideIndex]= 1.3f;
+		}
+		run(210, 40, pose);
+		bool bScale= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::PnpScale scale= solver.getPnpScale(sideIndex);
+			bScale&= scale.sampleCount >= 40 && nearlyEqual(scale.scale, 1.f / 1.3f, 0.05f / 1.3f);
+		}
+		check(bScale, "(l) the lift's depth scale converges on the measured ratio over seen-elbow frames");
+
+		// The elbow drops out of view and the wrist moves with nothing to
+		// say how far: it keeps its distance along the new ray
+		const float heldDepth= glm::length(user.wrist[0]);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.bElbowSeen[sideIndex]= false;
+			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.6f, 0.f, -0.8f)) * kForearmLength;
+		}
+		run(260, 40, pose);
+		bool bHeld= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bHeld&= chain.valid && nearlyEqual(glm::length(chain.wrist), heldDepth, 0.05f * heldDepth);
+			bHeld&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bHeld, "(l) with the elbow unseen and no depth cue the wrist keeps its distance on its new ray");
+	}
+
+	// (m) The palm hold: a one-frame palm roll in a steady sequence leaves
+	// the forearm where it was, the same roll held for three frames is
+	// adopted by the third
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		const User steady= makeNeutralUser();
+		User rolled= steady;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const glm::quat roll= glm::angleAxis(glm::radians(90.f), glm::vec3(1.f, 0.f, 0.f));
+			rolled.palm[sideIndex]= makePalm(glm::vec3(1.f, 0.f, 0.f), roll * glm::vec3(0.f, 0.f, -1.f));
+		}
+		auto run= [&](const User& user, int firstFrame, int frameCount, AvatarPose& outPose) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto forearmsWithin= [&](const AvatarPose& a, const AvatarPose& b, float toleranceRadians) {
+			bool bWithin= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+				bWithin&= nearlySameRotation(a.bones[(int)lower].deltaWorld, b.bones[(int)lower].deltaWorld, toleranceRadians);
+			}
+			return bWithin;
+		};
+
+		AvatarPose steadyPose;
+		run(steady, 300, 10, steadyPose);
+		AvatarPose glitchPose;
+		run(rolled, 310, 1, glitchPose);
+		AvatarPose afterPose;
+		run(steady, 311, 1, afterPose);
+		check(forearmsWithin(steadyPose, glitchPose, glm::radians(1.f)) && forearmsWithin(steadyPose, afterPose, glm::radians(1.f)),
+			  "(m) a one-frame palm roll is held out of the forearm");
+
+		AvatarPose adoptedPose;
+		run(rolled, 320, 3, adoptedPose);
+		check(!forearmsWithin(steadyPose, adoptedPose, glm::radians(45.f)),
+			  "(m) a palm roll that persists three frames is adopted");
+	}
+
+	// (n) The filter split: a wrist pixel jittered by 2 px per frame at a
+	// fixed depth leaves the chain's depth within 1 percent of steady
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		AvatarPose pose;
+		float minDepth[2]= {1e9f, 1e9f};
+		float maxDepth[2]= {0.f, 0.f};
+		for (int step= 0; step < 60; ++step)
+		{
+			const float jitter= (step % 2) == 0 ? 2.f : -2.f;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.handPixelOffset[sideIndex]= glm::vec2(0.f, jitter);
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 400 + step);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+			if (step < 30)
+				continue;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const float depth= glm::length(solver.getArmChain(sideIndex).wrist);
+				minDepth[sideIndex]= std::min(minDepth[sideIndex], depth);
+				maxDepth[sideIndex]= std::max(maxDepth[sideIndex], depth);
+			}
+		}
+		bool bSteady= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float truth= glm::length(user.wrist[sideIndex]);
+			bSteady&= (maxDepth[sideIndex] - minDepth[sideIndex]) < 0.01f * truth;
+			bSteady&= nearlyEqual(0.5f * (maxDepth[sideIndex] + minDepth[sideIndex]), truth, 0.02f * truth);
+		}
+		check(bSteady, "(n) a wrist pixel jittered 2 px per frame leaves the chain's depth within 1 percent");
+	}
+
+	// (o) The vec2 One Euro filter: initialized on its first sample, then
+	// each component the scalar filter's
+	{
+		OneEuroFilterVec2 filter;
+		filter.configure(1.f, 0.f, 1.f);
+		OneEuroFilter scalar;
+		scalar.configure(1.f, 0.f, 1.f);
+		const glm::vec2 first= filter.filter(glm::vec2(1.f, 2.f), 0.f);
+		scalar.filter(2.f, 0.f);
+		const glm::vec2 second= filter.filter(glm::vec2(3.f, 4.f), 0.033f);
+		const float scalarSecond= scalar.filter(4.f, 0.033f);
+		check(glm::length(first - glm::vec2(1.f, 2.f)) < 1e-6f && second.x > 1.f && second.x < 3.f &&
+				  nearlyEqual(second.y, scalarSecond, 1e-6f),
+			  "(o) the vec2 One Euro filter runs the scalar filter per component");
+	}
+
 	// (i) The config section round-trips through the project JSON
 	{
 		AppConfig config;
@@ -809,5 +1014,5 @@ static int runDirectRetargetTest(const TestArgs&)
 }
 
 MIKAN_REGISTER_TEST("--test-direct-retarget",
-					"Direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism",
+					"Direct retarget: camera world, neutral capture, the wrist-depth scorer, the lift's scale, the palm hold, hold and rest, determinism",
 					eTestCategory::SelfTest, runDirectRetargetTest);
