@@ -89,6 +89,26 @@ static int runHandPoseTest(const TestArgs& args)
 		result= 1;
 	}
 
+	// A fist seen from the front: the proximal bone folds past 90 degrees,
+	// so its palm-plane projection points back at the wrist. The lateral
+	// must stay a splay (within a quarter turn) and the proximal must read
+	// past 90, rather than a half-turn lateral with the later bends
+	// negative about a reversed hinge.
+	std::array<FingerAngles, FINGER_COUNT> anglesFolded{};
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		anglesFolded[finger].lateral= 0.1f * (float)(finger - 2);
+		anglesFolded[finger].proximal= 1.85f;
+		anglesFolded[finger].intermediate= 1.2f;
+		anglesFolded[finger].distal= 0.8f;
+	}
+	if (roundTrip(anglesFolded, "proximal folded past 90 (fist from the front)") > 0.02f)
+	{
+		MIKAN_LOG_ERROR("test-handpose") << "FAILED: folded-proximal round-trip error too large "
+											"(the lateral took the half-turn branch)";
+		result= 1;
+	}
+
 	// Thumb opposition: large MCP/IP flexion must round-trip AND must
 	// actually sweep the thumb tip ACROSS the palm toward the pinky
 	// (the pronated-hinge behavior; on the finger-style hinge this

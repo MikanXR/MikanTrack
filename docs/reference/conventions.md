@@ -45,8 +45,8 @@ The avatar rig settings carry two spatial quantities. A rotation trim rotates a 
 
 Angles are radians everywhere inside the app. The wire carries no angles: `VmcRetarget` turns them into bone quaternions, and the OSC panel readout is the only place they are shown in degrees. The sign conventions are stated on `FingerAngles` in `src/Vision/TrackingTypes.h`:
 
-- `lateral` is splay about palm +Z, positive counter-clockwise (toward palm +Y). Purely geometric and identical for both hands; the palm frame carries the chirality, so positive is toward the pinky on a right hand and toward the thumb on a left.
-- `proximal` is the base bone away from its neutral direction, positive curling toward the palmar side (+Z).
+- `lateral` is splay about palm +Z, positive counter-clockwise (toward palm +Y). Purely geometric and identical for both hands; the palm frame carries the chirality, so positive is toward the pinky on a right hand and toward the thumb on a left. It stays within a quarter turn: a base bone whose palm-plane projection points back at the wrist is a curl past 90 degrees, not a splay, so the lateral folds by a half turn and the proximal reads past 90.
+- `proximal` is the base bone away from its neutral direction, positive curling toward the palmar side (+Z), past 90 degrees on a folded finger.
 - `intermediate` and `distal` are each measured RELATIVE TO THE PARENT BONE, not the palm, positive toward the palm; zero means collinear with the parent. They chain, so an evenly curling finger reads three similar values.
 - The thumb's intermediate/distal hinge is pronated `kThumbPronationRad` (1.2 rad) about its metacarpal direction (`src/Tracking/HandPoseModel.cpp`), with the sign read from `baseInPalm[Index].y`: palm +Y runs toward the thumb on a left hand and toward the pinky on a right, so a left hand (index base at positive palm Y) pronates positively and a right hand (index base at negative palm Y) negatively. The side label plays no part.
 

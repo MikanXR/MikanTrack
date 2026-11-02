@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "glm/geometric.hpp"
+#include "glm/gtc/constants.hpp"
 #include "glm/gtc/quaternion.hpp"
 
 namespace
@@ -250,10 +251,17 @@ void computeFingerAnglesAgainst(const std::array<glm::vec3, HAND_LANDMARK_COUNT>
 		// vs the rest direction, about palm +Z. Positive is counter-clockwise
 		// about +Z (toward palm +Y). (The projection degenerates only at
 		// exactly 90 degrees of proximal curl, where lateral is visually
-		// meaningless anyway - safeNormalize guards it.)
+		// meaningless anyway - safeNormalize guards it.) A projection
+		// pointing back toward the wrist is a curl past 90 degrees (a fist
+		// seen from the front), never a splay, so the lateral folds by a half
+		// turn to stay within a quarter turn: the hinge stays on the finger's
+		// side and the proximal bend reads past 90 instead of the later
+		// joints reading negative about a reversed hinge.
 		const glm::vec3 proximalInPlane=
 			safeNormalize(proximalBone - palmZ * glm::dot(proximalBone, palmZ));
-		const float lateral= signedAngle(neutralInPlane, proximalInPlane, palmZ);
+		float lateral= signedAngle(neutralInPlane, proximalInPlane, palmZ);
+		if (glm::dot(proximalInPlane, neutralInPlane) < 0.f)
+			lateral+= lateral > 0.f ? -glm::pi<float>() : glm::pi<float>();
 
 		// ONE fixed hinge axis per finger, exactly as the FK side builds it:
 		// from the post-lateral direction. All three bend angles are measured
