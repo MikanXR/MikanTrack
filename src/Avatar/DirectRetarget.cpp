@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "glm/ext/matrix_transform.hpp"
 #include "glm/geometric.hpp"
 #include "glm/gtc/constants.hpp"
 #include "glm/gtc/quaternion.hpp"
@@ -201,6 +202,7 @@ void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::
 
 void DirectRetarget::reset()
 {
+	m_state= SolveState();
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
 	m_torso= TorsoState();
@@ -264,6 +266,9 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	// The root is fixed: the camera is the world and the user faces it
 	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
 
+	m_state= SolveState();
+	m_state.camera= cameraModel;
+	m_state.tiltRadians= config.cameraTiltRadians;
 	m_tiltRadians= config.cameraTiltRadians;
 	const glm::quat worldFromCam= worldFromCamera(config.cameraTiltRadians);
 	// The stored neutral references live in the level frame; this carries
@@ -354,6 +359,14 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			filter.reset();
 		m_torso.depthFilter.reset();
 	}
+	m_state.torsoValid= bTorsoUsable;
+	if (bTorsoUsable)
+	{
+		m_state.shoulder[0]= m_torso.shoulder[0];
+		m_state.shoulder[1]= m_torso.shoulder[1];
+		m_state.shoulderMidpoint= m_torso.midpoint;
+		m_state.torsoFrame= m_torso.lineFrame;
+	}
 
 	// -- Spine: the torso frame against the neutral one --
 	glm::quat spineDelta(1.f, 0.f, 0.f, 0.f);
@@ -370,6 +383,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		const glm::quat neutralTorso= tilt * config.neutral.torso;
 		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), kSpineLimitRadians);
 	}
+	m_state.spineDelta= spineDelta;
 	placeBone(outPose, skeleton, B::Spine, spineDelta);
 	placeBone(outPose, skeleton, B::Chest, spineDelta);
 	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
@@ -433,6 +447,10 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		}
 		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
 		placeBone(outPose, skeleton, B::Head, headDelta);
+		m_state.headMeasured= bHeadUsable;
+		if (bHeadUsable)
+			m_state.headFrame= m_head.frame;
+		m_state.headDelta= headDelta;
 	}
 
 	// -- Arms --
@@ -487,6 +505,9 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			elbowPx= arm.elbowPixelFilter.filter(landmarkPx(elbowIndex), dtSeconds);
 		else
 			arm.elbowPixelFilter.reset();
+		SolveState::Arm& armState= m_state.arms[sideIndex];
+		armState.bHandSeen= bHandSeen;
+		armState.bElbowSeen= bElbowSeen;
 
 		const bool bHadChain= arm.chain.valid && (timestampMs - arm.solvedTimestampMs) <= kMaxHoldMs;
 		if (bTorsoFresh && bWristPixel && upperArm > 1e-3f && forearm > 1e-3f)
@@ -544,6 +565,10 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				const float modelDepthDelta= bModelDepth
 					? (body.imagePoints[wristIndex].z - body.imagePoints[shoulderIndex].z) / kModelDepthScale * lengthScale
 					: 0.f;
+				armState.depthLow= depthLow;
+				armState.depthHigh= depthHigh;
+				armState.modelDepthDelta= modelDepthDelta;
+				armState.pnpDistance= pnpDistanceRaw;
 				auto feasible= [&](float depth) {
 					return depth >= depthLow && depth <= depthHigh && glm::length(wristRay * depth - shoulder) >= minReach;
 				};
@@ -642,6 +667,11 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 					float depth= std::clamp(arm.depthFilter.filter(chosen.depth, dtSeconds), depthLow, depthHigh);
 					if (!feasible(depth))
 						depth= chosen.depth;
+					armState.bDepthChosen= true;
+					armState.chosenDepth= chosen.depth;
+					armState.chosenCost= chosen.cost;
+					armState.chosenElbowPx= chosen.elbowPx;
+					armState.filteredDepth= depth;
 					const glm::vec3 wrist= wristRay * depth;
 					arm.chain.shoulder= shoulder;
 					arm.chain.wrist= wrist;
@@ -662,6 +692,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			restArm(outPose, skeleton, sideIndex);
 			continue;
 		}
+		armState.chain= arm.chain;
+		armState.pnpScale= getPnpScale(sideIndex);
 
 		// Upper arm and forearm: swings from rest onto the chain's directions
 		const glm::vec3 upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
@@ -775,6 +807,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			// Fingers: the single view's angles, filtered
 			std::array<FingerAngles, FINGER_COUNT> measured;
 			measureMonoFingers(hand, arm.palmarMemory, measured);
+			armState.measuredFingers= measured;
 			for (int finger= 0; finger < FINGER_COUNT; ++finger)
 			{
 				const FingerAngles& angles= measured[finger];
@@ -797,6 +830,12 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			for (OneEuroFilter& filter : arm.fingerFilters)
 				filter.reset();
 		}
+
+		armState.bHandMeasured= arm.bHandMeasured;
+		armState.twist= arm.twist;
+		armState.wristRotation= arm.wristRotation;
+		armState.filteredPalm= arm.filteredPalm;
+		armState.fingers= arm.fingers;
 
 		// Forearm roll: the measured twist against the avatar's rest palm,
 		// plus the rig's trim; an arm whose hand was never seen rolls only
@@ -826,6 +865,19 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		solveFingerBones(skeleton, sideIndex, glm::quat(1.f, 0.f, 0.f, 0.f), handDelta,
 						 skeleton.getBone(handBone).restPositionWorld, arm.fingers, sideConfig, outPose);
 	}
+}
+
+glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,
+											const SolveState& state)
+{
+	const glm::mat4 rotation= glm::mat4_cast(worldFromCamera(state.tiltRadians));
+	if (!state.torsoValid || !pose.valid)
+		return rotation;
+	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
+	computePosedBones(skeleton, pose, posed);
+	const glm::vec3 posedMidpoint=
+		0.5f * (posed[(int)B::LeftUpperArm].positionWorld + posed[(int)B::RightUpperArm].positionWorld);
+	return glm::translate(glm::mat4(1.f), posedMidpoint - state.shoulderMidpoint) * rotation;
 }
 
 bool DirectRetarget::captureNeutral(DirectNeutralPose& outNeutral) const

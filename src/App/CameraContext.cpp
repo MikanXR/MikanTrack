@@ -358,15 +358,13 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 		// Opt-in body-pose stage, same undistorted frame the hand pipeline
 		// consumed (so its imagePoints share the undistorted camera matrix)
-		if (bRecordingInputs)
-			m_pendingRecordInput.bHaveBodyPose= false;
+		m_pendingRecordInput.bHaveBodyPose= false;
 		if (m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded())
 		{
 			m_bodyPoseTracker->process(*activeFrame, result.body);
 
 			// Recording tap: the stage's cadence (divider re-emits) is baked
 			// into the observation, so replay never re-runs the pose models
-			if (bRecordingInputs)
 			{
 				m_pendingRecordInput.bHaveBodyPose= true;
 				m_pendingRecordInput.body= result.body;
@@ -381,7 +379,6 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 		// Recording tap, part 1: the pipeline-output hands, exactly as the
 		// LandmarkTo3D call below consumes them
-		if (bRecordingInputs)
 		{
 			m_pendingRecordInput.refLengthMeters= 0.f;
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -409,11 +406,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 			// Recording tap, part 2: the hand scale in effect for this exact
 			// process() call (the auto-scale EMA feedback loop becomes a
 			// recorded input)
-			if (bRecordingInputs)
-			{
-				m_pendingRecordInput.refLengthMeters=
-					m_landmarkTo3D->getRefLengthMeters();
-			}
+			m_pendingRecordInput.refLengthMeters= m_landmarkTo3D->getRefLengthMeters();
 
 			m_landmarkTo3D->process(result);
 
@@ -428,8 +421,8 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 	// Recording tap, part 3: frame metadata + the fresh flag. A popped frame
 	// with tracking disabled records as fresh-but-invalid (replay advances
-	// that camera's mirror timestamp without running LandmarkTo3D).
-	if (bRecordingInputs)
+	// that camera's mirror timestamp without running LandmarkTo3D). Staged
+	// every frame for the diagnostic dump; fresh only for the recorder.
 	{
 		RecordedCameraInput& record= m_pendingRecordInput;
 		if (!bProducedTracking)
@@ -444,7 +437,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		record.inferenceMs= result.inferenceMs;
 		record.lumaInstability= result.lumaInstability;
 		record.lumaFlickerHz= result.lumaFlickerHz;
-		m_bPendingRecordFresh= true;
+		m_bPendingRecordFresh= bRecordingInputs;
 	}
 
 	// Store the fusion input (the result itself follows once its timings are

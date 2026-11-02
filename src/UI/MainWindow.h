@@ -44,6 +44,7 @@ public:
 	// fetch is one-shot, so other readers on the main thread read these)
 	const TrackingFrameResult& getLatestFused() const { return m_latestFused; }
 	const AvatarPose& getLatestDirectPose() const { return m_latestDirectPose; }
+	const DirectRetarget::SolveState& getLatestDirectState() const { return m_latestDirectState; }
 
 private:
 	// The MainMenu app state: draws the startup menu and dispatches its
@@ -56,7 +57,14 @@ private:
 	// Global hotkeys, active anywhere in the tracking UI: fires the action
 	// bound to any key pressed this frame (the table is in the source file)
 	void handleHotkeys();
+	// The diagnostic dump: at once, or after a settle countdown so the user
+	// can get into the pose it captures. Both land in performDiagnosticDump
+	// after the avatar is posed for the frame, so the avatar's render and
+	// the vision thread's state describe the same pose.
 	void dumpDiagnostics();
+	void dumpDiagnosticsDelayed();
+	void performDiagnosticDump(const std::vector<SceneCameraView>& cameras,
+							   const std::vector<const TrackingFrameResult*>& perCameraResults);
 	void toggleRecording();
 	// Restores one camera's persisted device by path, then by friendly name
 	bool restoreCameraDevice(int cameraIndex);
@@ -79,8 +87,12 @@ private:
 	// the UI still has data when no new frame arrived this tick)
 	std::vector<VisionPreviewFrame> m_latestPreviews;
 	TrackingFrameResult m_latestFused;
-	// The direct retarget's pose for that result, valid only in direct mode
+	// The direct retarget's pose for that result and the solve behind it,
+	// valid only in direct mode
 	AvatarPose m_latestDirectPose;
+	DirectRetarget::SolveState m_latestDirectState;
+	// An immediate dump requested this frame, taken after the avatar update
+	bool m_bDumpPending= false;
 
 	TrackingPanelState m_trackingPanelState;
 
@@ -97,6 +109,10 @@ private:
 	int m_avatarPoseFeed= -1;
 	// Poses the scene's avatar and fills the elbow hint gizmos from it
 	void updateDisplayAvatar(SceneGizmos& outGizmos);
+	// The camera the scene can look through: the direct solve's placement
+	// of its camera when one is shown (directState), else camera 0's
+	// calibration; and the solve's chains drawn beside the avatar
+	void updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton);
 	// A direct-mode recording's frame through the window's direct retarget
 	// into m_avatarPose; false when the recording is not direct mode or the
 	// frame cannot be solved

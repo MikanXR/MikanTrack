@@ -99,6 +99,10 @@ public:
 
 	// Hands over the inputs staged by the last process() call, once
 	bool consumePendingRecordInput(RecordedCameraInput& outInput);
+	// The inputs staged by the last process() call, recording or not, so a
+	// diagnostic dump can write the frame as a one-frame recording (vision
+	// thread only; frameIndex is -1 before any frame)
+	const RecordedCameraInput& getLastRecordInput() const { return m_pendingRecordInput; }
 
 	// The frame the last process() call ran on (vision thread only; stable
 	// between iterations for diagnostic dumps)
@@ -147,8 +151,8 @@ private:
 	int m_hintCooldownFrames= 0;
 
 	// Recording staging: this camera's inputs for the current iteration,
-	// gathered in process() and consumed when the frame record is assembled
-	// after fusion
+	// gathered in process() every frame and consumed when the frame record
+	// is assembled after fusion; fresh only while a recording is on
 	RecordedCameraInput m_pendingRecordInput;
 	bool m_bPendingRecordFresh= false;
 };

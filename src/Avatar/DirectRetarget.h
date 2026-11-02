@@ -2,6 +2,7 @@
 
 #include <array>
 
+#include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/quaternion_float.hpp"
 #include "glm/ext/vector_float3.hpp"
 
@@ -130,6 +131,54 @@ public:
 	};
 	PnpScale getPnpScale(int sideIndex) const;
 
+	// What the last solve measured and chose, world space (the camera at
+	// the origin), for the diagnostic dump and the pose report: the pose
+	// says where the bones went, this says why
+	struct SolveState
+	{
+		struct Arm
+		{
+			ArmChain chain;
+			bool bHandSeen= false;  // the hand slot agreed with the body model's wrist
+			bool bElbowSeen= false; // the body model's elbow passed the visibility gate
+			bool bDepthChosen= false;
+			float depthLow= 0.f;  // the wrist distances the arm reaches along its ray
+			float depthHigh= 0.f;
+			float modelDepthDelta= 0.f; // the model's shoulder-to-wrist depth, avatar units
+			float pnpDistance= 0.f;     // the hand lift's wrist distance, zero without one
+			float chosenDepth= 0.f;     // the scorer's choice this frame
+			float chosenCost= 0.f;
+			float chosenElbowPx= 0.f; // the chosen elbow's miss from its ray
+			float filteredDepth= 0.f; // the chain's wrist distance after the depth filter
+			PnpScale pnpScale;
+			bool bHandMeasured= false;
+			float twist= 0.f;
+			glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
+			glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
+			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
+			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
+		};
+		DirectCameraModel camera;
+		float tiltRadians= 0.f;
+		bool torsoValid= false;
+		glm::vec3 shoulder[2]{};
+		glm::vec3 shoulderMidpoint{0.f};
+		glm::quat torsoFrame{1.f, 0.f, 0.f, 0.f}; // the shoulder line's frame, no lean
+		glm::quat spineDelta{1.f, 0.f, 0.f, 0.f};
+		bool headMeasured= false;
+		glm::quat headFrame{1.f, 0.f, 0.f, 0.f};
+		glm::quat headDelta{1.f, 0.f, 0.f, 0.f};
+		Arm arms[2];
+	};
+	const SolveState& getSolveState() const { return m_state; }
+
+	// The camera's pose in the posed avatar's world (OpenCV camera axes to
+	// world): the solve's world has the camera at the origin and the avatar's
+	// has the root there, so the two differ by the measured shoulder
+	// midpoint against the posed one. Identity before a torso is measured.
+	static glm::mat4 makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,
+									   const SolveState& state);
+
 	// The running median's window, frames with a seen elbow
 	static constexpr int kPnpScaleSamples= 90;
 
@@ -205,4 +254,5 @@ private:
 	TorsoState m_torso;
 	HeadState m_head;
 	ArmState m_arms[2];
+	SolveState m_state;
 };

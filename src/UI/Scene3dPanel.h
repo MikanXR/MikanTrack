@@ -8,9 +8,11 @@
 #include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/vector_float2.hpp"
 #include "glm/ext/vector_float3.hpp"
+#include "opencv2/core/mat.hpp"
 
 #include "AvatarFaceMap.h"
 #include "AvatarRetarget.h"
+#include "DirectRetarget.h"
 #include "TrackingTypes.h"
 
 class AppConfig;
@@ -60,6 +62,29 @@ struct SceneGizmos
 // (x, y, z) -> (x, z, -y). Shared with the headless avatar render tool.
 const glm::mat4& displayFromWorld();
 
+// A real camera's view of the scene: its undistorted pinhole and its pose
+// (OpenCV camera axes to world), for the view-from-camera toggle and the
+// avatar capture. In direct mode the pose comes from the solve (the camera
+// at the measured shoulders), in stereo mode from the extrinsics.
+struct SceneCameraMatch
+{
+	bool valid= false;
+	DirectCameraModel camera;
+	glm::mat4 cameraToWorld{1.f};
+};
+
+// The view and projection that render the scene the way the camera's
+// undistorted frame shows it: a world point lands on the pixel the pinhole
+// puts it on, with image row 0 at the top of the rendered image (NDC +Y),
+// which is how the panel displays its framebuffer and how the capture
+// reads it back
+void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cameraToWorld, float zNear, float zFar,
+						   glm::mat4& outView, glm::mat4& outProjection);
+// A world point through that view onto the frame's pixels; false behind
+// the camera
+bool projectCameraMatched(const glm::mat4& viewProjection, const glm::vec3& world, int width, int height,
+						  glm::vec2& outPixel);
+
 // Alternate 3D view: renders the marker-plane grid, marker axes, one frustum
 // per calibrated camera, the FUSED hand/arm skeletons (full brightness) and
 // optionally each camera's unfused skeleton (dimmed, in that camera's color)
@@ -99,11 +124,36 @@ public:
 	bool getShowPerCameraSkeletons() const { return m_bShowPerCameraSkeletons; }
 	void setShowPerCameraSkeletons(bool bShow) { m_bShowPerCameraSkeletons= bShow; }
 
+	// The direct solver's chains (its world, the camera at the origin) drawn
+	// beside the avatar they posed; solveToWorld carries them into the
+	// avatar's world. Null draws none.
+	void setDirectSolve(const DirectRetarget::SolveState* state, const glm::mat4& solveToWorld);
+
+	// The camera the view-from-camera toggle and the capture look through;
+	// an invalid match disables both
+	void setCameraMatch(const SceneCameraMatch& match) { m_cameraMatch= match; }
+	bool hasCameraMatch() const { return m_cameraMatch.valid; }
+	// On, the panel shows the scene from the matched camera, the frame's
+	// aspect letterboxed in the panel; the orbit camera waits untouched
+	bool getViewFromCamera() const { return m_bViewFromCamera; }
+	void setViewFromCamera(bool bOn) { m_bViewFromCamera= bOn; }
+
+	// Renders the scene from the matched camera at the frame's size into a
+	// BGR image, the way the dump's annotated frame is laid out, so the two
+	// compare pixel for pixel. False without a match or a GL context. Needs
+	// a current GL context, not an ImGui frame.
+	bool captureFromCamera(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+						   const std::vector<const TrackingFrameResult*>& perCameraResults, cv::Mat& outBgr);
+
 private:
+	// Draws the scene into the bound framebuffer's current viewport with the
+	// view and projection given
 	void renderScene(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 					 const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos,
-					 float aspect);
+					 const glm::mat4& viewProjection);
+	bool startRenderers();
 	void drawGizmos(const SceneGizmos& gizmos);
+	void drawDirectSolve();
 	// Picks and drags the gizmos with the mouse over the scene image; returns
 	// whether a gizmo owns the mouse this frame (the orbit drag stands down)
 	bool updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMin, const glm::vec2& imageSize);
@@ -112,13 +162,26 @@ private:
 						glm::vec2& outPixel) const;
 	void drawSkeleton(const TrackingFrameResult& result, float brightness, const glm::vec3* colorOverride);
 	// Draws the avatar when one is shown; returns whether anything was drawn
-	bool drawAvatar();
+	bool drawAvatar(const glm::mat4& viewProjection);
 
 	std::unique_ptr<GlFrameBuffer> m_frameBuffer;
+	std::unique_ptr<GlFrameBuffer> m_captureBuffer;
 	std::unique_ptr<GlLineRenderer> m_lineRenderer;
 	std::unique_ptr<OrbitCamera> m_camera;
 	std::unique_ptr<GlSkinnedMeshRenderer> m_meshRenderer;
+	bool m_bLineRendererInitialized= false;
 	bool m_bMeshRendererInitialized= false;
+
+	SceneCameraMatch m_cameraMatch;
+	bool m_bViewFromCamera= false;
+	// The last draw's view and where it rendered inside the panel's
+	// framebuffer (the letterbox when the camera view is on), for the gizmo
+	// picking
+	glm::mat4 m_viewProjection{1.f};
+	int m_viewport[4]= {0, 0, 0, 0};
+	bool m_bHasDirectSolve= false;
+	DirectRetarget::SolveState m_directSolve;
+	glm::mat4 m_solveToWorld{1.f};
 
 	std::shared_ptr<const AvatarModel> m_avatarModel;
 	std::shared_ptr<const AvatarSkeleton> m_avatarSkeleton;

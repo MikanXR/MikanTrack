@@ -136,7 +136,8 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 	return m_cameras[cameraIndex]->fetchPreviewFrame(outFrame);
 }
 
-bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose)
+bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose,
+									DirectRetarget::SolveState* outDirectState)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
 	if (!m_bFusedFresh)
@@ -145,6 +146,8 @@ bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* 
 	outResult= m_fusedResult;
 	if (outDirectPose != nullptr)
 		*outDirectPose= m_fusedDirectPose;
+	if (outDirectState != nullptr)
+		*outDirectState= m_fusedDirectState;
 	m_bFusedFresh= false;
 	return true;
 }
@@ -275,11 +278,12 @@ void VisionThread::finalizeRecordingOnThread(bool bAborted, const std::string& r
 	m_lastRecordingPath= m_recorder->getFilePath();
 }
 
-void VisionThread::requestDiagnosticDump(const std::string& dumpDir)
+void VisionThread::requestDiagnosticDump(const std::string& dumpDir, const cv::Mat& avatarRender)
 {
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
 		m_requestedDumpDir= dumpDir;
+		m_requestedAvatarRender= avatarRender;
 	}
 	m_bDumpRequested= true;
 }
@@ -293,12 +297,42 @@ std::string VisionThread::getLastDumpPath()
 void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput)
 {
 	std::string dumpDir;
+	DiagAvatarSnapshot avatar;
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
 		dumpDir= m_requestedDumpDir;
+		avatar.render= m_requestedAvatarRender;
+		m_requestedAvatarRender= cv::Mat();
 	}
 	if (dumpDir.empty())
 		return;
+
+	// The frame as a one-frame recording: every camera's last inputs, the
+	// output snapshot and its checksum the way the recorder takes them
+	RecordedFrame recordFrame;
+	recordFrame.seq= 0;
+	recordFrame.nowTimestampMs= latestOutput.timestampMs;
+	recordFrame.bFused= false;
+	for (const std::unique_ptr<CameraContext>& context : m_cameras)
+	{
+		const RecordedCameraInput& input= context->getLastRecordInput();
+		if (input.frameIndex >= 0)
+			recordFrame.freshCameras.push_back(input);
+	}
+	TrackingRecording::snapshotFusedOutput(latestOutput, recordFrame.outPoses);
+	recordFrame.checksum= TrackingRecording::computeFusedChecksum(latestOutput);
+
+	// The avatar half: the direct solver's pose for this output and the
+	// state behind it
+	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_directPose.valid;
+	if (bAvatar)
+	{
+		avatar.skeleton= m_avatar.skeleton.get();
+		avatar.pose= &m_directPose;
+		avatar.solveState= &m_directRetarget.getSolveState();
+		avatar.modelPath= m_avatarIdentity.path;
+		avatar.cameraIndex= m_config->direct.cameraIndex;
+	}
 
 	std::vector<DiagCameraSnapshot> snapshots;
 	for (const std::unique_ptr<CameraContext>& contextPtr : m_cameras)
@@ -361,8 +395,9 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 		out.palmarSource= (int)capture.palmarSource;
 	}
 
-	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(),
-										rawImu, lastCapture);
+	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(), rawImu,
+										lastCapture, recordFrame.freshCameras.empty() ? nullptr : &recordFrame,
+										bAvatar ? &avatar : nullptr);
 	if (bOk)
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
@@ -956,6 +991,7 @@ void VisionThread::runOutputStage(IterationState& iteration)
 		std::lock_guard<std::mutex> lock(m_fusedMutex);
 		m_fusedResult= iteration.outputResult;
 		m_fusedDirectPose= m_directPose;
+		m_fusedDirectState= bDirectPose ? m_directRetarget.getSolveState() : DirectRetarget::SolveState();
 		m_bFusedFresh= true;
 	}
 	m_lastOutputResult= iteration.outputResult;

@@ -7,6 +7,9 @@
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
 
+#include "AvatarJson.h"
+#include "AvatarOverlay.h"
+#include "AvatarRetarget.h"
 #include "Logger.h"
 #include "TrackingJson.h"
 
@@ -170,7 +173,7 @@ void DiagnosticDump::record(const std::vector<const CameraFrameResult*>& cameraR
 // Draws landmarks/bones, ROI boxes and per-hand labels onto a copy of the
 // camera frame (colors match nothing else in the app - chosen for print
 // legibility: left amber, right cyan, detections green)
-static void annotateFrame(const cv::Mat& frame, const TrackingFrameResult& result, cv::Mat& outAnnotated)
+void DiagnosticDump::annotateFrame(const cv::Mat& frame, const TrackingFrameResult& result, cv::Mat& outAnnotated)
 {
 	frame.copyTo(outAnnotated);
 
@@ -366,7 +369,9 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 						   const TrackingFrameResult& latestFused,
 						   const std::string& configJsonString,
 						   const std::vector<DiagImuRawSample> rawImu[2],
-						   const DiagImuCapture lastCapture[2]) const
+						   const DiagImuCapture lastCapture[2],
+						   const RecordedFrame* recordFrame,
+						   const DiagAvatarSnapshot* avatar) const
 {
 	std::error_code ec;
 	std::filesystem::create_directories(dumpDir, ec);
@@ -378,6 +383,13 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 
 	bool bSuccess= true;
 	json j;
+
+	// The avatar half applies when the direct solver posed one
+	const bool bAvatar= avatar != nullptr && avatar->skeleton != nullptr && avatar->pose != nullptr &&
+		avatar->pose->valid && avatar->solveState != nullptr;
+	glm::mat4 avatarCameraToWorld(1.f);
+	if (bAvatar)
+		avatarCameraToWorld= DirectRetarget::makeCameraToWorld(*avatar->skeleton, *avatar->pose, *avatar->solveState);
 
 	// The live config (may differ from the saved config.json)
 	try
@@ -444,9 +456,29 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 			{
 				cv::Mat annotated;
 				annotateFrame(*camera.frame, camera.lastResult->result, annotated);
+				cameraJson["images"]= {{"raw", rawName}, {"annotated", annotatedName}};
+				// The posed avatar over its own camera's landmarks, and the
+				// render beside the frame it should match
+				if (bAvatar && (int)cameraIndex == avatar->cameraIndex)
+				{
+					AvatarOverlay::drawPosedSkeleton(annotated, *avatar->skeleton, *avatar->pose,
+													 avatarCameraToWorld, avatar->solveState->camera);
+					if (!avatar->render.empty())
+					{
+						char avatarName[64], compareName[64];
+						snprintf(avatarName, sizeof(avatarName), "cam%zu_avatar.png", cameraIndex);
+						snprintf(compareName, sizeof(compareName), "cam%zu_compare.png", cameraIndex);
+						if (!cv::imwrite((dirPath / avatarName).string(), avatar->render))
+							bSuccess= false;
+						if (!cv::imwrite((dirPath / compareName).string(),
+										 AvatarOverlay::makeCompareImage(annotated, avatar->render)))
+							bSuccess= false;
+						cameraJson["images"]["avatar"]= avatarName;
+						cameraJson["images"]["compare"]= compareName;
+					}
+				}
 				if (!cv::imwrite((dirPath / annotatedName).string(), annotated))
 					bSuccess= false;
-				cameraJson["images"]= {{"raw", rawName}, {"annotated", annotatedName}};
 			}
 			else
 			{
@@ -564,6 +596,28 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 	}
 	j["imuLastCapture"]= captureJson;
 
+	// The avatar: the pose the stream carried, the solve behind it, and the
+	// camera's placement in its world (column-major, OpenCV camera axes)
+	if (bAvatar)
+	{
+		json columns= json::array();
+		for (int column= 0; column < 4; ++column)
+		{
+			const glm::vec4& c= avatarCameraToWorld[column];
+			columns.push_back(json::array({c.x, c.y, c.z, c.w}));
+		}
+		j["avatar"]= {
+			{"modelPath", avatar->modelPath},
+			{"cameraIndex", avatar->cameraIndex},
+			{"cameraToWorld", columns},
+			{"pose", AvatarJson::avatarPoseToJson(*avatar->skeleton, *avatar->pose)},
+			{"solveState", AvatarJson::directSolveStateToJson(*avatar->solveState)},
+		};
+	}
+	else
+	{
+		j["avatar"]= nullptr;
+	}
 
 	const std::filesystem::path jsonPath= std::filesystem::path(dumpDir) / "dump.json";
 	std::ofstream file(jsonPath);
@@ -573,6 +627,28 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 		return false;
 	}
 	file << j.dump(1, '\t');
+
+	// The frame as a one-frame recording, in the recorder's own line format,
+	// so replay and the pose report read a dump like any take
+	if (recordFrame != nullptr)
+	{
+		RecordingHeader header;
+		header.formatVersion= TrackingRecording::k_formatVersion;
+		header.appConfigJsonText= configJsonString;
+		header.cameraCount= (int)cameras.size();
+		RecordingFooter footer;
+		footer.frameCount= 1;
+		const std::filesystem::path recordingPath= std::filesystem::path(dumpDir) / "dump.jsonl";
+		std::ofstream recording(recordingPath);
+		if (!recording.is_open())
+		{
+			MIKAN_MT_LOG_ERROR("DiagnosticDump") << "Failed to open " << recordingPath.string() << " for writing";
+			return false;
+		}
+		recording << TrackingRecording::headerToJson(header).dump() << '\n';
+		recording << TrackingRecording::frameToJson(*recordFrame).dump() << '\n';
+		recording << TrackingRecording::footerToJson(footer).dump() << '\n';
+	}
 
 	return bSuccess;
 }

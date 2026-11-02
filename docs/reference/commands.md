@@ -66,6 +66,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-pnp`: monocular PnP recovers a synthetic hand pose
 - `--test-replay`: record/replay determinism, checksums, what-if
 - `--test-roiquality`: hand ROI image-quality metrics + flicker tracker
+- `--test-scene-view`: camera-matched scene view and overlay projection
 - `--test-seeding`: cross-camera seed redundancy gate
 - `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
@@ -94,6 +95,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates
 - `--replay-popmetrics`: pop statistics of a recording: baseline vs hand estimator
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
+- `--pose-report <recording.jsonl> [frameIndex] [outDir]`: re-solves one frame of a direct-mode take or a dump's `dump.jsonl` through the direct retarget and reports the posed avatar against the landmarks (reprojection per joint, arm angles and depths, finger angles) with a compare image, the loop after a solver change
 - `--replay-verify`: re-runs a recording and verifies every frame checksum
 - `--vrm-info`: prints what the loader reads from a VRM file and the derived skeleton
 - `--test-imupair`: solves the transform between two rigidly coupled IMUs from a dump (categorized as a Tool despite the `--test-` name, since it takes a dump file argument rather than running standalone)

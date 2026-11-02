@@ -69,7 +69,8 @@ public:
 	// in direct mode the avatar pose the direct retarget solved for it (an
 	// invalid pose otherwise). Returns false if nothing new arrived since
 	// the last call.
-	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr);
+	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr,
+						  DirectRetarget::SolveState* outDirectState= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
 	int getDominantCamera(eHandSide side) const { return m_dominantCamera[(int)side].load(); }
@@ -225,9 +226,12 @@ public:
 	std::string getLastRecordingPath();
 
 	// Diagnostic dump (F9): the vision thread writes its rolling state history,
-	// the current camera frames (raw + annotated PNGs) and the live config to
-	// dumpDir on its next loop iteration
-	void requestDiagnosticDump(const std::string& dumpDir);
+	// the current camera frames (raw + annotated PNGs), the live config, the
+	// frame as a one-frame recording and, in direct mode, the posed avatar
+	// to dumpDir on its next loop iteration. avatarRender: the avatar as the
+	// UI rendered it from the direct camera this frame, saved beside the
+	// frame it should match (empty for none).
+	void requestDiagnosticDump(const std::string& dumpDir, const cv::Mat& avatarRender= cv::Mat());
 	// Directory of the last completed dump ("" until one succeeds)
 	std::string getLastDumpPath();
 
@@ -396,6 +400,7 @@ private:
 	std::mutex m_fusedMutex;
 	TrackingFrameResult m_fusedResult;
 	AvatarPose m_fusedDirectPose;
+	DirectRetarget::SolveState m_fusedDirectState;
 	bool m_bFusedFresh= false;
 
 	// Direct retarget (single camera, no world calibration): the solver and
@@ -454,5 +459,6 @@ private:
 	std::atomic_bool m_bDumpRequested{false};
 	std::mutex m_dumpMutex;
 	std::string m_requestedDumpDir;
+	cv::Mat m_requestedAvatarRender;
 	std::string m_lastDumpPath;
 };

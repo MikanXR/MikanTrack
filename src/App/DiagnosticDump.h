@@ -7,9 +7,14 @@
 
 #include "opencv2/core/mat.hpp"
 
+#include "DirectRetarget.h" // SolveState
 #include "HandFusion.h" // CameraFrameResult, FusionDiagnostics
 #include "HandTrackingPipeline.h" // HandSeedStats
+#include "TrackingRecording.h" // RecordedFrame
 #include "TrackingTypes.h"
+
+class AvatarSkeleton;
+struct AvatarPose;
 
 // Diagnostic dump system (F9): a rolling history of compact tracking state
 // recorded every fusion iteration on the vision thread, written to a
@@ -182,9 +187,28 @@ struct DiagCameraSnapshot
 	const HandSeedStats* seedStats= nullptr;
 };
 
+// The avatar side of a dump, direct mode only: the solver's pose for the
+// latest output and the state behind it, the model it posed, the camera it
+// solved from, and the avatar as the UI rendered it from that camera (empty
+// when the UI had no view to render)
+struct DiagAvatarSnapshot
+{
+	const AvatarSkeleton* skeleton= nullptr;
+	const AvatarPose* pose= nullptr;
+	const DirectRetarget::SolveState* solveState= nullptr;
+	std::string modelPath;
+	int cameraIndex= -1;
+	cv::Mat render;
+};
+
 class DiagnosticDump
 {
 public:
+	// The frame with the detections, the body landmarks and the hand
+	// landmarks drawn over it (the dump's annotated PNG, shared with the
+	// pose report)
+	static void annotateFrame(const cv::Mat& frame, const TrackingFrameResult& result, cv::Mat& outAnnotated);
+
 	// Appends one history record (call after every fusion iteration)
 	void record(const std::vector<const CameraFrameResult*>& cameraResults,
 				const TrackingFrameResult& fused,
@@ -194,13 +218,19 @@ public:
 				const DiagImuState imu[2]);
 
 	// Writes dump.json + per-camera raw/annotated PNGs into dumpDir (created
-	// if needed). Returns false on any I/O failure (partial output possible).
+	// if needed), plus dump.jsonl, the cameras' last inputs as a one-frame
+	// recording (recordFrame, null for none), and the avatar files when the
+	// snapshot has a pose: the posed skeleton over its camera's annotated
+	// PNG, cam<N>_avatar.png, cam<N>_compare.png and the avatar block of
+	// dump.json. Returns false on any I/O failure (partial output possible).
 	bool write(const std::string& dumpDir,
 			   const std::vector<DiagCameraSnapshot>& cameras,
 			   const TrackingFrameResult& latestFused,
 			   const std::string& configJsonString,
 			   const std::vector<DiagImuRawSample> rawImu[2],
-			   const DiagImuCapture lastCapture[2]) const;
+			   const DiagImuCapture lastCapture[2],
+			   const RecordedFrame* recordFrame= nullptr,
+			   const DiagAvatarSnapshot* avatar= nullptr) const;
 
 private:
 	// ~4-8s of history depending on the fusion rate; records are ~1-2 KB

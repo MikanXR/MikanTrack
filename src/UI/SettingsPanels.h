@@ -5,6 +5,7 @@
 
 #include "glm/ext/vector_double3.hpp"
 
+#include "Countdown.h"
 #include "NeutralCaptureControl.h"
 #include "TrackingTypes.h"
 
@@ -58,6 +59,13 @@ struct TrackingPanelState
 
 	// Direct retarget neutral capture
 	NeutralCaptureControl directNeutral;
+
+	// The diagnostic dump buttons: the owner runs the dump (it needs the
+	// posed avatar, which the panel does not hold), at once or after the
+	// settle countdown the panel draws
+	bool bDumpRequested= false;
+	bool bDelayedDumpRequested= false;
+	Countdown dumpCountdown;
 };
 
 // Small side panels: tracking/fusion options and OSC output settings.

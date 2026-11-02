@@ -811,6 +811,14 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 			scene3dPanel->setShowPerCameraSkeletons(bShowPerCamera);
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.showPerCameraSkeletonsTooltip"));
 	}
+	{
+		ImGui::BeginDisabled(!scene3dPanel->hasCameraMatch());
+		bool bViewFromCamera= scene3dPanel->getViewFromCamera();
+		if (ImGui::Checkbox(locLabel("trackingPanel.viewFromCamera"), &bViewFromCamera))
+			scene3dPanel->setViewFromCamera(bViewFromCamera);
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
+	}
 
 	ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
 	for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
@@ -839,8 +847,20 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 
 	ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
 	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingState")))
-		visionThread->requestDiagnosticDump(config->makeDumpDirectoryPath());
+		panelState.bDumpRequested= true;
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.dumpTrackingStateTooltip"));
+	ImGui::SameLine();
+	ImGui::BeginDisabled(panelState.dumpCountdown.isRunning());
+	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingStateDelayed")))
+		panelState.bDelayedDumpRequested= true;
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.dumpTrackingStateDelayedTooltip"));
+	if (panelState.dumpCountdown.isRunning())
+	{
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.dumpCountdownFmt"),
+						   (int)ceilf(panelState.dumpCountdown.getRemainingSeconds()));
+		ImGui::ProgressBar(panelState.dumpCountdown.getProgress(), ImVec2(-1, 4), "");
+	}
 	{
 		const std::string lastDump= visionThread->getLastDumpPath();
 		if (!lastDump.empty())
