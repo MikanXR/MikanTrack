@@ -361,6 +361,8 @@
 		"sharpnessTooltip": "Edge strength with sensor noise filtered out first. Low = motion\nblur or defocus - shorten the exposure time (adding light to\ncompensate) or refocus the camera.",
 		"shoulderWidth": "Shoulder width",
 		"shoulderWidthTooltip": "Between the shoulder joints. Sets the shoulders' distance from the camera.",
+		"showAllHands": "Show every hand slot",
+		"showAllHandsTooltip": "Draws a hand slot the direct solver rejected at full strength.\nOff, a slot the body model's wrist disagrees with (the palm\ndetector on something hand-shaped in the scene) is dimmed.",
 		"showBodyLandmarks": "Show body landmarks",
 		"showBodyLandmarksTooltip": "Draws the raw body skeleton on cameras running body pose.\nLandmarks below the solver's visibility gate are dimmed, and the\njoints it consumes (shoulders, elbows, wrists) carry their\nvisibility - so a bad elbow can be traced to its source landmark.",
 		"showDetectionBoxes": "Show detection boxes",

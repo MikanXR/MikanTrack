@@ -8,6 +8,8 @@
 static const ImU32 k_leftHandColor= IM_COL32(80, 160, 255, 255);   // blue
 static const ImU32 k_rightHandColor= IM_COL32(255, 96, 96, 255);   // red
 static const ImU32 k_jointColor= IM_COL32(255, 255, 255, 220);
+// A slot the direct solver rejected: the same colors at this alpha
+static const int k_unusedHandAlpha= 70;
 static const ImU32 k_palmDetectColor= IM_COL32(255, 220, 60, 180); // yellow
 static const ImU32 k_bodyColor= IM_COL32(200, 120, 255, 230);      // purple
 static const ImU32 k_bodyDimColor= IM_COL32(200, 120, 255, 70);
@@ -17,7 +19,8 @@ static const ImU32 k_bodyKeyColor= IM_COL32(120, 255, 180, 255);   // green
 static const float k_bodyVisibilityGate= 0.5f;
 
 void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result,
-									 const ImageToScreenMapping& mapping, bool bShowDetectionBoxes)
+									 const ImageToScreenMapping& mapping, bool bShowDetectionBoxes,
+									 const std::array<bool, 2>* handUsed)
 {
 	// Detection debug boxes
 	if (bShowDetectionBoxes)
@@ -43,7 +46,12 @@ void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameRe
 		if (!hand.tracked)
 			continue;
 
-		const ImU32 boneColor= hand.side == eHandSide::Left ? k_leftHandColor : k_rightHandColor;
+		const bool bUnused= handUsed != nullptr && !(*handUsed)[sideIndex];
+		auto dimmed= [&](ImU32 color) {
+			return bUnused ? (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, k_unusedHandAlpha) : color;
+		};
+		const ImU32 boneColor= dimmed(hand.side == eHandSide::Left ? k_leftHandColor : k_rightHandColor);
+		const ImU32 jointColor= dimmed(k_jointColor);
 
 		for (int i= 0; i < HAND_CONNECTION_COUNT; ++i)
 		{
@@ -55,7 +63,7 @@ void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameRe
 		for (int i= 0; i < HAND_LANDMARK_COUNT; ++i)
 		{
 			const glm::vec3& p= hand.imagePoints[i];
-			drawList->AddCircleFilled(mapping.toScreen(p.x, p.y), 3.f, k_jointColor);
+			drawList->AddCircleFilled(mapping.toScreen(p.x, p.y), 3.f, jointColor);
 		}
 
 		// Label near the wrist

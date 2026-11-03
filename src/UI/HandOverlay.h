@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "imgui.h"
 
 #include "TrackingTypes.h"
@@ -42,8 +44,13 @@ namespace HandOverlay
 ForearmOverlay makeForearmOverlay(const CameraProfile& profile, const TrackingFrameResult& fused,
 								  float forearmLengthMeters);
 
+// Draws the tracked hand slots and, when asked, the palm detector's boxes.
+// handUsed, when given, is the direct solver's verdict per side (whether the
+// slot was the hand this frame): a slot it rejected is drawn dimmed, since
+// the palm detector keeps finding hand-shaped things in the scene and a
+// full-strength wireframe on the wall reads as a phantom hand.
 void drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result, const ImageToScreenMapping& mapping,
-						bool bShowDetectionBoxes);
+						bool bShowDetectionBoxes, const std::array<bool, 2>* handUsed= nullptr);
 
 // Draws the projected forearm (wrist->elbow) with an elbow marker. Lets you
 // check the IMU forearm direction against the real arm in the video: if the

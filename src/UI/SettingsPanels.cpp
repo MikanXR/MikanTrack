@@ -800,6 +800,14 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 	if (ImGui::Checkbox(locLabel("trackingPanel.showDetectionBoxes"), &bShowBoxes))
 		previewPanel->setShowDetectionBoxes(bShowBoxes);
 
+	if (config->direct.enabled)
+	{
+		bool bShowAllHands= previewPanel->getShowAllHands();
+		if (ImGui::Checkbox(locLabel("trackingPanel.showAllHands"), &bShowAllHands))
+			previewPanel->setShowAllHands(bShowAllHands);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.showAllHandsTooltip"));
+	}
+
 	bool bShowBodyPose= previewPanel->getShowBodyPose();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);

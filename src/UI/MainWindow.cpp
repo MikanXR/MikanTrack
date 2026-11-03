@@ -452,6 +452,9 @@ void MainWindow::update(float deltaSeconds)
 			forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
 				config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
 		}
+		// Direct mode: which of the direct camera's hand slots the solver took
+		m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
+										{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
 		m_videoPreviewPanel->draw(perCameraResults, executionProviders, &forearmOverlays);
 	}
 
