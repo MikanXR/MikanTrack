@@ -62,6 +62,15 @@ struct AvatarRetargetConfig
 		// skeleton's own (HandPoseModel::getThumbPronationRad)
 		bool bThumbPronationOverride= false;
 		float thumbPronationRad= 0.f;
+		// The arm's rest pose (the direct retarget's, for an arm whose
+		// tracking is lost): the elbow and the wrist relative to the upper-arm
+		// joint in the rooted torso frame, meters, of which only the
+		// directions are used; the direction the palm faces; the finger
+		// curl, radians
+		glm::vec3 restElbowOffset{0.05f, 0.f, -0.28f};
+		glm::vec3 restWristOffset{0.28f, 0.f, -0.34f};
+		glm::vec3 restPalmNormal{0.f, 0.f, -1.f};
+		float restFingerCurlRadians= 0.f;
 	};
 	std::array<Side, 2> sides{};
 	// Trim on the head's assumed rest frame (+X facing, +Y left, +Z up), in

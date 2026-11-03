@@ -125,8 +125,6 @@ void placeBone(AvatarPose& pose, const AvatarSkeleton& skeleton, B bone, const g
 	out.deltaWorld= delta;
 }
 
-// An arm at rest: every bone of the chain present at identity, so a receiver
-// is told the arm rests rather than left holding its last pose
 // A gate over a per-frame reading: in after kEnterFrames consecutive frames
 // of evidence, out on the first frame without
 bool advanceGate(bool bEvidence, int& frames, bool& bAccepted)
@@ -144,15 +142,10 @@ double earnedHoldMs(double sightingStartMs, double solvedTimestampMs, double fra
 	return std::min(std::max(solvedTimestampMs - sightingStartMs, 0.0) + frameMs, kMaxHoldMs);
 }
 
-void restArm(AvatarPose& pose, const AvatarSkeleton& skeleton, int sideIndex)
+float smoothstep(float t)
 {
-	const glm::quat identity(1.f, 0.f, 0.f, 0.f);
-	placeBone(pose, skeleton, sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm), identity);
-	placeBone(pose, skeleton, sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm), identity);
-	placeBone(pose, skeleton, sideBone(sideIndex, B::LeftHand, B::RightHand), identity);
-	for (int finger= 0; finger < FINGER_COUNT; ++finger)
-		for (int phalanx= 0; phalanx < 3; ++phalanx)
-			placeBone(pose, skeleton, fingerBone(sideIndex, finger, phalanx), identity);
+	t= std::clamp(t, 0.f, 1.f);
+	return t * t * (3.f - 2.f * t);
 }
 
 // A rotation from a forward and a left that may not be exactly
@@ -170,12 +163,167 @@ bool frameFromForwardAndLeft(const glm::vec3& forward, const glm::vec3& left, gl
 	return true;
 }
 
+// The chain's swings: the upper arm and the forearm from rest onto the
+// directions, chained from the spine. A forearm without a direction takes
+// the upper arm's, and without either it keeps the swung rest direction.
+struct ChainSwing
+{
+	glm::quat upperDelta{1.f, 0.f, 0.f, 0.f};
+	glm::quat forearmDelta{1.f, 0.f, 0.f, 0.f};
+	glm::vec3 forearmDirection{0.f};
+};
+ChainSwing swingChain(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+					  const glm::vec3& upperDirection, glm::vec3 forearmDirection)
+{
+	const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
+	const B handBone= sideBone(sideIndex, B::LeftHand, B::RightHand);
+	if (glm::dot(forearmDirection, forearmDirection) <= 0.f)
+		forearmDirection= upperDirection;
+	ChainSwing swing;
+	swing.upperDelta= spineDelta;
+	if (glm::dot(upperDirection, upperDirection) > 0.f)
+		swing.upperDelta= swingTo(spineDelta, restDirection(skeleton, lowerArmBone), upperDirection);
+	swing.forearmDelta= swing.upperDelta;
+	if (glm::dot(forearmDirection, forearmDirection) > 0.f)
+		swing.forearmDelta= swingTo(swing.upperDelta, restDirection(skeleton, handBone), forearmDirection);
+	else
+		forearmDirection= swing.upperDelta * restDirection(skeleton, handBone);
+	swing.forearmDirection= forearmDirection;
+	return swing;
+}
+
+// The avatar's rest palm normal under the chain's swings, clear of the
+// forearm: the zero of the forearm's twist
+glm::vec3 restPalmNormalUnder(const AvatarSkeleton& skeleton, eHandSide side, const ChainSwing& swing)
+{
+	const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
+	return safeNormalize(
+		projectPerpendicular(swing.forearmDelta * glm::vec3(handRest.palmFrameWorld[2]), swing.forearmDirection));
+}
+
 // A palm frame from its finger axis and a normal that may not be exactly
 // perpendicular to it
 glm::quat palmFrame(const glm::vec3& palmX, const glm::vec3& palmZ)
 {
 	const glm::vec3 palmY= glm::cross(palmZ, palmX);
 	return glm::quat_cast(glm::mat3(palmX, palmY, palmZ));
+}
+
+// The hand from a palm frame (+X the finger axis, +Z the palm normal): the
+// normal's roll about the forearm against the avatar's rest palm, and the
+// palm in the forearm's frame (the wrist). The forearm frame takes the
+// normal projected clear of the forearm, or the palm's +Y when the normal
+// lies along it; false when both do. A zero rest normal leaves the twist.
+bool handFromPalm(const glm::vec3& forearmDirection, const glm::vec3& restPalmNormal, const glm::quat& palm,
+				  float& ioTwist, glm::quat& outWristRotation)
+{
+	const glm::vec3 palmY= palm * glm::vec3(0.f, 1.f, 0.f);
+	const glm::vec3 palmZ= palm * glm::vec3(0.f, 0.f, 1.f);
+	glm::vec3 forearmZ= safeNormalize(projectPerpendicular(palmZ, forearmDirection));
+	if (glm::dot(forearmZ, forearmZ) <= 0.f)
+		forearmZ= safeNormalize(projectPerpendicular(palmY, forearmDirection));
+	if (glm::dot(forearmZ, forearmZ) <= 0.f)
+		return false;
+	if (glm::dot(restPalmNormal, restPalmNormal) > 0.f)
+		ioTwist= signedAngle(restPalmNormal, forearmZ, forearmDirection);
+	const glm::vec3 forearmY= glm::cross(forearmZ, forearmDirection);
+	const glm::quat forearmFrame= glm::quat_cast(glm::mat3(forearmDirection, forearmY, forearmZ));
+	outWristRotation= glm::inverse(forearmFrame) * palm;
+	return true;
+}
+
+// The arm's bones from a placement: the chain's swings, the forearm's roll
+// (the rig's trim plus the twist), the hand bone (the wrist applied in the
+// avatar's trimmed rest palm frame under the posed forearm: a straight
+// wrist is the avatar's rest wrist, since the user's hands carry no
+// reference, a single view's palm at one instant being too unsure to be
+// subtracted from every later frame) and the fingers
+void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+			  const DirectRetarget::ArmPlacement& placement, const AvatarRetargetConfig::Side& sideConfig,
+			  AvatarPose& outPose)
+{
+	const eHandSide side= (eHandSide)sideIndex;
+	const B upperArmBone= sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm);
+	const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
+	const B handBone= sideBone(sideIndex, B::LeftHand, B::RightHand);
+	const ChainSwing swing=
+		swingChain(skeleton, sideIndex, spineDelta, placement.upperDirection, placement.forearmDirection);
+	placeBone(outPose, skeleton, upperArmBone, swing.upperDelta);
+	const glm::quat chainDelta=
+		glm::angleAxis(sideConfig.forearmRollTrimRadians + placement.twist, swing.forearmDirection) *
+		swing.forearmDelta;
+	placeBone(outPose, skeleton, lowerArmBone, chainDelta);
+
+	const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
+	const glm::quat relative= limitRotationAngle(placement.wristRotation, kWristLimitRadians);
+	const glm::quat restLowerArm= skeleton.getBone(lowerArmBone).restRotationWorld;
+	const glm::quat trimmedRestPalm=
+		glm::quat_cast(glm::mat3(handRest.palmFrameWorld)) * glm::quat(sideConfig.handTrimRadians);
+	const glm::quat posedForearm= chainDelta * restLowerArm;
+	const glm::quat posedPalm= posedForearm * (glm::inverse(restLowerArm) * trimmedRestPalm) * relative;
+	const glm::quat handDelta= posedPalm * glm::inverse(trimmedRestPalm);
+	placeBone(outPose, skeleton, handBone, handDelta);
+
+	solveFingerBones(skeleton, sideIndex, glm::quat(1.f, 0.f, 0.f, 0.f), handDelta,
+					 skeleton.getBone(handBone).restPositionWorld, placement.fingers, sideConfig, outPose);
+}
+
+// The rest placement from the rig: the chain's directions from the rest
+// offsets, under the lean; the palm facing the rest normal, through the
+// same hand math as a measured palm (a normal along the forearm leaves the
+// wrist straight); the four fingers curled, the thumb at the avatar's rest
+DirectRetarget::ArmPlacement restPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+										   const AvatarRetargetConfig::Side& sideConfig)
+{
+	const eHandSide side= (eHandSide)sideIndex;
+	DirectRetarget::ArmPlacement rest;
+	rest.upperDirection= safeNormalize(spineDelta * sideConfig.restElbowOffset);
+	rest.forearmDirection= safeNormalize(spineDelta * (sideConfig.restWristOffset - sideConfig.restElbowOffset));
+	const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, rest.upperDirection, rest.forearmDirection);
+	const glm::vec3 palmZ=
+		safeNormalize(projectPerpendicular(spineDelta * sideConfig.restPalmNormal, swing.forearmDirection));
+	if (glm::dot(palmZ, palmZ) > 0.f)
+	{
+		const glm::quat palm= palmFrame(swing.forearmDirection, palmZ);
+		handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, rest.twist,
+					 rest.wristRotation);
+	}
+	for (int finger= (int)eFinger::Index; finger < FINGER_COUNT; ++finger)
+	{
+		rest.fingers[finger].proximal= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].intermediate= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].distal= 0.5f * sideConfig.restFingerCurlRadians;
+	}
+	return rest;
+}
+
+// A unit direction between two, falling to the target where they cancel
+glm::vec3 mixDirection(const glm::vec3& from, const glm::vec3& to, float t)
+{
+	const glm::vec3 mixed= safeNormalize(glm::mix(from, to, t));
+	return glm::dot(mixed, mixed) > 0.f ? mixed : to;
+}
+
+// The placement part way from one to another: the directions and the
+// finger angles linearly, the twist by the shorter way round, the wrist
+// along the arc
+DirectRetarget::ArmPlacement blendPlacement(const DirectRetarget::ArmPlacement& from,
+											const DirectRetarget::ArmPlacement& to, float t)
+{
+	DirectRetarget::ArmPlacement out;
+	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
+	out.forearmDirection= mixDirection(from.forearmDirection, to.forearmDirection, t);
+	out.twist= from.twist + wrapAngle(to.twist - from.twist) * t;
+	out.wristRotation= glm::slerp(from.wristRotation, to.wristRotation, t);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		out.fingers[finger].lateral= glm::mix(from.fingers[finger].lateral, to.fingers[finger].lateral, t);
+		out.fingers[finger].proximal= glm::mix(from.fingers[finger].proximal, to.fingers[finger].proximal, t);
+		out.fingers[finger].intermediate=
+			glm::mix(from.fingers[finger].intermediate, to.fingers[finger].intermediate, t);
+		out.fingers[finger].distal= glm::mix(from.fingers[finger].distal, to.fingers[finger].distal, t);
+	}
+	return out;
 }
 
 // The elbow for a wrist, both bone lengths held by construction: on the bone
@@ -496,9 +644,6 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		const int shoulderIndex= sideIndex == 0 ? leftShoulderIndex : rightShoulderIndex;
 		const int elbowIndex= sideIndex == 0 ? (int)ePoseLandmark::LEFT_ELBOW : (int)ePoseLandmark::RIGHT_ELBOW;
 		const int wristIndex= sideIndex == 0 ? (int)ePoseLandmark::LEFT_WRIST : (int)ePoseLandmark::RIGHT_WRIST;
-		const B upperArmBone= sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm);
-		const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
-		const B handBone= sideBone(sideIndex, B::LeftHand, B::RightHand);
 		// The chain in the user's proportions, in the avatar's units
 		const float upperArm= config.userUpperArmLengthMeters * lengthScale;
 		const float forearm= config.userForearmLengthMeters * lengthScale;
@@ -750,33 +895,46 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			arm.wristPixelFilter.reset();
 			arm.elbowPixelFilter.reset();
 			arm.depthFilter.reset();
-			restArm(outPose, skeleton, sideIndex);
+
+			// The ease into the rig's rest pose, from what the bones took
+			// last frame, timed from that frame so the first frame without
+			// a chain already moves; an arm nothing has placed since the
+			// last reset is at rest at once
+			if (arm.easeStartMs < 0.0)
+			{
+				arm.easeStartMs= timestampMs - frameMs;
+				arm.easeFrom= arm.lastPlacement;
+			}
+			const DirectRetarget::ArmPlacement rest= restPlacement(skeleton, sideIndex, spineDelta, sideConfig);
+			float blend= 1.f;
+			if (arm.bPlaced && config.restBlendMs > 0.f)
+				blend= smoothstep((float)((timestampMs - arm.easeStartMs) / config.restBlendMs));
+			const DirectRetarget::ArmPlacement placement=
+				blend < 1.f ? blendPlacement(arm.easeFrom, rest, blend) : rest;
+			arm.lastPlacement= placement;
+			arm.bPlaced= true;
+			armState.bResting= true;
+			armState.restBlend= blend;
+			placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
 			continue;
 		}
+		arm.easeStartMs= -1.0;
 		armState.chain= arm.chain;
 		armState.pnpScale= getPnpScale(sideIndex);
 
 		// Upper arm and forearm: swings from rest onto the chain's directions
-		const glm::vec3 upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
-		glm::vec3 forearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
-		if (glm::dot(forearmDirection, forearmDirection) <= 0.f)
-			forearmDirection= upperDirection;
-		glm::quat chainDelta= spineDelta;
-		if (glm::dot(upperDirection, upperDirection) > 0.f)
-			chainDelta= swingTo(chainDelta, restDirection(skeleton, lowerArmBone), upperDirection);
-		placeBone(outPose, skeleton, upperArmBone, chainDelta);
-		if (glm::dot(forearmDirection, forearmDirection) > 0.f)
-			chainDelta= swingTo(chainDelta, restDirection(skeleton, handBone), forearmDirection);
-		else
-			forearmDirection= chainDelta * restDirection(skeleton, handBone);
+		DirectRetarget::ArmPlacement placement;
+		placement.upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
+		placement.forearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
+		const ChainSwing swing=
+			swingChain(skeleton, sideIndex, spineDelta, placement.upperDirection, placement.forearmDirection);
+		const glm::vec3 forearmDirection= swing.forearmDirection;
 
 		// The hand: the palm frame in the world, its normal's roll about the
 		// forearm against the avatar's rest palm, and the palm in the
 		// measured forearm frame (the wrist). Held through a hand dropout, a
 		// slot the body disagrees with counting as one.
-		const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
-		const glm::vec3 restPalmNormal=
-			safeNormalize(projectPerpendicular(chainDelta * glm::vec3(handRest.palmFrameWorld[2]), forearmDirection));
+		const glm::vec3 restPalmNormal= restPalmNormalUnder(skeleton, side, swing);
 		if (bHandSeen && pose.tracked && pose.hasCameraPose)
 		{
 			const glm::quat palmRaw= glm::normalize(worldFromCam * pose.palmOrientationCamera);
@@ -842,26 +1000,11 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 					palmZ= safeNormalize(projectPerpendicular(palmZRaw, palmX));
 				if (glm::dot(palmZ, palmZ) > 0.f)
 				{
-					const glm::vec3 palmY= glm::cross(palmZ, palmX);
 					const glm::quat palm= palmFrame(palmX, palmZ);
 					arm.filteredPalm= palm;
 					arm.bPalmFiltered= true;
-
-					// The measured forearm frame: +X along the forearm, +Z the
-					// palm normal projected clear of it (the palm's +Y when the
-					// normal lies along the forearm)
-					glm::vec3 forearmZ= safeNormalize(projectPerpendicular(palmZ, forearmDirection));
-					if (glm::dot(forearmZ, forearmZ) <= 0.f)
-						forearmZ= safeNormalize(projectPerpendicular(palmY, forearmDirection));
-					if (glm::dot(forearmZ, forearmZ) > 0.f)
-					{
-						if (glm::dot(restPalmNormal, restPalmNormal) > 0.f)
-							arm.twist= signedAngle(restPalmNormal, forearmZ, forearmDirection);
-						const glm::vec3 forearmY= glm::cross(forearmZ, forearmDirection);
-						const glm::quat forearmFrame= glm::quat_cast(glm::mat3(forearmDirection, forearmY, forearmZ));
-						arm.wristRotation= glm::inverse(forearmFrame) * palm;
+					if (handFromPalm(forearmDirection, restPalmNormal, palm, arm.twist, arm.wristRotation))
 						arm.bHandMeasured= true;
-					}
 				}
 			}
 
@@ -898,34 +1041,30 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		armState.filteredPalm= arm.filteredPalm;
 		armState.fingers= arm.fingers;
 
-		// Forearm roll: the measured twist against the avatar's rest palm,
-		// plus the rig's trim; an arm whose hand was never seen rolls only
-		// by the trim
-		float twist= sideConfig.forearmRollTrimRadians;
+		// An arm whose hand was never seen rolls only by the rig's trim and
+		// keeps the avatar's rest wrist
 		if (arm.bHandMeasured)
-			twist+= arm.twist;
-		chainDelta= glm::angleAxis(twist, forearmDirection) * chainDelta;
-		placeBone(outPose, skeleton, lowerArmBone, chainDelta);
-
-		// The hand bone: the measured wrist, applied in the avatar's trimmed
-		// rest palm frame under the posed forearm. A straight wrist is the
-		// avatar's rest wrist: the user's hands carry no reference, since a
-		// single view's palm at one instant is too unsure to be subtracted
-		// from every later frame.
-		glm::quat relative(1.f, 0.f, 0.f, 0.f);
-		if (arm.bHandMeasured)
-			relative= limitRotationAngle(arm.wristRotation, kWristLimitRadians);
-		const glm::quat restLowerArm= skeleton.getBone(lowerArmBone).restRotationWorld;
-		const glm::quat trimmedRestPalm=
-			glm::quat_cast(glm::mat3(handRest.palmFrameWorld)) * glm::quat(sideConfig.handTrimRadians);
-		const glm::quat posedForearm= chainDelta * restLowerArm;
-		const glm::quat posedPalm= posedForearm * (glm::inverse(restLowerArm) * trimmedRestPalm) * relative;
-		const glm::quat handDelta= posedPalm * glm::inverse(trimmedRestPalm);
-		placeBone(outPose, skeleton, handBone, handDelta);
-
-		solveFingerBones(skeleton, sideIndex, glm::quat(1.f, 0.f, 0.f, 0.f), handDelta,
-						 skeleton.getBone(handBone).restPositionWorld, arm.fingers, sideConfig, outPose);
+		{
+			placement.twist= arm.twist;
+			placement.wristRotation= arm.wristRotation;
+		}
+		placement.fingers= arm.fingers;
+		arm.lastPlacement= placement;
+		arm.bPlaced= true;
+		placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
 	}
+}
+
+void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+								  AvatarPose& outPose)
+{
+	outPose.clear();
+	outPose.valid= true;
+	const glm::quat identity(1.f, 0.f, 0.f, 0.f);
+	placeBone(outPose, skeleton, B::Hips, identity);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		placeArm(skeleton, sideIndex, identity, restPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]),
+				 config.sides[sideIndex], outPose);
 }
 
 glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,

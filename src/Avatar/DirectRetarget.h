@@ -80,8 +80,12 @@ struct DirectRetargetConfig
 	glm::vec3 headTrimRadians{0.f};
 	// The rig's per-side adjustments, the same fields the position retarget
 	// reads (the elbow hint is the IK fallback's target, the hand trim
-	// orients the wrist's axes, the gains and enables shape the fingers)
+	// orients the wrist's axes, the gains and enables shape the fingers,
+	// the rest pose is where a lost arm goes)
 	std::array<AvatarRetargetConfig::Side, 2> sides{};
+	// How long an arm takes to ease into its rest pose, milliseconds; zero
+	// snaps
+	float restBlendMs= 300.f;
 };
 
 class DirectRetarget
@@ -166,6 +170,8 @@ public:
 			glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
+			bool bResting= false; // no chain to place: the arm is easing into, or at, the rest pose
+			float restBlend= 0.f; // how far into the rest pose, 1 at rest
 		};
 		DirectCameraModel camera;
 		float tiltRadians= 0.f;
@@ -187,6 +193,24 @@ public:
 	// midpoint against the posed one. Identity before a torso is measured.
 	static glm::mat4 makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,
 									   const SolveState& state);
+
+	// What places an arm's bones: the chain's directions (world, unit), the
+	// forearm's roll against the avatar's rest palm, the palm in the forearm
+	// frame, and the finger angles. A solved chain fills one, the rest pose
+	// fills one, and the ease into rest blends between them.
+	struct ArmPlacement
+	{
+		glm::vec3 upperDirection{0.f};
+		glm::vec3 forearmDirection{0.f};
+		float twist= 0.f;
+		glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
+		std::array<FingerAngles, FINGER_COUNT> fingers{};
+	};
+
+	// Both arms at the rig's rest pose with the spine straight, the rest of
+	// the pose absent: what a lost arm has eased into, for the preview and
+	// the tests
+	static void makeRestPose(const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose);
 
 	// The running median's window, frames with a seen elbow
 	static constexpr int kPnpScaleSamples= 90;
@@ -224,6 +248,14 @@ private:
 		bool bWristAccepted= false;
 		int handGateFrames= 0;
 		bool bHandAccepted= false;
+		// What the bones took last frame, and whether anything has placed
+		// them since the last reset: the ease into rest starts from here
+		bool bPlaced= false;
+		ArmPlacement lastPlacement;
+		// The ease into rest: when it began (negative while the chain
+		// places the arm) and the placement it started from
+		double easeStartMs= -1.0;
+		ArmPlacement easeFrom;
 		// The hand as last measured, held while the hand model loses it
 		bool bHandMeasured= false;
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm

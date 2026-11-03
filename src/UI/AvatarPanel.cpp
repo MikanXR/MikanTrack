@@ -464,6 +464,12 @@ void AvatarPanel::drawRetargetTab()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", locText("avatarPanel.previewPoseTooltip"));
 
+	AvatarRigSettings rig= m_app->getAvatarRig();
+	if (ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &rig.restBlendMs, 0.f, 1000.f, "%.0f ms"))
+		m_app->setAvatarRig(rig);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", locText("avatarPanel.restBlendTooltip"));
+
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		drawArmControls(sideIndex);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -488,6 +494,25 @@ void AvatarPanel::drawArmControls(int sideIndex)
 									  0.f, 1.f, "%.2f");
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", locText("avatarPanel.elbowHintConfidenceTooltip"));
+
+		ImGui::TextUnformatted(locText("avatarPanel.restPoseLabel"));
+		bChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restElbowDrag"), &side.restElbowOffset.x, 0.005f, -1.f, 1.f,
+									 "%.3f m");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", locText("avatarPanel.restElbowTooltip"));
+		bChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restWristDrag"), &side.restWristOffset.x, 0.005f, -1.f, 1.f,
+									 "%.3f m");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", locText("avatarPanel.restWristTooltip"));
+		bChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restPalmDrag"), &side.restPalmNormal.x, 0.01f, -1.f, 1.f,
+									 "%.2f");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", locText("avatarPanel.restPalmTooltip"));
+		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restCurlSlider"), &side.restFingerCurlDegrees, 0.f, 90.f,
+									  "%.0f deg");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", locText("avatarPanel.restCurlTooltip"));
+
 		ImGui::Checkbox(locLabel("avatarPanel.showGizmoCheckbox"), &m_bShowElbowGizmo[sideIndex]);
 		ImGui::SameLine();
 		if (ImGui::Button(locLabel("avatarPanel.resetArmButton")))
@@ -495,6 +520,10 @@ void AvatarPanel::drawArmControls(int sideIndex)
 			const AvatarRigSettings::Side defaults;
 			side.elbowHintOffset= defaults.elbowHintOffset;
 			side.elbowHintConfidence= defaults.elbowHintConfidence;
+			side.restElbowOffset= defaults.restElbowOffset;
+			side.restWristOffset= defaults.restWristOffset;
+			side.restPalmNormal= defaults.restPalmNormal;
+			side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 			bChanged= true;
 		}
 

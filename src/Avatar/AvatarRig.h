@@ -54,10 +54,25 @@ struct AvatarRigSettings
 		float splayGain= 1.f;
 		// A disabled finger is left at rest
 		std::array<bool, FINGER_COUNT> fingerEnabled{true, true, true, true, true};
+
+		// The arm's rest pose, where the direct retarget eases an arm whose
+		// tracking is lost: the elbow and the wrist relative to the upper-arm
+		// joint in the torso frame above, meters (only their directions are
+		// used, so the pose fits any arm length), the direction the palm
+		// faces, and a curl on the fingers, degrees. The defaults hang the
+		// upper arm with the forearm forward and the palm down on a desk.
+		glm::vec3 restElbowOffset{0.05f, 0.f, -0.28f};
+		glm::vec3 restWristOffset{0.28f, 0.f, -0.34f};
+		glm::vec3 restPalmNormal{0.f, 0.f, -1.f};
+		float restFingerCurlDegrees= 15.f;
 	};
-	// Left, right. The default elbow hint lies in the sagittal plane, so it
-	// is its own mirror image.
+	// Left, right. The default elbow hint and rest pose lie in the sagittal
+	// plane, so they are their own mirror images.
 	std::array<Side, 2> sides{};
+
+	// How long an arm takes to ease into its rest pose, milliseconds; zero
+	// snaps
+	float restBlendMs= 300.f;
 
 	// Whether the mapping (the only part that changes the skeleton) differs
 	bool sameMapping(const AvatarRigSettings& other) const { return boneNodeOverrides == other.boneNodeOverrides; }

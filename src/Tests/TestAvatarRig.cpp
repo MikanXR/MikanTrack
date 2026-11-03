@@ -182,6 +182,11 @@ static int runAvatarRigTest(const TestArgs&)
 		saved.sides[1].curlGain= 0.8f;
 		saved.sides[1].splayGain= 1.3f;
 		saved.sides[1].fingerEnabled[(int)eFinger::Ring]= false;
+		saved.sides[1].restElbowOffset= glm::vec3(0.1f, -0.05f, -0.25f);
+		saved.sides[1].restWristOffset= glm::vec3(0.3f, -0.1f, -0.3f);
+		saved.sides[1].restPalmNormal= glm::vec3(0.f, -1.f, 0.f);
+		saved.sides[1].restFingerCurlDegrees= 25.f;
+		saved.restBlendMs= 450.f;
 
 		const std::filesystem::path folder=
 			std::filesystem::temp_directory_path() / PathUtils::utf8ToPath("mikan-test-avatar-rig-\xE3\x82\xA2\xE3\x83\x90\xE3\x82\xBF\xE3\x83\xBC");
@@ -193,14 +198,16 @@ static int runAvatarRigTest(const TestArgs&)
 		const bool bSaved= saveAvatarRig(vrmPath, saved);
 		const AvatarRigSettings loaded= loadAvatarRig(vrmPath);
 		bool bSame= bSaved && loaded.boneNodeOverrides == saved.boneNodeOverrides &&
-			loaded.rotationTrimDegrees == saved.rotationTrimDegrees;
+			loaded.rotationTrimDegrees == saved.rotationTrimDegrees && loaded.restBlendMs == saved.restBlendMs;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const AvatarRigSettings::Side& a= saved.sides[sideIndex];
 			const AvatarRigSettings::Side& b= loaded.sides[sideIndex];
 			bSame&= a.elbowHintOffset == b.elbowHintOffset && a.elbowHintConfidence == b.elbowHintConfidence &&
 				a.bThumbPronationAuto == b.bThumbPronationAuto && a.thumbPronationDegrees == b.thumbPronationDegrees &&
-				a.curlGain == b.curlGain && a.splayGain == b.splayGain && a.fingerEnabled == b.fingerEnabled;
+				a.curlGain == b.curlGain && a.splayGain == b.splayGain && a.fingerEnabled == b.fingerEnabled &&
+				a.restElbowOffset == b.restElbowOffset && a.restWristOffset == b.restWristOffset &&
+				a.restPalmNormal == b.restPalmNormal && a.restFingerCurlDegrees == b.restFingerCurlDegrees;
 		}
 		check(bSame, "(a) the sidecar round-trips through a non-ASCII path");
 		check(loaded.boneNodeOverrides[(int)B::LeftEye].has_value() && loaded.boneNodeOverrides[(int)B::LeftEye]->empty() &&
@@ -442,5 +449,5 @@ static int runAvatarRigTest(const TestArgs&)
 	MIKAN_LOG_INFO("test-avatar-rig") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures << " failed)";
 	return failures == 0 ? 0 : 1;
 }
-MIKAN_REGISTER_TEST("--test-avatar-rig", "Avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint",
+MIKAN_REGISTER_TEST("--test-avatar-rig", "Avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint, rest pose",
 					eTestCategory::SelfTest, runAvatarRigTest);

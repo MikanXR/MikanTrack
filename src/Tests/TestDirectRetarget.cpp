@@ -326,6 +326,23 @@ bool samePose(const AvatarPose& a, const AvatarPose& b)
 	}
 	return true;
 }
+
+// Whether an arm's bones (upper arm, forearm, hand, index base) sit where a
+// reference pose puts them
+bool armAtPose(const AvatarPose& pose, const AvatarPose& reference, int sideIndex)
+{
+	const B bones[]= {sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm,
+					  sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm, sideIndex == 0 ? B::LeftHand : B::RightHand,
+					  sideIndex == 0 ? B::LeftIndexProximal : B::RightIndexProximal};
+	for (const B bone : bones)
+	{
+		const AvatarPose::Bone& a= pose.bones[(int)bone];
+		const AvatarPose::Bone& b= reference.bones[(int)bone];
+		if (a.present != b.present || (a.present && !nearlySameRotation(a.deltaWorld, b.deltaWorld, 1e-3f)))
+			return false;
+	}
+	return true;
+}
 } // namespace
 
 static int runDirectRetargetTest(const TestArgs&)
@@ -645,16 +662,13 @@ static int runDirectRetargetTest(const TestArgs&)
 		empty.timestampMs= timestampMs;
 		AvatarPose rest;
 		solver.solve(empty, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, rest);
-		bool bRest= rest.valid;
+		AvatarPose restReference;
+		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
+		bool bRest= rest.valid && armAtPose(rest, restReference, 0) && armAtPose(rest, restReference, 1);
 		int presentCount= 0;
 		for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
-		{
-			if (!rest.bones[index].present)
-				continue;
-			++presentCount;
-			bRest&= rotationAngle(rest.bones[index].deltaWorld) < 1e-6f;
-		}
-		check(bRest && presentCount > 10, "(f) past the hold every placed bone rests at identity");
+			presentCount+= rest.bones[index].present ? 1 : 0;
+		check(bRest && presentCount > 10, "(f) past the hold the arms sit at the rig's rest pose, every bone placed");
 
 		timestampMs+= 33.0;
 		AvatarPose back;
@@ -816,13 +830,13 @@ static int runDirectRetargetTest(const TestArgs&)
 
 		AvatarPose phantom;
 		run(user, 50, 40, phantom);
+		AvatarPose restReference;
+		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
 		bool bRested= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
-			bRested&= !solver.getArmChain(sideIndex).valid;
-			bRested&= rotationAngle(phantom.bones[(int)upper].deltaWorld) < 1e-3f;
-			bRested&= indexBend(phantom, sideIndex) < 1e-3f;
+			bRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+			bRested&= armAtPose(phantom, restReference, sideIndex);
 		}
 		check(bRested, "(k) a hand slot beside an unseen body wrist rests the arm and its fingers");
 
@@ -875,13 +889,10 @@ static int runDirectRetargetTest(const TestArgs&)
 				timestampMs+= 33.0;
 			}
 		};
-		auto armsRest= [&](const AvatarPose& pose) {
+		auto armsRest= [&](const AvatarPose&) {
 			bool bRest= true;
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			{
-				const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
-				bRest&= !solver.getArmChain(sideIndex).valid && rotationAngle(pose.bones[(int)upper].deltaWorld) < 1e-3f;
-			}
+				bRest&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
 			return bRest;
 		};
 		auto handsSeen= [&]() {
@@ -931,6 +942,146 @@ static int runDirectRetargetTest(const TestArgs&)
 			user.bWristSeen[sideIndex]= true;
 		runWith(399, 1, pose, [](int) { return 0.6f; });
 		check(!armsRest(pose) && handsSeen(), "(p) a held arm takes its wrist and hand back the frame they return");
+	}
+
+	// (q) The ease into rest: an arm placed well away from the rest pose,
+	// its wrist then unseen past the hold, turns toward the rest pose frame
+	// by frame and reaches it at the blend time, with the palm facing the
+	// rig's rest normal and the fingers at the rest curl; a wrist returning
+	// mid-ease places the solved chain the frame the entry gate admits it; a
+	// blend of zero rests the arm on the first frame past the hold
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		// The rest forearm level, so the rest palm normal (down) needs no
+		// projection clear of it
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			rig.config.sides[sideIndex].restWristOffset.z= rig.config.sides[sideIndex].restElbowOffset.z;
+			rig.config.sides[sideIndex].restFingerCurlRadians= glm::radians(20.f);
+		}
+		AvatarPose restReference;
+		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
+
+		// Hands raised in front of the shoulders, palms to the camera
+		auto makeRaisedUser= [&]() {
+			User user= makeNeutralUser();
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.elbow[sideIndex]= user.shoulder[sideIndex] + glm::vec3(0.7071f, 0.f, 0.7071f) * kUpperArmLength;
+				user.wrist[sideIndex]= user.elbow[sideIndex] + glm::vec3(0.f, 0.f, kForearmLength);
+				user.palm[sideIndex]= makePalm(glm::vec3(0.f, 0.f, 1.f), glm::vec3(1.f, 0.f, 0.f));
+			}
+			return user;
+		};
+		auto upperAngleBetween= [](const AvatarPose& a, const AvatarPose& b, int sideIndex) {
+			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+			return rotationAngle(glm::inverse(a.bones[(int)upper].deltaWorld) * b.bones[(int)upper].deltaWorld);
+		};
+		auto resting= [](const DirectRetarget& solver, int sideIndex) {
+			return solver.getSolveState().arms[sideIndex].bResting;
+		};
+
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+		User user= makeRaisedUser();
+		auto step= [&](DirectRetarget& stepSolver, int frameIndex, AvatarPose& outPose) {
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex);
+			stepSolver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
+			timestampMs+= 33.0;
+		};
+		AvatarPose placed;
+		for (int repeat= 0; repeat < 40; ++repeat)
+			step(solver, 400 + repeat, placed);
+		const bool bAway= upperAngleBetween(placed, restReference, 0) > glm::radians(30.f) &&
+			upperAngleBetween(placed, restReference, 1) > glm::radians(30.f);
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		AvatarPose pose;
+		int frameIndex= 440;
+		while (!resting(solver, 0) && frameIndex < 500)
+			step(solver, frameIndex++, pose);
+		const int easeStartFrame= frameIndex;
+		bool bMonotonic= resting(solver, 0) && resting(solver, 1);
+		float fromPlaced[2]= {upperAngleBetween(placed, pose, 0), upperAngleBetween(placed, pose, 1)};
+		float toRest[2]= {upperAngleBetween(pose, restReference, 0), upperAngleBetween(pose, restReference, 1)};
+		bool bAtRest= false;
+		for (int repeat= 0; repeat < 12 && !bAtRest; ++repeat)
+		{
+			step(solver, frameIndex++, pose);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const float placedAngle= upperAngleBetween(placed, pose, sideIndex);
+				const float restAngle= upperAngleBetween(pose, restReference, sideIndex);
+				bMonotonic&= placedAngle >= fromPlaced[sideIndex] - 1e-4f && restAngle <= toRest[sideIndex] + 1e-4f;
+				fromPlaced[sideIndex]= placedAngle;
+				toRest[sideIndex]= restAngle;
+			}
+			bAtRest= armAtPose(pose, restReference, 0) && armAtPose(pose, restReference, 1);
+		}
+		const int easeFrames= frameIndex - easeStartFrame;
+		check(bAway && bMonotonic, "(q) past the hold the arm turns toward the rest pose frame by frame");
+		check(bAtRest && easeFrames >= 8 && easeFrames <= 10,
+			  "(q) the arm reaches the rest pose at the blend time");
+
+		bool bPalmDown= true;
+		bool bCurled= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const B hand= sideIndex == 0 ? B::LeftHand : B::RightHand;
+			const B index= sideIndex == 0 ? B::LeftIndexProximal : B::RightIndexProximal;
+			const glm::vec3 palmNormal= pose.bones[(int)hand].deltaWorld *
+				glm::vec3(rig.skeleton->getHand((eHandSide)sideIndex).palmFrameWorld[2]);
+			bPalmDown&= angleBetween(palmNormal, rig.config.sides[sideIndex].restPalmNormal) < glm::radians(3.f);
+			const float bend=
+				rotationAngle(glm::inverse(pose.bones[(int)hand].deltaWorld) * pose.bones[(int)index].deltaWorld);
+			bCurled&= std::fabs(bend - rig.config.sides[sideIndex].restFingerCurlRadians) < glm::radians(1.f);
+		}
+		check(bPalmDown, "(q) at rest the palm faces the rig's rest normal");
+		check(bCurled, "(q) at rest the index base bends by the rest curl");
+
+		// Back up, then unseen into the ease, then seen again mid-ease
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		for (int repeat= 0; repeat < 40; ++repeat)
+			step(solver, frameIndex++, pose);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		while (!resting(solver, 0) && frameIndex < 700)
+			step(solver, frameIndex++, pose);
+		for (int repeat= 0; repeat < 3; ++repeat)
+			step(solver, frameIndex++, pose);
+		const bool bMidEase= resting(solver, 0) && solver.getSolveState().arms[0].restBlend < 1.f;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		// The arm is from rest, so the wrist passes the entry gate first
+		for (int repeat= 0; repeat < 3; ++repeat)
+			step(solver, frameIndex++, pose);
+		bool bReturned= bMidEase;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bReturned&= chain.valid && !resting(solver, sideIndex) &&
+				glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bReturned, "(q) a wrist returning mid-ease places the solved chain the frame the gate admits it");
+
+		// No blend: the first frame past the hold is the rest pose
+		rig.config.restBlendMs= 0.f;
+		DirectRetarget snapSolver;
+		timestampMs= 0.0;
+		captureNeutral(rig, camera, snapSolver, timestampMs);
+		for (int repeat= 0; repeat < 40; ++repeat)
+			step(snapSolver, 800 + repeat, pose);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		frameIndex= 840;
+		while (!resting(snapSolver, 0) && frameIndex < 900)
+			step(snapSolver, frameIndex++, pose);
+		check(resting(snapSolver, 0) && armAtPose(pose, restReference, 0) && armAtPose(pose, restReference, 1),
+			  "(q) with no blend the first frame past the hold is the rest pose");
 	}
 
 	// (l) The scorer: with the model's depth withheld, a seen elbow picks
@@ -1187,5 +1338,5 @@ static int runDirectRetargetTest(const TestArgs&)
 }
 
 MIKAN_REGISTER_TEST("--test-direct-retarget",
-					"Direct retarget: camera world, neutral capture, the wrist-depth scorer, the lift's scale, the palm hold, hold and rest, determinism",
+					"Direct retarget: camera world, neutral capture, the wrist-depth scorer, the lift's scale, the palm hold, hold and the ease into rest, determinism",
 					eTestCategory::SelfTest, runDirectRetargetTest);

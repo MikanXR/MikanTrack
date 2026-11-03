@@ -359,6 +359,10 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		side.fingerEnabled= rigSide.fingerEnabled;
 		side.bThumbPronationOverride= !rigSide.bThumbPronationAuto;
 		side.thumbPronationRad= glm::radians(rigSide.thumbPronationDegrees);
+		side.restElbowOffset= rigSide.restElbowOffset;
+		side.restWristOffset= rigSide.restWristOffset;
+		side.restPalmNormal= rigSide.restPalmNormal;
+		side.restFingerCurlRadians= glm::radians(rigSide.restFingerCurlDegrees);
 	}
 	return retarget;
 }
@@ -380,6 +384,7 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	// The rig adjustments are the position retarget's, one mapping
 	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
 	direct.headTrimRadians= retarget.headTrimRadians;
+	direct.restBlendMs= rig.restBlendMs;
 	direct.sides= retarget.sides;
 	return direct;
 }

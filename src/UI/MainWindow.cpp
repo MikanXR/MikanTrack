@@ -521,13 +521,21 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const DirectRetarget::SolveState* directState= nullptr;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
-		TrackingFrameResult frame;
-		BodyDimensions user;
-		if (preview == AvatarPanel::ePreviewPose::Rest)
-			AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
+		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
+		{
+			// Direct mode: the same rest pose the stream falls back to
+			DirectRetarget::makeRestPose(*skeleton, makeDirectRetargetConfig(*config, rig), m_avatarPose);
+		}
 		else
-			AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-		m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+		{
+			TrackingFrameResult frame;
+			BodyDimensions user;
+			if (preview == AvatarPanel::ePreviewPose::Rest)
+				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
+			else
+				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
+			m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
 	else
