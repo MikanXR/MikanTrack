@@ -20,8 +20,15 @@ using B= eHumanoidBone;
 using namespace AvatarRetargetMath;
 using RaySphereHit= BodyPoseSolver::RaySphereHit;
 
-// Landmark visibility below this is treated as unseen
+// Landmark visibility below this is treated as unseen. A wrist, and a hand
+// slot on it, gets in only after this many consecutive frames of evidence:
+// the model's visibility flickers across the bar on a joint it has placed
+// by guesswork (a wrist below the frame put beside a hand-shaped thing on
+// the wall), and one frame across it used to be enough to pose the arm and
+// start the hold. The bar itself stays where it is: the model scores a
+// plainly visible wrist at 0.5 to 0.7 on the seated takes.
 constexpr float kMinVisibility= 0.5f;
+constexpr int kEnterFrames= 3;
 // A landmark this close to the frame edge is treated as out of frame: the
 // model places a joint it cannot see somewhere plausible inside the image,
 // and that somewhere is not where the joint is
@@ -31,7 +38,10 @@ constexpr float kFrameMarginPx= 16.f;
 // fires on hand-shaped things in the scene
 constexpr float kHandAgreementShoulderWidths= 0.5f;
 // A group (torso, head, an arm) unseen for longer than this returns to rest,
-// and a gap longer than this restarts the filters
+// and a gap longer than this restarts the filters. An arm earns its hold:
+// it is held for as long as it was continuously placed plus one frame, up
+// to this, so a sighting of a few frames does not leave the arm up for half
+// a second.
 constexpr double kMaxHoldMs= 500.0;
 // A pair of landmarks whose known separation places it outside this range
 // is not on the person
@@ -117,6 +127,23 @@ void placeBone(AvatarPose& pose, const AvatarSkeleton& skeleton, B bone, const g
 
 // An arm at rest: every bone of the chain present at identity, so a receiver
 // is told the arm rests rather than left holding its last pose
+// A gate over a per-frame reading: in after kEnterFrames consecutive frames
+// of evidence, out on the first frame without
+bool advanceGate(bool bEvidence, int& frames, bool& bAccepted)
+{
+	frames= bEvidence ? std::min(frames + 1, kEnterFrames) : 0;
+	bAccepted= frames >= kEnterFrames;
+	return bAccepted;
+}
+
+// The hold an arm has earned by the time it was last placed: the length of
+// its unbroken run of placements plus one frame, so a run of one frame
+// carries to the next frame and no further
+double earnedHoldMs(double sightingStartMs, double solvedTimestampMs, double frameMs)
+{
+	return std::min(std::max(solvedTimestampMs - sightingStartMs, 0.0) + frameMs, kMaxHoldMs);
+}
+
 void restArm(AvatarPose& pose, const AvatarSkeleton& skeleton, int sideIndex)
 {
 	const glm::quat identity(1.f, 0.f, 0.f, 0.f);
@@ -261,6 +288,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	if (!m_bFiltersConfigured)
 		configureFilters();
 	const float dtSeconds= m_bHasTime ? (float)((timestampMs - m_lastTimestampMs) * 0.001) : 0.f;
+	const double frameMs= m_bHasTime ? timestampMs - m_lastTimestampMs : 0.0;
 	m_bHasTime= true;
 	m_lastTimestampMs= timestampMs;
 
@@ -480,22 +508,38 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		if (arm.pnpScaleSampleCount == 0)
 			arm.pnpScale= lengthScale;
 
+		// The entry gates apply to an arm coming from rest: a visibility
+		// flicker on a wrist the model cannot see neither poses the arm nor
+		// starts the hold. An arm already placed and within its hold takes
+		// the wrist and the hand back the frame they return, since a dip of
+		// one frame is the model's score wavering on a wrist it has, and the
+		// hand's lift is what keeps the wrist's distance from flipping.
+		const bool bHadChain= arm.chain.valid &&
+			(timestampMs - arm.solvedTimestampMs) <=
+				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
+		const bool bWristVisible= usable(wristIndex);
+		const bool bWristGate= advanceGate(bWristVisible, arm.wristGateFrames, arm.bWristAccepted);
+		const bool bWristUsable= bHadChain ? bWristVisible : bWristGate;
+
 		// The hand slot is the hand only where the body model agrees: the
 		// palm detector runs over the whole frame and fires on hand-shaped
 		// things in the scene, while the body model places the wrist by the
 		// whole figure and reports one it cannot see as unseen. Agreement is
-		// measured in shoulder widths, so it scales with the user's distance.
+		// measured in shoulder widths, so it scales with the user's distance,
+		// and it has to hold for the entry frames before the slot is the hand.
 		const glm::vec2 handWristPx(hand.imagePoints[0].x, hand.imagePoints[0].y);
 		const glm::vec2 bodyWristPx= landmarkPx(wristIndex);
-		const bool bHandSeen= hand.tracked && usable(wristIndex) && shoulderWidthPx > 0.f &&
+		const bool bHandNear= hand.tracked && bWristVisible && shoulderWidthPx > 0.f &&
 			glm::distance(handWristPx, bodyWristPx) <= kHandAgreementShoulderWidths * shoulderWidthPx;
+		const bool bHandGate= advanceGate(bHandNear, arm.handGateFrames, arm.bHandAccepted);
+		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
 		// the body model's, which keeps the arm placed through a hand dropout;
 		// either through the same light filter. The elbow pixel likewise.
 		bool bWristPixel= false;
 		glm::vec2 wristPx(0.f);
-		if (bHandSeen || usable(wristIndex))
+		if (bHandSeen || bWristUsable)
 		{
 			wristPx= arm.wristPixelFilter.filter(bHandSeen ? handWristPx : bodyWristPx, dtSeconds);
 			bWristPixel= true;
@@ -514,7 +558,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		armState.bHandSeen= bHandSeen;
 		armState.bElbowSeen= bElbowSeen;
 
-		const bool bHadChain= arm.chain.valid && (timestampMs - arm.solvedTimestampMs) <= kMaxHoldMs;
+		if (bWristPixel && !bHadChain)
+			arm.sightingStartMs= timestampMs;
 		if (bTorsoFresh && bWristPixel && upperArm > 1e-3f && forearm > 1e-3f)
 		{
 			const glm::vec3 shoulder= m_torso.shoulder[sideIndex];
@@ -696,7 +741,9 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			}
 		}
 
-		const bool bChainUsable= arm.chain.valid && (timestampMs - arm.solvedTimestampMs) <= kMaxHoldMs;
+		const bool bChainUsable= arm.chain.valid &&
+			(timestampMs - arm.solvedTimestampMs) <=
+				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
 		if (!bChainUsable)
 		{
 			arm.chain.valid= false;

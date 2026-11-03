@@ -205,6 +205,9 @@ private:
 	{
 		ArmChain chain;
 		double solvedTimestampMs= -1.0;
+		// When the chain's current unbroken run of placements began: the
+		// hold it has earned is the run's length, up to the maximum
+		double sightingStartMs= -1.0;
 		// The wrist's distance along its ray as the scorer chose it last
 		// frame, before the depth filter: the smoothness term's anchor and a
 		// candidate of its own
@@ -215,6 +218,12 @@ private:
 		int pnpScaleSampleCount= 0;
 		int pnpScaleNextSample= 0;
 		float pnpScale= 1.f;
+		// The entry gates on the body wrist and on the hand slot's agreement
+		// with it: consecutive frames of evidence, and whether in
+		int wristGateFrames= 0;
+		bool bWristAccepted= false;
+		int handGateFrames= 0;
+		bool bHandAccepted= false;
 		// The hand as last measured, held while the hand model loses it
 		bool bHandMeasured= false;
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm

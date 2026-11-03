@@ -100,6 +100,8 @@ struct User
 	bool bHandTracked[2]= {true, true};
 	bool bElbowSeen[2]= {true, true};
 	bool bWristSeen[2]= {true, true};
+	// The body model's visibility on a seen wrist
+	float wristVisibility[2]= {1.f, 1.f};
 	// Whether the body model reports its relative depth
 	bool bModelDepth= true;
 	// The hand lift's wrist distance as a multiple of the truth
@@ -164,6 +166,10 @@ TrackingFrameResult makeFrame(const Camera& camera, const User& user, const Avat
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_ELBOW, user.elbow[1], hipDepth, user.bElbowSeen[1]);
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_WRIST, user.wrist[0], hipDepth, user.bWristSeen[0]);
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_WRIST, user.wrist[1], hipDepth, user.bWristSeen[1]);
+	if (user.bWristSeen[0])
+		body.visibility[(int)ePoseLandmark::LEFT_WRIST]= user.wristVisibility[0];
+	if (user.bWristSeen[1])
+		body.visibility[(int)ePoseLandmark::RIGHT_WRIST]= user.wristVisibility[1];
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_HIP, user.hip[0], hipDepth, true);
 	setLandmark(body, camera, (int)ePoseLandmark::RIGHT_HIP, user.hip[1], hipDepth, true);
 
@@ -843,6 +849,90 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(k) a hand slot on the body wrist is the hand");
 	}
 
+	// (p) The wrist's entry gate and the earned hold: a body wrist whose
+	// visibility flickers across the bar every other frame never poses the
+	// arm, one steady above it gets in with its hand on the third frame, a
+	// short sighting leaves an arm that rests within a few frames of the
+	// wrist going, and a long one leaves an arm held for the full hold
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectRetarget solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				user.fingers[sideIndex][finger].proximal= 1.f;
+		auto runWith= [&](int firstFrame, int frameCount, AvatarPose& outPose, auto&& visibilityOf) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const float visibility= visibilityOf(repeat);
+				user.wristVisibility[0]= user.wristVisibility[1]= visibility;
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto armsRest= [&](const AvatarPose& pose) {
+			bool bRest= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+				bRest&= !solver.getArmChain(sideIndex).valid && rotationAngle(pose.bones[(int)upper].deltaWorld) < 1e-3f;
+			}
+			return bRest;
+		};
+		auto handsSeen= [&]() {
+			const DirectRetarget::SolveState& state= solver.getSolveState();
+			return state.arms[0].bHandSeen && state.arms[1].bHandSeen;
+		};
+
+		AvatarPose pose;
+		// The neutral capture ran at full visibility: the gates are in, so a
+		// stretch of unseen wrists past the hold empties them first
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		runWith(300, 20, pose, [](int) { return 1.f; });
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		check(armsRest(pose), "(p) wrists unseen past the hold rest the arms");
+
+		runWith(320, 20, pose, [](int repeat) { return repeat % 2 == 0 ? 0.7f : 0.3f; });
+		check(armsRest(pose), "(p) a wrist visibility flickering across the bar every other frame never poses the arm");
+
+		runWith(340, 2, pose, [](int) { return 0.6f; });
+		const bool bNotYet= armsRest(pose) && !handsSeen();
+		runWith(342, 1, pose, [](int) { return 0.6f; });
+		const bool bIn= !armsRest(pose) && handsSeen();
+		check(bNotYet && bIn, "(p) a wrist steady above the bar gets in, with its hand, on the third frame");
+
+		// Placed for two frames past its entry (about 70 ms), then gone: the
+		// arm rests within a few frames, not the half second of the full hold
+		runWith(343, 2, pose, [](int) { return 0.6f; });
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		runWith(345, 4, pose, [](int) { return 1.f; });
+		check(armsRest(pose), "(p) a short sighting's arm rests within a few frames of the wrist going");
+
+		// Placed for 40 frames, then gone for 10 (330 ms): still held
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		runWith(349, 40, pose, [](int) { return 0.6f; });
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= false;
+		runWith(389, 10, pose, [](int) { return 1.f; });
+		check(!armsRest(pose), "(p) a long sighting's arm is held through a gap within the full hold");
+
+		// The wrists back for one frame while the arm is held: the hand is
+		// seen on that frame, the entry gate being for an arm from rest
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bWristSeen[sideIndex]= true;
+		runWith(399, 1, pose, [](int) { return 0.6f; });
+		check(!armsRest(pose) && handsSeen(), "(p) a held arm takes its wrist and hand back the frame they return");
+	}
+
 	// (l) The scorer: with the model's depth withheld, a seen elbow picks
 	// the wrist distance whose elbow reprojects; the hand lift's depth scale
 	// is measured against those frames, free of the lift's own pull; with
@@ -895,13 +985,13 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bElbowPicks, "(l) a seen elbow picks the wrist distance whose elbow reprojects, without the model's depth");
 
 		// The hands tracked with a lift that reads 1.3 times too far, for 40
-		// frames of seen elbow
+		// frames of seen elbow past the hand gate's entry
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			user.bHandTracked[sideIndex]= true;
 			user.pnpDepthScale[sideIndex]= 1.3f;
 		}
-		run(210, 40, pose);
+		run(210, 40 + 3, pose);
 		bool bScale= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
