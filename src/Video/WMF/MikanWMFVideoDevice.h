@@ -87,6 +87,11 @@ protected:
 	*/
 	bool setCameraControlProperty(CameraControlProperty propId, long desired_value, bool bAuto);
 	long getCameraControlProperty(CameraControlProperty propId, bool* bIsAuto= nullptr) const;
+	// The UVC auto exposure priority flag, through the kernel streaming
+	// property the camera control set carries beyond IAMCameraControl.
+	// Returns false where the device or its driver has no such control.
+	bool getAutoExposurePriority(bool& outPriority) const;
+	bool setAutoExposurePriority(bool bPriority);
 	bool getCameraControlRange(CameraControlProperty propId, VideoSettingConstraint& constraint) const;
 
 	void notifyVideoModePropertiesChanged();
