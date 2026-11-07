@@ -11,7 +11,8 @@ struct AvatarModel;
 
 // The phone face stream's ARKit blendshapes as the blendshape names a VMC
 // receiver matches on (/VMC/Ext/Blend/Val), built once per avatar. Each
-// output is a weighted sum of ARKit columns, clamped to [0, 1].
+// output is the largest of its term groups, a group being a weighted sum of
+// ARKit columns clamped to [0, 1]; most outputs have one group.
 //
 // Which names an avatar gets:
 // - Expressions named after ARKit blendshapes (perfect sync): those
@@ -35,7 +36,8 @@ public:
 	struct Output
 	{
 		std::string name;
-		std::vector<Term> terms;
+		// The alternatives the output takes the largest of
+		std::vector<std::vector<Term>> groups;
 	};
 
 	static std::shared_ptr<const AvatarFaceMap> buildRaw();

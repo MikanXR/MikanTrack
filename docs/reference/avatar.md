@@ -157,11 +157,11 @@ The loaded file is announced as `/VMC/Ext/VRM` (path, title, SHA-256) once a sec
 
 ## The face map (`src/Avatar/AvatarFaceMap.h`)
 
-`AvatarFaceMap` turns the face stream's 52 ARKit blendshapes (see [face.md](./face.md)) into the blendshape names a VMC receiver matches on, built once per loaded avatar. Each output is a weighted sum of ARKit columns, clamped to [0, 1]. Which names an avatar gets:
+`AvatarFaceMap` turns the face stream's 52 ARKit blendshapes (see [face.md](./face.md)) into the blendshape names a VMC receiver matches on, built once per loaded avatar. Each output is the largest of its term groups, a group being a weighted sum of ARKit columns clamped to [0, 1], and most outputs have one group. Which names an avatar gets:
 
 - An avatar with expressions named after ARKit blendshapes (perfect sync, compared without case) gets those expressions alone, in its own spelling.
 
-- Otherwise each VRM preset the avatar carries gets the ARKit columns that shape it: the sided blinks from each eye, `aa` from the jaw, `ih` from the smile, `ee` from the stretch, `ou` from the pucker, `oh` from the funnel, and the four gaze directions from the eye looks. The two-eyed blink is driven only when the avatar lacks a sided pair, since both would close the eyes twice. The emotion presets have no ARKit counterpart and stay untouched.
+- Otherwise each VRM preset the avatar carries gets the ARKit columns that shape it: the sided blinks from each eye, `aa` from the larger of the jaw and 1.25 times the lowered lower lip (wav2arkit opens the mouth through the lower lip with the jaw nearly still, and a phone face opens the jaw further than the lip, so the jaw wins there), `ih` from the smile, `ee` from the stretch, `ou` from the pucker, `oh` from the funnel, and the four gaze directions from the eye looks. The two-eyed blink is driven only when the avatar lacks a sided pair, since both would close the eyes twice. The emotion presets have no ARKit counterpart and stay untouched.
 
 - Also in that second case, the ARKit names the avatar carries as morph targets go out under their own names. A standard receiver ignores them, since it matches expressions only. A receiver that also matches morph targets gets the full face, which is how an avatar whose ARKit shapes are morphs without expressions keeps its detail.
 

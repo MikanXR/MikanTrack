@@ -40,27 +40,38 @@ std::vector<AvatarFaceMap::Term> average(const char* first, const char* second)
 	return {term(first, 0.5f), term(second, 0.5f)};
 }
 
+// A pair of columns averaged and scaled
+std::vector<AvatarFaceMap::Term> average(const char* first, const char* second, float scale)
+{
+	return {term(first, 0.5f * scale), term(second, 0.5f * scale)};
+}
+
 struct PresetRule
 {
 	const char* preset;
-	std::vector<AvatarFaceMap::Term> terms;
+	std::vector<std::vector<AvatarFaceMap::Term>> groups;
 };
+
+// A mouth opened by the lower lip alone (wav2arkit opens it that way, its
+// jawOpen under 0.2 while mouthLowerDown reaches 0.74) reads as the same
+// aa, so aa takes the larger of the jaw and the scaled lower lip
+constexpr float k_lowerLipAaScale= 1.25f;
 
 std::vector<PresetRule> makePresetRules()
 {
 	return {
-		{"blinkLeft", {term("eyeBlinkLeft", 1.f)}},
-		{"blinkRight", {term("eyeBlinkRight", 1.f)}},
-		{"aa", {term("jawOpen", 1.f)}},
-		{"ih", average("mouthSmileLeft", "mouthSmileRight")},
-		{"ee", average("mouthStretchLeft", "mouthStretchRight")},
-		{"ou", {term("mouthPucker", 1.f)}},
-		{"oh", {term("mouthFunnel", 1.f)}},
-		{"lookUp", average("eyeLookUpLeft", "eyeLookUpRight")},
-		{"lookDown", average("eyeLookDownLeft", "eyeLookDownRight")},
+		{"blinkLeft", {{term("eyeBlinkLeft", 1.f)}}},
+		{"blinkRight", {{term("eyeBlinkRight", 1.f)}}},
+		{"aa", {{term("jawOpen", 1.f)}, average("mouthLowerDownLeft", "mouthLowerDownRight", k_lowerLipAaScale)}},
+		{"ih", {average("mouthSmileLeft", "mouthSmileRight")}},
+		{"ee", {average("mouthStretchLeft", "mouthStretchRight")}},
+		{"ou", {{term("mouthPucker", 1.f)}}},
+		{"oh", {{term("mouthFunnel", 1.f)}}},
+		{"lookUp", {average("eyeLookUpLeft", "eyeLookUpRight")}},
+		{"lookDown", {average("eyeLookDownLeft", "eyeLookDownRight")}},
 		// The person's left: the left eye looks out, the right eye in
-		{"lookLeft", average("eyeLookOutLeft", "eyeLookInRight")},
-		{"lookRight", average("eyeLookInLeft", "eyeLookOutRight")},
+		{"lookLeft", {average("eyeLookOutLeft", "eyeLookInRight")}},
+		{"lookRight", {average("eyeLookInLeft", "eyeLookOutRight")}},
 	};
 }
 } // namespace
@@ -69,7 +80,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::buildRaw()
 {
 	auto map= std::make_shared<AvatarFaceMap>();
 	for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
-		map->m_outputs.push_back(Output{arkitBlendshapeName(index), {Term{index, 1.f}}});
+		map->m_outputs.push_back(Output{arkitBlendshapeName(index), {{Term{index, 1.f}}}});
 	return map;
 }
 
@@ -81,7 +92,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 	{
 		const int arkitIndex= arkitIndexIgnoringCase(expression.name);
 		if (arkitIndex >= 0)
-			map->m_outputs.push_back(Output{expression.name, {Term{arkitIndex, 1.f}}});
+			map->m_outputs.push_back(Output{expression.name, {{Term{arkitIndex, 1.f}}}});
 	}
 	if (!map->m_outputs.empty())
 	{
@@ -92,7 +103,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 	for (const PresetRule& rule : makePresetRules())
 	{
 		if (const AvatarExpression* expression= model.findExpressionByPreset(rule.preset))
-			map->m_outputs.push_back(Output{expression->name, rule.terms});
+			map->m_outputs.push_back(Output{expression->name, rule.groups});
 	}
 	// The two-eyed blink only when the avatar cannot blink each eye on its
 	// own: driving both would close the eyes twice
@@ -100,7 +111,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 	const bool bHasSidedBlinks=
 		model.findExpressionByPreset("blinkLeft") != nullptr && model.findExpressionByPreset("blinkRight") != nullptr;
 	if (blink != nullptr && !bHasSidedBlinks)
-		map->m_outputs.push_back(Output{blink->name, average("eyeBlinkLeft", "eyeBlinkRight")});
+		map->m_outputs.push_back(Output{blink->name, {average("eyeBlinkLeft", "eyeBlinkRight")}});
 
 	for (const AvatarMesh& mesh : model.meshes)
 	{
@@ -114,7 +125,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 				std::any_of(map->m_outputs.begin(), map->m_outputs.end(),
 							[&morphName](const Output& output) { return output.name == morphName; });
 			if (!bAlreadyMapped)
-				map->m_outputs.push_back(Output{morphName, {Term{arkitIndex, 1.f}}});
+				map->m_outputs.push_back(Output{morphName, {{Term{arkitIndex, 1.f}}}});
 		}
 	}
 
@@ -128,12 +139,17 @@ void AvatarFaceMap::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>& ar
 	for (size_t outputIndex= 0; outputIndex < m_outputs.size(); ++outputIndex)
 	{
 		float value= 0.f;
-		for (const Term& outputTerm : m_outputs[outputIndex].terms)
+		for (const std::vector<Term>& group : m_outputs[outputIndex].groups)
 		{
-			if (outputTerm.arkitIndex >= 0)
-				value+= outputTerm.weight * arkit[outputTerm.arkitIndex];
+			float sum= 0.f;
+			for (const Term& outputTerm : group)
+			{
+				if (outputTerm.arkitIndex >= 0)
+					sum+= outputTerm.weight * arkit[outputTerm.arkitIndex];
+			}
+			value= std::max(value, std::clamp(sum, 0.f, 1.f));
 		}
-		outValues[outputIndex]= std::clamp(value, 0.f, 1.f);
+		outValues[outputIndex]= value;
 	}
 }
 

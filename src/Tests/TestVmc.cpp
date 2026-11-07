@@ -1043,6 +1043,20 @@ static int runVmcTest(const TestArgs&)
 		check(!map->isPerfectSync() && map->getOutputs().size() == 1 && fabsf(values[0] - 0.5f) < 1e-6f,
 			  "an avatar with only the two-eyed blink gets the average of both eyes");
 
+		// aa takes the larger of the jaw and the scaled lower lip, so a mouth
+		// opened by the lip alone still reads as aa
+		AvatarModel vowels;
+		addExpression(vowels, "A", "aa");
+		map= AvatarFaceMap::build(vowels);
+		arkitValues= {};
+		arkitValues[arkitBlendshapeFromName("mouthLowerDownLeft")]= 0.4f;
+		arkitValues[arkitBlendshapeFromName("mouthLowerDownRight")]= 0.4f;
+		map->evaluate(arkitValues, values);
+		check(values.size() == 1 && fabsf(values[0] - 0.5f) < 1e-6f, "aa reads a lowered lip at 1.25 times its average");
+		arkitValues[arkitBlendshapeFromName("jawOpen")]= 0.7f;
+		map->evaluate(arkitValues, values);
+		check(fabsf(values[0] - 0.7f) < 1e-6f, "and the jaw wins once it opens further");
+
 		// The receiver half: outputs onto morph targets, as the preview applies them
 		AvatarModel morphed;
 		AvatarMesh face;
