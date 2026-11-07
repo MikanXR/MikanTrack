@@ -310,7 +310,7 @@ void OscStreamer::appendVmcBlendMessages(const TrackingFrameResult& frame)
 	// A stopped stream sends zeros once: a receiver holds the last value of a
 	// blendshape that stops arriving, which would freeze a blink mid-closure
 	if (bFacePresent)
-		faceMap.evaluate(frame.face.blendshapes, m_blendValues);
+		faceMap.evaluate(frame.face.blendshapes, frame.face.visemesPresent ? &frame.face.visemes : nullptr, m_blendValues);
 	else
 		m_blendValues.assign(faceMap.getOutputs().size(), 0.f);
 

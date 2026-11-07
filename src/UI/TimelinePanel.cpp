@@ -1,6 +1,6 @@
 #include "TimelinePanel.h"
 
-#include "AudioTypes.h"
+#include "VisemeTable.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -515,13 +515,17 @@ void TimelinePanel::rebuildDisplayFrame()
 	}
 
 	// The mouth is not replayed (the audio stage runs offline through
-	// --replay-audio), so every view shows the frame's recorded mouth over a
-	// neutral face, which is what the avatar received live
+	// --replay-audio), so every view shows the frame's recorded visemes the
+	// way the live merge handed them on: over a neutral face through the
+	// viseme table, and as the visemes themselves
+	m_displayFused.face.visemesPresent= false;
 	if (frame.recorded->mouth.present)
 	{
 		m_displayFused.face.present= true;
 		m_displayFused.face.blendshapes.fill(0.f);
-		applyMouthFrame(frame.recorded->mouth.frame, m_displayFused.face.blendshapes);
+		applyVisemeWeights(frame.recorded->mouth.frame.weights, m_displayFused.face.blendshapes);
+		m_displayFused.face.visemesPresent= true;
+		m_displayFused.face.visemes= frame.recorded->mouth.frame.weights;
 	}
 
 	m_perCameraCopies= frame.perCamera;

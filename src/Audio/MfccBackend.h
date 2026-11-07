@@ -4,23 +4,26 @@
 #include <string>
 #include <vector>
 
-#include "IMouthBackend.h"
+#include "AudioTypes.h"
 #include "MfccFeatures.h"
 #include "VadGate.h"
 #include "VisemeModel.h"
 #include "VisemeTypes.h"
 
-// The mfcc backend: HeadAudio's method, MFCC vectors per 256-sample hop
-// classified against Gaussian prototypes into the 15 Oculus visemes, which
-// the viseme table turns into mouth columns. A run is pure over its window:
-// the vote and the crossfade restart from silence at the window's start, so
-// the first few hops of a window are warm-up and the emitted tail is not.
+// The mouth backend: HeadAudio's method, MFCC vectors per 256-sample hop
+// classified against Gaussian prototypes into the 15 Oculus visemes, emitted
+// as 30 fps frames of viseme weights. A run is pure over its window (the
+// same samples give the same frames): the vote and the crossfade restart
+// from silence at the window's start, so the first few hops of a window are
+// warm-up and the emitted tail is not. Which frames are new is the window
+// policy's business (MouthWindow), and smoothing happens after emission
+// (MouthFilter), so the bench can compare chunked and whole-clip output.
 //
 // The shipped model's silence prototype is the zero vector with a tight
 // covariance, which only digital silence reaches, so HeadAudio's energy gate
 // runs in front of the classifier: a hop below it is silence and feeds no
 // vote, which is what keeps a pause or a quiet room from reading as speech.
-class MfccBackend : public IMouthBackend
+class MfccBackend
 {
 public:
 	static constexpr const char* k_defaultModelPath= "resources/audio/model-en-mixed.bin";
@@ -30,15 +33,19 @@ public:
 	// HeadAudio's sigmoid easing
 	float rampMs= 100.f;
 
-	// Loads the model. A missing or malformed file leaves the backend not
-	// ready with the reason set.
+	// Loads the model, the shipped one or a calibration profile. A missing or
+	// malformed file leaves the backend not ready with the reason set.
 	bool create(const std::string& modelPath= k_defaultModelPath);
 
-	const char* getName() const override { return "mfcc"; }
-	bool isReady() const override { return m_classifier.hasModel(); }
-	const std::string& getUnavailableReason() const override { return m_unavailableReason; }
-	bool infer(const float* samples, size_t sampleCount, std::vector<MouthFrame>& outFrames) override;
-	double getLastInferMs() const override { return m_lastInferMs; }
+	bool isReady() const { return m_classifier.hasModel(); }
+	// Why the backend is not ready, when it is not
+	const std::string& getUnavailableReason() const { return m_unavailableReason; }
+	// Runs over the samples and fills outFrames with mouthFramesForSamples
+	// frames covering them, first to last. Returns false on a failed run
+	// (outFrames is left empty).
+	bool infer(const float* samples, size_t sampleCount, std::vector<MouthFrame>& outFrames);
+	// Milliseconds the last infer took, for the panel's readout and the bench
+	double getLastInferMs() const { return m_lastInferMs; }
 
 	// The voted viseme of each hop of the last run, in hop order
 	const std::vector<uint8_t>& getLastHopVisemes() const { return m_hopVisemes; }

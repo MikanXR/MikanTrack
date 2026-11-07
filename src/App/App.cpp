@@ -196,7 +196,6 @@ void App::applyAudioConfig()
 	AudioServiceConfig audioConfig;
 	audioConfig.enabled= m_config->audio.enabled;
 	audioConfig.deviceName= m_config->audio.deviceName;
-	audioConfig.backend= m_config->audio.backend;
 	audioConfig.gainDb= m_config->audio.gainDb;
 	audioConfig.gateDbfs= m_config->audio.gateDbfs;
 	audioConfig.profilePath= m_config->audio.profilePath;

@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 
+#include "AudioTypes.h"
 #include "FaceTypes.h"
 
 namespace
@@ -15,14 +16,15 @@ struct NamedTerm
 };
 
 // The fixed map from the 15 Oculus visemes to the ARKit mouth columns: the
-// jaw and lip shape of each sound. The vowels open the jaw and shape the
-// lips, the consonants are the lip contact (PP), the lip under the teeth
-// (FF), the tongue between them (TH), and the small openings of the rest.
-// Silence drives nothing. Each vowel's lead column (the jaw for aa, the
-// smile for I, the stretch for E, the funnel for O, the pucker for U) is the
-// one the VRM preset map derives that vowel from, and it reaches 0.8 to
-// 0.85 at a full viseme so a preset avatar gets a full shape; the secondary
-// columns are the detail a perfect-sync avatar reads.
+// jaw and lip shape of each sound, what a perfect-sync avatar, a morph
+// target named after an ARKit column, and the raw face map read. (A preset
+// avatar reads the viseme weights themselves through the face map.) The
+// vowels open the jaw and shape the lips, the consonants are the lip
+// contact (PP), the lip under the teeth (FF), the tongue between them (TH),
+// and the small openings of the rest. Silence drives nothing. Each vowel
+// leads with its defining column (the jaw for aa, the smile for I, the
+// stretch for E, the funnel for O, the pucker for U) at 0.8 to 0.85, so a
+// full viseme is a full shape.
 const std::vector<NamedTerm> k_rows[VISEME_COUNT]= {
 	// aa
 	{{"jawOpen", 0.85f}, {"mouthLowerDownLeft", 0.25f}, {"mouthLowerDownRight", 0.25f}},
@@ -61,7 +63,7 @@ const std::vector<NamedTerm> k_rows[VISEME_COUNT]= {
 	{},
 };
 
-// The rows with their names resolved to mouth columns, built on first use
+// The rows with their names resolved to ARKit columns, built on first use
 const std::array<std::vector<VisemeTerm>, VISEME_COUNT>& resolvedRows()
 {
 	static const std::array<std::vector<VisemeTerm>, VISEME_COUNT> rows= [] {
@@ -71,9 +73,9 @@ const std::array<std::vector<VisemeTerm>, VISEME_COUNT>& resolvedRows()
 			for (const NamedTerm& named : k_rows[viseme])
 			{
 				VisemeTerm term;
-				term.mouthColumn= mouthColumnFromArkitIndex(arkitBlendshapeFromName(named.arkitName));
+				term.arkitIndex= arkitBlendshapeFromName(named.arkitName);
 				term.weight= named.weight;
-				assert(term.mouthColumn >= 0);
+				assert(isMouthArkitIndex(term.arkitIndex));
 				result[viseme].push_back(term);
 			}
 		}
@@ -89,23 +91,23 @@ const std::vector<VisemeTerm>& visemeTableRow(int viseme)
 	return viseme >= 0 && viseme < VISEME_COUNT ? resolvedRows()[viseme] : empty;
 }
 
-void applyVisemeWeights(const VisemeWeights& weights, MouthFrame& outFrame)
+void applyVisemeWeights(const VisemeWeights& weights, std::array<float, ARKIT_BLENDSHAPE_COUNT>& outFace)
 {
-	std::array<float, MOUTH_COLUMN_COUNT> sums{};
-	std::array<bool, MOUTH_COLUMN_COUNT> touched{};
+	std::array<float, ARKIT_BLENDSHAPE_COUNT> sums{};
+	std::array<bool, ARKIT_BLENDSHAPE_COUNT> touched{};
 	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 	{
 		for (const VisemeTerm& term : resolvedRows()[viseme])
 		{
-			if (term.mouthColumn < 0)
+			if (term.arkitIndex < 0)
 				continue;
-			sums[term.mouthColumn]+= term.weight * weights[viseme];
-			touched[term.mouthColumn]= true;
+			sums[term.arkitIndex]+= term.weight * weights[viseme];
+			touched[term.arkitIndex]= true;
 		}
 	}
-	for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+	for (int arkitIndex= 0; arkitIndex < ARKIT_BLENDSHAPE_COUNT; ++arkitIndex)
 	{
-		if (touched[column])
-			outFrame.weights[column]= std::min(std::max(sums[column], 0.f), 1.f);
+		if (touched[arkitIndex])
+			outFace[arkitIndex]= std::min(std::max(sums[arkitIndex], 0.f), 1.f);
 	}
 }

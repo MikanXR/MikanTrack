@@ -16,20 +16,18 @@
 #include "MouthChain.h"
 
 class AudioRecorder;
-class IMouthBackend;
+class MfccBackend;
 
 struct AudioServiceConfig
 {
 	bool enabled= false;
 	// The capture device by name; empty or unknown takes the system default
 	std::string deviceName;
-	// "wav2arkit" or "mfcc"
-	std::string backend= "wav2arkit";
 	// Applied to the samples before everything else
 	float gainDb= 0.f;
 	// Hop level below which the mouth is neutral and no backend runs
 	float gateDbfs= -45.f;
-	// The mfcc backend's calibration profile; empty is the shipped model
+	// The calibration profile the backend loads; empty is the shipped model
 	std::string profilePath;
 };
 
@@ -41,7 +39,6 @@ struct AudioServiceStatus
 	// The device that opened, "default" for the system default
 	std::string deviceName;
 	int deviceSampleRate= 0;
-	std::string backendName;
 	bool backendReady= false;
 	// Why the backend is not ready, when it is not
 	std::string backendReason;
@@ -74,7 +71,7 @@ struct AudioRecordingStart
 // The microphone mouth stage: SDL captures the chosen device as 16 kHz mono
 // float, its callback hands fixed blocks to the audio thread over an SPSC
 // queue, and the thread runs the chain (the gain, the rolling window, the
-// gate, the selected backend, the filter) and pushes the emitted frames
+// gate, the backend, the filter) and pushes the emitted frames
 // into the pacer. Readers draw the pacer down one frame per frame interval
 // into the newest MouthSample, latest-wins behind a mutex: the vision thread
 // reads it once per iteration beside the face sample. The backend is
@@ -93,8 +90,8 @@ public:
 	void shutdown();
 
 	// Thread-safe. The audio thread applies it: a device or enable change
-	// reopens the device, a backend or profile change recreates the backend,
-	// the gain and the gate take effect on the next hop. A config set before
+	// reopens the device, a profile change recreates the backend, the gain
+	// and the gate take effect on the next hop. A config set before
 	// startup() is applied by it.
 	void setConfig(const AudioServiceConfig& config);
 
@@ -178,7 +175,7 @@ private:
 	// Audio thread state
 	AudioServiceConfig m_threadConfig;
 	uint32_t m_device= 0;
-	std::unique_ptr<IMouthBackend> m_backend;
+	std::unique_ptr<MfccBackend> m_backend;
 	MouthChain m_chain;
 	std::vector<MouthChainFrame> m_chainFrames;
 	std::vector<MouthChainRun> m_chainRuns;

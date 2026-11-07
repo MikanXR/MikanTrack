@@ -7,15 +7,16 @@
 
 struct MouthFilterConfig
 {
-	// The one-euro cutoffs per column. The LAM post-processing that smooths
-	// the decoder's frames lives in Python and is not in the exported graph,
-	// so emitted frames are smoothed here instead.
+	// The one-euro cutoffs per viseme
 	float minCutoffHz= 3.f;
 	float beta= 0.5f;
 	float derivativeCutoffHz= 1.f;
 };
 
-// A one-euro filter per mouth column over the emitted 30 fps frames
+// A one-euro filter per viseme over the emitted 30 fps frames. The backend's
+// crossfade already ramps between the hops' votes inside a run; this smooths
+// the frames across runs and eases the mouth shut when the gate closes
+// instead of snapping it.
 class MouthFilter
 {
 public:
@@ -26,5 +27,5 @@ public:
 	MouthFrame filter(const MouthFrame& frame, float dtSeconds= 1.f / MOUTH_FRAME_RATE);
 
 private:
-	std::array<OneEuroFilter, MOUTH_COLUMN_COUNT> m_columnFilters;
+	std::array<OneEuroFilter, VISEME_COUNT> m_visemeFilters;
 };

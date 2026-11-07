@@ -332,7 +332,6 @@ json headerToJson(const RecordingHeader& header)
 			{"sampleRate", header.audio.sampleRate},
 			{"startSample", header.audio.startSampleIndex},
 			{"startMs", header.audio.startTimestampMs},
-			{"backend", header.audio.backend},
 		};
 	}
 	return out;
@@ -355,7 +354,6 @@ bool headerFromJson(const json& j, RecordingHeader& outHeader)
 		outHeader.audio.sampleRate= audio.value("sampleRate", 0);
 		outHeader.audio.startSampleIndex= audio.value("startSample", (int64_t)0);
 		outHeader.audio.startTimestampMs= audio.value("startMs", 0.0);
-		outHeader.audio.backend= audio.value("backend", "");
 	}
 	return outHeader.formatVersion == k_formatVersion && outHeader.cameraCount > 0;
 }
@@ -425,14 +423,20 @@ bool frameFromJson(const json& j, RecordedFrame& outFrame)
 			outFrame.imu[sideIndex].forearmConfidence= imu[sideIndex].value("conf", 0.f);
 		}
 	}
+	// A mouth block is the 15 viseme weights; a block of another width is
+	// from before the frame carried visemes and is skipped, since its values
+	// mean something else
 	if (j.contains("mouth") && j["mouth"].is_object())
 	{
 		const json& mouth= j["mouth"];
-		outFrame.mouth.present= true;
-		outFrame.mouth.audioFrameIndex= mouth.value("frameIndex", (int64_t)-1);
 		const json& weights= mouth.value("w", json::array());
-		for (int column= 0; column < MOUTH_COLUMN_COUNT && column < (int)weights.size(); ++column)
-			outFrame.mouth.frame.weights[column]= floatFromJson(weights[column]);
+		if (weights.is_array() && (int)weights.size() == VISEME_COUNT)
+		{
+			outFrame.mouth.present= true;
+			outFrame.mouth.audioFrameIndex= mouth.value("frameIndex", (int64_t)-1);
+			for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+				outFrame.mouth.frame.weights[viseme]= floatFromJson(weights[viseme]);
+		}
 	}
 	outFrame.checksum= checksumFromHex(j.value("checksum", "0"));
 	return true;

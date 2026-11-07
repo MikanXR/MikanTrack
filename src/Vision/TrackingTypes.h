@@ -10,6 +10,7 @@
 #include "glm/ext/vector_float3.hpp"
 
 #include "BodyPoseTypes.h"
+#include "VisemeTypes.h"
 
 // Shared result types passed from the vision/inference thread to the render
 // thread and the OSC streamer.
@@ -354,6 +355,12 @@ struct TrackingFrameResult
 	{
 		bool present= false;
 		std::array<float, 52> blendshapes{};
+		// The microphone's viseme weights while it owns the mouth: the
+		// blendshapes then carry them through the viseme table, and a
+		// preset avatar's face map reads them directly. false while the
+		// phone's face owns the mouth.
+		bool visemesPresent= false;
+		VisemeWeights visemes{};
 	};
 	FacePose face;
 

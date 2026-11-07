@@ -124,7 +124,6 @@ static int runReplayTest(const TestArgs& args)
 		header.audio.sampleRate= AUDIO_SAMPLE_RATE;
 		header.audio.startSampleIndex= 123904;
 		header.audio.startTimestampMs= 987.5;
-		header.audio.backend= "mfcc";
 
 		TrackingRecorder recorder;
 		if (!recorder.start(recordingPath, TrackingRecording::headerToJson(header)))
@@ -239,8 +238,8 @@ static int runReplayTest(const TestArgs& args)
 			{
 				frame.mouth.present= true;
 				frame.mouth.audioFrameIndex= frameIdx % 3 == 0 ? -1 : 300 + frameIdx;
-				for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
-					frame.mouth.frame.weights[column]= 0.01f * (float)(column + 1) + 0.001f * (float)frameIdx;
+				for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+					frame.mouth.frame.weights[viseme]= 0.01f * (float)(viseme + 1) + 0.001f * (float)frameIdx;
 			}
 			recorder.enqueueFrame(std::move(frame));
 		}
@@ -434,7 +433,7 @@ static int runReplayTest(const TestArgs& args)
 	{
 		const RecordedAudioSidecar& audio= replay.getHeader().audio;
 		if (!audio.present || audio.fileName != "mikan-test-replay.wav" || audio.sampleRate != AUDIO_SAMPLE_RATE ||
-			audio.startSampleIndex != 123904 || audio.startTimestampMs != 987.5 || audio.backend != "mfcc")
+			audio.startSampleIndex != 123904 || audio.startTimestampMs != 987.5)
 		{
 			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: the audio sidecar header must round-trip";
 			result= 1;
@@ -455,9 +454,9 @@ static int runReplayTest(const TestArgs& args)
 				++mouthMismatches;
 				continue;
 			}
-			for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+			for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 			{
-				if (mouth.frame.weights[column] != 0.01f * (float)(column + 1) + 0.001f * (float)frameIdx)
+				if (mouth.frame.weights[viseme] != 0.01f * (float)(viseme + 1) + 0.001f * (float)frameIdx)
 					++mouthMismatches;
 			}
 		}

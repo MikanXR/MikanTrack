@@ -6,7 +6,6 @@
 
 #include "Logger.h"
 #include "PathUtils.h"
-#include "VisemeTable.h"
 
 namespace
 {
@@ -96,7 +95,7 @@ bool MfccBackend::infer(const float* samples, size_t sampleCount, std::vector<Mo
 		const double frameCenter= (frameIndex + 0.5) * AUDIO_SAMPLE_RATE / MOUTH_FRAME_RATE;
 		// Hop h is centered at (h + 1) * 256 samples
 		const int hop= std::min(std::max((int)std::floor(frameCenter / MFCC_HOP_SAMPLES) - 1, 0), hopCount - 1);
-		applyVisemeWeights(m_hopWeights[(size_t)hop], outFrames[(size_t)frameIndex]);
+		outFrames[(size_t)frameIndex].weights= m_hopWeights[(size_t)hop];
 	}
 
 	m_lastInferMs= std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

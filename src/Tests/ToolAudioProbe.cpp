@@ -1,6 +1,8 @@
 #include "TestCommon.h"
 
+#include <array>
 #include <chrono>
+#include <sstream>
 #include <thread>
 
 #include "AudioService.h"
@@ -13,7 +15,7 @@
 // microphone problem is told from a model problem before the panel is
 // involved.
 //
-//   --audio-probe [seconds] [--backend wav2arkit|mfcc] [--device name] [--gate dbfs] [--gain db]
+//   --audio-probe [seconds] [--device name] [--gate dbfs] [--gain db]
 
 static int runAudioProbe(const TestArgs& args)
 {
@@ -24,9 +26,7 @@ static int runAudioProbe(const TestArgs& args)
 	{
 		const std::string& arg= args[index];
 		const bool bHasValue= index + 1 < args.size();
-		if (arg == "--backend" && bHasValue)
-			config.backend= args[++index];
-		else if (arg == "--device" && bHasValue)
+		if (arg == "--device" && bHasValue)
 			config.deviceName= args[++index];
 		else if (arg == "--gate" && bHasValue)
 			config.gateDbfs= std::stof(args[++index]);
@@ -55,11 +55,10 @@ static int runAudioProbe(const TestArgs& args)
 	uint64_t lastSequence= 0;
 	uint64_t frameCount= 0;
 	float peakDbfs= -100.f;
-	float peakJaw= 0.f;
+	std::array<int, VISEME_COUNT> visemeFrames{};
 	int openHops= 0;
 	int polls= 0;
 	double lastReportMs= startMs;
-	const int jawOpen= mouthColumnFromArkitIndex(arkitBlendshapeFromName("jawOpen"));
 	while (steadyNowMs() - startMs < seconds * 1000.0)
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -73,7 +72,7 @@ static int runAudioProbe(const TestArgs& args)
 			// Every sequence step is a frame, seen or not
 			frameCount+= status.latest.sequence - lastSequence;
 			lastSequence= status.latest.sequence;
-			peakJaw= std::max(peakJaw, status.latest.frame.weights[jawOpen]);
+			visemeFrames[dominantViseme(status.latest.frame.weights)]++;
 		}
 
 		const double nowMs= steadyNowMs();
@@ -81,8 +80,8 @@ static int runAudioProbe(const TestArgs& args)
 		{
 			lastReportMs= nowMs;
 			MIKAN_LOG_INFO("audio-probe") << "level " << status.levelDbfs << " dBFS, gate " << (status.gateOpen ? "open" : "closed")
-										  << ", frames " << frameCount << ", jawOpen "
-										  << (status.latest.valid ? status.latest.frame.weights[jawOpen] : 0.f)
+										  << ", frames " << frameCount << ", viseme "
+										  << (status.latest.valid ? visemeName(dominantViseme(status.latest.frame.weights)) : "none")
 										  << ", infer " << status.inferMsEma << " ms";
 		}
 	}
@@ -104,11 +103,18 @@ static int runAudioProbe(const TestArgs& args)
 	const AudioServiceStatus status= service.getStatus();
 	MIKAN_LOG_INFO("audio-probe") << "device " << (status.deviceOpen ? "open" : "NOT open") << ": " << status.deviceName
 								  << " at " << status.deviceSampleRate << " Hz";
-	MIKAN_LOG_INFO("audio-probe") << "backend " << status.backendName << (status.backendReady ? " ready" : " NOT ready")
+	MIKAN_LOG_INFO("audio-probe") << "model " << (status.backendReady ? "ready" : "NOT ready")
 								  << (status.backendReady ? "" : ": " + status.backendReason);
+	std::ostringstream seen;
+	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+	{
+		if (visemeFrames[viseme] > 0)
+			seen << " " << visemeName(viseme) << " " << visemeFrames[viseme];
+	}
 	MIKAN_LOG_INFO("audio-probe") << frameCount << " frames in " << seconds << " s (" << (double)frameCount / seconds
 								  << " per second), peak level " << peakDbfs << " dBFS, gate open on " << openHops << " of "
-								  << polls << " polls, peak jawOpen " << peakJaw << ", dropped blocks " << status.droppedBlocks;
+								  << polls << " polls, dropped blocks " << status.droppedBlocks << ", dominant viseme per polled frame:"
+								  << seen.str();
 
 	service.shutdown();
 	const bool bOk= status.deviceOpen && status.backendReady && frameCount > 0 && captured.size() >= AUDIO_SAMPLE_RATE / 2;
@@ -116,5 +122,5 @@ static int runAudioProbe(const TestArgs& args)
 	return bOk ? 0 : 1;
 }
 
-MIKAN_REGISTER_TEST("--audio-probe", "Live microphone mouth stage: devices, level, gate, backend, frames per second",
+MIKAN_REGISTER_TEST("--audio-probe", "Live microphone mouth stage: devices, level, gate, model, frames per second",
 					eTestCategory::Hardware, runAudioProbe)

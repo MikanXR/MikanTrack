@@ -1,18 +1,11 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <vector>
 
 #include "MouthChain.h"
 
-class IMouthBackend;
-
-// The backend a config names: "mfcc" is the HeadAudio port, anything else
-// the learned wav2arkit model. An empty model path takes the backend's
-// default. The backend comes back created, ready or carrying its reason.
-std::unique_ptr<IMouthBackend> createMouthBackend(const std::string& backendName, const std::string& modelPath);
+class MfccBackend;
 
 // Where a recorded stretch of the stream sits on the live chain's grid. The
 // live chain runs at every hop boundary and counts frames from the device's
@@ -36,4 +29,4 @@ struct MouthReplayOutput
 // Runs the chain over a clip the way the live stage would have: padSamples
 // of silence first, then the clip in capture-sized blocks
 void replayMouthChain(const std::vector<float>& clip, int64_t padSamples, const MouthChainConfig& config,
-					  IMouthBackend& backend, MouthReplayOutput& outReplay);
+					  MfccBackend& backend, MouthReplayOutput& outReplay);

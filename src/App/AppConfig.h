@@ -233,13 +233,11 @@ struct AudioConfig
 	// The capture device by name, re-resolved at open; empty or a name no
 	// device carries any more takes the system default
 	std::string deviceName;
-	// "wav2arkit" or "mfcc"
-	std::string backend= "wav2arkit";
 	// Applied to the samples before the gate and the backend
 	float gainDb= 0.f;
 	// Hop level under which the mouth is neutral and no backend runs
 	float gateDbfs= -45.f;
-	// The mfcc backend's calibration profile; empty is the shipped model
+	// The calibration profile the backend loads; empty is the shipped model
 	std::string profilePath;
 };
 

@@ -2,21 +2,21 @@
 
 void MouthFilter::configure(const MouthFilterConfig& config)
 {
-	for (OneEuroFilter& columnFilter : m_columnFilters)
-		columnFilter.configure(config.minCutoffHz, config.beta, config.derivativeCutoffHz);
+	for (OneEuroFilter& visemeFilter : m_visemeFilters)
+		visemeFilter.configure(config.minCutoffHz, config.beta, config.derivativeCutoffHz);
 	reset();
 }
 
 void MouthFilter::reset()
 {
-	for (OneEuroFilter& columnFilter : m_columnFilters)
-		columnFilter.reset();
+	for (OneEuroFilter& visemeFilter : m_visemeFilters)
+		visemeFilter.reset();
 }
 
 MouthFrame MouthFilter::filter(const MouthFrame& frame, float dtSeconds)
 {
 	MouthFrame filtered;
-	for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
-		filtered.weights[column]= m_columnFilters[column].filter(frame.weights[column], dtSeconds);
+	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+		filtered.weights[viseme]= m_visemeFilters[viseme].filter(frame.weights[viseme], dtSeconds);
 	return filtered;
 }

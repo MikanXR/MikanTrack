@@ -639,7 +639,6 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	const json& au= j.value("audio", json::object());
 	config.audio.enabled= au.value("enabled", false);
 	config.audio.deviceName= au.value("deviceName", std::string());
-	config.audio.backend= au.value("backend", std::string("wav2arkit"));
 	config.audio.gainDb= au.value("gainDb", 0.f);
 	config.audio.gateDbfs= au.value("gateDbfs", -45.f);
 	config.audio.profilePath= au.value("profilePath", std::string());
@@ -825,7 +824,6 @@ std::string AppConfig::toJsonString() const
 	j["audio"]= {
 		{"enabled", audio.enabled},
 		{"deviceName", audio.deviceName},
-		{"backend", audio.backend},
 		{"gainDb", audio.gainDb},
 		{"gateDbfs", audio.gateDbfs},
 		{"profilePath", audio.profilePath},

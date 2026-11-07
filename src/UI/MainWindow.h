@@ -11,6 +11,7 @@
 
 class App;
 class AudioPanel;
+class AvatarMouthReadout;
 class AvatarPanel;
 class CalibrationPanel;
 class DevicePanel;
@@ -81,6 +82,7 @@ private:
 	std::unique_ptr<TimelinePanel> m_timelinePanel;
 	std::unique_ptr<AvatarPanel> m_avatarPanel;
 	std::unique_ptr<AudioPanel> m_audioPanel;
+	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
 	// Guided new-project setup chain; needs the wizards above, so it is
 	// constructed last (in the constructor body)
 	std::unique_ptr<SetupFlow> m_setupFlow;

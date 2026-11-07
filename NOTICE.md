@@ -57,14 +57,7 @@ model, downloaded from the MMPose model zoo
 
 - `rtmpose_body.onnx` — rtmpose-m_simcc-body7_pt-body7_420e-256x192
 
-The wav2arkit_cpu mouth model (Apache-2.0, Myned AI, https://huggingface.co/myned-ai/wav2arkit_cpu)
-is the audio stage's learned backend: a fused ONNX export of the wav2vec2-base-960h encoder
-(Apache-2.0, Meta) and the LAM Audio2Expression decoder (Apache-2.0, Alibaba aigc3d,
-https://github.com/aigc3d/LAM_Audio2Expression), downloaded by `InitialSetup_x64.bat`:
-
-- `wav2arkit_cpu.onnx` and `wav2arkit_cpu.onnx.data` — the graph and its external weights
-
-The mfcc mouth backend (`src/Audio/MfccFeatures`, `VadGate`, `VisemeModel`, `MfccBackend`) is a C++ port of
+The mouth backend (`src/Audio/MfccFeatures`, `VadGate`, `VisemeModel`, `MfccBackend`) is a C++ port of
 HeadAudio (MIT, Mika Suominen, https://github.com/met4citizen/HeadAudio), its MFCC feature chain, energy
 gate, Gaussian prototype classifier, and binary model format, and ships HeadAudio's pre-trained model:
 
@@ -73,7 +66,7 @@ gate, Gaussian prototype classifier, and binary model format, and ships HeadAudi
 ## Audio bench clips
 
 `resources/audio/bench/bench_en.wav` and `bench_ja.wav`, the speech clips `--viseme-bench` measures
-the mouth backends on, were synthesized once with Kokoro-82M (Apache-2.0, hexgrad,
+the mouth backend on, were synthesized once with Kokoro-82M (Apache-2.0, hexgrad,
 https://huggingface.co/hexgrad/Kokoro-82M) through kokoro-onnx (MIT) from Harvard Sentences and
 original Japanese text, and are published as assets of this repository's `bench-audio-1` release,
 which `InitialSetup_x64.bat` fetches.

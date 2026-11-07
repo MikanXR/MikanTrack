@@ -1,7 +1,5 @@
 #include "AudioPanel.h"
 
-#include <algorithm>
-#include <array>
 #include <cstdio>
 
 #include "imgui.h"
@@ -10,17 +8,14 @@
 #include "AppConfig.h"
 #include "AudioService.h"
 #include "AudioTypes.h"
-#include "AvatarFaceMap.h"
-#include "AvatarTypes.h"
 #include "FaceService.h"
 #include "LocText.h"
 #include "SteadyClock.h"
 #include "TrackingTypes.h"
+#include "WeightBars.h"
 
 namespace
 {
-const char* const k_backendNames[]= {"wav2arkit", "mfcc"};
-const char* const k_backendLabelKeys[]= {"audioPanel.backendWav2arkit", "audioPanel.backendMfcc"};
 constexpr float k_meterFloorDbfs= -60.f;
 } // namespace
 
@@ -56,116 +51,24 @@ AudioPanel::DrawResult AudioPanel::draw(bool* pOpen, bool bWizardActive, const T
 	drawStatus();
 	ImGui::Separator();
 	drawWeights(shownFused, bReplayView);
-	ImGui::Separator();
-	drawAvatarExpressions(shownFused);
 
 	ImGui::End();
 	return result;
 }
 
-namespace
-{
-// A table of names and bars, two per row
-void drawWeightTable(const char* id, int count, const char* (*name)(int, const void*), const float* values,
-					 const void* context)
-{
-	if (!ImGui::BeginTable(id, 4, ImGuiTableFlags_SizingStretchProp))
-		return;
-	ImGui::TableSetupColumn("nameA", ImGuiTableColumnFlags_WidthFixed, 150.f);
-	ImGui::TableSetupColumn("barA", ImGuiTableColumnFlags_WidthStretch);
-	ImGui::TableSetupColumn("nameB", ImGuiTableColumnFlags_WidthFixed, 150.f);
-	ImGui::TableSetupColumn("barB", ImGuiTableColumnFlags_WidthStretch);
-	const int rows= (count + 1) / 2;
-	char overlay[16];
-	for (int row= 0; row < rows; ++row)
-	{
-		ImGui::TableNextRow();
-		for (int half= 0; half < 2; ++half)
-		{
-			const int index= row + half * rows;
-			ImGui::TableSetColumnIndex(half * 2);
-			if (index >= count)
-				continue;
-			ImGui::TextDisabled("%s", name(index, context));
-			ImGui::TableSetColumnIndex(half * 2 + 1);
-			const float weight= std::clamp(values[index], 0.f, 1.f);
-			snprintf(overlay, sizeof(overlay), "%.2f", weight);
-			ImGui::ProgressBar(weight, ImVec2(-FLT_MIN, 0.f), overlay);
-		}
-	}
-	ImGui::EndTable();
-}
-} // namespace
-
-void AudioPanel::drawAvatarExpressions(const TrackingFrameResult& shownFused)
-{
-	const std::shared_ptr<const AvatarModel> model= m_app->getAvatarModel();
-	if (model == nullptr)
-	{
-		ImGui::TextDisabled("%s", locText("audioPanel.avatarNone"));
-		m_faceMapModel= nullptr;
-		m_faceMap= nullptr;
-		return;
-	}
-	if (model != m_faceMapModel)
-	{
-		m_faceMapModel= model;
-		m_faceMap= AvatarFaceMap::build(*model);
-		m_mouthOutputs.clear();
-		const std::vector<AvatarFaceMap::Output>& outputs= m_faceMap->getOutputs();
-		for (size_t outputIndex= 0; outputIndex < outputs.size(); ++outputIndex)
-		{
-			bool bMouth= false;
-			for (const std::vector<AvatarFaceMap::Term>& group : outputs[outputIndex].groups)
-				for (const AvatarFaceMap::Term& outputTerm : group)
-					bMouth|= mouthColumnFromArkitIndex(outputTerm.arkitIndex) >= 0;
-			if (bMouth)
-				m_mouthOutputs.push_back((int)outputIndex);
-		}
-	}
-	if (m_mouthOutputs.empty())
-	{
-		ImGui::TextDisabled("%s", locText("audioPanel.avatarNoMouth"));
-		return;
-	}
-
-	ImGui::TextDisabled(locText("audioPanel.avatarHeaderFmt"), (int)m_mouthOutputs.size());
-	std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
-	if (shownFused.face.present)
-		face= shownFused.face.blendshapes;
-	m_faceMap->evaluate(face, m_outputValues);
-
-	std::vector<float> values(m_mouthOutputs.size());
-	for (size_t index= 0; index < m_mouthOutputs.size(); ++index)
-		values[index]= m_outputValues[(size_t)m_mouthOutputs[index]];
-	struct Context
-	{
-		const AvatarFaceMap* faceMap;
-		const std::vector<int>* outputs;
-	};
-	const Context context{m_faceMap.get(), &m_mouthOutputs};
-	drawWeightTable(
-		"avatarMouth", (int)m_mouthOutputs.size(),
-		[](int index, const void* raw) -> const char* {
-			const Context* c= (const Context*)raw;
-			return c->faceMap->getOutputs()[(size_t)(*c->outputs)[(size_t)index]].name.c_str();
-		},
-		values.data(), &context);
-}
-
 void AudioPanel::drawWeights(const TrackingFrameResult& shownFused, bool bReplayView)
 {
+	const bool bVisemes= shownFused.face.present && shownFused.face.visemesPresent;
 	if (bReplayView)
 		ImGui::TextDisabled("%s", locText("audioPanel.weightsReplay"));
-	else if (!shownFused.face.present)
+	else if (!bVisemes)
 		ImGui::TextDisabled("%s", locText("audioPanel.weightsNone"));
 	else
 		ImGui::TextDisabled("%s", locText("audioPanel.weightsHeader"));
 
-	const MouthFrame mouth= shownFused.face.present ? mouthFrameFromFace(shownFused.face.blendshapes) : MouthFrame();
+	const VisemeWeights weights= bVisemes ? shownFused.face.visemes : VisemeWeights{};
 	drawWeightTable(
-		"mouthWeights", MOUTH_COLUMN_COUNT, [](int index, const void*) { return mouthColumnName(index); },
-		mouth.weights.data(), nullptr);
+		"visemeWeights", VISEME_COUNT, [](int index, const void*) { return visemeName(index); }, weights.data(), nullptr);
 }
 
 void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
@@ -177,21 +80,6 @@ void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 	ImGui::SetItemTooltip("%s", locText("audioPanel.enableTooltip"));
 
 	ImGui::BeginDisabled(!audio.enabled);
-
-	int backendIndex= audio.backend == k_backendNames[1] ? 1 : 0;
-	if (ImGui::BeginCombo(locLabel("audioPanel.backendCombo"), locText(k_backendLabelKeys[backendIndex])))
-	{
-		for (int index= 0; index < 2; ++index)
-		{
-			if (ImGui::Selectable(locLabel(k_backendLabelKeys[index]), index == backendIndex) && index != backendIndex)
-			{
-				audio.backend= k_backendNames[index];
-				bChanged= true;
-			}
-		}
-		ImGui::EndCombo();
-	}
-	ImGui::SetItemTooltip("%s", locText("audioPanel.backendTooltip"));
 
 	const char* currentDevice= audio.deviceName.empty() ? locText("audioPanel.deviceDefault") : audio.deviceName.c_str();
 	if (ImGui::BeginCombo(locLabel("audioPanel.deviceCombo"), currentDevice))
@@ -238,28 +126,25 @@ void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 	bChanged|= ImGui::SliderFloat(locLabel("audioPanel.gainSlider"), &audio.gainDb, -20.f, 20.f, "%.0f dB");
 	ImGui::SetItemTooltip("%s", locText("audioPanel.gainTooltip"));
 
-	if (audio.backend == k_backendNames[1])
-	{
-		if (audio.profilePath.empty())
-			ImGui::TextDisabled("%s", locText("audioPanel.profileShipped"));
-		else
-			ImGui::TextDisabled(locText("audioPanel.profileFmt"), audio.profilePath.c_str());
+	if (audio.profilePath.empty())
+		ImGui::TextDisabled("%s", locText("audioPanel.profileShipped"));
+	else
+		ImGui::TextDisabled(locText("audioPanel.profileFmt"), audio.profilePath.c_str());
 
-		// The wizard needs an open device, which the service only has while
-		// the stage is enabled
-		ImGui::BeginDisabled(bWizardActive || !bDeviceOpen);
-		if (ImGui::Button(locLabel("audioPanel.calibrateButton")))
-			outResult.bLaunchAudioWizard= true;
-		ImGui::EndDisabled();
-		ImGui::SetItemTooltip("%s", locText("audioPanel.calibrateTooltip"));
-		if (!audio.profilePath.empty())
+	// The wizard needs an open device, which the service only has while
+	// the stage is enabled
+	ImGui::BeginDisabled(bWizardActive || !bDeviceOpen);
+	if (ImGui::Button(locLabel("audioPanel.calibrateButton")))
+		outResult.bLaunchAudioWizard= true;
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("%s", locText("audioPanel.calibrateTooltip"));
+	if (!audio.profilePath.empty())
+	{
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("audioPanel.useShippedButton")))
 		{
-			ImGui::SameLine();
-			if (ImGui::Button(locLabel("audioPanel.useShippedButton")))
-			{
-				audio.profilePath.clear();
-				bChanged= true;
-			}
+			audio.profilePath.clear();
+			bChanged= true;
 		}
 	}
 
@@ -288,10 +173,10 @@ void AudioPanel::drawStatus()
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("audioPanel.statusDeviceClosed"));
 
 	if (status.backendReady)
-		ImGui::TextDisabled(locText("audioPanel.statusBackendReadyFmt"), status.backendName.c_str(), status.inferMsEma);
-	else if (!status.backendName.empty())
+		ImGui::TextDisabled(locText("audioPanel.statusBackendReadyFmt"), status.inferMsEma);
+	else if (!status.backendReason.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), locText("audioPanel.statusBackendNotReadyFmt"),
-						   status.backendName.c_str(), status.backendReason.c_str());
+						   status.backendReason.c_str());
 
 	// Who owns the mouth: the phone while it streams a tracked face, else
 	// the microphone when its gate is open

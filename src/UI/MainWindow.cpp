@@ -10,6 +10,7 @@
 #include "App.h"
 #include "AppConfig.h"
 #include "AudioPanel.h"
+#include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
 #include "AvatarRig.h"
@@ -47,6 +48,7 @@ MainWindow::MainWindow(App* app)
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
 	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
+	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -395,7 +397,7 @@ void MainWindow::update(float deltaSeconds)
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
 	}
-	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused);
+	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused, *m_mouthReadout, m_app->getAvatarModel());
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel();
 	m_timelinePanel->draw(config, visionThread);

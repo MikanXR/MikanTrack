@@ -7,9 +7,8 @@
 #include "SDL.h"
 
 #include "AudioRecorder.h"
-#include "IMouthBackend.h"
 #include "Logger.h"
-#include "MouthReplay.h"
+#include "MfccBackend.h"
 #include "SteadyClock.h"
 #include "ThreadUtils.h"
 
@@ -239,8 +238,7 @@ void AudioService::applyPendingConfig()
 	}
 
 	const bool bDeviceChanged= config.enabled != m_threadConfig.enabled || config.deviceName != m_threadConfig.deviceName;
-	const bool bBackendChanged= config.enabled != m_threadConfig.enabled || config.backend != m_threadConfig.backend ||
-								config.profilePath != m_threadConfig.profilePath;
+	const bool bBackendChanged= config.enabled != m_threadConfig.enabled || config.profilePath != m_threadConfig.profilePath;
 	m_threadConfig= config;
 	m_chain.setGainDb(config.gainDb);
 	m_chain.setGateDbfs(config.gateDbfs);
@@ -358,17 +356,18 @@ void AudioService::closeDevice()
 
 void AudioService::createBackend()
 {
-	m_backend= createMouthBackend(m_threadConfig.backend, m_threadConfig.backend == "mfcc" ? m_threadConfig.profilePath : "");
+	m_backend= std::make_unique<MfccBackend>();
+	m_backend->create(m_threadConfig.profilePath.empty() ? std::string(MfccBackend::k_defaultModelPath)
+														 : m_threadConfig.profilePath);
 	// The stream did not restart with the backend: the window keeps its
 	// samples and the frame indices keep counting, so a recording's mouth
-	// frames stay tied to its sidecar across a backend or profile change
+	// frames stay tied to its sidecar across a profile change
 	m_chain.setGainDb(m_threadConfig.gainDb);
 	m_chain.setGateDbfs(m_threadConfig.gateDbfs);
 	m_inferMsEma= 0.f;
 	m_bInferEmaValid= false;
 
 	std::lock_guard<std::mutex> lock(m_mutex);
-	m_status.backendName= m_backend->getName();
 	m_status.backendReady= m_backend->isReady();
 	m_status.backendReason= m_backend->getUnavailableReason();
 	m_status.inferMsEma= 0.f;
@@ -378,7 +377,6 @@ void AudioService::destroyBackend()
 {
 	m_backend= nullptr;
 	std::lock_guard<std::mutex> lock(m_mutex);
-	m_status.backendName.clear();
 	m_status.backendReady= false;
 	m_status.backendReason.clear();
 }

@@ -4,6 +4,7 @@
 
 #include "AppConfig.h"
 #include "AudioService.h"
+#include "VisemeTable.h"
 #include "AvatarRetarget.h"
 #include "AvatarSkeleton.h"
 #include "FaceHead.h"
@@ -269,7 +270,6 @@ void VisionThread::handleRecordingStartOnThread()
 			header.audio.sampleRate= AUDIO_SAMPLE_RATE;
 			header.audio.startSampleIndex= start.startSampleIndex;
 			header.audio.startTimestampMs= start.timestampMs;
-			header.audio.backend= m_config->audio.backend;
 			m_bRecordingAudio= true;
 			m_recordingAudioEpoch= start.captureEpoch;
 		}
@@ -1046,12 +1046,15 @@ void VisionThread::applyMouthToOutput(TrackingFrameResult& output, double nowMs)
 	m_lastMouthSequence= mouth.sequence;
 	output.face.present= true;
 	output.face.blendshapes.fill(0.f);
-	applyMouthFrame(mouth.frame, output.face.blendshapes);
+	applyVisemeWeights(mouth.frame.weights, output.face.blendshapes);
+	output.face.visemesPresent= true;
+	output.face.visemes= mouth.frame.weights;
 }
 
 void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead)
 {
 	output.face.present= false;
+	output.face.visemesPresent= false;
 
 	// The phone wins while it streams a tracked face; otherwise the
 	// microphone owns the mouth

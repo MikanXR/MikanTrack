@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "IMouthBackend.h"
+#include "MfccBackend.h"
 
 float audioLevelDbfs(const float* samples, size_t sampleCount)
 {
@@ -55,7 +55,7 @@ void MouthChain::reset()
 	m_pushedSamples= 0;
 }
 
-void MouthChain::push(const float* samples, size_t sampleCount, IMouthBackend* backend,
+void MouthChain::push(const float* samples, size_t sampleCount, MfccBackend* backend,
 					  std::vector<MouthChainFrame>& outFrames, std::vector<MouthChainRun>& outRuns)
 {
 	m_scaled.resize(sampleCount);

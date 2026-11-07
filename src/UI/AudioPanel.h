@@ -1,20 +1,17 @@
 #pragma once
 
-#include <memory>
 #include <string>
 #include <vector>
 
 class App;
 class AppConfig;
-class AvatarFaceMap;
-struct AvatarModel;
 struct TrackingFrameResult;
 
-// The Audio panel: the microphone mouth stage's enable, backend, device,
-// level meter with the gate and gain, the mfcc profile with its Calibrate
-// button, and a status block (the device, the backend, the run time, which
-// source owns the mouth). Edits go to the persisted AudioConfig and through
-// App::applyAudioConfig to the service.
+// The Audio panel: the microphone mouth stage's enable, device, level meter
+// with the gate and gain, the profile with its Calibrate button, a status
+// block (the device, the model, the run time, which source owns the mouth),
+// and the viseme weights the stage is putting out. Edits go to the
+// persisted AudioConfig and through App::applyAudioConfig to the service.
 class AudioPanel
 {
 public:
@@ -28,30 +25,21 @@ public:
 
 	// bWizardActive disables the Calibrate button while another wizard runs.
 	// shownFused is the result the scene is showing (the live output, or the
-	// timeline's display frame while its replay view is active), whose face
-	// the weights block reads.
+	// timeline's display frame while its replay view is active), whose
+	// visemes the weights block reads.
 	DrawResult draw(bool* pOpen, bool bWizardActive, const TrackingFrameResult& shownFused, bool bReplayView);
 
 private:
 	void refreshDeviceList();
 	void drawControls(bool bWizardActive, DrawResult& outResult);
 	void drawStatus();
-	// The mouth columns of the shown face as bars, so the weights reaching
-	// the avatar can be read live and during playback, then the avatar's
-	// mouth expressions as the face map derives them from that face
+	// The shown frame's viseme weights as bars, so what the microphone is
+	// putting out can be read live and during playback
 	void drawWeights(const TrackingFrameResult& shownFused, bool bReplayView);
-	void drawAvatarExpressions(const TrackingFrameResult& shownFused);
 
 	App* m_app;
 	AppConfig* m_config;
 
 	std::vector<std::string> m_deviceNames;
 	bool m_bDeviceListFetched= false;
-
-	// The loaded avatar's face map, rebuilt when the avatar changes
-	std::shared_ptr<const AvatarModel> m_faceMapModel;
-	std::shared_ptr<const AvatarFaceMap> m_faceMap;
-	// The outputs a mouth column feeds, in face map order
-	std::vector<int> m_mouthOutputs;
-	std::vector<float> m_outputValues;
 };

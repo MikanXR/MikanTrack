@@ -13,13 +13,16 @@
 #include "OrbitCamera.h"
 #include "PathUtils.h"
 #include "Scene3dPanel.h"
+#include "VisemeTable.h"
 #include "VrmLoader.h"
 
-// Renders a contact sheet of an avatar's face under the mouth frames a bench
-// JSON holds, through the same renderer and face map the 3D scene uses, from
-// a hidden window. The headless way to look at what a backend's weights do
-// to a real face: tiles are spread evenly over the clip, each labelled with
-// its frame index and jawOpen.
+// Renders a contact sheet of an avatar's face under the viseme frames a
+// bench JSON holds, through the same renderer and face map the 3D scene
+// uses, from a hidden window: the frame's visemes onto a neutral face
+// through the viseme table, and the visemes themselves to the face map, the
+// way the live merge hands them on. The headless way to look at what the
+// backend's weights do to a real face: tiles are spread evenly over the
+// clip, each labelled with its frame index and its dominant viseme.
 //
 //   --render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]
 static int runRenderMouthTool(const TestArgs& args)
@@ -60,7 +63,6 @@ static int runRenderMouthTool(const TestArgs& args)
 		return 1;
 	}
 	const nlohmann::json& frames= bench[series];
-	const int jawOpen= mouthColumnFromArkitIndex(arkitBlendshapeFromName("jawOpen"));
 
 	const VrmLoader::LoadResult loaded= VrmLoader::loadFile(vrmPath);
 	if (loaded.model == nullptr)
@@ -111,12 +113,12 @@ static int runRenderMouthTool(const TestArgs& args)
 			{
 				const size_t frameIndex= tileCount > 1 ? (frames.size() - 1) * (size_t)tile / (size_t)(tileCount - 1) : 0;
 				const nlohmann::json& row= frames[frameIndex];
+				VisemeWeights visemes{};
+				for (int viseme= 0; viseme < VISEME_COUNT && viseme < (int)row.size(); ++viseme)
+					visemes[viseme]= row[(size_t)viseme].get<float>();
 				std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
-				MouthFrame mouth;
-				for (int column= 0; column < MOUTH_COLUMN_COUNT && column < (int)row.size(); ++column)
-					mouth.weights[column]= row[(size_t)column].get<float>();
-				applyMouthFrame(mouth, face);
-				faceMorphs.evaluate(&face, morphWeights);
+				applyVisemeWeights(visemes, face);
+				faceMorphs.evaluate(&face, &visemes, morphWeights);
 				meshRenderer.setMorphWeights(morphWeights);
 
 				frameBuffer.bindFrameBuffer();
@@ -131,8 +133,9 @@ static int runRenderMouthTool(const TestArgs& args)
 				cv::Mat bgr;
 				cv::cvtColor(rgba, bgr, cv::COLOR_RGBA2BGR);
 				cv::flip(bgr, bgr, 0);
-				const std::string label= "#" + std::to_string(frameIndex) + " jaw " +
-										 std::to_string(mouth.weights[jawOpen]).substr(0, 4);
+				const int dominant= dominantViseme(visemes);
+				const std::string label= "#" + std::to_string(frameIndex) + " " + visemeName(dominant) + " " +
+										 std::to_string(visemes[dominant]).substr(0, 4);
 				cv::putText(bgr, label, cv::Point(6, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
 				bgr.copyTo(sheet(cv::Rect((tile % columns) * kTile, (tile / columns) * kTile, kTile, kTile)));
 			}
@@ -154,5 +157,5 @@ static int runRenderMouthTool(const TestArgs& args)
 	return exitCode;
 }
 MIKAN_REGISTER_TEST("--render-mouth",
-					"Render a contact sheet of an avatar's face under a bench JSON's mouth frames (hidden window)",
+					"Render a contact sheet of an avatar's face under a bench JSON's viseme frames (hidden window)",
 					eTestCategory::Tool, runRenderMouthTool);

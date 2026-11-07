@@ -1,26 +1,22 @@
 #include "TestCommon.h"
 
 #include <iomanip>
-#include <memory>
 #include <sstream>
 
-#include "IMouthBackend.h"
 #include "MfccBackend.h"
 #include "MouthFilter.h"
 #include "MouthWindow.h"
 #include "PathUtils.h"
-#include "Wav2ArkitBackend.h"
 #include "WavFile.h"
 
-// The audio stage's bench: runs a backend over a wav clip under the live
-// rolling-window policy, writes the emitted 30 fps mouth weights as JSON for
+// The audio stage's bench: runs the backend over a wav clip under the live
+// rolling-window policy, writes the emitted 30 fps viseme weights as JSON for
 // playback on the avatar, and measures the two numbers that gate the live
 // stage: how far the chunked tail frames drift from one whole-clip run, and
 // the per-run inference time against the hop.
 //
-//   --viseme-bench <clip.wav> [out.json] [--backend wav2arkit|mfcc] [--hop ms] [--window ms]
-//                  [--lookahead frames] [--model path] [--ep cpu|directml] [--threads n]
-//                  [--cutoff hz] [--beta b]
+//   --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames]
+//                  [--model path] [--cutoff hz] [--beta b]
 
 namespace
 {
@@ -31,11 +27,8 @@ struct BenchOptions
 	int hopMs= 100;
 	int windowMs= 1000;
 	int lookaheadFrames= 2;
-	std::string backendName= "wav2arkit";
-	// Empty for the backend's default
+	// Empty for the shipped model
 	std::string modelPath;
-	std::string ep= "cpu";
-	int threads= 4;
 	MouthFilterConfig filter;
 };
 
@@ -45,9 +38,7 @@ bool parseOptions(const TestArgs& args, BenchOptions& out)
 	{
 		const std::string& arg= args[index];
 		const bool bHasValue= index + 1 < args.size();
-		if (arg == "--backend" && bHasValue)
-			out.backendName= args[++index];
-		else if (arg == "--hop" && bHasValue)
+		if (arg == "--hop" && bHasValue)
 			out.hopMs= std::stoi(args[++index]);
 		else if (arg == "--window" && bHasValue)
 			out.windowMs= std::stoi(args[++index]);
@@ -55,10 +46,6 @@ bool parseOptions(const TestArgs& args, BenchOptions& out)
 			out.lookaheadFrames= std::stoi(args[++index]);
 		else if (arg == "--model" && bHasValue)
 			out.modelPath= args[++index];
-		else if (arg == "--ep" && bHasValue)
-			out.ep= args[++index];
-		else if (arg == "--threads" && bHasValue)
-			out.threads= std::stoi(args[++index]);
 		else if (arg == "--cutoff" && bHasValue)
 			out.filter.minCutoffHz= std::stof(args[++index]);
 		else if (arg == "--beta" && bHasValue)
@@ -104,8 +91,8 @@ static int runVisemeBench(const TestArgs& args)
 	if (!parseOptions(args, options))
 	{
 		MIKAN_LOG_ERROR("viseme-bench")
-			<< "Usage: --viseme-bench <clip.wav> [out.json] [--backend wav2arkit|mfcc] [--hop ms] [--window ms] "
-			   "[--lookahead frames] [--model path] [--ep cpu|directml] [--threads n] [--cutoff hz] [--beta b]";
+			<< "Usage: --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames] "
+			   "[--model path] [--cutoff hz] [--beta b]";
 		return 1;
 	}
 
@@ -120,71 +107,41 @@ static int runVisemeBench(const TestArgs& args)
 	MIKAN_LOG_INFO("viseme-bench") << options.clipPath.string() << ": " << clip.size() << " samples at 16 kHz, "
 								   << clipSeconds << " s";
 
-	std::unique_ptr<IMouthBackend> backend;
-	std::string provider= "CPU";
-	if (options.backendName == "wav2arkit")
+	const std::string modelPath= options.modelPath.empty() ? std::string(MfccBackend::k_defaultModelPath) : options.modelPath;
+	MfccBackend backend;
+	if (!backend.create(modelPath))
 	{
-		auto wav2arkit= std::make_unique<Wav2ArkitBackend>();
-		const std::string modelPath=
-			options.modelPath.empty() ? std::string(Wav2ArkitBackend::k_defaultModelPath) : options.modelPath;
-		if (!wav2arkit->create(modelPath, options.ep, options.threads))
-		{
-			MIKAN_LOG_ERROR("viseme-bench") << wav2arkit->getUnavailableReason();
-			return 1;
-		}
-		provider= wav2arkit->getActiveEp();
-		backend= std::move(wav2arkit);
-	}
-	else if (options.backendName == "mfcc")
-	{
-		auto mfcc= std::make_unique<MfccBackend>();
-		const std::string modelPath=
-			options.modelPath.empty() ? std::string(MfccBackend::k_defaultModelPath) : options.modelPath;
-		if (!mfcc->create(modelPath))
-		{
-			MIKAN_LOG_ERROR("viseme-bench") << mfcc->getUnavailableReason();
-			return 1;
-		}
-		backend= std::move(mfcc);
-	}
-	else
-	{
-		MIKAN_LOG_ERROR("viseme-bench") << "unknown backend " << options.backendName << " (wav2arkit or mfcc)";
+		MIKAN_LOG_ERROR("viseme-bench") << backend.getUnavailableReason();
 		return 1;
 	}
-	MIKAN_LOG_INFO("viseme-bench") << backend->getName() << " on " << provider << ", " << options.threads
-								   << " threads, hop " << options.hopMs << " ms, window " << options.windowMs << " ms, lookahead "
-								   << options.lookaheadFrames << " frames";
+	MIKAN_LOG_INFO("viseme-bench") << "model " << modelPath << ", hop " << options.hopMs << " ms, window "
+								   << options.windowMs << " ms, lookahead " << options.lookaheadFrames << " frames";
 
 	// One run over the whole clip: the reference the chunked tail frames are
 	// measured against
 	std::vector<MouthFrame> offlineFrames;
 	double offlineMs= 0.0;
-	if (backend->infer(clip.data(), clip.size(), offlineFrames))
+	if (backend.infer(clip.data(), clip.size(), offlineFrames))
 	{
-		offlineMs= backend->getLastInferMs();
+		offlineMs= backend.getLastInferMs();
 		MIKAN_LOG_INFO("viseme-bench") << "whole clip: " << offlineFrames.size() << " frames in " << offlineMs << " ms";
-		if (const MfccBackend* mfcc= dynamic_cast<const MfccBackend*>(backend.get()))
+
+		// How the clip's hops split across the visemes, the readout that
+		// says whether the classifier is calling anything but silence
+		std::array<int, VISEME_COUNT> counts{};
+		for (uint8_t viseme : backend.getLastHopVisemes())
+			counts[viseme]++;
+		std::ostringstream shares;
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 		{
-			// How the clip's hops split across the visemes, the readout that
-			// says whether the classifier is calling anything but silence
-			std::array<int, VISEME_COUNT> counts{};
-			for (uint8_t viseme : mfcc->getLastHopVisemes())
-				counts[viseme]++;
-			std::ostringstream shares;
-			for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
-			{
-				if (counts[viseme] > 0)
-					shares << " " << visemeName(viseme) << " " << std::fixed << std::setprecision(2)
-						   << (double)counts[viseme] / (double)mfcc->getLastHopVisemes().size();
-			}
-			MIKAN_LOG_INFO("viseme-bench") << "viseme share of hops:" << shares.str();
+			if (counts[viseme] > 0)
+				shares << " " << visemeName(viseme) << " " << std::fixed << std::setprecision(2)
+					   << (double)counts[viseme] / (double)backend.getLastHopVisemes().size();
 		}
+		MIKAN_LOG_INFO("viseme-bench") << "viseme share of hops:" << shares.str();
 	}
 	else
 	{
-		// A fixed-shape export cannot take the whole clip; the timing still
-		// measures, the drift does not
 		MIKAN_LOG_WARNING("viseme-bench") << "whole-clip run failed - drift against it is not measured";
 	}
 
@@ -215,12 +172,12 @@ static int runVisemeBench(const TestArgs& args)
 		while (window.isRunDue())
 		{
 			const int emitCount= window.beginRun(windowSamples);
-			if (!backend->infer(windowSamples.data(), windowSamples.size(), windowFrames))
+			if (!backend.infer(windowSamples.data(), windowSamples.size(), windowFrames))
 			{
 				MIKAN_LOG_ERROR("viseme-bench") << "chunked run failed at sample " << window.getConsumedSamples();
 				return 1;
 			}
-			runMs.push_back(backend->getLastInferMs());
+			runMs.push_back(backend.getLastInferMs());
 
 			tailFrames.clear();
 			MouthWindow::takeTail(windowFrames, emitCount, windowConfig.lookaheadFrames, tailFrames);
@@ -232,36 +189,36 @@ static int runVisemeBench(const TestArgs& args)
 		}
 	}
 
-	// Drift of the chunked frames from the whole-clip run, per column and
-	// overall, beside how much each column moves at all
+	// Drift of the chunked frames from the whole-clip run, per viseme and
+	// overall, beside how much each viseme moves at all
 	const size_t compareCount= std::min(chunkedFrames.size(), offlineFrames.size());
-	std::array<double, MOUTH_COLUMN_COUNT> columnDiff{};
-	std::array<double, MOUTH_COLUMN_COUNT> columnActivity{};
+	std::array<double, VISEME_COUNT> visemeDiff{};
+	std::array<double, VISEME_COUNT> visemeActivity{};
 	for (size_t frameIndex= 0; frameIndex < compareCount; ++frameIndex)
 	{
-		for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 		{
-			columnDiff[column]+= std::fabs(chunkedFrames[frameIndex].weights[column] - offlineFrames[frameIndex].weights[column]);
-			columnActivity[column]+= std::fabs(offlineFrames[frameIndex].weights[column]);
+			visemeDiff[viseme]+= std::fabs(chunkedFrames[frameIndex].weights[viseme] - offlineFrames[frameIndex].weights[viseme]);
+			visemeActivity[viseme]+= std::fabs(offlineFrames[frameIndex].weights[viseme]);
 		}
 	}
 	double meanDiff= 0.0;
 	double meanActivity= 0.0;
-	int worstColumn= 0;
-	for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+	int worstViseme= 0;
+	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 	{
 		if (compareCount > 0)
 		{
-			columnDiff[column]/= (double)compareCount;
-			columnActivity[column]/= (double)compareCount;
+			visemeDiff[viseme]/= (double)compareCount;
+			visemeActivity[viseme]/= (double)compareCount;
 		}
-		meanDiff+= columnDiff[column];
-		meanActivity+= columnActivity[column];
-		if (columnDiff[column] > columnDiff[worstColumn])
-			worstColumn= column;
+		meanDiff+= visemeDiff[viseme];
+		meanActivity+= visemeActivity[viseme];
+		if (visemeDiff[viseme] > visemeDiff[worstViseme])
+			worstViseme= viseme;
 	}
-	meanDiff/= MOUTH_COLUMN_COUNT;
-	meanActivity/= MOUTH_COLUMN_COUNT;
+	meanDiff/= VISEME_COUNT;
+	meanActivity/= VISEME_COUNT;
 
 	double totalRunMs= 0.0;
 	for (double ms : runMs)
@@ -276,34 +233,38 @@ static int runVisemeBench(const TestArgs& args)
 	MIKAN_LOG_INFO("viseme-bench") << "inference ms per run: p50 " << p50 << ", p95 " << p95 << ", max " << maxMs
 								   << ", share of real time " << cpuShare;
 	if (!offlineFrames.empty())
-	MIKAN_LOG_INFO("viseme-bench") << "chunked vs whole-clip mean abs diff " << meanDiff << " over mean activity "
-								   << meanActivity << "; worst column " << mouthColumnName(worstColumn) << " at "
-								   << columnDiff[worstColumn] << " (activity " << columnActivity[worstColumn] << ")";
-	const int jawOpen= mouthColumnFromArkitIndex(arkitBlendshapeFromName("jawOpen"));
-	MIKAN_LOG_INFO("viseme-bench") << "jawOpen: diff " << columnDiff[jawOpen] << ", activity " << columnActivity[jawOpen];
+	{
+		MIKAN_LOG_INFO("viseme-bench") << "chunked vs whole-clip mean abs diff " << meanDiff << " over mean activity "
+									   << meanActivity << "; worst viseme " << visemeName(worstViseme) << " at "
+									   << visemeDiff[worstViseme] << " (activity " << visemeActivity[worstViseme] << ")";
+		std::ostringstream activity;
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+		{
+			if (visemeActivity[viseme] > 0.01)
+				activity << " " << visemeName(viseme) << " " << std::fixed << std::setprecision(3) << visemeActivity[viseme];
+		}
+		MIKAN_LOG_INFO("viseme-bench") << "mean activity per viseme:" << activity.str();
+	}
 	MIKAN_LOG_INFO("viseme-bench") << (p95 < (double)options.hopMs ? "LATENCY PASS" : "LATENCY FAIL")
 								   << ": p95 " << p95 << " ms against the " << options.hopMs << " ms hop; emitted frames trail the audio by about "
 								   << options.hopMs + options.lookaheadFrames * 1000 / MOUTH_FRAME_RATE + (int)p50 << " ms";
 
 	if (!options.outPath.empty())
 	{
-		nlohmann::json columns= nlohmann::json::array();
-		for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
-			columns.push_back(mouthColumnName(column));
-		nlohmann::json perColumnDiff= nlohmann::json::object();
-		nlohmann::json perColumnActivity= nlohmann::json::object();
-		for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+		nlohmann::json visemes= nlohmann::json::array();
+		nlohmann::json perVisemeDiff= nlohmann::json::object();
+		nlohmann::json perVisemeActivity= nlohmann::json::object();
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 		{
-			perColumnDiff[mouthColumnName(column)]= columnDiff[column];
-			perColumnActivity[mouthColumnName(column)]= columnActivity[column];
+			visemes.push_back(visemeName(viseme));
+			perVisemeDiff[visemeName(viseme)]= visemeDiff[viseme];
+			perVisemeActivity[visemeName(viseme)]= visemeActivity[viseme];
 		}
 
 		nlohmann::json out;
 		out["clip"]= PathUtils::pathToUtf8(options.clipPath);
 		out["clipSeconds"]= clipSeconds;
-		out["backend"]= backend->getName();
-		out["executionProvider"]= provider;
-		out["threads"]= options.threads;
+		out["model"]= modelPath;
 		out["sampleRate"]= AUDIO_SAMPLE_RATE;
 		out["frameRate"]= MOUTH_FRAME_RATE;
 		out["hopMs"]= options.hopMs;
@@ -312,7 +273,7 @@ static int runVisemeBench(const TestArgs& args)
 		out["filter"]= {{"minCutoffHz", options.filter.minCutoffHz},
 						{"beta", options.filter.beta},
 						{"derivativeCutoffHz", options.filter.derivativeCutoffHz}};
-		out["columns"]= columns;
+		out["visemes"]= visemes;
 		out["timings"]= {{"runs", runMs.size()},
 						 {"p50Ms", p50},
 						 {"p95Ms", p95},
@@ -322,9 +283,9 @@ static int runVisemeBench(const TestArgs& args)
 						 {"wholeClipMs", offlineMs}};
 		out["diff"]= {{"mean", meanDiff},
 					  {"meanActivity", meanActivity},
-					  {"worstColumn", mouthColumnName(worstColumn)},
-					  {"perColumn", perColumnDiff},
-					  {"perColumnActivity", perColumnActivity}};
+					  {"worstViseme", visemeName(worstViseme)},
+					  {"perViseme", perVisemeDiff},
+					  {"perVisemeActivity", perVisemeActivity}};
 		out["offline"]= framesToJson(offlineFrames);
 		out["chunked"]= framesToJson(chunkedFrames);
 		out["filtered"]= framesToJson(filteredFrames);
@@ -343,6 +304,6 @@ static int runVisemeBench(const TestArgs& args)
 }
 
 MIKAN_REGISTER_TEST("--viseme-bench",
-					"Run a mouth backend over a wav clip under the live window policy: drift vs a whole-clip run, "
-					"inference ms, mouth weights as JSON",
+					"Run the mouth backend over a wav clip under the live window policy: drift vs a whole-clip run, "
+					"inference ms, viseme weights as JSON",
 					eTestCategory::Tool, runVisemeBench)

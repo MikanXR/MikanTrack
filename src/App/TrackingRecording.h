@@ -138,8 +138,6 @@ struct RecordedAudioSidecar
 	int64_t startSampleIndex= 0;
 	// steadyNowMs() when the sidecar began
 	double startTimestampMs= 0.0;
-	// The backend that produced the recorded mouth frames
-	std::string backend;
 };
 
 struct RecordingHeader

@@ -3,26 +3,12 @@
 #include <algorithm>
 
 #include "MfccBackend.h"
-#include "Wav2ArkitBackend.h"
 
 namespace
 {
 // The capture callback's block, the granularity the live chain is fed at
 constexpr size_t k_replayBlockSamples= 256;
 } // namespace
-
-std::unique_ptr<IMouthBackend> createMouthBackend(const std::string& backendName, const std::string& modelPath)
-{
-	if (backendName == "mfcc")
-	{
-		auto mfcc= std::make_unique<MfccBackend>();
-		mfcc->create(modelPath.empty() ? std::string(MfccBackend::k_defaultModelPath) : modelPath);
-		return mfcc;
-	}
-	auto wav2arkit= std::make_unique<Wav2ArkitBackend>();
-	wav2arkit->create(modelPath.empty() ? std::string(Wav2ArkitBackend::k_defaultModelPath) : modelPath);
-	return wav2arkit;
-}
 
 MouthReplayAlignment mouthReplayAlignment(int64_t startSampleIndex, const MouthWindowConfig& window)
 {
@@ -36,7 +22,7 @@ MouthReplayAlignment mouthReplayAlignment(int64_t startSampleIndex, const MouthW
 }
 
 void replayMouthChain(const std::vector<float>& clip, int64_t padSamples, const MouthChainConfig& config,
-					  IMouthBackend& backend, MouthReplayOutput& outReplay)
+					  MfccBackend& backend, MouthReplayOutput& outReplay)
 {
 	outReplay= MouthReplayOutput();
 

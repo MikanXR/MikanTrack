@@ -9,7 +9,7 @@
 #include "MouthFilter.h"
 #include "MouthWindow.h"
 
-class IMouthBackend;
+class MfccBackend;
 
 // The level of a span of samples in dBFS RMS, floored at -100
 float audioLevelDbfs(const float* samples, size_t sampleCount);
@@ -81,7 +81,7 @@ public:
 	// Pushes captured samples and runs every run they make due. The emitted
 	// frames are appended with their stream indices, one MouthChainRun per
 	// run. A null or unready backend emits the neutral mouth.
-	void push(const float* samples, size_t sampleCount, IMouthBackend* backend, std::vector<MouthChainFrame>& outFrames,
+	void push(const float* samples, size_t sampleCount, MfccBackend* backend, std::vector<MouthChainFrame>& outFrames,
 			  std::vector<MouthChainRun>& outRuns);
 
 	// Samples pushed since the reset, the stream position the next push

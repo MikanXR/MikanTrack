@@ -6,7 +6,6 @@
 #include "AudioRecorder.h"
 #include "AudioService.h"
 #include "AudioTypes.h"
-#include "IMouthBackend.h"
 #include "MfccBackend.h"
 #include "MfccFeatures.h"
 #include "MouthChain.h"
@@ -18,15 +17,14 @@
 #include "VisemeModel.h"
 #include "VisemeTable.h"
 #include "VisemeTypes.h"
-#include "Wav2ArkitBackend.h"
 #include "WavFile.h"
 
-// Tests for the audio stage's pieces: the mouth column group, the model's
-// output column table, the rolling-window policy's frame accounting, the wav
-// reader and resampler, the emission filter, (when the model file is
-// present) the wav2arkit backend's output shape and range, the MFCC chain
-// against HeadAudio's vectors, the viseme model and classifier, the viseme
-// table, and the mfcc backend.
+// Tests for the audio stage's pieces: the mouth columns and the frame
+// accounting, the rolling-window policy, the wav reader and resampler, the
+// emission filter, the MFCC chain against HeadAudio's vectors, the viseme
+// model and classifier, the viseme table, the backend, the level gate, the
+// config, the wav writer and the sidecar recorder, the pacer, the chain and
+// its replay, and the calibration fit.
 
 namespace
 {
@@ -98,87 +96,42 @@ static int runAudioTest(const TestArgs&)
 		}
 	};
 
-	// (a) The mouth column group
+	// (a) The mouth columns and the frame accounting
 	{
-		bool bValid= true;
-		bool bUnique= true;
+		int mouthCount= 0;
 		bool bMouthOnly= true;
-		bool bRoundTrip= true;
-		std::vector<int> seen;
-		for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+		for (int arkitIndex= 0; arkitIndex < ARKIT_BLENDSHAPE_COUNT; ++arkitIndex)
 		{
-			const int arkitIndex= mouthColumnArkitIndex(column);
-			bValid&= arkitIndex >= 0 && arkitIndex < ARKIT_BLENDSHAPE_COUNT;
-			bUnique&= std::find(seen.begin(), seen.end(), arkitIndex) == seen.end();
-			seen.push_back(arkitIndex);
-			const std::string name= mouthColumnName(column);
+			if (!isMouthArkitIndex(arkitIndex))
+				continue;
+			++mouthCount;
+			const std::string name= arkitBlendshapeName(arkitIndex);
 			bMouthOnly&= name.rfind("jaw", 0) == 0 || name.rfind("mouth", 0) == 0 || name == "cheekPuff" ||
 						 name == "tongueOut";
-			bRoundTrip&= mouthColumnFromArkitIndex(arkitIndex) == column;
 		}
-		check(bValid && bUnique, "29 distinct ARKit indices");
-		check(bMouthOnly, "every column is a jaw, mouth, cheekPuff, or tongueOut shape");
-		check(bRoundTrip, "mouth column and ARKit index round trip");
-		check(mouthColumnArkitIndex(-1) == -1 && mouthColumnArkitIndex(MOUTH_COLUMN_COUNT) == -1 &&
-				  mouthColumnName(MOUTH_COLUMN_COUNT)[0] == '\0',
-			  "out-of-range columns give -1 and an empty name");
-
-		int excluded= 0;
-		for (int arkitIndex= 0; arkitIndex < ARKIT_BLENDSHAPE_COUNT; ++arkitIndex)
-		{
-			if (mouthColumnFromArkitIndex(arkitIndex) < 0)
-				excluded++;
-		}
-		check(excluded == ARKIT_BLENDSHAPE_COUNT - MOUTH_COLUMN_COUNT, "the other 23 ARKit columns are not mouth columns");
-		check(mouthColumnFromArkitIndex(arkitBlendshapeFromName("eyeBlinkLeft")) == -1 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("browInnerUp")) == -1 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("cheekSquintLeft")) == -1 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("noseSneerRight")) == -1,
+		check(mouthCount == 29 && bMouthOnly, "the 29 mouth columns are the jaw, mouth, cheekPuff, and tongueOut shapes");
+		check(!isMouthArkitIndex(arkitBlendshapeFromName("eyeBlinkLeft")) &&
+				  !isMouthArkitIndex(arkitBlendshapeFromName("browInnerUp")) &&
+				  !isMouthArkitIndex(arkitBlendshapeFromName("cheekSquintLeft")) &&
+				  !isMouthArkitIndex(arkitBlendshapeFromName("noseSneerRight")),
 			  "eyes, brows, cheek squints, and nose are excluded");
-		check(mouthColumnFromArkitIndex(arkitBlendshapeFromName("jawOpen")) >= 0 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("mouthPucker")) >= 0 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("cheekPuff")) >= 0 &&
-				  mouthColumnFromArkitIndex(arkitBlendshapeFromName("tongueOut")) >= 0,
+		check(isMouthArkitIndex(arkitBlendshapeFromName("jawOpen")) &&
+				  isMouthArkitIndex(arkitBlendshapeFromName("mouthPucker")) &&
+				  isMouthArkitIndex(arkitBlendshapeFromName("cheekPuff")) &&
+				  isMouthArkitIndex(arkitBlendshapeFromName("tongueOut")),
 			  "jawOpen, mouthPucker, cheekPuff, and tongueOut are included");
+		check(!isMouthArkitIndex(-1) && !isMouthArkitIndex(ARKIT_BLENDSHAPE_COUNT), "out-of-range indices are not mouth columns");
 
-		std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
-		face.fill(0.25f);
-		MouthFrame frame;
-		for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
-			frame.weights[column]= 0.5f + 0.01f * (float)column;
-		applyMouthFrame(frame, face);
-		bool bApplied= true;
-		for (int arkitIndex= 0; arkitIndex < ARKIT_BLENDSHAPE_COUNT; ++arkitIndex)
-		{
-			const int column= mouthColumnFromArkitIndex(arkitIndex);
-			const float expected= column >= 0 ? frame.weights[column] : 0.25f;
-			bApplied&= std::fabs(face[arkitIndex] - expected) < 1e-6f;
-		}
-		check(bApplied, "applyMouthFrame writes the mouth columns and leaves the rest");
-		const MouthFrame back= mouthFrameFromFace(face);
-		check(back.weights == frame.weights, "mouthFrameFromFace reads them back");
+		VisemeWeights weights{};
+		check(dominantViseme(weights) == VISEME_SIL, "no weight at all is silence");
+		weights[(int)eViseme::U]= 0.4f;
+		weights[(int)eViseme::O]= 0.6f;
+		weights[VISEME_SIL]= 1.f;
+		check(dominantViseme(weights) == (int)eViseme::O, "the dominant viseme is the heaviest one other than silence");
 
 		check(mouthFramesForSamples(16000) == 30 && mouthFramesForSamples(32000) == 60 &&
 				  mouthFramesForSamples(1600) == 3 && mouthFramesForSamples(1) == 1 && mouthFramesForSamples(0) == 0,
 			  "frames per samples follow ceil(30 * n / 16000)");
-	}
-
-	// (b) The model's output column table
-	{
-		std::vector<int> covered(ARKIT_BLENDSHAPE_COUNT, 0);
-		bool bAllValid= true;
-		for (int column= 0; column < ARKIT_BLENDSHAPE_COUNT; ++column)
-		{
-			const int arkitIndex= Wav2ArkitBackend::outputColumnArkitIndex(column);
-			bAllValid&= arkitIndex >= 0;
-			if (arkitIndex >= 0)
-				covered[arkitIndex]++;
-		}
-		check(bAllValid && std::all_of(covered.begin(), covered.end(), [](int count) { return count == 1; }),
-			  "the 52 output columns cover every ARKit column once");
-		check(Wav2ArkitBackend::outputColumnArkitIndex(-1) == -1 &&
-				  Wav2ArkitBackend::outputColumnArkitIndex(ARKIT_BLENDSHAPE_COUNT) == -1,
-			  "out-of-range output columns give -1");
 	}
 
 	// (c) The window policy
@@ -390,53 +343,6 @@ static int runAudioTest(const TestArgs&)
 		check(std::fabs(out.weights[0] - 0.4f) < 1e-6f, "reset restarts from the next value");
 	}
 
-	// (f) The backend, when the model is present
-	{
-		if (std::filesystem::exists(Wav2ArkitBackend::k_defaultModelPath))
-		{
-			Wav2ArkitBackend backend;
-			check(backend.create(Wav2ArkitBackend::k_defaultModelPath, "cpu", 2) && backend.isReady(),
-				  "wav2arkit model loads on the CPU provider");
-			check(std::string(backend.getActiveEp()) == "CPU", "the session landed on CPU");
-
-			// A second of a buzzy 150 Hz voice-like tone
-			std::vector<float> tone(16000);
-			for (size_t index= 0; index < tone.size(); ++index)
-			{
-				const float t= (float)index / AUDIO_SAMPLE_RATE;
-				tone[index]= 0.3f * (std::sin(2.f * glm::pi<float>() * 150.f * t) +
-									 0.5f * std::sin(2.f * glm::pi<float>() * 450.f * t) +
-									 0.25f * std::sin(2.f * glm::pi<float>() * 900.f * t));
-			}
-			std::vector<MouthFrame> frames;
-			check(backend.infer(tone.data(), tone.size(), frames) && frames.size() == 30,
-				  "a second of audio gives thirty frames");
-			bool bInRange= true;
-			for (const MouthFrame& frame : frames)
-			{
-				for (float weight : frame.weights)
-					bInRange&= weight >= 0.f && weight <= 1.f;
-			}
-			check(bInRange, "every weight is within 0..1");
-			MIKAN_LOG_INFO("test-audio") << "inference " << backend.getLastInferMs() << " ms for one second";
-
-			std::vector<float> silence(16000, 0.f);
-			check(backend.infer(silence.data(), silence.size(), frames) && frames.size() == 30,
-				  "silence runs through the same shape");
-			check(!backend.infer(tone.data(), 100, frames) && frames.empty(), "too few samples is refused");
-		}
-		else
-		{
-			MIKAN_LOG_WARNING("test-audio") << Wav2ArkitBackend::k_defaultModelPath
-											<< " missing - SKIPPING the backend checks (re-run InitialSetup_x64.bat)";
-		}
-
-		Wav2ArkitBackend missing;
-		check(!missing.create("models/does_not_exist.onnx") && !missing.isReady() &&
-				  missing.getUnavailableReason().find("missing") != std::string::npos,
-			  "a missing model leaves the backend not ready with the reason");
-	}
-
 	// (g) The MFCC chain against vectors HeadAudio's JavaScript computed on
 	// the same signal: a 150 Hz buzz under LCG noise, pre-emphasised, one
 	// second at 16 kHz, blocks of 512 at a 256 hop
@@ -549,33 +455,34 @@ static int runAudioTest(const TestArgs&)
 			else
 				bRowsValid&= !row.empty();
 			for (const VisemeTerm& term : row)
-				bRowsValid&= term.mouthColumn >= 0 && term.mouthColumn < MOUTH_COLUMN_COUNT && term.weight > 0.f &&
-							 term.weight <= 1.f;
+				bRowsValid&= isMouthArkitIndex(term.arkitIndex) && term.weight > 0.f && term.weight <= 1.f;
 		}
 		check(bRowsValid, "every viseme but silence drives at least one mouth column with a weight in 0..1");
 		check(std::string(visemeName((int)eViseme::aa)) == "aa" && std::string(visemeName(VISEME_SIL)) == "sil" &&
 				  std::string(visemeName(15)).empty(),
 			  "the viseme names follow HeadAudio's id order");
 
-		const int jawOpen= mouthColumnFromArkitIndex(arkitBlendshapeFromName("jawOpen"));
-		const int mouthPucker= mouthColumnFromArkitIndex(arkitBlendshapeFromName("mouthPucker"));
+		const int jawOpen= arkitBlendshapeFromName("jawOpen");
+		const int mouthPucker= arkitBlendshapeFromName("mouthPucker");
+		const int eyeBlinkLeft= arkitBlendshapeFromName("eyeBlinkLeft");
 		VisemeWeights weights{};
 		weights[(int)eViseme::aa]= 1.f;
-		MouthFrame frame;
-		frame.weights[mouthPucker]= 0.7f;
-		applyVisemeWeights(weights, frame);
-		check(std::fabs(frame.weights[jawOpen] - 0.85f) < 1e-6f, "a full aa opens the jaw to its row's weight");
-		check(std::fabs(frame.weights[mouthPucker] - 0.3f) < 1e-6f || frame.weights[mouthPucker] == 0.f,
-			  "a column another viseme drives is overwritten, not accumulated");
+		std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
+		face[mouthPucker]= 0.7f;
+		face[eyeBlinkLeft]= 0.9f;
+		applyVisemeWeights(weights, face);
+		check(std::fabs(face[jawOpen] - 0.85f) < 1e-6f, "a full aa opens the jaw to its row's weight");
+		check(face[mouthPucker] == 0.f, "a column another viseme drives is overwritten, not accumulated");
+		check(face[eyeBlinkLeft] == 0.9f, "a column the table does not drive is left alone");
 		weights.fill(1.f);
-		applyVisemeWeights(weights, frame);
+		applyVisemeWeights(weights, face);
 		bool bClamped= true;
-		for (float weight : frame.weights)
+		for (float weight : face)
 			bClamped&= weight >= 0.f && weight <= 1.f;
 		check(bClamped, "every viseme at once stays within 0..1");
 		weights.fill(0.f);
-		applyVisemeWeights(weights, frame);
-		check(frame.weights[jawOpen] == 0.f && frame.weights[mouthPucker] == 0.f, "no viseme is the neutral mouth");
+		applyVisemeWeights(weights, face);
+		check(face[jawOpen] == 0.f && face[mouthPucker] == 0.f, "no viseme is the neutral mouth");
 	}
 
 	// (j) The live stage's level and gate
@@ -605,18 +512,17 @@ static int runAudioTest(const TestArgs&)
 		AppConfig config;
 		config.audio.enabled= true;
 		config.audio.deviceName= "USB Microphone";
-		config.audio.backend= "mfcc";
 		config.audio.gainDb= 6.f;
 		config.audio.gateDbfs= -38.f;
 		config.audio.profilePath= "audio/profile.bin";
 		AppConfig loaded;
 		const bool bLoaded= loaded.loadFromJsonString(config.toJsonString());
-		check(bLoaded && loaded.audio.enabled && loaded.audio.deviceName == "USB Microphone" && loaded.audio.backend == "mfcc" &&
+		check(bLoaded && loaded.audio.enabled && loaded.audio.deviceName == "USB Microphone" &&
 				  std::fabs(loaded.audio.gainDb - 6.f) < 1e-6f && std::fabs(loaded.audio.gateDbfs + 38.f) < 1e-6f &&
 				  loaded.audio.profilePath == "audio/profile.bin",
 			  "the audio section round-trips through the project JSON");
 		AppConfig fresh;
-		check(fresh.loadFromJsonString("{}") && !fresh.audio.enabled && fresh.audio.backend == "wav2arkit" &&
+		check(fresh.loadFromJsonString("{}") && !fresh.audio.enabled &&
 				  fresh.audio.deviceName.empty() && std::fabs(fresh.audio.gateDbfs + 45.f) < 1e-6f,
 			  "a project without an audio section gets the defaults");
 	}
@@ -842,15 +748,14 @@ static int runAudioTest(const TestArgs&)
 				stream[index]= envelope * 0.25f * buzz;
 			}
 
-			std::unique_ptr<IMouthBackend> liveBackend= createMouthBackend("mfcc", "");
-			std::unique_ptr<IMouthBackend> replayBackend= createMouthBackend("mfcc", "");
-			check(liveBackend->isReady() && replayBackend->isReady(), "the factory creates a ready mfcc backend");
-			check(createMouthBackend("wav2arkit", "")->getName() == std::string("wav2arkit"), "the factory names wav2arkit");
+			MfccBackend liveBackend;
+			MfccBackend replayBackend;
+			check(liveBackend.create() && replayBackend.create(), "two backends load the shipped model");
 
 			MouthChainConfig chainConfig;
 			chainConfig.gateDbfs= -40.f;
 			MouthReplayOutput live;
-			replayMouthChain(stream, 0, chainConfig, *liveBackend, live);
+			replayMouthChain(stream, 0, chainConfig, liveBackend, live);
 			check(live.frames.size() == streamSeconds * MOUTH_FRAME_RATE - (size_t)chainConfig.window.lookaheadFrames &&
 					  live.runs.size() == streamSeconds * 10,
 				  "the chain emits a frame per 33 ms less the lookahead, one run per hop");
@@ -868,12 +773,13 @@ static int runAudioTest(const TestArgs&)
 				chain.configure(chainConfig);
 				std::vector<MouthChainFrame> frames;
 				std::vector<MouthChainRun> runs;
-				chain.push(stream.data(), 2 * AUDIO_SAMPLE_RATE, liveBackend.get(), frames, runs);
+				chain.push(stream.data(), 2 * AUDIO_SAMPLE_RATE, &liveBackend, frames, runs);
 				const int64_t lastBefore= frames.back().frameIndex;
-				std::unique_ptr<IMouthBackend> swapped= createMouthBackend("mfcc", "");
+				MfccBackend swapped;
+				swapped.create();
 				chain.setGainDb(chainConfig.gainDb);
 				chain.setGateDbfs(chainConfig.gateDbfs);
-				chain.push(stream.data() + 2 * AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE, swapped.get(), frames, runs);
+				chain.push(stream.data() + 2 * AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE, &swapped, frames, runs);
 				check(chain.getPushedSamples() == 3 * AUDIO_SAMPLE_RATE && frames.back().frameIndex == lastBefore + MOUTH_FRAME_RATE,
 					  "a backend swap through the setters keeps the stream count and the frame indices");
 				chain.configure(chainConfig);
@@ -885,7 +791,7 @@ static int runAudioTest(const TestArgs&)
 			const std::vector<float> sidecar(stream.begin() + startSample, stream.end());
 			const MouthReplayAlignment alignment= mouthReplayAlignment(startSample, chainConfig.window);
 			MouthReplayOutput replayed;
-			replayMouthChain(sidecar, alignment.padSamples, chainConfig, *replayBackend, replayed);
+			replayMouthChain(sidecar, alignment.padSamples, chainConfig, replayBackend, replayed);
 			check(replayed.frames.size() + (size_t)alignment.frameOffset == live.frames.size(),
 				  "the replayed frames count up to the live frames");
 
@@ -898,8 +804,8 @@ static int runAudioTest(const TestArgs&)
 			{
 				const MouthFrame& a= replayed.frames[index].frame;
 				const MouthFrame& b= live.frames[index + (size_t)alignment.frameOffset].frame;
-				for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
-					maxDiff= std::max(maxDiff, std::fabs(a.weights[column] - b.weights[column]));
+				for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+					maxDiff= std::max(maxDiff, std::fabs(a.weights[viseme] - b.weights[viseme]));
 				++compared;
 			}
 			MIKAN_LOG_INFO("test-audio") << "aligned replay: " << compared << " frames compared, max diff " << maxDiff;
@@ -919,7 +825,6 @@ static int runAudioTest(const TestArgs&)
 				AppConfig config;
 				config.cameras.push_back(CameraProfile());
 				config.audio.enabled= true;
-				config.audio.backend= "mfcc";
 				config.audio.gateDbfs= chainConfig.gateDbfs;
 				RecordingHeader header;
 				header.formatVersion= TrackingRecording::k_formatVersion;
@@ -929,7 +834,6 @@ static int runAudioTest(const TestArgs&)
 				header.audio.fileName= "replay.wav";
 				header.audio.sampleRate= AUDIO_SAMPLE_RATE;
 				header.audio.startSampleIndex= startSample;
-				header.audio.backend= "mfcc";
 				TrackingRecorder recorder;
 				check(recorder.start(recordingPath, TrackingRecording::headerToJson(header)), "the test recording starts");
 				// Two iterations per live frame, the way a 60 Hz loop sees a
