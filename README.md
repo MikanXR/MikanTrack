@@ -108,9 +108,9 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   the loaded avatar. The phone's face takes the mouth back whenever it
   streams. The Model combo switches between Simple Loudness (the jaw by
   volume alone), MFCC (uLipSync, the calibrated default above), and Oculus
-  LipSync, which appears once the Oculus Lipsync native SDK, a separate
-  download from Meta, is unpacked to `deps/OVRLipSyncNative` before
-  building ([build.md](docs/reference/build.md)).
+  LipSync (Meta's engine; release builds include it, and a source build
+  needs the Oculus Lipsync native SDK unpacked to `deps/OVRLipSyncNative`,
+  [build.md](docs/reference/build.md)).
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
 - Localized UI (English and Japanese; machine-translated Japanese for now),
   switchable live from the main menu or the Settings panel

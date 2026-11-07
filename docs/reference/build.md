@@ -47,7 +47,7 @@ Three steps, in order:
 
 ### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
 
-The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. Unpack it so these exist:
+The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. Release builds are made with the SDK present, so `OVRLipSync.dll` ships beside the exe under that license. Unpack it so these exist:
 
 - `deps/OVRLipSyncNative/Include/OVRLipSync.h`
 - `deps/OVRLipSyncNative/Lib/Win64/OVRLipSyncShim.lib`

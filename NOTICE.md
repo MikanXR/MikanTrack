@@ -64,10 +64,10 @@ phoneme scoring, and its profile JSON format.
 ## Oculus Lipsync native SDK
 
 The Oculus LipSync mouth model (`src/Audio/OvrLipSyncBackend.cpp`) uses the Oculus Lipsync native SDK
-(OVRLipSync 1.61.0, Meta Platforms) when it is present at build time. The SDK is not bundled with this
-repository: the user downloads it from https://developer.oculus.com/downloads/package/oculus-lipsync-native/
-and unpacks it to `deps/OVRLipSyncNative`, under the Oculus SDK License
-(https://developer.oculus.com/licenses/oculussdk/).
+(OVRLipSync 1.61.0, Meta Platforms) when it is present at build time. The SDK is not in this repository:
+a developer downloads it from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ and
+unpacks it to `deps/OVRLipSyncNative`. Release builds of MikanTrack ship its `OVRLipSync.dll` beside the
+executable. Both uses are under the Oculus SDK License (https://developer.oculus.com/licenses/oculussdk/).
 
 ## Audio bench clips
 
