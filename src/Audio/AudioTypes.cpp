@@ -1,6 +1,7 @@
 #include "AudioTypes.h"
 
 #include <cmath>
+#include <cstring>
 
 // The ARKit table lists the jaw and mouth columns contiguously, then
 // cheekPuff and tongueOut further on
@@ -38,4 +39,28 @@ int dominantViseme(const VisemeWeights& weights)
 		}
 	}
 	return best;
+}
+
+namespace
+{
+constexpr const char* k_mouthModelNames[MOUTH_MODEL_COUNT]= {"loudness", "mfcc", "ovrlipsync"};
+}
+
+const char* mouthModelName(eMouthModel model)
+{
+	const int index= (int)model;
+	return (index >= 0 && index < MOUTH_MODEL_COUNT) ? k_mouthModelNames[index] : k_mouthModelNames[(int)eMouthModel::Mfcc];
+}
+
+bool parseMouthModel(const std::string& name, eMouthModel& outModel)
+{
+	for (int index= 0; index < MOUTH_MODEL_COUNT; ++index)
+	{
+		if (name == k_mouthModelNames[index])
+		{
+			outModel= (eMouthModel)index;
+			return true;
+		}
+	}
+	return false;
 }

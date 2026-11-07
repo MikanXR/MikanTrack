@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "FaceTypes.h"
 #include "VisemeTypes.h"
@@ -11,6 +12,20 @@
 constexpr int AUDIO_SAMPLE_RATE= 16000;
 // The rate the backend emits mouth frames at
 constexpr int MOUTH_FRAME_RATE= 30;
+
+// The mouth model the Audio panel selects: the level alone, uLipSync's MFCC
+// scoring against a calibrated profile, or the Oculus LipSync engine
+enum class eMouthModel : int
+{
+	Loudness= 0,
+	Mfcc= 1,
+	OvrLipSync= 2,
+};
+constexpr int MOUTH_MODEL_COUNT= 3;
+// The config's name for a model: loudness, mfcc, ovrlipsync
+const char* mouthModelName(eMouthModel model);
+// Parses a config name; false (and outModel untouched) for an unknown one
+bool parseMouthModel(const std::string& name, eMouthModel& outModel);
 
 // Whether an ARKit column is one the voice drives: the four jaw columns, the
 // twenty-three mouth columns, cheekPuff, and tongueOut. Audio cannot see

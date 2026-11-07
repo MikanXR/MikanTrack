@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "MfccBackend.h"
+#include "MouthBackend.h"
 
 float audioLevelDbfs(const float* samples, size_t sampleCount)
 {
@@ -14,6 +14,22 @@ float audioLevelDbfs(const float* samples, size_t sampleCount)
 		sum+= (double)samples[index] * samples[index];
 	const double rms= std::sqrt(sum / (double)sampleCount);
 	return std::max(-100.f, 20.f * (float)std::log10(rms + 1e-10));
+}
+
+float audioBlockLevelDbfs(const float* samples, size_t sampleCount, size_t blockSamples)
+{
+	if (blockSamples == 0)
+		return -100.f;
+	double sum= 0.0;
+	for (size_t index= 0; index < sampleCount; ++index)
+		sum+= (double)samples[index] * samples[index];
+	const double rms= std::sqrt(sum / (double)blockSamples);
+	return std::max(-100.f, 20.f * (float)std::log10(rms + 1e-10));
+}
+
+float volumeForLevel(float levelDbfs, float minDbfs, float maxDbfs)
+{
+	return std::clamp((levelDbfs - minDbfs) / std::max(maxDbfs - minDbfs, 1.f), 0.f, 1.f);
 }
 
 float suggestGateDbfs(const float* samples, size_t sampleCount, float gainDb)
@@ -67,7 +83,7 @@ void MouthChain::reset()
 	m_pushedSamples= 0;
 }
 
-void MouthChain::push(const float* samples, size_t sampleCount, MfccBackend* backend,
+void MouthChain::push(const float* samples, size_t sampleCount, IMouthBackend* backend,
 					  std::vector<MouthChainFrame>& outFrames, std::vector<MouthChainRun>& outRuns)
 {
 	m_scaled.resize(sampleCount);
@@ -87,13 +103,16 @@ void MouthChain::push(const float* samples, size_t sampleCount, MfccBackend* bac
 		run.levelDbfs= audioLevelDbfs(m_windowSamples.data() + m_windowSamples.size() - hopSamples, hopSamples);
 		run.bGateOpen= m_gate.update(run.levelDbfs);
 
+		// A stateful backend sees the audio while gated too, but the
+		// emitted mouth is still the neutral one
 		m_tailFrames.clear();
-		if (run.bGateOpen && backend != nullptr && backend->isReady())
+		const bool bRun= backend != nullptr && backend->isReady() && (run.bGateOpen || backend->runsWhileGated());
+		if (bRun)
 			backend->setVolumeWindow(m_config.gateDbfs, m_config.gateDbfs + MouthChainConfig::k_volumeSpanDb);
-		if (run.bGateOpen && backend != nullptr && backend->isReady() &&
-			backend->infer(m_windowSamples.data(), m_windowSamples.size(), m_windowFrames))
+		if (bRun && backend->infer(m_windowSamples.data(), m_windowSamples.size(), emitCount, m_windowFrames))
 		{
-			MouthWindow::takeTail(m_windowFrames, emitCount, m_config.window.lookaheadFrames, m_tailFrames);
+			if (run.bGateOpen)
+				MouthWindow::takeTail(m_windowFrames, emitCount, m_config.window.lookaheadFrames, m_tailFrames);
 			run.bInferred= true;
 			run.inferMs= backend->getLastInferMs();
 		}

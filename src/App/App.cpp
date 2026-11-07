@@ -198,6 +198,7 @@ void App::applyAudioConfig()
 	audioConfig.deviceName= m_config->audio.deviceName;
 	audioConfig.gainDb= m_config->audio.gainDb;
 	audioConfig.gateDbfs= m_config->audio.gateDbfs;
+	audioConfig.model= m_config->audio.model;
 	audioConfig.profilePath= m_config->audio.profilePath;
 	m_audioService->setConfig(audioConfig);
 }

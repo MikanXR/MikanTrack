@@ -5,7 +5,7 @@
 
 #include "MouthChain.h"
 
-class MfccBackend;
+class IMouthBackend;
 
 // Where a recorded stretch of the stream sits on the live chain's grid. The
 // live chain runs at every hop boundary and counts frames from the device's
@@ -26,7 +26,8 @@ struct MouthReplayOutput
 	std::vector<MouthChainRun> runs;
 };
 
-// Runs the chain over a clip the way the live stage would have: padSamples
-// of silence first, then the clip in capture-sized blocks
+// Runs the chain over a clip the way the live stage would have: the backend
+// reset for the new stream, padSamples of silence first, then the clip in
+// capture-sized blocks
 void replayMouthChain(const std::vector<float>& clip, int64_t padSamples, const MouthChainConfig& config,
-					  MfccBackend& backend, MouthReplayOutput& outReplay);
+					  IMouthBackend& backend, MouthReplayOutput& outReplay);

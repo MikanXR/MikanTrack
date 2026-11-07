@@ -29,7 +29,7 @@ Three steps, in order:
 `InitialSetup_x64.bat` (run from the repo root):
 
 - Runs `git submodule update --init --recursive` to populate `thirdparty/`.
-- Deletes any existing `deps/` folder and recreates it from scratch. This is a full wipe-and-redownload every time, roughly 1.3 GB total, with OpenCV alone around 900 MB. Never store anything by hand in `deps/`; it does not survive a re-run.
+- Deletes any existing `deps/` folder and recreates it from scratch. This is a full wipe-and-redownload every time, roughly 1.3 GB total, with OpenCV alone around 900 MB. Never store anything by hand in `deps/`; it does not survive a re-run. The one exception is `deps/OVRLipSyncNative`, the optional SDK below, which the script moves aside before the wipe and puts back after it.
 - Downloads pinned dependency versions with `curl` and extracts them with the vendored `tools/7zip/7za.exe` (zips, self-extracting `.exe` archives, and NuGet `.nupkg` files, which are zips under a different extension).
 - Downloads the ONNX models into `models/`.
 
@@ -44,6 +44,17 @@ Three steps, in order:
 | OpenCV | 4.10.0, `opencv_world` build | `deps/opencv` | GitHub release self-extracting `.exe`, unpacked with `7za` |
 | ONNX Runtime | 1.20.1, DirectML flavor | `deps/onnxruntime` | NuGet package `microsoft.ml.onnxruntime.directml` |
 | DirectML | 1.15.4 | `deps/directml` | NuGet package `microsoft.ai.directml` |
+
+### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
+
+The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. Unpack it so these exist:
+
+- `deps/OVRLipSyncNative/Include/OVRLipSync.h`
+- `deps/OVRLipSyncNative/Lib/Win64/OVRLipSyncShim.lib`
+- `deps/OVRLipSyncNative/Lib/Win64/OVRLipSyncShimd.lib`
+- `deps/OVRLipSyncNative/Lib/Win64/OVRLipSync.dll`
+
+Then rerun `GenerateProjectFiles_X64_VS2022.bat`. CMake detects `Include/OVRLipSync.h` at configure time and prints a status line either way. When it is present, CMake defines `MIKANTRACK_OVRLIPSYNC` on the target, adds the include directory, links the shim (`OVRLipSyncShim.lib`, or `OVRLipSyncShimd.lib` under Debug, a static loader that loads `OVRLipSync.dll` at run time and resolves its `ovrLipSyncDll_*` exports), and copies the DLL beside the exe post-build. Without it the Oculus backend's source compiles to nothing and the Audio panel hides the entry. `InitialSetup_x64.bat` preserves `deps\OVRLipSyncNative` across its wipe of `deps/` and prints a note at the end when the SDK is absent.
 
 ### Submodules (`thirdparty/`)
 
@@ -91,6 +102,7 @@ Every module directory under `src/` is on the include path (see the `target_incl
 A `POST_BUILD` custom command on the `MikanTrack` target:
 
 - Copies the SDL2, GLEW, ONNX Runtime, DirectML, and OpenCV (`opencv_world4100.dll`, or the `d` debug variant under a Debug config) runtime DLLs next to the exe.
+- Copies `OVRLipSync.dll` next to the exe when the optional Oculus Lipsync SDK is present.
 - `copy_directory`s `models/` and `resources/` into `<exe dir>/models` and `<exe dir>/resources`.
 
 `VS_DEBUGGER_WORKING_DIRECTORY` is set to the exe's own directory, which is the working directory Visual Studio's F5 launches with. This matters beyond the debugger: every model load path in the code is relative (`models/palm_detection.onnx`, `models/rtmpose_body.onnx`, ...), so the exe must be run with its current working directory set to the exe's directory. Running it with the repo root as the working directory silently fails to load models (or loads the wrong stale copy if the same exe was previously run correctly from its own directory).

@@ -190,6 +190,8 @@ bool AudioCalibrationWizard::writeProfile(std::string& outError)
 	if (!m_profile.save(PathUtils::utf8ToPath(profilePath), outError))
 		return false;
 
+	// A fresh calibration is meant to drive the mouth
+	m_config->audio.model= eMouthModel::Mfcc;
 	m_config->audio.profilePath= profilePath;
 	m_config->audio.gateDbfs= m_suggestedGateDbfs;
 	m_config->markDirty();

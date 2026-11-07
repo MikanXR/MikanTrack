@@ -61,6 +61,14 @@ The mouth backend (`src/Audio/MfccFeatures`, `src/Audio/LipSyncProfile`, `src/Au
 C++ port of uLipSync (MIT, hecomi, https://github.com/hecomi/uLipSync): its MFCC feature chain, its
 phoneme scoring, and its profile JSON format.
 
+## Oculus Lipsync native SDK
+
+The Oculus LipSync mouth model (`src/Audio/OvrLipSyncBackend.cpp`) uses the Oculus Lipsync native SDK
+(OVRLipSync 1.61.0, Meta Platforms) when it is present at build time. The SDK is not bundled with this
+repository: the user downloads it from https://developer.oculus.com/downloads/package/oculus-lipsync-native/
+and unpacks it to `deps/OVRLipSyncNative`, under the Oculus SDK License
+(https://developer.oculus.com/licenses/oculussdk/).
+
 ## Audio bench clips
 
 `resources/audio/bench/bench_en.wav` and `bench_ja.wav`, the speech clips `--viseme-bench` measures
@@ -68,6 +76,7 @@ the mouth backend on, were synthesized once with Kokoro-82M (Apache-2.0, hexgrad
 https://huggingface.co/hexgrad/Kokoro-82M) through kokoro-onnx (MIT) from Harvard Sentences and
 original Japanese text, and are published as assets of this repository's `bench-audio-1` release,
 which `InitialSetup_x64.bat` fetches.
+
 ## Sample avatars
 
 `models/avatars/fem_vroid.vrm` and `masc_vroid.vrm` are the VRoid Studio sample avatars from the

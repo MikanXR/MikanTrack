@@ -6,13 +6,16 @@
 #include "AudioRecorder.h"
 #include "AudioService.h"
 #include "AudioTypes.h"
+#include "LoudnessBackend.h"
 #include "MfccBackend.h"
 #include "MfccFeatures.h"
+#include "MouthBackend.h"
 #include "MouthChain.h"
 #include "MouthFilter.h"
 #include "MouthReplay.h"
 #include "LipSyncProfile.h"
 #include "MouthWindow.h"
+#include "OvrLipSyncBackend.h"
 #include "PathUtils.h"
 #include "VisemeTable.h"
 #include "VisemeTypes.h"
@@ -21,9 +24,10 @@
 // Tests for the audio stage's pieces: the mouth columns and the frame
 // accounting, the rolling-window policy, the wav reader and resampler, the
 // emission filter, the MFCC chain against uLipSync's, the profile, the
-// viseme table, the backend, the level gate, the config, the wav writer and
-// the sidecar recorder, the pacer, the chain and its replay, and the
-// calibration frames.
+// viseme table, the backends and the model selector, the level gate, the
+// config, the wav writer and the sidecar recorder, the pacer, the chain and
+// its replay, the calibration frames, and the Oculus LipSync engine where
+// the build carries it.
 
 namespace
 {
@@ -78,6 +82,31 @@ float rms(const std::vector<float>& samples)
 		sum+= (double)sample * sample;
 	return samples.empty() ? 0.f : (float)std::sqrt(sum / (double)samples.size());
 }
+
+// A backend that opens aa fully on every frame and counts what the chain
+// asks of it
+struct CountingBackend : IMouthBackend
+{
+	bool bRunsWhileGated= false;
+	int inferCalls= 0;
+	std::vector<int> newFrameCounts;
+	std::string reason;
+
+	bool isReady() const override { return true; }
+	std::string getInfo() const override { return "counting"; }
+	const std::string& getReason() const override { return reason; }
+	bool runsWhileGated() const override { return bRunsWhileGated; }
+	bool infer(const float*, size_t sampleCount, int newFrameCount, std::vector<MouthFrame>& outFrames) override
+	{
+		++inferCalls;
+		newFrameCounts.push_back(newFrameCount);
+		outFrames.assign((size_t)mouthFramesForSamples(sampleCount), MouthFrame());
+		for (MouthFrame& frame : outFrames)
+			frame.weights[(int)eViseme::aa]= 1.f;
+		return true;
+	}
+	double getLastInferMs() const override { return 0.0; }
+};
 } // namespace
 
 static int runAudioTest(const TestArgs&)
@@ -633,11 +662,11 @@ static int runAudioTest(const TestArgs&)
 		};
 
 		MfccBackend backend;
-		check(!backend.create("") && backend.isReady() && !backend.hasProfile() && backend.getProfileError().empty(),
+		check(!backend.create("") && backend.isReady() && !backend.hasProfile() && backend.getReason().empty(),
 			  "no profile is ready and volume-only");
 		backend.setVolumeWindow(-45.f, -25.f);
 		std::vector<MouthFrame> frames;
-		check(backend.infer(low.data(), low.size(), frames) && frames.size() == 30 &&
+		check(backend.infer(low.data(), low.size(), mouthFramesForSamples(low.size()), frames) && frames.size() == 30 &&
 				  backend.getLastFrameScores().size() == 30,
 			  "a second of audio gives thirty frames");
 		bool bInRange= true;
@@ -655,11 +684,11 @@ static int runAudioTest(const TestArgs&)
 			  "a loud tone over the window is all aa, volume-only");
 		MIKAN_LOG_INFO("test-audio") << "volume-only inference " << backend.getLastInferMs() << " ms for one second";
 
-		check(backend.infer(silence.data(), silence.size(), frames) && frames.size() == 30 &&
+		check(backend.infer(silence.data(), silence.size(), mouthFramesForSamples(silence.size()), frames) && frames.size() == 30 &&
 				  frames.back().weights[(int)eViseme::aa] == 0.f && frames.back().weights[VISEME_SIL] == 1.f,
 			  "digital silence is silence");
-		check(!backend.infer(low.data(), 0, frames) && frames.empty(), "nothing is refused");
-		check(backend.infer(low.data(), 300, frames) && frames.size() == 1, "less than a block is padded into its frame");
+		check(!backend.infer(low.data(), 0, mouthFramesForSamples(0), frames) && frames.empty(), "nothing is refused");
+		check(backend.infer(low.data(), 300, mouthFramesForSamples(300), frames) && frames.size() == 1, "less than a block is padded into its frame");
 
 		// Two phonemes taught on the two chords and the noise phoneme on
 		// silence, through the calibration frames and a saved profile
@@ -682,28 +711,95 @@ static int runAudioTest(const TestArgs&)
 			check(profile.save(profilePath, error), "the two-phoneme profile writes");
 
 			MfccBackend taught;
-			check(taught.create(PathUtils::pathToUtf8(profilePath)) && taught.hasProfile() && taught.getProfileError().empty() &&
+			check(taught.create(PathUtils::pathToUtf8(profilePath)) && taught.hasProfile() && taught.getReason().empty() &&
 					  taught.getProfile().phonemes.size() == 3,
 				  "the backend loads the profile");
 			taught.setVolumeWindow(-45.f, -25.f);
-			check(taught.infer(low.data(), low.size(), frames) && frames.size() == 30, "the low chord runs");
+			check(taught.infer(low.data(), low.size(), mouthFramesForSamples(low.size()), frames) && frames.size() == 30, "the low chord runs");
 			const MfccBackend::FrameScores& lowScore= taught.getLastFrameScores().back();
 			check(lowScore.scores.mainViseme == (int)eViseme::aa && lowScore.scores.perViseme[(int)eViseme::aa] > 0.6f &&
 					  std::fabs(frames.back().weights[(int)eViseme::aa] - lowScore.scores.perViseme[(int)eViseme::aa] * lowScore.volume) < 1e-6f,
 				  "the low chord calls A, its weight the share times the volume");
-			check(taught.infer(high.data(), high.size(), frames) && frames.size() == 30 &&
+			check(taught.infer(high.data(), high.size(), mouthFramesForSamples(high.size()), frames) && frames.size() == 30 &&
 					  taught.getLastFrameScores().back().scores.mainViseme == (int)eViseme::I &&
 					  frames.back().weights[(int)eViseme::I] > 0.6f,
 				  "the high chord calls I");
-			check(taught.infer(silence.data(), silence.size(), frames) && frames.back().weights[VISEME_SIL] == 1.f,
+			check(taught.infer(silence.data(), silence.size(), mouthFramesForSamples(silence.size()), frames) && frames.back().weights[VISEME_SIL] == 1.f,
 				  "silence is silence with a profile too");
 			MIKAN_LOG_INFO("test-audio") << "profile inference " << taught.getLastInferMs() << " ms for one second";
 		}
 
 		MfccBackend broken;
 		check(!broken.create(PathUtils::pathToUtf8(tempDir / "does_not_exist.json")) && broken.isReady() && !broken.hasProfile() &&
-				  broken.getProfileError().find("missing") != std::string::npos,
+				  broken.getReason().find("missing") != std::string::npos,
 			  "a missing profile leaves the backend volume-only with the reason");
+
+		// The loudness model: aa at the volume, silence the remainder, the
+		// same level and window the volume-only MFCC model opens aa by
+		{
+			LoudnessBackend loudness;
+			loudness.setVolumeWindow(-45.f, -25.f);
+			check(loudness.isReady() && loudness.getInfo() == "loudness" && loudness.getReason().empty(),
+				  "the loudness backend is ready");
+			check(loudness.infer(low.data(), low.size(), mouthFramesForSamples(low.size()), frames) && frames.size() == 30,
+				  "the loudness backend gives thirty frames for a second");
+			bool bOpen= true;
+			bool bRemainder= true;
+			for (const MouthFrame& frame : frames)
+			{
+				const float aa= frame.weights[(int)eViseme::aa];
+				float sum= 0.f;
+				for (float weight : frame.weights)
+					sum+= weight;
+				bOpen&= aa > 0.f && aa <= 1.f;
+				bRemainder&= std::fabs(frame.weights[VISEME_SIL] - (1.f - aa)) < 1e-6f && std::fabs(sum - 1.f) < 1e-6f;
+			}
+			check(bOpen, "the low chord opens aa on every frame");
+			check(bRemainder, "silence is the remainder and the weights sum to one");
+
+			MfccBackend volumeOnly;
+			volumeOnly.create("");
+			volumeOnly.setVolumeWindow(-45.f, -25.f);
+			std::vector<MouthFrame> volumeFrames;
+			volumeOnly.infer(low.data(), low.size(), mouthFramesForSamples(low.size()), volumeFrames);
+			bool bSame= volumeFrames.size() == frames.size();
+			for (size_t index= 0; bSame && index < frames.size(); ++index)
+				bSame&= std::fabs(frames[index].weights[(int)eViseme::aa] - volumeFrames[index].weights[(int)eViseme::aa]) < 1e-5f;
+			check(bSame, "frame for frame the loudness aa is the volume-only MFCC aa");
+
+			check(loudness.infer(silence.data(), silence.size(), mouthFramesForSamples(silence.size()), frames) &&
+					  frames.size() == 30 && frames.back().weights[VISEME_SIL] == 1.f && frames.back().weights[(int)eViseme::aa] == 0.f,
+				  "digital silence is silence to the loudness backend");
+		}
+
+		// The model selector: the names, and the factory per model
+		{
+			bool bRoundTrip= true;
+			for (int index= 0; index < MOUTH_MODEL_COUNT; ++index)
+			{
+				eMouthModel parsed= eMouthModel::Loudness;
+				bRoundTrip&= parseMouthModel(mouthModelName((eMouthModel)index), parsed) && parsed == (eMouthModel)index;
+			}
+			check(bRoundTrip && std::string(mouthModelName(eMouthModel::Loudness)) == "loudness" &&
+					  std::string(mouthModelName(eMouthModel::Mfcc)) == "mfcc" &&
+					  std::string(mouthModelName(eMouthModel::OvrLipSync)) == "ovrlipsync",
+				  "each model name round-trips");
+			eMouthModel untouched= eMouthModel::OvrLipSync;
+			check(!parseMouthModel("bogus", untouched) && untouched == eMouthModel::OvrLipSync,
+				  "an unknown name is refused and leaves the model untouched");
+
+			std::string reason;
+			const std::unique_ptr<IMouthBackend> loudness= createMouthBackend(eMouthModel::Loudness, "", reason);
+			check(loudness && loudness->isReady() && loudness->getInfo() == "loudness" && reason.empty(),
+				  "the factory makes a ready loudness backend");
+			const std::unique_ptr<IMouthBackend> mfcc= createMouthBackend(eMouthModel::Mfcc, "", reason);
+			check(mfcc && mfcc->isReady() && mfcc->getInfo() == "no profile, volume only" && reason.empty(),
+				  "the factory makes a ready volume-only mfcc backend");
+#ifndef MIKANTRACK_OVRLIPSYNC
+			const std::unique_ptr<IMouthBackend> ovr= createMouthBackend(eMouthModel::OvrLipSync, "", reason);
+			check(!ovr && !reason.empty(), "a build without the Oculus SDK makes no Oculus backend, with the reason");
+#endif
+		}
 	}
 
 	// (n) The wav writer and the sidecar recorder
@@ -971,6 +1067,62 @@ static int runAudioTest(const TestArgs&)
 				MIKAN_LOG_INFO("test-audio") << "wrote " << recordingPath << " and its sidecar for --replay-audio";
 			}
 		}
+
+		// The gate and a backend that runs while gated: it sees every hop
+		// of a silence the gate holds closed, with only the hop's frames as
+		// new, and the chain still emits the neutral mouth. A backend that
+		// does not run while gated is not called at all.
+		{
+			const std::vector<float> silence(AUDIO_SAMPLE_RATE, 0.f);
+			std::vector<float> loud(AUDIO_SAMPLE_RATE);
+			for (size_t index= 0; index < loud.size(); ++index)
+				loud[index]= 0.3f * std::sin(2.f * glm::pi<float>() * 200.f * (float)index / AUDIO_SAMPLE_RATE);
+			const MouthChainConfig chainConfig;
+
+			for (const bool bRunsWhileGated : {true, false})
+			{
+				const std::string label= bRunsWhileGated ? "a backend that runs while gated" : "a backend that does not";
+
+				CountingBackend counting;
+				counting.bRunsWhileGated= bRunsWhileGated;
+				MouthChain chain;
+				chain.configure(chainConfig);
+				std::vector<MouthChainFrame> frames;
+				std::vector<MouthChainRun> runs;
+				chain.push(silence.data(), silence.size(), &counting, frames, runs);
+
+				bool bClosed= runs.size() == 10;
+				for (const MouthChainRun& run : runs)
+					bClosed&= !run.bGateOpen && run.bInferred == bRunsWhileGated;
+				bool bNeutral= frames.size() == 30;
+				for (const MouthChainFrame& frame : frames)
+				{
+					for (float weight : frame.frame.weights)
+						bNeutral&= weight == 0.f;
+				}
+				if (bRunsWhileGated)
+				{
+					bool bHops= counting.inferCalls == 10 && counting.newFrameCounts.size() == 10;
+					for (int newFrameCount : counting.newFrameCounts)
+						bHops&= newFrameCount == 3;
+					check(bClosed && bHops, (label + " is called once per gated hop with its three new frames").c_str());
+				}
+				else
+				{
+					check(bClosed && counting.inferCalls == 0, (label + " is not called while the gate is closed").c_str());
+				}
+				check(bNeutral, (label + " leaves the gated mouth exactly neutral").c_str());
+
+				chain.configure(chainConfig);
+				frames.clear();
+				runs.clear();
+				chain.push(loud.data(), loud.size(), &counting, frames, runs);
+				bool bOpen= !frames.empty();
+				for (const MouthChainFrame& frame : frames)
+					bOpen&= frame.frame.weights[(int)eViseme::aa] > 0.f;
+				check(bOpen, (label + " opens aa through an open gate").c_str());
+			}
+		}
 	}
 
 	// (r) The calibration frames of a clip and the gate a quiet room suggests
@@ -1011,12 +1163,136 @@ static int runAudioTest(const TestArgs&)
 		check(suggestGateDbfs(silence.data(), silence.size(), 0.f) == -80.f, "digital silence suggests the gate's floor");
 	}
 
+#ifdef MIKANTRACK_OVRLIPSYNC
+	// (s) The Oculus LipSync engine, where the DLL is beside the exe: the
+	// remap, silence and a voiced buzz, only the new frames fed, the reset
+	// reproducing a run, and the chain end to end
+	{
+		OvrLipSyncBackend ovr;
+		if (!ovr.create())
+		{
+			MIKAN_LOG_INFO("test-audio") << "(s) Oculus LipSync skipped: " << ovr.getReason();
+		}
+		else
+		{
+			// The heaviest of the fifteen, silence included
+			const auto heaviest= [](const MouthFrame& frame) {
+				return (int)(std::max_element(frame.weights.begin(), frame.weights.end()) - frame.weights.begin());
+			};
+			// The chain's neutral mouth: every weight zero
+			const auto isNeutral= [](const MouthFrame& frame) {
+				return std::all_of(frame.weights.begin(), frame.weights.end(), [](float weight) { return weight == 0.f; });
+			};
+
+			check(ovr.isReady() && ovr.getInfo().rfind("Oculus LipSync 1.61", 0) == 0 && ovr.getReason().empty(),
+				  "the Oculus engine is ready at 1.61");
+
+			const std::array<int, VISEME_COUNT>& remap= OvrLipSyncBackend::getVisemeRemap();
+			std::array<int, VISEME_COUNT> hits{};
+			bool bInRange= true;
+			for (int stageIndex : remap)
+			{
+				bInRange&= stageIndex >= 0 && stageIndex < VISEME_COUNT;
+				if (stageIndex >= 0 && stageIndex < VISEME_COUNT)
+					hits[stageIndex]++;
+			}
+			bool bPermutation= bInRange;
+			for (int count : hits)
+				bPermutation&= count == 1;
+			check(bPermutation && remap[0] == VISEME_SIL && remap[10] == (int)eViseme::aa,
+				  "the remap is a permutation with sil and aa in place");
+
+			// A 120 Hz voiced buzz with its harmonics up to 2.4 kHz
+			std::vector<float> buzz(AUDIO_SAMPLE_RATE);
+			for (size_t index= 0; index < buzz.size(); ++index)
+			{
+				const float t= (float)index / AUDIO_SAMPLE_RATE;
+				float sum= 0.f;
+				for (int harmonic= 1; harmonic <= 20; ++harmonic)
+					sum+= std::sin(2.f * glm::pi<float>() * 120.f * (float)harmonic * t) / (float)harmonic;
+				buzz[index]= 0.1f * sum;
+			}
+			const std::vector<float> silence(AUDIO_SAMPLE_RATE, 0.f);
+
+			std::vector<MouthFrame> frames;
+			ovr.reset();
+			check(ovr.infer(silence.data(), silence.size(), 30, frames) && frames.size() == 30 &&
+					  heaviest(frames.back()) == VISEME_SIL,
+				  "a second of digital silence ends on silence");
+
+			ovr.reset();
+			std::vector<MouthFrame> first;
+			check(ovr.infer(buzz.data(), buzz.size(), 30, first) && first.size() == 30, "a second of buzz gives thirty frames");
+			bool bWeightsInRange= first.size() == 30;
+			bool bSumsToOne= first.size() == 30;
+			bool bVoiced= false;
+			for (size_t index= first.size() >= 10 ? first.size() - 10 : 0; index < first.size(); ++index)
+			{
+				float sum= 0.f;
+				for (float weight : first[index].weights)
+				{
+					bWeightsInRange&= weight >= 0.f && weight <= 1.f;
+					sum+= weight;
+				}
+				bSumsToOne&= std::fabs(sum - 1.f) < 0.05f;
+				bVoiced|= heaviest(first[index]) != VISEME_SIL;
+			}
+			check(bWeightsInRange, "the buzz's weights are within 0..1");
+			check(bSumsToOne, "the buzz's fifteen weights sum to one past the warm-up");
+			check(bVoiced, "the buzz is voiced on the engine's mouth");
+			const std::string firstLast= visemeName(heaviest(first.back()));
+			MIKAN_LOG_INFO("test-audio") << "Oculus buzz: last frame heaviest " << firstLast << " at "
+										 << first.back().weights[heaviest(first.back())] << ", inference "
+										 << ovr.getLastInferMs() << " ms for one second";
+
+			check(ovr.infer(buzz.data(), buzz.size(), 3, frames) && frames.size() == 30 &&
+					  std::all_of(frames.begin(), frames.begin() + 27, isNeutral),
+				  "only the new frames are fed, the earlier ones neutral");
+
+			ovr.reset();
+			std::vector<MouthFrame> second;
+			ovr.infer(buzz.data(), buzz.size(), 30, second);
+			float maxDiff= second.size() == first.size() ? 0.f : 1.f;
+			if (second.size() == first.size())
+			{
+				for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+					maxDiff= std::max(maxDiff, std::fabs(second.back().weights[viseme] - first.back().weights[viseme]));
+			}
+			MIKAN_LOG_INFO("test-audio") << "Oculus reset: last frame max diff " << maxDiff;
+			check(maxDiff < 1e-5f, "a reset engine reproduces the run");
+
+			// The chain end to end: the replay resets the engine, the gate
+			// opens on the buzz, and the emitted mouth is voiced
+			std::vector<float> stream(2 * AUDIO_SAMPLE_RATE);
+			for (size_t index= 0; index < stream.size(); ++index)
+				stream[index]= buzz[index % buzz.size()];
+			MouthChainConfig chainConfig;
+			MouthReplayOutput replayed;
+			replayMouthChain(stream, 0, chainConfig, ovr, replayed);
+			bool bAllOpen= !replayed.runs.empty();
+			for (const MouthChainRun& run : replayed.runs)
+				bAllOpen&= run.bGateOpen && run.bInferred;
+			int voicedFrames= 0;
+			for (const MouthChainFrame& frame : replayed.frames)
+			{
+				if (heaviest(frame.frame) != VISEME_SIL)
+					++voicedFrames;
+			}
+			MIKAN_LOG_INFO("test-audio") << "Oculus chain: " << replayed.frames.size() << " frames, " << voicedFrames
+										 << " voiced";
+			check(bAllOpen && replayed.frames.size() == 60 && voicedFrames > 0,
+				  "the chain runs the engine with the gate open and emits a voiced mouth");
+		}
+	}
+#endif
+
 	MIKAN_LOG_INFO("test-audio") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures << " failed)";
 	return failures == 0 ? 0 : 1;
 }
 
 MIKAN_REGISTER_TEST("--test-audio",
 					"Audio stage: mouth column group, window policy, wav reader, filter, the MFCC chain against uLipSync, "
-					"the profile, the viseme table, the backend, the wav writer, the sidecar recorder, the pacer, the replay "
-					"alignment, the chain, the calibration frames and the gate suggestion",
+					"the profile, the viseme table, the backends and the model selector, the wav writer, the sidecar recorder, "
+					"the pacer, the replay alignment, the chain, the calibration frames and the gate suggestion, the Oculus "
+					"LipSync engine",
 					eTestCategory::SelfTest, runAudioTest)

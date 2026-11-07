@@ -63,6 +63,28 @@ The first backend was a C++ port of HeadAudio (MIT, Mika Suominen, https://githu
 
 HeadAudio's design serves a speaker-independent model trained offline over many voices and shipped with the library, which was not this project's goal. uLipSync scores the coefficients against the speaker's own templates, which is the per-user calibration the stage is built around, and its profile format is one VTube Studio users already hold.
 
+## Oculus LipSync, back in for an A/B
+
+The first design kept the Oculus library out, and the stage had settled on one backend, uLipSync's method, with nothing behind an interface. With distinct vowels live from the calibrated profile as the baseline, that is reversed for a measured comparison: the backend is a seam again (`IMouthBackend`, `createMouthBackend`), and the Audio panel's Model combo picks between Simple Loudness (the volume-only rule as a model of its own), MFCC (uLipSync), and Oculus LipSync, the Oculus Lipsync native SDK (OVRLipSync 1.61.0, Meta Platforms). The SDK is a manual download under the Oculus SDK License that the setup script cannot fetch and the repository cannot carry, so it is an optional build-time drop into `deps/OVRLipSyncNative`, and a build without it hides the entry. The mechanics are in `docs/reference/audio.md`.
+
+The three run under equal conditions, so a difference on the avatar is the model's:
+
+- The same gain: the slider scales the input of every model.
+
+- The same audio: the Oculus engine is stateful, so it is fed every new frame's samples in stream order while the gate is open and while it is closed, and never misses audio. The gate still decides what is emitted, the neutral mouth for a gated hop under every model.
+
+- Raw weights: the engine's fifteen scores are remapped into `eViseme` order and emitted as they come, with no volume window and no smoothing signal sent to the engine.
+
+- The same post-filter: `MouthFilter` smooths all three alike after emission.
+
+The A/B is meant to decide which model drives the mouth by default and whether the Oculus engine earns a place in a release: whether its consonant visemes, which the MFCC model never emits, read on a preset and a perfect-sync avatar, and whether it calls the user's vowels as cleanly as the calibrated profile does. It is judged live on the user's voice and by replaying the vowel recording under each model through `--replay-audio --model`, which is exact for all three, since the engine is deterministic for a given sample sequence.
+
+The first offline reading, the `2026-11-07_00-30-50` recording (aa, ih, oo, eh, oh held in turn) replayed under each model with the recording's gate:
+- Simple Loudness: aa through every held vowel, as designed.
+- MFCC with the profile built from the first 60 percent of each vowel: aa, I, U, E, O in order, one contiguous run each.
+- Oculus LipSync, uncalibrated: aa for "aa", E for both "ih" and "eh", O for "oh", and nn for most of "oo" after a PP onset and a short U, with FF, SS, PP, and nn lighting at the vowel onsets. The engine's generic model calls three of the five vowels for this voice where the calibrated profile calls five, and it is the only model that emits consonants at all. The live A/B on the avatar is still owed.
+
+
 ## Pieces in order
 
 Each piece is one reviewable commit on the `viseme` branch.

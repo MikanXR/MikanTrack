@@ -641,6 +641,8 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.audio.deviceName= au.value("deviceName", std::string());
 	config.audio.gainDb= au.value("gainDb", 0.f);
 	config.audio.gateDbfs= au.value("gateDbfs", -45.f);
+	config.audio.model= eMouthModel::Mfcc;
+	parseMouthModel(au.value("model", std::string()), config.audio.model);
 	config.audio.profilePath= au.value("profilePath", std::string());
 
 	const json& im= j.value("imu", json::object());
@@ -826,6 +828,7 @@ std::string AppConfig::toJsonString() const
 		{"deviceName", audio.deviceName},
 		{"gainDb", audio.gainDb},
 		{"gateDbfs", audio.gateDbfs},
+		{"model", mouthModelName(audio.model)},
 		{"profilePath", audio.profilePath},
 	};
 

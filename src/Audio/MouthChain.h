@@ -9,10 +9,16 @@
 #include "MouthFilter.h"
 #include "MouthWindow.h"
 
-class MfccBackend;
+class IMouthBackend;
 
 // The level of a span of samples in dBFS RMS, floored at -100
 float audioLevelDbfs(const float* samples, size_t sampleCount);
+// The level of a block of blockSamples whose last sampleCount samples are
+// the given ones and the rest silence: the analysis block of a frame near
+// the start of a window
+float audioBlockLevelDbfs(const float* samples, size_t sampleCount, size_t blockSamples);
+// A level through the volume window, 0 at minDbfs and 1 at maxDbfs, clamped
+float volumeForLevel(float levelDbfs, float minDbfs, float maxDbfs);
 
 // The gate a room's silence suggests: the loudest hop of the samples at
 // the gain, plus a 6 dB margin, clamped to the gate slider's range
@@ -69,8 +75,9 @@ struct MouthChainRun
 
 // The stage's chain from captured samples to emitted frames: the gain, the
 // rolling window, the hop's level through the gate, the backend over the
-// window while the gate is open (the neutral mouth otherwise), and the tail
-// frames through the filter. The live service and the offline replay both run
+// window while the gate is open (the neutral mouth otherwise, though a
+// backend that runs while gated still sees the audio), and the tail frames
+// through the filter. The live service and the offline replay both run
 // this one chain, so a recording replays through exactly what live ran.
 class MouthChain
 {
@@ -88,7 +95,7 @@ public:
 	// Pushes captured samples and runs every run they make due. The emitted
 	// frames are appended with their stream indices, one MouthChainRun per
 	// run. A null or unready backend emits the neutral mouth.
-	void push(const float* samples, size_t sampleCount, MfccBackend* backend, std::vector<MouthChainFrame>& outFrames,
+	void push(const float* samples, size_t sampleCount, IMouthBackend* backend, std::vector<MouthChainFrame>& outFrames,
 			  std::vector<MouthChainRun>& outRuns);
 
 	// Samples pushed since the reset, the stream position the next push

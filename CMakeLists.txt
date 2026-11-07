@@ -41,6 +41,23 @@ set(ONNXRUNTIME_LIBRARIES ${ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime
 set(ONNXRUNTIME_DLL ${ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime.dll)
 set(DIRECTML_DLL ${DEPS_DIR}/directml/bin/x64-win/DirectML.dll)
 
+# Oculus LipSync native SDK (a manual download under the Oculus SDK License,
+# which the setup script cannot fetch). The Oculus mouth model compiles only
+# when it is present; without it the Audio panel hides that entry.
+set(OVRLIPSYNC_DIR ${DEPS_DIR}/OVRLipSyncNative)
+set(MIKANTRACK_OVRLIPSYNC OFF)
+if(EXISTS ${OVRLIPSYNC_DIR}/Include/OVRLipSync.h)
+    set(MIKANTRACK_OVRLIPSYNC ON)
+    set(OVRLIPSYNC_INCLUDE_DIR ${OVRLIPSYNC_DIR}/Include)
+    set(OVRLIPSYNC_LIBRARIES
+        optimized ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSyncShim.lib
+        debug ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSyncShimd.lib)
+    set(OVRLIPSYNC_DLL ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSync.dll)
+    message(STATUS "Oculus LipSync SDK found: the Oculus mouth model is built")
+else()
+    message(STATUS "Oculus LipSync SDK not found under deps/OVRLipSyncNative: the Oculus mouth model is not built")
+endif()
+
 # Header-only submodules
 set(GLM_INCLUDE_DIR ${THIRDPARTY_DIR}/glm)
 set(NLOHMANN_JSON_INCLUDE_DIR ${THIRDPARTY_DIR}/nlohmann_json/single_include)
@@ -168,6 +185,15 @@ target_link_libraries(MikanTrack PRIVATE
 
 # ImGui GL loader: use GLEW (already linked) instead of the built-in loader
 target_compile_definitions(MikanTrack PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLEW GLEW_NO_GLU)
+
+if(MIKANTRACK_OVRLIPSYNC)
+    target_compile_definitions(MikanTrack PRIVATE MIKANTRACK_OVRLIPSYNC)
+    target_include_directories(MikanTrack PRIVATE ${OVRLIPSYNC_INCLUDE_DIR})
+    target_link_libraries(MikanTrack PRIVATE ${OVRLIPSYNC_LIBRARIES})
+    add_custom_command(TARGET MikanTrack POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OVRLIPSYNC_DLL} $<TARGET_FILE_DIR:MikanTrack>
+    )
+endif()
 
 set_property(TARGET MikanTrack PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:MikanTrack>")
 set_property(DIRECTORY ${CMAKE_CURRENT_LIST_DIR} PROPERTY VS_STARTUP_PROJECT MikanTrack)

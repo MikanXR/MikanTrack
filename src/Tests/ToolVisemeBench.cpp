@@ -3,20 +3,21 @@
 #include <iomanip>
 #include <sstream>
 
-#include "MfccBackend.h"
+#include "MouthBackend.h"
 #include "MouthFilter.h"
 #include "MouthWindow.h"
 #include "PathUtils.h"
 #include "WavFile.h"
 
-// The audio stage's bench: runs the backend over a wav clip under the live
-// rolling-window policy, writes the emitted 30 fps viseme weights as JSON for
-// playback on the avatar, and measures the two numbers that gate the live
-// stage: how far the chunked tail frames drift from one whole-clip run, and
-// the per-run inference time against the hop.
+// The audio stage's bench: runs a mouth model (mfcc by default, the profile
+// only mattering to it) over a wav clip under the live rolling-window policy,
+// writes the emitted 30 fps viseme weights as JSON for playback on the
+// avatar, and measures the two numbers that gate the live stage: how far the
+// chunked tail frames drift from one whole-clip run, and the per-run
+// inference time against the hop.
 //
-//   --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames]
-//                  [--profile path] [--cutoff hz] [--beta b]
+//   --viseme-bench <clip.wav> [out.json] [--model loudness|mfcc|ovrlipsync] [--hop ms] [--window ms]
+//                  [--lookahead frames] [--profile path] [--cutoff hz] [--beta b]
 
 namespace
 {
@@ -27,7 +28,8 @@ struct BenchOptions
 	int hopMs= 100;
 	int windowMs= 200;
 	int lookaheadFrames= 0;
-	// Empty for the volume-only stage
+	eMouthModel model= eMouthModel::Mfcc;
+	// Empty for the volume-only mfcc stage
 	std::string profilePath;
 	MouthFilterConfig filter;
 };
@@ -46,6 +48,11 @@ bool parseOptions(const TestArgs& args, BenchOptions& out)
 			out.lookaheadFrames= std::stoi(args[++index]);
 		else if (arg == "--profile" && bHasValue)
 			out.profilePath= args[++index];
+		else if (arg == "--model" && bHasValue)
+		{
+			if (!parseMouthModel(args[++index], out.model))
+				return false;
+		}
 		else if (arg == "--cutoff" && bHasValue)
 			out.filter.minCutoffHz= std::stof(args[++index]);
 		else if (arg == "--beta" && bHasValue)
@@ -91,8 +98,8 @@ static int runVisemeBench(const TestArgs& args)
 	if (!parseOptions(args, options))
 	{
 		MIKAN_LOG_ERROR("viseme-bench")
-			<< "Usage: --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames] "
-			   "[--profile path] [--cutoff hz] [--beta b]";
+			<< "Usage: --viseme-bench <clip.wav> [out.json] [--model loudness|mfcc|ovrlipsync] [--hop ms] [--window ms] "
+			   "[--lookahead frames] [--profile path] [--cutoff hz] [--beta b]";
 		return 1;
 	}
 
@@ -107,23 +114,26 @@ static int runVisemeBench(const TestArgs& args)
 	MIKAN_LOG_INFO("viseme-bench") << options.clipPath.string() << ": " << clip.size() << " samples at 16 kHz, "
 								   << clipSeconds << " s";
 
-	MfccBackend backend;
-	if (!backend.create(options.profilePath) && !options.profilePath.empty())
+	std::string reason;
+	const std::unique_ptr<IMouthBackend> backend= createMouthBackend(options.model, options.profilePath, reason);
+	if (!backend || !backend->isReady())
 	{
-		MIKAN_LOG_ERROR("viseme-bench") << backend.getProfileError();
+		MIKAN_LOG_ERROR("viseme-bench") << mouthModelName(options.model) << ": " << (backend ? backend->getReason() : reason);
 		return 1;
 	}
-	const std::string profileLabel= options.profilePath.empty() ? std::string("no profile, volume only") : options.profilePath;
-	MIKAN_LOG_INFO("viseme-bench") << profileLabel << ", hop " << options.hopMs << " ms, window " << options.windowMs
-								   << " ms, lookahead " << options.lookaheadFrames << " frames";
+	if (!backend->getReason().empty())
+		MIKAN_LOG_WARNING("viseme-bench") << mouthModelName(options.model) << ": " << backend->getReason();
+	MIKAN_LOG_INFO("viseme-bench") << "model " << mouthModelName(options.model) << " (" << backend->getInfo() << "), hop "
+								   << options.hopMs << " ms, window " << options.windowMs << " ms, lookahead " << options.lookaheadFrames << " frames";
 
 	// One run over the whole clip: the reference the chunked tail frames are
-	// measured against
+	// measured against. Every frame of it is new to a stateful engine.
 	std::vector<MouthFrame> offlineFrames;
 	double offlineMs= 0.0;
-	if (backend.infer(clip.data(), clip.size(), offlineFrames))
+	backend->reset();
+	if (backend->infer(clip.data(), clip.size(), mouthFramesForSamples(clip.size()), offlineFrames))
 	{
-		offlineMs= backend.getLastInferMs();
+		offlineMs= backend->getLastInferMs();
 		MIKAN_LOG_INFO("viseme-bench") << "whole clip: " << offlineFrames.size() << " frames in " << offlineMs << " ms";
 
 		// How the clip's frames split across the dominant visemes, the
@@ -155,6 +165,8 @@ static int runVisemeBench(const TestArgs& args)
 	window.configure(windowConfig);
 	MouthFilter filter;
 	filter.configure(options.filter);
+	// The live stream starts where the device opens
+	backend->reset();
 
 	std::vector<MouthFrame> chunkedFrames;
 	std::vector<MouthFrame> filteredFrames;
@@ -172,12 +184,13 @@ static int runVisemeBench(const TestArgs& args)
 		while (window.isRunDue())
 		{
 			const int emitCount= window.beginRun(windowSamples);
-			if (!backend.infer(windowSamples.data(), windowSamples.size(), windowFrames))
+			// The emitted frames are the new ones, as the chain hands them
+			if (!backend->infer(windowSamples.data(), windowSamples.size(), emitCount, windowFrames))
 			{
 				MIKAN_LOG_ERROR("viseme-bench") << "chunked run failed at sample " << window.getConsumedSamples();
 				return 1;
 			}
-			runMs.push_back(backend.getLastInferMs());
+			runMs.push_back(backend->getLastInferMs());
 
 			tailFrames.clear();
 			MouthWindow::takeTail(windowFrames, emitCount, windowConfig.lookaheadFrames, tailFrames);
@@ -264,6 +277,7 @@ static int runVisemeBench(const TestArgs& args)
 		nlohmann::json out;
 		out["clip"]= PathUtils::pathToUtf8(options.clipPath);
 		out["clipSeconds"]= clipSeconds;
+		out["model"]= mouthModelName(options.model);
 		out["profile"]= options.profilePath;
 		out["sampleRate"]= AUDIO_SAMPLE_RATE;
 		out["frameRate"]= MOUTH_FRAME_RATE;

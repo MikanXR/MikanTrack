@@ -16,7 +16,7 @@
 #include "MouthChain.h"
 
 class AudioRecorder;
-class MfccBackend;
+class IMouthBackend;
 
 struct AudioServiceConfig
 {
@@ -27,7 +27,9 @@ struct AudioServiceConfig
 	float gainDb= 0.f;
 	// Hop level below which the mouth is neutral and no backend runs
 	float gateDbfs= -45.f;
-	// The calibration profile the backend loads; empty is the shipped model
+	// The mouth model the backend runs
+	eMouthModel model= eMouthModel::Mfcc;
+	// The calibration profile the MFCC model loads; empty is volume-only
 	std::string profilePath;
 };
 
@@ -40,9 +42,9 @@ struct AudioServiceStatus
 	std::string deviceName;
 	int deviceSampleRate= 0;
 	bool backendReady= false;
-	// Whether the backend runs a calibration profile; volume-only otherwise
-	bool profileLoaded= false;
-	// Why no profile loaded, empty while one did or none is configured
+	// What the backend runs: the profile state, the engine version
+	std::string backendInfo;
+	// Why the backend is not ready or runs degraded, empty when fine
 	std::string backendReason;
 	// The newest hop's level after gain
 	float levelDbfs= -100.f;
@@ -177,7 +179,7 @@ private:
 	// Audio thread state
 	AudioServiceConfig m_threadConfig;
 	uint32_t m_device= 0;
-	std::unique_ptr<MfccBackend> m_backend;
+	std::unique_ptr<IMouthBackend> m_backend;
 	MouthChain m_chain;
 	std::vector<MouthChainFrame> m_chainFrames;
 	std::vector<MouthChainRun> m_chainRuns;

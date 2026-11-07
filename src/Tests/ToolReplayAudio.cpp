@@ -2,19 +2,21 @@
 
 #include <map>
 
-#include "MfccBackend.h"
+#include "MouthBackend.h"
 #include "MouthReplay.h"
 #include "PathUtils.h"
 #include "WavFile.h"
 
 // Re-runs the microphone mouth stage over a recording's audio sidecar and
 // measures the result against the viseme frames the live run recorded, so a
-// profile change (or other gain and gate settings) can be judged against old
-// recordings. The sidecar is aligned to the live hop grid, so the same
-// profile under the same settings replays to the live frames once the window
-// has filled.
+// model or profile change (or other gain and gate settings) can be judged
+// against old recordings. The model defaults to the recorded one, and the
+// profile only matters to the mfcc model. The sidecar is aligned to the live
+// hop grid, so the same model and profile under the same settings replays to
+// the live frames once the window has filled.
 //
-//   --replay-audio <recording.jsonl> [out.json] [--profile path] [--gain db] [--gate dbfs]
+//   --replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path]
+//                  [--gain db] [--gate dbfs]
 
 namespace
 {
@@ -23,6 +25,8 @@ struct ReplayAudioOptions
 	std::filesystem::path recordingPath;
 	std::filesystem::path outPath;
 	std::string profilePath;
+	bool bModelSet= false;
+	eMouthModel model= eMouthModel::Mfcc;
 	bool bGainSet= false;
 	float gainDb= 0.f;
 	bool bGateSet= false;
@@ -38,6 +42,12 @@ bool parseOptions(const TestArgs& args, ReplayAudioOptions& options)
 		const bool bHasValue= index + 1 < args.size();
 		if (arg == "--profile" && bHasValue)
 			options.profilePath= args[++index];
+		else if (arg == "--model" && bHasValue)
+		{
+			if (!parseMouthModel(args[++index], options.model))
+				return false;
+			options.bModelSet= true;
+		}
 		else if (arg == "--gain" && bHasValue)
 		{
 			options.gainDb= std::stof(args[++index]);
@@ -82,7 +92,8 @@ static int runReplayAudio(const TestArgs& args)
 	if (!parseOptions(args, options))
 	{
 		MIKAN_LOG_ERROR("replay-audio")
-			<< "usage: --replay-audio <recording.jsonl> [out.json] [--profile path] [--gain db] [--gate dbfs]";
+			<< "usage: --replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path] "
+			   "[--gain db] [--gate dbfs]";
 		return 1;
 	}
 
@@ -112,24 +123,27 @@ static int runReplayAudio(const TestArgs& args)
 								   << sidecar.startSampleIndex;
 
 	// The chain under the recorded settings unless overridden: the recorded
-	// profile, or volume-only where the recording had none
+	// model and profile, volume-only where an mfcc recording had none
 	const AudioConfig& recordedAudio= replay.getRecordedConfig().audio;
 	MouthChainConfig chainConfig;
 	chainConfig.gainDb= options.bGainSet ? options.gainDb : recordedAudio.gainDb;
 	chainConfig.gateDbfs= options.bGateSet ? options.gateDbfs : recordedAudio.gateDbfs;
+	const eMouthModel model= options.bModelSet ? options.model : recordedAudio.model;
 	const std::string profilePath= !options.profilePath.empty() ? options.profilePath : recordedAudio.profilePath;
-	MfccBackend backend;
-	if (!backend.create(profilePath) && !profilePath.empty())
+	std::string reason;
+	const std::unique_ptr<IMouthBackend> backend= createMouthBackend(model, profilePath, reason);
+	if (!backend || !backend->isReady())
 	{
-		MIKAN_LOG_ERROR("replay-audio") << backend.getProfileError();
+		MIKAN_LOG_ERROR("replay-audio") << mouthModelName(model) << ": " << (backend ? backend->getReason() : reason);
 		return 1;
 	}
-	const std::string profileLabel= profilePath.empty() ? std::string("no profile, volume only") : profilePath;
+	if (!backend->getReason().empty())
+		MIKAN_LOG_WARNING("replay-audio") << mouthModelName(model) << ": " << backend->getReason();
 
 	const MouthReplayAlignment alignment= mouthReplayAlignment(sidecar.startSampleIndex, chainConfig.window);
 	MouthReplayOutput replayed;
-	replayMouthChain(clip, alignment.padSamples, chainConfig, backend, replayed);
-	MIKAN_LOG_INFO("replay-audio") << profileLabel << " at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
+	replayMouthChain(clip, alignment.padSamples, chainConfig, *backend, replayed);
+	MIKAN_LOG_INFO("replay-audio") << "model " << mouthModelName(model) << " (" << backend->getInfo() << ") at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
 								   << " dBFS: " << replayed.frames.size() << " frames from " << replayed.runs.size()
 								   << " runs, padded " << alignment.padSamples
 								   << " samples onto the live hop grid, live frame = replayed frame + "
@@ -247,7 +261,9 @@ static int runReplayAudio(const TestArgs& args)
 		nlohmann::json out;
 		out["recording"]= PathUtils::pathToUtf8(options.recordingPath);
 		out["sidecar"]= sidecar.fileName;
+		out["recordedModel"]= mouthModelName(recordedAudio.model);
 		out["recordedProfile"]= recordedAudio.profilePath;
+		out["model"]= mouthModelName(model);
 		out["profile"]= profilePath;
 		out["gainDb"]= chainConfig.gainDb;
 		out["gateDbfs"]= chainConfig.gateDbfs;

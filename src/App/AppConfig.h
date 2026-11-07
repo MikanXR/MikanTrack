@@ -8,6 +8,7 @@
 
 #include "glm/ext/matrix_double4x4.hpp"
 
+#include "AudioTypes.h"
 #include "MikanVideoSourceTypes.h"
 #include "TrackingTypes.h"
 
@@ -237,7 +238,9 @@ struct AudioConfig
 	float gainDb= 0.f;
 	// Hop level under which the mouth is neutral and no backend runs
 	float gateDbfs= -45.f;
-	// The calibration profile the backend loads; empty is the shipped model
+	// The mouth model: the level alone, the MFCC profile, or Oculus LipSync
+	eMouthModel model= eMouthModel::Mfcc;
+	// The calibration profile the MFCC model loads; empty is volume-only
 	std::string profilePath;
 };
 

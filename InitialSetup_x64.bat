@@ -15,13 +15,19 @@ IF %ERRORLEVEL% NEQ 0 (
   goto failure
 )
 
-:: Clean up the old deps folder
+:: Clean up the old deps folder. The Oculus LipSync SDK under
+:: deps\OVRLipSyncNative is a manual download, so it survives the wipe.
+IF EXIST deps\OVRLipSyncNative (
+IF EXIST OVRLipSyncNative.keep rmdir /s /q OVRLipSyncNative.keep
+move deps\OVRLipSyncNative OVRLipSyncNative.keep > nul
+)
 IF EXIST deps (
 del /f /s /q deps > nul
 rmdir /s /q deps
 )
 
 mkdir deps
+IF EXIST OVRLipSyncNative.keep move OVRLipSyncNative.keep deps\OVRLipSyncNative > nul
 pushd deps
 
 :: ---------------------------------------------------------------- SDL2
@@ -184,6 +190,10 @@ IF %ERRORLEVEL% NEQ 0 goto model_failure
 :skip_masc_vroid
 
 echo "Initial setup complete!"
+IF NOT EXIST deps\OVRLipSyncNative\Include\OVRLipSync.h (
+echo "Optional: the Oculus LipSync mouth model needs the Oculus Lipsync native SDK unpacked to deps\OVRLipSyncNative (Include, Lib)."
+echo "          Download it from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ and rerun GenerateProjectFiles."
+)
 goto exit
 
 :model_failure

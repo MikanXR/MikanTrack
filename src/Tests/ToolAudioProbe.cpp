@@ -12,9 +12,9 @@
 
 // The microphone mouth stage live, without the UI: lists the capture
 // devices, runs the service on one for a few seconds, and reports the level,
-// the gate, the backend's run time, and the mouth frames it published, so a
-// microphone problem is told from a profile problem before the panel is
-// involved.
+// the gate, the mouth model the config selects and its run time, and the
+// mouth frames it published, so a microphone problem is told from a model or
+// profile problem before the panel is involved.
 //
 //   --audio-probe [seconds] [--device name] [--gate dbfs] [--gain db]
 
@@ -105,8 +105,8 @@ static int runAudioProbe(const TestArgs& args)
 	const AudioServiceStatus status= service.getStatus();
 	MIKAN_LOG_INFO("audio-probe") << "device " << (status.deviceOpen ? "open" : "NOT open") << ": " << status.deviceName
 								  << " at " << status.deviceSampleRate << " Hz";
-	MIKAN_LOG_INFO("audio-probe") << "backend " << (status.backendReady ? "ready" : "NOT ready") << ", profile "
-								  << (status.profileLoaded ? "loaded" : "none (volume only)")
+	MIKAN_LOG_INFO("audio-probe") << "backend " << (status.backendReady ? "ready" : "NOT ready") << ", model "
+								  << status.backendInfo
 								  << (status.backendReason.empty() ? "" : ": " + status.backendReason);
 	std::ostringstream seen;
 	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)

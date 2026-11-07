@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "MfccBackend.h"
+#include "MouthBackend.h"
 
 namespace
 {
@@ -22,9 +22,10 @@ MouthReplayAlignment mouthReplayAlignment(int64_t startSampleIndex, const MouthW
 }
 
 void replayMouthChain(const std::vector<float>& clip, int64_t padSamples, const MouthChainConfig& config,
-					  MfccBackend& backend, MouthReplayOutput& outReplay)
+					  IMouthBackend& backend, MouthReplayOutput& outReplay)
 {
 	outReplay= MouthReplayOutput();
+	backend.reset();
 
 	MouthChain chain;
 	chain.configure(config);

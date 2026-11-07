@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "Logger.h"
+#include "MouthChain.h"
 #include "PathUtils.h"
 
 namespace
@@ -32,13 +33,20 @@ bool MfccBackend::create(const std::string& profilePath)
 	return true;
 }
 
+std::string MfccBackend::getInfo() const
+{
+	if (!hasProfile())
+		return "no profile, volume only";
+	return "uLipSync profile, " + std::to_string(m_profile.phonemes.size()) + " phonemes";
+}
+
 void MfccBackend::setVolumeWindow(float minDbfs, float maxDbfs)
 {
 	m_minDbfs= minDbfs;
 	m_maxDbfs= std::max(maxDbfs, minDbfs + 1.f);
 }
 
-bool MfccBackend::infer(const float* samples, size_t sampleCount, std::vector<MouthFrame>& outFrames)
+bool MfccBackend::infer(const float* samples, size_t sampleCount, int, std::vector<MouthFrame>& outFrames)
 {
 	outFrames.clear();
 	if (!m_bCreated || sampleCount == 0)
@@ -63,7 +71,7 @@ bool MfccBackend::infer(const float* samples, size_t sampleCount, std::vector<Mo
 
 		FrameScores& frame= m_frameScores[(size_t)frameIndex];
 		m_extractor.compute(m_block.data(), frame.levelDbfs, mfcc);
-		frame.volume= std::clamp((frame.levelDbfs - m_minDbfs) / (m_maxDbfs - m_minDbfs), 0.f, 1.f);
+		frame.volume= volumeForLevel(frame.levelDbfs, m_minDbfs, m_maxDbfs);
 
 		VisemeWeights& weights= outFrames[(size_t)frameIndex].weights;
 		weights.fill(0.f);
