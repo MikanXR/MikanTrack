@@ -1031,7 +1031,7 @@ static int runVmcTest(const TestArgs&)
 		std::array<float, ARKIT_BLENDSHAPE_COUNT> arkitValues{};
 		arkitValues[arkitBlendshapeFromName("jawOpen")]= 1.7f;
 		std::vector<float> values;
-		map->evaluate(arkitValues, values);
+		map->evaluate(arkitValues, nullptr, values);
 		check(values.size() == 2 && values[1] == 1.f, "a value past full is clamped to one");
 
 		AvatarModel blinkOnly;
@@ -1039,9 +1039,34 @@ static int runVmcTest(const TestArgs&)
 		map= AvatarFaceMap::build(blinkOnly);
 		arkitValues= {};
 		arkitValues[arkitBlendshapeFromName("eyeBlinkLeft")]= 1.f;
-		map->evaluate(arkitValues, values);
+		map->evaluate(arkitValues, nullptr, values);
 		check(!map->isPerfectSync() && map->getOutputs().size() == 1 && fabsf(values[0] - 0.5f) < 1e-6f,
 			  "an avatar with only the two-eyed blink gets the average of both eyes");
+
+		// A vowel preset reads its viseme directly while the frame carries
+		// viseme weights (the microphone's), and its ARKit columns otherwise
+		// (the phone's face)
+		AvatarModel vowels;
+		addExpression(vowels, "A", "aa");
+		addExpression(vowels, "U", "ou");
+		map= AvatarFaceMap::build(vowels);
+		check(map->getOutputs().size() == 2 && map->getOutputs()[0].viseme == (int)eViseme::aa &&
+				  map->getOutputs()[1].viseme == (int)eViseme::U,
+			  "the vowel presets name their visemes");
+		arkitValues= {};
+		arkitValues[arkitBlendshapeFromName("jawOpen")]= 0.3f;
+		VisemeWeights visemes{};
+		visemes[(int)eViseme::aa]= 0.9f;
+		visemes[(int)eViseme::U]= 1.5f;
+		map->evaluate(arkitValues, &visemes, values);
+		check(values.size() == 2 && fabsf(values[0] - 0.9f) < 1e-6f && values[1] == 1.f,
+			  "with visemes a vowel is its viseme's weight, clamped, whatever the jaw says");
+		map->evaluate(arkitValues, nullptr, values);
+		check(fabsf(values[0] - 0.3f) < 1e-6f && values[1] == 0.f, "without visemes a vowel derives from its ARKit columns");
+		map= AvatarFaceMap::build(perfectSync);
+		arkitValues= {};
+		map->evaluate(arkitValues, &visemes, values);
+		check(values.size() == 2 && values[1] == 0.f, "a perfect-sync expression never reads a viseme");
 
 		// The receiver half: outputs onto morph targets, as the preview applies them
 		AvatarModel morphed;
@@ -1064,12 +1089,12 @@ static int runVmcTest(const TestArgs&)
 		arkitValues[arkitBlendshapeFromName("jawOpen")]= 0.6f;
 		arkitValues[arkitBlendshapeFromName("eyeBlinkLeft")]= 1.f;
 		std::vector<std::vector<float>> meshWeights;
-		faceMorphs.evaluate(&arkitValues, meshWeights);
+		faceMorphs.evaluate(&arkitValues, nullptr, meshWeights);
 		check(meshWeights.size() == 1 && meshWeights[0].size() == 2 && fabsf(meshWeights[0][0] - 0.6f) < 1e-6f,
 			  "a morph driven by a preset and by its own ARKit name takes the larger weight, not the sum");
 		check(meshWeights.size() == 1 && fabsf(meshWeights[0][1] - 0.5f) < 1e-6f,
 			  "an expression scales the morphs it binds by the bind weight");
-		faceMorphs.evaluate(nullptr, meshWeights);
+		faceMorphs.evaluate(nullptr, nullptr, meshWeights);
 		check(meshWeights.size() == 1 && meshWeights[0][0] == 0.f && meshWeights[0][1] == 0.f,
 			  "no face rests every morph");
 	}

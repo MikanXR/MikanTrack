@@ -15,13 +15,19 @@ IF %ERRORLEVEL% NEQ 0 (
   goto failure
 )
 
-:: Clean up the old deps folder
+:: Clean up the old deps folder. The Oculus LipSync SDK under
+:: deps\OVRLipSyncNative is a manual download, so it survives the wipe.
+IF EXIST deps\OVRLipSyncNative (
+IF EXIST OVRLipSyncNative.keep rmdir /s /q OVRLipSyncNative.keep
+move deps\OVRLipSyncNative OVRLipSyncNative.keep > nul
+)
 IF EXIST deps (
 del /f /s /q deps > nul
 rmdir /s /q deps
 )
 
 mkdir deps
+IF EXIST OVRLipSyncNative.keep move OVRLipSyncNative.keep deps\OVRLipSyncNative > nul
 pushd deps
 
 :: ---------------------------------------------------------------- SDL2
@@ -147,6 +153,19 @@ curl -L "https://huggingface.co/Soykaf/RTMW3D-x/resolve/main/onnx/rtmw3d-x_8xb64
 IF %ERRORLEVEL% NEQ 0 goto model_failure
 :skip_rtmw3d
 
+:: ------------------------------------------------------ audio bench clips
+:: One English and one Japanese speech clip synthesized with Kokoro, the
+:: inputs --viseme-bench measures the mouth backend on. Published as assets
+:: of the bench-audio-1 release of this repository. A failed fetch is a
+:: warning, not a setup failure: the bench reports a missing clip itself.
+IF NOT EXIST resources\audio\bench mkdir resources\audio\bench
+IF EXIST resources\audio\bench\bench_ja.wav goto skip_bench_audio
+echo "Downloading audio bench clips..."
+curl -L https://github.com/MikanXR/MikanTrack/releases/download/bench-audio-1/bench_en.wav --output resources\audio\bench\bench_en.wav
+IF %ERRORLEVEL% NEQ 0 echo "Warning: bench_en.wav not fetched (release bench-audio-1 missing?)"
+curl -L https://github.com/MikanXR/MikanTrack/releases/download/bench-audio-1/bench_ja.wav --output resources\audio\bench\bench_ja.wav
+IF %ERRORLEVEL% NEQ 0 echo "Warning: bench_ja.wav not fetched (release bench-audio-1 missing?)"
+:skip_bench_audio
 IF EXIST rtm_demo.jpg goto skip_rtm_demo
 echo "Downloading pose reference image..."
 curl -L https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg --output rtm_demo.jpg
@@ -171,6 +190,10 @@ IF %ERRORLEVEL% NEQ 0 goto model_failure
 :skip_masc_vroid
 
 echo "Initial setup complete!"
+IF NOT EXIST deps\OVRLipSyncNative\Include\OVRLipSync.h (
+echo "Optional: the Oculus LipSync mouth model needs the Oculus Lipsync native SDK unpacked to deps\OVRLipSyncNative (Include, Lib)."
+echo "          Download it from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ and rerun GenerateProjectFiles."
+)
 goto exit
 
 :model_failure

@@ -5,7 +5,9 @@
 
 #include "TrackingTypes.h"
 
+class App;
 class AppConfig;
+class AudioCalibrationWizard;
 class BodyCalibrationWizard;
 class ExtrinsicsWizard;
 class HandCalibrationWizard;
@@ -23,9 +25,10 @@ enum class eWizardKind
 	Hand,
 	Mounting,
 	Body,
+	AudioCalibration,
 };
 
-// Owns the five calibration wizards and the rule that at most one runs at a
+// Owns the six calibration wizards and the rule that at most one runs at a
 // time. Launches go through launch(), which refuses while one is active;
 // update() drives whichever is active and closes it when it asks to. The
 // guided setup flow reaches the wizards directly through the accessors,
@@ -33,7 +36,7 @@ enum class eWizardKind
 class WizardHost
 {
 public:
-	WizardHost(AppConfig* config, VisionThread* visionThread);
+	WizardHost(App* app, AppConfig* config, VisionThread* visionThread);
 	~WizardHost();
 
 	// Starts a wizard. False, and nothing happens, while any wizard is
@@ -63,6 +66,7 @@ public:
 	HandCalibrationWizard* getHandCalibrationWizard() { return m_handCalibrationWizard.get(); }
 	MountingWizard* getMountingWizard() { return m_mountingWizard.get(); }
 	BodyCalibrationWizard* getBodyCalibrationWizard() { return m_bodyCalibrationWizard.get(); }
+	AudioCalibrationWizard* getAudioCalibrationWizard() { return m_audioCalibrationWizard.get(); }
 
 private:
 	std::unique_ptr<IntrinsicsWizard> m_intrinsicsWizard;
@@ -70,6 +74,7 @@ private:
 	std::unique_ptr<HandCalibrationWizard> m_handCalibrationWizard;
 	std::unique_ptr<MountingWizard> m_mountingWizard;
 	std::unique_ptr<BodyCalibrationWizard> m_bodyCalibrationWizard;
+	std::unique_ptr<AudioCalibrationWizard> m_audioCalibrationWizard;
 
 	// Rising-edge tracker behind consumeCameraWizardStarted
 	bool m_bCameraWizardWasActive= false;

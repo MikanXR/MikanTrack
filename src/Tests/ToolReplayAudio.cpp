@@ -1,0 +1,307 @@
+#include "TestCommon.h"
+
+#include <map>
+
+#include "MouthBackend.h"
+#include "MouthReplay.h"
+#include "PathUtils.h"
+#include "WavFile.h"
+
+// Re-runs the microphone mouth stage over a recording's audio sidecar and
+// measures the result against the viseme frames the live run recorded, so a
+// model or profile change (or other gain and gate settings) can be judged
+// against old recordings. The model defaults to the recorded one, and the
+// profile only matters to the mfcc model. The sidecar is aligned to the live
+// hop grid, so the same model and profile under the same settings replays to
+// the live frames once the window has filled.
+//
+//   --replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path]
+//                  [--gain db] [--gate dbfs]
+
+namespace
+{
+struct ReplayAudioOptions
+{
+	std::filesystem::path recordingPath;
+	std::filesystem::path outPath;
+	std::string profilePath;
+	bool bModelSet= false;
+	eMouthModel model= eMouthModel::Mfcc;
+	bool bGainSet= false;
+	float gainDb= 0.f;
+	bool bGateSet= false;
+	float gateDbfs= 0.f;
+};
+
+bool parseOptions(const TestArgs& args, ReplayAudioOptions& options)
+{
+	int positional= 0;
+	for (size_t index= 0; index < args.size(); ++index)
+	{
+		const std::string& arg= args[index];
+		const bool bHasValue= index + 1 < args.size();
+		if (arg == "--profile" && bHasValue)
+			options.profilePath= args[++index];
+		else if (arg == "--model" && bHasValue)
+		{
+			if (!parseMouthModel(args[++index], options.model))
+				return false;
+			options.bModelSet= true;
+		}
+		else if (arg == "--gain" && bHasValue)
+		{
+			options.gainDb= std::stof(args[++index]);
+			options.bGainSet= true;
+		}
+		else if (arg == "--gate" && bHasValue)
+		{
+			options.gateDbfs= std::stof(args[++index]);
+			options.bGateSet= true;
+		}
+		else if (arg.rfind("--", 0) == 0)
+			return false;
+		else if (positional == 0)
+			options.recordingPath= PathUtils::utf8ToPath(arg);
+		else if (positional == 1)
+			options.outPath= PathUtils::utf8ToPath(arg);
+		else
+			return false;
+		if (arg.rfind("--", 0) != 0)
+			++positional;
+	}
+	return !options.recordingPath.empty();
+}
+
+nlohmann::json framesToJson(const std::vector<MouthFrame>& frames)
+{
+	nlohmann::json rows= nlohmann::json::array();
+	for (const MouthFrame& frame : frames)
+	{
+		nlohmann::json row= nlohmann::json::array();
+		for (float weight : frame.weights)
+			row.push_back(std::round(weight * 10000.f) / 10000.f);
+		rows.push_back(std::move(row));
+	}
+	return rows;
+}
+} // namespace
+
+static int runReplayAudio(const TestArgs& args)
+{
+	ReplayAudioOptions options;
+	if (!parseOptions(args, options))
+	{
+		MIKAN_LOG_ERROR("replay-audio")
+			<< "usage: --replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path] "
+			   "[--gain db] [--gate dbfs]";
+		return 1;
+	}
+
+	TrackingReplay replay;
+	std::string error;
+	if (!replay.load(PathUtils::pathToUtf8(options.recordingPath), error))
+	{
+		MIKAN_LOG_ERROR("replay-audio") << "Load failed: " << error;
+		return 1;
+	}
+	const RecordedAudioSidecar& sidecar= replay.getHeader().audio;
+	if (!sidecar.present)
+	{
+		MIKAN_LOG_ERROR("replay-audio") << "the recording has no audio sidecar (the mouth stage was off when it was made)";
+		return 1;
+	}
+
+	const std::filesystem::path wavPath= options.recordingPath.parent_path() / PathUtils::utf8ToPath(sidecar.fileName);
+	std::vector<float> clip;
+	if (!WavFile::readMono16k(wavPath, clip, error))
+	{
+		MIKAN_LOG_ERROR("replay-audio") << "sidecar: " << error;
+		return 1;
+	}
+	MIKAN_LOG_INFO("replay-audio") << wavPath.string() << ": " << clip.size() << " samples ("
+								   << (double)clip.size() / AUDIO_SAMPLE_RATE << " s), starting at stream sample "
+								   << sidecar.startSampleIndex;
+
+	// The chain under the recorded settings unless overridden: the recorded
+	// model and profile, volume-only where an mfcc recording had none
+	const AudioConfig& recordedAudio= replay.getRecordedConfig().audio;
+	MouthChainConfig chainConfig;
+	chainConfig.gainDb= options.bGainSet ? options.gainDb : recordedAudio.gainDb;
+	chainConfig.gateDbfs= options.bGateSet ? options.gateDbfs : recordedAudio.gateDbfs;
+	const eMouthModel model= options.bModelSet ? options.model : recordedAudio.model;
+	// The recording's smoothing for the model, and the engine's own
+	chainConfig.filter.minCutoffHz= smoothingCutoffHz(recordedAudio.smoothingMs[(size_t)model]);
+	const std::string profilePath= !options.profilePath.empty() ? options.profilePath : recordedAudio.profilePath;
+	std::string reason;
+	const std::unique_ptr<IMouthBackend> backend= createMouthBackend(model, profilePath, reason);
+	if (!backend || !backend->isReady())
+	{
+		MIKAN_LOG_ERROR("replay-audio") << mouthModelName(model) << ": " << (backend ? backend->getReason() : reason);
+		return 1;
+	}
+	if (!backend->getReason().empty())
+		MIKAN_LOG_WARNING("replay-audio") << mouthModelName(model) << ": " << backend->getReason();
+
+	const MouthReplayAlignment alignment= mouthReplayAlignment(sidecar.startSampleIndex, chainConfig.window);
+	MouthReplayOutput replayed;
+	backend->setEngineSmoothing(recordedAudio.ovrSmoothing);
+	replayMouthChain(clip, alignment.padSamples, chainConfig, *backend, replayed);
+	MIKAN_LOG_INFO("replay-audio") << "model " << mouthModelName(model) << " (" << backend->getInfo() << ") at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
+								   << " dBFS: " << replayed.frames.size() << " frames from " << replayed.runs.size()
+								   << " runs, padded " << alignment.padSamples
+								   << " samples onto the live hop grid, live frame = replayed frame + "
+								   << alignment.frameOffset;
+
+	// The live frames by their stream index: consecutive iterations share a
+	// mouth sample, so each distinct frame counts once
+	std::map<int64_t, MouthFrame> recordedByIndex;
+	int recordedFrames= 0;
+	int untiedFrames= 0;
+	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
+	{
+		const RecordedMouth& mouth= replay.getFrame(frameIndex).recorded->mouth;
+		if (!mouth.present)
+			continue;
+		++recordedFrames;
+		if (mouth.audioFrameIndex < 0)
+			++untiedFrames;
+		else
+			recordedByIndex[mouth.audioFrameIndex]= mouth.frame;
+	}
+
+	// The first window's frames replay from padding where live had the
+	// stream's history, so they are measured apart
+	const int64_t warmupFrames= (int64_t)chainConfig.window.windowSamples * MOUTH_FRAME_RATE / AUDIO_SAMPLE_RATE;
+	std::array<double, VISEME_COUNT> visemeDiff{};
+	std::array<double, VISEME_COUNT> visemeActivity{};
+	double warmupDiff= 0.0;
+	int compared= 0;
+	int warmupCompared= 0;
+	int outside= 0;
+	std::vector<MouthFrame> recordedSeries;
+	std::vector<MouthFrame> replayedSeries;
+	for (const auto& [liveIndex, recordedFrame] : recordedByIndex)
+	{
+		const int64_t replayIndex= liveIndex - alignment.frameOffset;
+		if (replayIndex < 0 || replayIndex >= (int64_t)replayed.frames.size())
+		{
+			++outside;
+			continue;
+		}
+		const MouthFrame& replayedFrame= replayed.frames[(size_t)replayIndex].frame;
+		recordedSeries.push_back(recordedFrame);
+		replayedSeries.push_back(replayedFrame);
+		if (replayIndex < warmupFrames)
+		{
+			for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+				warmupDiff+= std::fabs(replayedFrame.weights[viseme] - recordedFrame.weights[viseme]);
+			++warmupCompared;
+			continue;
+		}
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+		{
+			visemeDiff[viseme]+= std::fabs(replayedFrame.weights[viseme] - recordedFrame.weights[viseme]);
+			visemeActivity[viseme]+= std::fabs(recordedFrame.weights[viseme]);
+		}
+		++compared;
+	}
+
+	double meanDiff= 0.0;
+	double meanActivity= 0.0;
+	int worstViseme= 0;
+	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+	{
+		visemeDiff[viseme]/= std::max(compared, 1);
+		visemeActivity[viseme]/= std::max(compared, 1);
+		meanDiff+= visemeDiff[viseme];
+		meanActivity+= visemeActivity[viseme];
+		if (visemeDiff[viseme] > visemeDiff[worstViseme])
+			worstViseme= viseme;
+	}
+	meanDiff/= VISEME_COUNT;
+	meanActivity/= VISEME_COUNT;
+	warmupDiff/= std::max(warmupCompared, 1) * VISEME_COUNT;
+
+	std::vector<double> runMs;
+	for (const MouthChainRun& run : replayed.runs)
+	{
+		if (run.bInferred)
+			runMs.push_back(run.inferMs);
+	}
+	std::sort(runMs.begin(), runMs.end());
+	const double p50= runMs.empty() ? 0.0 : runMs[runMs.size() / 2];
+	const double p95= runMs.empty() ? 0.0 : runMs[std::min(runMs.size() - 1, (size_t)(0.95 * (double)runMs.size()))];
+
+	if (recordedFrames == 0)
+		MIKAN_LOG_WARNING("replay-audio") << "the recording carries no viseme frames (made before the frame carried visemes?)";
+	MIKAN_LOG_INFO("replay-audio") << recordedFrames << " recorded iterations carried a mouth, " << recordedByIndex.size()
+								   << " distinct frames tied to the sidecar, " << untiedFrames << " untied, " << outside
+								   << " outside the replayed span";
+	MIKAN_LOG_INFO("replay-audio") << "warm-up (the first " << warmupFrames << " frames): " << warmupCompared
+								   << " compared, mean abs diff " << warmupDiff;
+	MIKAN_LOG_INFO("replay-audio") << "AUDIO REPLAY: " << compared << " frames compared, mean abs diff " << meanDiff
+								   << " over mean activity " << meanActivity << ", worst viseme "
+								   << visemeName(worstViseme) << " " << visemeDiff[worstViseme] << ", run p50 " << p50
+								   << " ms p95 " << p95 << " ms";
+	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+	{
+		if (visemeDiff[viseme] > 0.01 || visemeActivity[viseme] > 0.05)
+			MIKAN_LOG_INFO("replay-audio") << "  " << visemeName(viseme) << ": diff " << visemeDiff[viseme]
+										   << " activity " << visemeActivity[viseme];
+	}
+
+	if (!options.outPath.empty())
+	{
+		nlohmann::json visemes= nlohmann::json::array();
+		nlohmann::json perVisemeDiff= nlohmann::json::object();
+		nlohmann::json perVisemeActivity= nlohmann::json::object();
+		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+		{
+			visemes.push_back(visemeName(viseme));
+			perVisemeDiff[visemeName(viseme)]= visemeDiff[viseme];
+			perVisemeActivity[visemeName(viseme)]= visemeActivity[viseme];
+		}
+		nlohmann::json out;
+		out["recording"]= PathUtils::pathToUtf8(options.recordingPath);
+		out["sidecar"]= sidecar.fileName;
+		out["recordedModel"]= mouthModelName(recordedAudio.model);
+		out["recordedProfile"]= recordedAudio.profilePath;
+		out["model"]= mouthModelName(model);
+		out["profile"]= profilePath;
+		out["gainDb"]= chainConfig.gainDb;
+		out["gateDbfs"]= chainConfig.gateDbfs;
+		out["sampleRate"]= AUDIO_SAMPLE_RATE;
+		out["frameRate"]= MOUTH_FRAME_RATE;
+		out["alignment"]= {{"startSample", sidecar.startSampleIndex},
+						   {"padSamples", alignment.padSamples},
+						   {"frameOffset", alignment.frameOffset},
+						   {"warmupFrames", warmupFrames}};
+		out["visemes"]= visemes;
+		out["timings"]= {{"runs", runMs.size()}, {"p50Ms", p50}, {"p95Ms", p95}};
+		out["diff"]= {{"compared", compared},
+					  {"mean", meanDiff},
+					  {"meanActivity", meanActivity},
+					  {"worstViseme", visemeName(worstViseme)},
+					  {"warmupCompared", warmupCompared},
+					  {"warmupMean", warmupDiff},
+					  {"perViseme", perVisemeDiff},
+					  {"perVisemeActivity", perVisemeActivity}};
+		out["recorded"]= framesToJson(recordedSeries);
+		out["replayed"]= framesToJson(replayedSeries);
+
+		std::ofstream file(options.outPath);
+		if (!file)
+		{
+			MIKAN_LOG_ERROR("replay-audio") << "cannot write " << options.outPath.string();
+			return 1;
+		}
+		file << out.dump();
+		MIKAN_LOG_INFO("replay-audio") << "wrote " << options.outPath.string();
+	}
+
+	return compared > 0 ? 0 : 1;
+}
+
+MIKAN_REGISTER_TEST("--replay-audio",
+					"Re-runs the mouth stage over a recording's audio sidecar and measures it against the recorded viseme frames",
+					eTestCategory::Tool, runReplayAudio)

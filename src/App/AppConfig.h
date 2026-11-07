@@ -8,6 +8,7 @@
 
 #include "glm/ext/matrix_double4x4.hpp"
 
+#include "AudioTypes.h"
 #include "MikanVideoSourceTypes.h"
 #include "TrackingTypes.h"
 
@@ -226,6 +227,29 @@ struct FaceConfig
 	glm::quat headAnchor{1.f, 0.f, 0.f, 0.f};
 };
 
+// The microphone mouth stage
+struct AudioConfig
+{
+	bool enabled= false;
+	// The capture device by name, re-resolved at open; empty or a name no
+	// device carries any more takes the system default
+	std::string deviceName;
+	// Applied to the samples before the gate and the backend
+	float gainDb= 0.f;
+	// Hop level under which the mouth is neutral and no backend runs
+	float gateDbfs= -45.f;
+	// The mouth model: the level alone, the MFCC profile, or Oculus LipSync
+	eMouthModel model= eMouthModel::Mfcc;
+	// The calibration profile the MFCC model loads; empty is volume-only
+	std::string profilePath;
+	// The emission filter's settling time per model (eMouthModel order), ms,
+	// 0 for no filter
+	std::array<float, MOUTH_MODEL_COUNT> smoothingMs= {
+		MOUTH_SMOOTHING_DEFAULT_MS[0], MOUTH_SMOOTHING_DEFAULT_MS[1], MOUTH_SMOOTHING_DEFAULT_MS[2]};
+	// The Oculus engine's own viseme smoothing, OVR_SMOOTHING_MIN..MAX
+	int ovrSmoothing= OVR_SMOOTHING_DEFAULT;
+};
+
 // Body proportions shared by every elbow consumer (IMU-measured forearms and
 // the vision body-pose solver alike)
 struct BodyConfig
@@ -404,6 +428,7 @@ public:
 	FusionConfig fusion;
 	ImuConfig imu;
 	FaceConfig face;
+	AudioConfig audio;
 	BodyConfig body;
 	RecordingConfig recording;
 	AvatarConfig avatar;

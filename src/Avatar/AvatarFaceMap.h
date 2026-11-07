@@ -6,20 +6,25 @@
 #include <vector>
 
 #include "FaceTypes.h"
+#include "VisemeTypes.h"
 
 struct AvatarModel;
 
-// The phone face stream's ARKit blendshapes as the blendshape names a VMC
+// The output face's ARKit blendshapes as the blendshape names a VMC
 // receiver matches on (/VMC/Ext/Blend/Val), built once per avatar. Each
-// output is a weighted sum of ARKit columns, clamped to [0, 1].
+// output is a weighted sum of ARKit columns clamped to [0, 1]. A preset
+// vowel also names its viseme: while the frame carries the microphone's
+// viseme weights, the vowel reads its viseme directly instead of the ARKit
+// columns the viseme table spread it over, since the viseme is the vowel.
 //
 // Which names an avatar gets:
 // - Expressions named after ARKit blendshapes (perfect sync): those
 //   expressions alone, one column each, in the avatar's own spelling.
 // - Otherwise the VRM presets the avatar carries, each derived from the ARKit
 //   columns that shape it (blinks from the blinks, the vowels from the jaw and
-//   mouth, the gaze directions from the eye looks). The emotion presets have
-//   no ARKit counterpart and are never driven.
+//   mouth, the gaze directions from the eye looks) or, for the vowels, from
+//   the frame's visemes. The emotion presets have no ARKit counterpart and
+//   are never driven.
 // - Plus, in that second case, the ARKit names the avatar carries as morph
 //   targets. A standard receiver ignores them (it matches expressions only),
 //   and a receiver that also matches morph targets gets the full face.
@@ -36,6 +41,9 @@ public:
 	{
 		std::string name;
 		std::vector<Term> terms;
+		// The viseme the output reads instead while the frame carries viseme
+		// weights, a preset vowel's; -1 for every other output
+		int viseme= -1;
 	};
 
 	static std::shared_ptr<const AvatarFaceMap> buildRaw();
@@ -44,8 +52,10 @@ public:
 	const std::vector<Output>& getOutputs() const { return m_outputs; }
 	bool isPerfectSync() const { return m_bPerfectSync; }
 
-	// One value per output, in getOutputs() order
-	void evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>& arkit, std::vector<float>& outValues) const;
+	// One value per output, in getOutputs() order. visemes is the frame's
+	// viseme weights while the microphone owns the mouth, else null.
+	void evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>& arkit, const VisemeWeights* visemes,
+				  std::vector<float>& outValues) const;
 
 private:
 	std::vector<Output> m_outputs;
@@ -64,7 +74,9 @@ public:
 	AvatarFaceMorphs(const AvatarModel& model, std::shared_ptr<const AvatarFaceMap> faceMap);
 
 	// Per mesh, one weight per morph target name. All zero without a face.
-	void evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>* arkit,
+	// visemes is the frame's viseme weights while the microphone owns the
+	// mouth, else null.
+	void evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>* arkit, const VisemeWeights* visemes,
 				  std::vector<std::vector<float>>& outMeshWeights) const;
 
 private:

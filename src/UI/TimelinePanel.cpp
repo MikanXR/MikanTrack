@@ -1,5 +1,7 @@
 #include "TimelinePanel.h"
 
+#include "VisemeTable.h"
+
 #include <algorithm>
 #include <filesystem>
 
@@ -47,6 +49,9 @@ void TimelinePanel::drawRecordingSection(AppConfig* config, VisionThread* vision
 		ImGui::SameLine();
 		ImGui::Text(locText("timelinePanel.recordingStatsFmt"), (long long)visionThread->getRecordingFrameCount(),
 					(double)visionThread->getRecordingBytes() / (1024.0 * 1024.0));
+		const double audioSeconds= visionThread->getAudioRecordingSeconds();
+		if (audioSeconds >= 0.0)
+			ImGui::Text(locText("timelinePanel.audioSidecarFmt"), audioSeconds);
 		if (visionThread->isRecordingRawFrames())
 		{
 			ImGui::TextColored(k_colorBad, "%s", locText("timelinePanel.rawFramesStatus"));
@@ -507,6 +512,20 @@ void TimelinePanel::rebuildDisplayFrame()
 	default:
 		m_displayFused= frame.replayedFused;
 		break;
+	}
+
+	// The mouth is not replayed (the audio stage runs offline through
+	// --replay-audio), so every view shows the frame's recorded visemes the
+	// way the live merge handed them on: over a neutral face through the
+	// viseme table, and as the visemes themselves
+	m_displayFused.face.visemesPresent= false;
+	if (frame.recorded->mouth.present)
+	{
+		m_displayFused.face.present= true;
+		m_displayFused.face.blendshapes.fill(0.f);
+		applyVisemeWeights(frame.recorded->mouth.frame.weights, m_displayFused.face.blendshapes);
+		m_displayFused.face.visemesPresent= true;
+		m_displayFused.face.visemes= frame.recorded->mouth.frame.weights;
 	}
 
 	m_perCameraCopies= frame.perCamera;

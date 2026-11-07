@@ -157,11 +157,11 @@ The loaded file is announced as `/VMC/Ext/VRM` (path, title, SHA-256) once a sec
 
 ## The face map (`src/Avatar/AvatarFaceMap.h`)
 
-`AvatarFaceMap` turns the face stream's 52 ARKit blendshapes (see [face.md](./face.md)) into the blendshape names a VMC receiver matches on, built once per loaded avatar. Each output is a weighted sum of ARKit columns, clamped to [0, 1]. Which names an avatar gets:
+`AvatarFaceMap` turns the output face's 52 ARKit blendshapes (see [face.md](./face.md)) into the blendshape names a VMC receiver matches on, built once per loaded avatar. Each output is a weighted sum of ARKit columns clamped to [0, 1]. A VRM vowel preset also names its viseme: while the frame carries the microphone's viseme weights (`FacePose::visemesPresent`, see [audio.md](./audio.md)), the vowel reads that viseme directly instead of the ARKit columns the viseme table spread it over, since the viseme is the vowel. `evaluate` takes the ARKit face and the visemes (null when the phone's face owns the mouth). Which names an avatar gets:
 
 - An avatar with expressions named after ARKit blendshapes (perfect sync, compared without case) gets those expressions alone, in its own spelling.
 
-- Otherwise each VRM preset the avatar carries gets the ARKit columns that shape it: the sided blinks from each eye, `aa` from the jaw, `ih` from the smile, `ee` from the stretch, `ou` from the pucker, `oh` from the funnel, and the four gaze directions from the eye looks. The two-eyed blink is driven only when the avatar lacks a sided pair, since both would close the eyes twice. The emotion presets have no ARKit counterpart and stay untouched.
+- Otherwise each VRM preset the avatar carries gets the ARKit columns that shape it: the sided blinks from each eye, `aa` from the jaw, `ih` from the smile, `ee` from the stretch, `ou` from the pucker, `oh` from the funnel, and the four gaze directions from the eye looks, with the five vowels reading the `aa`, `I`, `E`, `U`, and `O` visemes directly when the frame carries them. The two-eyed blink is driven only when the avatar lacks a sided pair, since both would close the eyes twice. The emotion presets have no ARKit counterpart and stay untouched.
 
 - Also in that second case, the ARKit names the avatar carries as morph targets go out under their own names. A standard receiver ignores them, since it matches expressions only. A receiver that also matches morph targets gets the full face, which is how an avatar whose ARKit shapes are morphs without expressions keeps its detail.
 

@@ -93,6 +93,25 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   in mm, scale) - the numbers are saved with the config as a baseline. Hand
   scale is measured continuously by stereo triangulation while tracking runs,
   until calibrated hand skeletons supersede it.
+- **Microphone mouth** (Audio panel): with no phone face streaming, the
+  voice drives the avatar's mouth from the microphone through uLipSync's
+  method, scored against your own calibrated vowels at a fraction of a
+  percent of a core. A VRM avatar with the vowel presets gets them straight
+  from the visemes, and one with ARKit shapes gets the jaw and lip shape of
+  each viseme. Pick the device and set the gate just above the room's noise
+  floor (the meter turns green when it opens). Before calibration the jaw
+  opens with the voice's volume alone. Calibrate records the five vowels
+  and the room's silence through six three-second prompts, builds your
+  profile, and sets the gate from the silence. Import loads a profile
+  exported from uLipSync or VTube Studio instead. The panel shows the
+  viseme weights live, and the OSC Output panel shows what they become on
+  the loaded avatar. The phone's face takes the mouth back whenever it
+  streams. The Model combo switches between Simple Loudness (the jaw by
+  volume alone), MFCC (uLipSync, the calibrated default above), and Oculus
+  LipSync (Meta's engine; release builds include it, and a source build
+  needs the Oculus Lipsync native SDK unpacked to `deps/OVRLipSyncNative`,
+  [build.md](docs/reference/build.md)). Each model has its own Smoothing
+  slider, and Oculus LipSync also exposes the engine's own smoothing.
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
 - Localized UI (English and Japanese; machine-translated Japanese for now),
   switchable live from the main menu or the Settings panel
@@ -128,7 +147,10 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   per-frame checksums. The Timeline panel scrubs/steps/plays a recording in
   the 3D scene view, marks any divergent frames, and re-simulates the same
   incident with edited fusion parameters ("what-if") to judge a candidate
-  fix against the recorded original. Headless:
+  fix against the recorded original. With the microphone mouth on, the
+  recording also carries the microphone as a wav beside it, and
+  `MikanTrack --replay-audio <file>` re-runs the mouth stage over it against
+  the recorded mouth frames. Headless:
   `MikanTrack --replay-verify <file>` re-verifies a recording;
   `MikanTrack --replay-dump <file> <first> <last>` emits a frame range
   with regenerated fusion diagnostics for offline analysis. Starting a
@@ -158,6 +180,7 @@ Developer reference lives in [docs/reference/](docs/reference/):
 - [calibration.md](docs/reference/calibration.md): the wizards and where results persist
 - [imu.md](docs/reference/imu.md): the wrist IMU system
 - [face.md](docs/reference/face.md): the iFacialMocap face stream
+- [audio.md](docs/reference/audio.md): the microphone mouth stage
 - [avatar.md](docs/reference/avatar.md): the VRM avatar loader, rest skeleton, and MToon renderer
 - [wire-protocol.md](docs/reference/wire-protocol.md): the OSC contract
 - [debugging.md](docs/reference/debugging.md): dumps, record/replay, diagnostics
@@ -243,7 +266,7 @@ the head into parent-relative bones.
 | `/VMC/Ext/T` | `f` | seconds since the socket opened |
 | `/VMC/Ext/Root/Pos` | `sfffffff` | `"root"` + identity; the avatar keeps whatever root it has |
 | `/VMC/Ext/Bone/Pos` | `sfffffff` | bone name + local position xyz (m) + rotation xyzw, Unity convention |
-| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, while the phone face stream is live |
+| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, while the phone face stream is live or the microphone mouth is on |
 | `/VMC/Ext/Blend/Apply` | (none) | after the last blendshape value |
 | `/VMC/Ext/VRM` | `sss` | loaded avatar's local file path, title, SHA-256 of the file (once a second) |
 

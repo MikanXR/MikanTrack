@@ -363,7 +363,9 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 	const glm::vec3 lightDirection= glm::normalize(glm::vec3(0.6f, 1.f, 0.4f));
 	if (m_faceMorphs != nullptr)
 	{
-		m_faceMorphs->evaluate(m_bHasAvatarFace ? &m_avatarFace.blendshapes : nullptr, m_morphWeights);
+		const bool bVisemes= m_bHasAvatarFace && m_avatarFace.visemesPresent;
+		m_faceMorphs->evaluate(m_bHasAvatarFace ? &m_avatarFace.blendshapes : nullptr,
+							   bVisemes ? &m_avatarFace.visemes : nullptr, m_morphWeights);
 		m_meshRenderer->setMorphWeights(m_morphWeights);
 	}
 	m_meshRenderer->draw(viewProjection, modelMatrix, m_posedGlobals, lightDirection);

@@ -306,17 +306,35 @@ std::string makeFrameDirectoryPath(const std::string& recordingFilePath)
 	return stem + "_frames";
 }
 
+std::string makeAudioSidecarPath(const std::string& recordingFilePath)
+{
+	const size_t extension= recordingFilePath.find_last_of('.');
+	const std::string stem=
+		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
+	return stem + ".wav";
+}
+
 json headerToJson(const RecordingHeader& header)
 {
 	json appConfig= json::parse(header.appConfigJsonText, nullptr, false);
 	if (appConfig.is_discarded())
 		appConfig= json::object();
-	return {
+	json out= {
 		{"type", "header"},
 		{"formatVersion", header.formatVersion},
 		{"appConfig", appConfig},
 		{"cameraCount", header.cameraCount},
 	};
+	if (header.audio.present)
+	{
+		out["audio"]= {
+			{"file", header.audio.fileName},
+			{"sampleRate", header.audio.sampleRate},
+			{"startSample", header.audio.startSampleIndex},
+			{"startMs", header.audio.startTimestampMs},
+		};
+	}
+	return out;
 }
 
 bool headerFromJson(const json& j, RecordingHeader& outHeader)
@@ -328,6 +346,15 @@ bool headerFromJson(const json& j, RecordingHeader& outHeader)
 	outHeader.cameraCount= j.value("cameraCount", 0);
 	if (j.contains("appConfig"))
 		outHeader.appConfigJsonText= j["appConfig"].dump();
+	if (j.contains("audio") && j["audio"].is_object())
+	{
+		const json& audio= j["audio"];
+		outHeader.audio.present= true;
+		outHeader.audio.fileName= audio.value("file", "");
+		outHeader.audio.sampleRate= audio.value("sampleRate", 0);
+		outHeader.audio.startSampleIndex= audio.value("startSample", (int64_t)0);
+		outHeader.audio.startTimestampMs= audio.value("startMs", 0.0);
+	}
 	return outHeader.formatVersion == k_formatVersion && outHeader.cameraCount > 0;
 }
 
@@ -348,7 +375,7 @@ json frameToJson(const RecordedFrame& frame)
 			imu.push_back({{"has", false}});
 	}
 
-	return {
+	json out= {
 		{"type", "frame"},
 		{"seq", frame.seq},
 		{"nowMs", frame.nowTimestampMs},
@@ -358,6 +385,14 @@ json frameToJson(const RecordedFrame& frame)
 		{"imu", imu},
 		{"checksum", checksumToHex(frame.checksum)},
 	};
+	if (frame.mouth.present)
+	{
+		json weights= json::array();
+		for (float weight : frame.mouth.frame.weights)
+			weights.push_back(weight);
+		out["mouth"]= {{"frameIndex", frame.mouth.audioFrameIndex}, {"w", weights}};
+	}
+	return out;
 }
 
 bool frameFromJson(const json& j, RecordedFrame& outFrame)
@@ -386,6 +421,21 @@ bool frameFromJson(const json& j, RecordedFrame& outFrame)
 			outFrame.imu[sideIndex].forearmOrientationWorld=
 				quatFromJson(imu[sideIndex].value("quatW", json::array()));
 			outFrame.imu[sideIndex].forearmConfidence= imu[sideIndex].value("conf", 0.f);
+		}
+	}
+	// A mouth block is the 15 viseme weights; a block of another width is
+	// from before the frame carried visemes and is skipped, since its values
+	// mean something else
+	if (j.contains("mouth") && j["mouth"].is_object())
+	{
+		const json& mouth= j["mouth"];
+		const json& weights= mouth.value("w", json::array());
+		if (weights.is_array() && (int)weights.size() == VISEME_COUNT)
+		{
+			outFrame.mouth.present= true;
+			outFrame.mouth.audioFrameIndex= mouth.value("frameIndex", (int64_t)-1);
+			for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+				outFrame.mouth.frame.weights[viseme]= floatFromJson(weights[viseme]);
 		}
 	}
 	outFrame.checksum= checksumFromHex(j.value("checksum", "0"));

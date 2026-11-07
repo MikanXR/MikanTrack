@@ -23,6 +23,7 @@
 class AppConfig;
 class AvatarFaceMap;
 class AvatarSkeleton;
+class AudioService;
 class FaceService;
 class VideoCaptureSystem;
 class OscStreamer;
@@ -39,7 +40,7 @@ class VisionThread
 {
 public:
 	VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
-				 AppConfig* config);
+				 AudioService* audioService, AppConfig* config);
 	~VisionThread();
 
 	// Sizes the per-camera contexts from the config's camera count and spawns
@@ -210,6 +211,8 @@ public:
 	uint64_t getRecordingBytes() const { return m_recorder != nullptr ? m_recorder->getBytesWritten() : 0; }
 	bool didLastRecordingAbort() const { return m_recorder != nullptr && m_recorder->wasAborted(); }
 	bool isRecordingRawFrames() const { return m_frameRecorder != nullptr && m_frameRecorder->isRecording(); }
+	// Seconds of audio the recording's sidecar holds, or -1 while none is written
+	double getAudioRecordingSeconds() const;
 	int64_t getRecordedFrameCount() const
 	{
 		return m_frameRecorder != nullptr ? m_frameRecorder->getFramesWritten() : 0;
@@ -307,6 +310,9 @@ private:
 	void runBodySolveStage(IterationState& iteration);
 	// OSC send and the fused-result publish
 	void runOutputStage(IterationState& iteration);
+	// The microphone's mouth onto the output's face when the phone does not
+	// own it: the mouth columns over a neutral face
+	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
 	// The face stream's blendshapes and head onto the output, phone head
 	// winning over the camera head while the stream is live
 	void applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead);
@@ -355,6 +361,9 @@ private:
 	// Phone face stream. Owned by App; this thread drains it.
 	FaceService* m_faceService= nullptr;
 	uint64_t m_lastFaceSequence= 0;
+	// Microphone mouth stage. Owned by App; this thread reads its sample.
+	AudioService* m_audioService= nullptr;
+	uint64_t m_lastMouthSequence= 0;
 	// The timestamp of the last output a camera produced, so a face-only
 	// frame can tell when the hands it repeats have gone stale
 	double m_lastCameraOutputMs= -1.0;
@@ -395,6 +404,9 @@ private:
 	// simply not reported.
 	static constexpr int k_maxReportedCameras= 8;
 	std::atomic<float> m_observationConfidence[k_maxReportedCameras * 2];
+
+	// A mouth sample older than this is a stage that stopped, not a mouth
+	static constexpr double k_mouthStaleMs= 1000.0;
 
 	// Fused result handoff (mutex-guarded, latest-wins)
 	std::mutex m_fusedMutex;
@@ -452,6 +464,10 @@ private:
 	std::string m_requestedRecordingPath;
 	std::string m_lastRecordingPath;
 	int64_t m_recordingSeq= 0;
+	// The audio sidecar's stream, so a mouth frame from another stream (the
+	// device reopened) records without an index into it
+	bool m_bRecordingAudio= false;
+	uint32_t m_recordingAudioEpoch= 0;
 
 	// Diagnostic dump: history lives on the vision thread; the request path
 	// and completion path are the only cross-thread strings (mutex-guarded)

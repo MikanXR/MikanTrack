@@ -44,6 +44,8 @@ struct PresetRule
 {
 	const char* preset;
 	std::vector<AvatarFaceMap::Term> terms;
+	// The viseme a vowel preset reads directly; -1 for the rest
+	int viseme= -1;
 };
 
 std::vector<PresetRule> makePresetRules()
@@ -51,11 +53,11 @@ std::vector<PresetRule> makePresetRules()
 	return {
 		{"blinkLeft", {term("eyeBlinkLeft", 1.f)}},
 		{"blinkRight", {term("eyeBlinkRight", 1.f)}},
-		{"aa", {term("jawOpen", 1.f)}},
-		{"ih", average("mouthSmileLeft", "mouthSmileRight")},
-		{"ee", average("mouthStretchLeft", "mouthStretchRight")},
-		{"ou", {term("mouthPucker", 1.f)}},
-		{"oh", {term("mouthFunnel", 1.f)}},
+		{"aa", {term("jawOpen", 1.f)}, (int)eViseme::aa},
+		{"ih", average("mouthSmileLeft", "mouthSmileRight"), (int)eViseme::I},
+		{"ee", average("mouthStretchLeft", "mouthStretchRight"), (int)eViseme::E},
+		{"ou", {term("mouthPucker", 1.f)}, (int)eViseme::U},
+		{"oh", {term("mouthFunnel", 1.f)}, (int)eViseme::O},
 		{"lookUp", average("eyeLookUpLeft", "eyeLookUpRight")},
 		{"lookDown", average("eyeLookDownLeft", "eyeLookDownRight")},
 		// The person's left: the left eye looks out, the right eye in
@@ -92,7 +94,7 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 	for (const PresetRule& rule : makePresetRules())
 	{
 		if (const AvatarExpression* expression= model.findExpressionByPreset(rule.preset))
-			map->m_outputs.push_back(Output{expression->name, rule.terms});
+			map->m_outputs.push_back(Output{expression->name, rule.terms, rule.viseme});
 	}
 	// The two-eyed blink only when the avatar cannot blink each eye on its
 	// own: driving both would close the eyes twice
@@ -121,19 +123,25 @@ std::shared_ptr<const AvatarFaceMap> AvatarFaceMap::build(const AvatarModel& mod
 	return map;
 }
 
-void AvatarFaceMap::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>& arkit,
+void AvatarFaceMap::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>& arkit, const VisemeWeights* visemes,
 							 std::vector<float>& outValues) const
 {
 	outValues.resize(m_outputs.size());
 	for (size_t outputIndex= 0; outputIndex < m_outputs.size(); ++outputIndex)
 	{
-		float value= 0.f;
-		for (const Term& outputTerm : m_outputs[outputIndex].terms)
+		const Output& output= m_outputs[outputIndex];
+		if (visemes != nullptr && output.viseme >= 0)
+		{
+			outValues[outputIndex]= std::clamp((*visemes)[output.viseme], 0.f, 1.f);
+			continue;
+		}
+		float sum= 0.f;
+		for (const Term& outputTerm : output.terms)
 		{
 			if (outputTerm.arkitIndex >= 0)
-				value+= outputTerm.weight * arkit[outputTerm.arkitIndex];
+				sum+= outputTerm.weight * arkit[outputTerm.arkitIndex];
 		}
-		outValues[outputIndex]= std::clamp(value, 0.f, 1.f);
+		outValues[outputIndex]= std::clamp(sum, 0.f, 1.f);
 	}
 }
 
@@ -173,7 +181,7 @@ AvatarFaceMorphs::AvatarFaceMorphs(const AvatarModel& model, std::shared_ptr<con
 	}
 }
 
-void AvatarFaceMorphs::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>* arkit,
+void AvatarFaceMorphs::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>* arkit, const VisemeWeights* visemes,
 								std::vector<std::vector<float>>& outMeshWeights) const
 {
 	outMeshWeights.resize(m_meshMorphCounts.size());
@@ -182,7 +190,7 @@ void AvatarFaceMorphs::evaluate(const std::array<float, ARKIT_BLENDSHAPE_COUNT>*
 	if (arkit == nullptr)
 		return;
 
-	m_faceMap->evaluate(*arkit, m_outputValues);
+	m_faceMap->evaluate(*arkit, visemes, m_outputValues);
 	for (const Bind& bind : m_binds)
 	{
 		float& weight= outMeshWeights[bind.mesh][bind.morph];

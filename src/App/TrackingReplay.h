@@ -100,6 +100,7 @@ public:
 
 	int getFrameCount() const { return (int)m_frames.size(); }
 	const AppConfig& getRecordedConfig() const { return m_recordedConfig; }
+	const RecordingHeader& getHeader() const { return m_header; }
 	const RecordingFooter& getFooter() const { return m_footer; }
 	bool hasFooter() const { return m_bHasFooter; }
 	const std::string& getFilePath() const { return m_filePath; }

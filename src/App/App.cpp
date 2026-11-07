@@ -15,6 +15,7 @@
 #include "AvatarFaceMap.h"
 #include "AvatarSkeleton.h"
 #include "FrameTimer.h"
+#include "AudioService.h"
 #include "FaceService.h"
 #include "GlobalSettings.h"
 #include "ImuService.h"
@@ -166,8 +167,9 @@ bool App::startup()
 	// activated
 	m_imuService= std::make_unique<ImuService>();
 	m_faceService= std::make_unique<FaceService>();
+	m_audioService= std::make_unique<AudioService>();
 	m_visionThread= std::make_unique<VisionThread>(m_videoCapture.get(), m_imuService.get(), m_faceService.get(),
-												   m_config.get());
+												   m_audioService.get(), m_config.get());
 
 	m_mainWindow= std::make_unique<MainWindow>(this);
 
@@ -186,6 +188,23 @@ void App::applyFaceConfig()
 	m_faceService->setConfig(faceConfig);
 }
 
+void App::applyAudioConfig()
+{
+	if (m_audioService == nullptr || m_config == nullptr)
+		return;
+
+	AudioServiceConfig audioConfig;
+	audioConfig.enabled= m_config->audio.enabled;
+	audioConfig.deviceName= m_config->audio.deviceName;
+	audioConfig.gainDb= m_config->audio.gainDb;
+	audioConfig.gateDbfs= m_config->audio.gateDbfs;
+	audioConfig.model= m_config->audio.model;
+	audioConfig.profilePath= m_config->audio.profilePath;
+	audioConfig.smoothingMs= m_config->audio.smoothingMs[(size_t)m_config->audio.model];
+	audioConfig.engineSmoothing= m_config->audio.ovrSmoothing;
+	m_audioService->setConfig(audioConfig);
+}
+
 bool App::activateProject(const std::filesystem::path& projectFile)
 {
 	// Stop the config's consumers before loadProject mutates it in place
@@ -197,6 +216,7 @@ bool App::activateProject(const std::filesystem::path& projectFile)
 	{
 		m_imuService->shutdown();
 		m_faceService->shutdown();
+		m_audioService->shutdown();
 		m_appState= eAppState::MainMenu;
 		return false;
 	}
@@ -205,6 +225,8 @@ bool App::activateProject(const std::filesystem::path& projectFile)
 	m_imuService->startup();
 	m_faceService->startup();
 	applyFaceConfig();
+	m_audioService->startup();
+	applyAudioConfig();
 	m_visionThread->start();
 	m_mainWindow->tryRestoreVideoDeviceFromConfig();
 	loadConfiguredAvatar();
@@ -240,6 +262,7 @@ void App::returnToMainMenu()
 	m_visionThread->stop();
 	m_imuService->shutdown();
 	m_faceService->shutdown();
+	m_audioService->shutdown();
 	for (int cameraIndex= 0; cameraIndex < (int)m_videoCapture->getCameraSlotCount(); ++cameraIndex)
 		m_videoCapture->closeDevice(cameraIndex);
 	m_appState= eAppState::MainMenu;
@@ -253,6 +276,7 @@ void App::discardNewProjectAndReturnToMenu()
 	m_visionThread->stop();
 	m_imuService->shutdown();
 	m_faceService->shutdown();
+	m_audioService->shutdown();
 	for (int cameraIndex= 0; cameraIndex < (int)m_videoCapture->getCameraSlotCount(); ++cameraIndex)
 		m_videoCapture->closeDevice(cameraIndex);
 
@@ -503,6 +527,12 @@ void App::shutdown()
 	{
 		m_faceService->shutdown();
 		m_faceService= nullptr;
+	}
+
+	if (m_audioService != nullptr)
+	{
+		m_audioService->shutdown();
+		m_audioService= nullptr;
 	}
 
 	if (m_videoCapture != nullptr)

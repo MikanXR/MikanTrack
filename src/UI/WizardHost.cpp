@@ -1,5 +1,6 @@
 #include "WizardHost.h"
 
+#include "AudioCalibrationWizard.h"
 #include "BodyCalibrationWizard.h"
 #include "CameraContext.h" // VisionPreviewFrame
 #include "ExtrinsicsWizard.h"
@@ -8,12 +9,13 @@
 #include "MountingWizard.h"
 #include "VideoPreviewPanel.h"
 
-WizardHost::WizardHost(AppConfig* config, VisionThread* visionThread)
+WizardHost::WizardHost(App* app, AppConfig* config, VisionThread* visionThread)
 	: m_intrinsicsWizard(std::make_unique<IntrinsicsWizard>(config, visionThread))
 	, m_extrinsicsWizard(std::make_unique<ExtrinsicsWizard>(config, visionThread))
 	, m_handCalibrationWizard(std::make_unique<HandCalibrationWizard>(config, visionThread))
 	, m_mountingWizard(std::make_unique<MountingWizard>(config, visionThread))
 	, m_bodyCalibrationWizard(std::make_unique<BodyCalibrationWizard>(config, visionThread))
+	, m_audioCalibrationWizard(std::make_unique<AudioCalibrationWizard>(app, config))
 {
 }
 
@@ -41,6 +43,9 @@ bool WizardHost::launch(eWizardKind kind, int cameraIndex)
 		case eWizardKind::Body:
 			m_bodyCalibrationWizard->enter();
 			return true;
+		case eWizardKind::AudioCalibration:
+			m_audioCalibrationWizard->enter();
+			return true;
 		default:
 			return false;
 	}
@@ -63,6 +68,8 @@ eWizardKind WizardHost::getActiveKind() const
 		return eWizardKind::Mounting;
 	if (m_bodyCalibrationWizard->isActive())
 		return eWizardKind::Body;
+	if (m_audioCalibrationWizard->isActive())
+		return eWizardKind::AudioCalibration;
 	return eWizardKind::None;
 }
 
@@ -119,6 +126,11 @@ void WizardHost::update(float deltaSeconds, const std::vector<VisionPreviewFrame
 			// Also leaves tracking running: both stages measure the tracked hands
 			if (!m_handCalibrationWizard->update(deltaSeconds, previews, fused))
 				m_handCalibrationWizard->exit();
+			break;
+		case eWizardKind::AudioCalibration:
+			// Needs no tracking at all: it reads the audio service alone
+			if (!m_audioCalibrationWizard->update(deltaSeconds))
+				m_audioCalibrationWizard->exit();
 			break;
 		default:
 			break;

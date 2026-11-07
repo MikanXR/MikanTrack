@@ -10,6 +10,7 @@
 
 #include "App.h"
 #include "AppConfig.h"
+#include "AvatarMouthReadout.h"
 #include "FaceService.h"
 #include "HandPoseModel.h"
 #include "HandRoiQuality.h"
@@ -1005,8 +1006,8 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 	ImGui::End();
 }
 
-void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread,
-								  const TrackingFrameResult& fusedResult)
+void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
+								  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.oscOutput")))
 	{
@@ -1054,6 +1055,11 @@ void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread,
 
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcBonesInfo"));
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcAvatarBoneLengths"));
+
+	ImGui::Separator();
+	// The avatar's mouth expressions as the stream carries them, after the
+	// face map
+	mouthReadout.draw(avatar, fusedResult.face);
 
 	ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
