@@ -9,6 +9,7 @@
 
 #include "App.h"
 #include "AppConfig.h"
+#include "AudioPanel.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
 #include "AvatarRig.h"
@@ -42,9 +43,10 @@ MainWindow::MainWindow(App* app)
 	, m_scene3dPanel(std::make_unique<Scene3dPanel>())
 	, m_devicePanel(std::make_unique<DevicePanel>(app, app->getVideoCapture(), app->getConfig()))
 	, m_calibrationPanel(std::make_unique<CalibrationPanel>(app->getConfig()))
-	, m_wizardHost(std::make_unique<WizardHost>(app->getConfig(), app->getVisionThread()))
+	, m_wizardHost(std::make_unique<WizardHost>(app, app->getConfig(), app->getVisionThread()))
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
+	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -200,6 +202,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.device"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.calibration"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
@@ -265,6 +268,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -397,6 +401,14 @@ void MainWindow::update(float deltaSeconds)
 	m_timelinePanel->draw(config, visionThread);
 	if (m_bShowAvatarPanel)
 		m_avatarPanel->draw(&m_bShowAvatarPanel);
+	AudioPanel::DrawResult audioAction;
+	if (m_bShowAudioPanel)
+	{
+		// The weights block reads the face the scene shows
+		const bool bReplayView= m_timelinePanel->isReplayViewActive();
+		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive,
+										bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused, bReplayView);
+	}
 
 	// Launch requests raised by the panels this frame
 	if (m_trackingPanelState.bLaunchMountingWizard)
@@ -414,6 +426,8 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
 	if (calibrationAction.bLaunchExtrinsicsWizard)
 		launchWizard(eWizardKind::Extrinsics);
+	if (audioAction.bLaunchAudioWizard)
+		launchWizard(eWizardKind::AudioCalibration);
 
 	// Guided setup chain: draws its prompt modals on top of the panels, and
 	// launches/watches the wizards updated below

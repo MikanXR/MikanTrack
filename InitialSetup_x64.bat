@@ -147,6 +147,33 @@ curl -L "https://huggingface.co/Soykaf/RTMW3D-x/resolve/main/onnx/rtmw3d-x_8xb64
 IF %ERRORLEVEL% NEQ 0 goto model_failure
 :skip_rtmw3d
 
+:: --------------------------------------------------- wav2arkit mouth model
+:: The audio stage's wav2arkit_cpu model (Apache-2.0, Myned AI): raw 16 kHz
+:: audio in, 52 ARKit blendshapes at 30 fps out, a fused export of the
+:: wav2vec2-base-960h encoder and the LAM Audio2Expression decoder. The graph
+:: and its external weights, about 0.4 GB together.
+:: https://huggingface.co/myned-ai/wav2arkit_cpu
+IF EXIST models\wav2arkit_cpu.onnx.data goto skip_wav2arkit
+echo "Downloading wav2arkit mouth model..."
+curl -L "https://huggingface.co/myned-ai/wav2arkit_cpu/resolve/main/wav2arkit_cpu.onnx?download=true" --output models\wav2arkit_cpu.onnx
+IF %ERRORLEVEL% NEQ 0 goto model_failure
+curl -L "https://huggingface.co/myned-ai/wav2arkit_cpu/resolve/main/wav2arkit_cpu.onnx.data?download=true" --output models\wav2arkit_cpu.onnx.data
+IF %ERRORLEVEL% NEQ 0 goto model_failure
+:skip_wav2arkit
+
+:: ------------------------------------------------------ audio bench clips
+:: One English and one Japanese speech clip synthesized with Kokoro, the
+:: inputs --viseme-bench measures the mouth backends on. Published as assets
+:: of the bench-audio-1 release of this repository. A failed fetch is a
+:: warning, not a setup failure: the bench reports a missing clip itself.
+IF NOT EXIST resources\audio\bench mkdir resources\audio\bench
+IF EXIST resources\audio\bench\bench_ja.wav goto skip_bench_audio
+echo "Downloading audio bench clips..."
+curl -L https://github.com/MikanXR/MikanTrack/releases/download/bench-audio-1/bench_en.wav --output resources\audio\bench\bench_en.wav
+IF %ERRORLEVEL% NEQ 0 echo "Warning: bench_en.wav not fetched (release bench-audio-1 missing?)"
+curl -L https://github.com/MikanXR/MikanTrack/releases/download/bench-audio-1/bench_ja.wav --output resources\audio\bench\bench_ja.wav
+IF %ERRORLEVEL% NEQ 0 echo "Warning: bench_ja.wav not fetched (release bench-audio-1 missing?)"
+:skip_bench_audio
 IF EXIST rtm_demo.jpg goto skip_rtm_demo
 echo "Downloading pose reference image..."
 curl -L https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg --output rtm_demo.jpg

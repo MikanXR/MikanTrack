@@ -22,7 +22,7 @@ const Ort::MemoryInfo& OnnxSession::getCpuMemoryInfo()
 	return s_memoryInfo;
 }
 
-bool OnnxSession::create(const std::string& modelPath, const std::string& preferredEp)
+bool OnnxSession::create(const std::string& modelPath, const std::string& preferredEp, int intraOpThreads)
 {
 	const std::filesystem::path fsPath(modelPath);
 	const std::wstring widePath= fsPath.wstring();
@@ -60,6 +60,8 @@ bool OnnxSession::create(const std::string& modelPath, const std::string& prefer
 		{
 			Ort::SessionOptions sessionOptions;
 			sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+			if (intraOpThreads > 0)
+				sessionOptions.SetIntraOpNumThreads(intraOpThreads);
 
 			m_session= std::make_unique<Ort::Session>(getSharedEnv(), widePath.c_str(), sessionOptions);
 			m_activeEp= "CPU";

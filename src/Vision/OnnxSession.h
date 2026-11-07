@@ -29,8 +29,11 @@ public:
 	// session options DML requires (mem pattern disabled, sequential
 	// execution); on ANY failure it logs and falls back to a plain CPU
 	// session. Anything else ("cpu", empty) goes straight to CPU.
+	// intraOpThreads caps the threads a CPU session computes with; 0 leaves
+	// the runtime's default (every core), which is right for the vision
+	// models and wrong for a session that shares the machine with them.
 	// Returns false if the model can't be loaded at all.
-	bool create(const std::string& modelPath, const std::string& preferredEp);
+	bool create(const std::string& modelPath, const std::string& preferredEp, int intraOpThreads= 0);
 
 	bool isValid() const { return m_session != nullptr; }
 

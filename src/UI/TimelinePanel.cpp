@@ -1,5 +1,7 @@
 #include "TimelinePanel.h"
 
+#include "AudioTypes.h"
+
 #include <algorithm>
 #include <filesystem>
 
@@ -47,6 +49,9 @@ void TimelinePanel::drawRecordingSection(AppConfig* config, VisionThread* vision
 		ImGui::SameLine();
 		ImGui::Text(locText("timelinePanel.recordingStatsFmt"), (long long)visionThread->getRecordingFrameCount(),
 					(double)visionThread->getRecordingBytes() / (1024.0 * 1024.0));
+		const double audioSeconds= visionThread->getAudioRecordingSeconds();
+		if (audioSeconds >= 0.0)
+			ImGui::Text(locText("timelinePanel.audioSidecarFmt"), audioSeconds);
 		if (visionThread->isRecordingRawFrames())
 		{
 			ImGui::TextColored(k_colorBad, "%s", locText("timelinePanel.rawFramesStatus"));
@@ -507,6 +512,16 @@ void TimelinePanel::rebuildDisplayFrame()
 	default:
 		m_displayFused= frame.replayedFused;
 		break;
+	}
+
+	// The mouth is not replayed (the audio stage runs offline through
+	// --replay-audio), so every view shows the frame's recorded mouth over a
+	// neutral face, which is what the avatar received live
+	if (frame.recorded->mouth.present)
+	{
+		m_displayFused.face.present= true;
+		m_displayFused.face.blendshapes.fill(0.f);
+		applyMouthFrame(frame.recorded->mouth.frame, m_displayFused.face.blendshapes);
 	}
 
 	m_perCameraCopies= frame.perCamera;

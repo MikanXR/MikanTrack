@@ -226,6 +226,23 @@ struct FaceConfig
 	glm::quat headAnchor{1.f, 0.f, 0.f, 0.f};
 };
 
+// The microphone mouth stage
+struct AudioConfig
+{
+	bool enabled= false;
+	// The capture device by name, re-resolved at open; empty or a name no
+	// device carries any more takes the system default
+	std::string deviceName;
+	// "wav2arkit" or "mfcc"
+	std::string backend= "wav2arkit";
+	// Applied to the samples before the gate and the backend
+	float gainDb= 0.f;
+	// Hop level under which the mouth is neutral and no backend runs
+	float gateDbfs= -45.f;
+	// The mfcc backend's calibration profile; empty is the shipped model
+	std::string profilePath;
+};
+
 // Body proportions shared by every elbow consumer (IMU-measured forearms and
 // the vision body-pose solver alike)
 struct BodyConfig
@@ -404,6 +421,7 @@ public:
 	FusionConfig fusion;
 	ImuConfig imu;
 	FaceConfig face;
+	AudioConfig audio;
 	BodyConfig body;
 	RecordingConfig recording;
 	AvatarConfig avatar;

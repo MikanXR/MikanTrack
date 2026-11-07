@@ -119,6 +119,12 @@ static int runReplayTest(const TestArgs& args)
 		header.formatVersion= TrackingRecording::k_formatVersion;
 		header.appConfigJsonText= config.toJsonString();
 		header.cameraCount= 2;
+		header.audio.present= true;
+		header.audio.fileName= "mikan-test-replay.wav";
+		header.audio.sampleRate= AUDIO_SAMPLE_RATE;
+		header.audio.startSampleIndex= 123904;
+		header.audio.startTimestampMs= 987.5;
+		header.audio.backend= "mfcc";
 
 		TrackingRecorder recorder;
 		if (!recorder.start(recordingPath, TrackingRecording::headerToJson(header)))
@@ -226,6 +232,16 @@ static int runReplayTest(const TestArgs& args)
 			TrackingRecording::snapshotFusedOutput(fused, frame.outPoses);
 			frame.checksum= TrackingRecording::computeFusedChecksum(fused);
 			liveOutputs.push_back(fused);
+
+			// The mouth stage's frame on every other iteration, every third
+			// one from before the sidecar (untied)
+			if (frameIdx % 2 == 0)
+			{
+				frame.mouth.present= true;
+				frame.mouth.audioFrameIndex= frameIdx % 3 == 0 ? -1 : 300 + frameIdx;
+				for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+					frame.mouth.frame.weights[column]= 0.01f * (float)(column + 1) + 0.001f * (float)frameIdx;
+			}
 			recorder.enqueueFrame(std::move(frame));
 		}
 		recorder.stop();
@@ -411,6 +427,70 @@ static int runReplayTest(const TestArgs& args)
 					<< "(d) FAILED: exactly the corrupted frame must diverge";
 				result= 1;
 			}
+		}
+	}
+
+	// -- (e) The audio sidecar header and the mouth frames round-trip --
+	{
+		const RecordedAudioSidecar& audio= replay.getHeader().audio;
+		if (!audio.present || audio.fileName != "mikan-test-replay.wav" || audio.sampleRate != AUDIO_SAMPLE_RATE ||
+			audio.startSampleIndex != 123904 || audio.startTimestampMs != 987.5 || audio.backend != "mfcc")
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: the audio sidecar header must round-trip";
+			result= 1;
+		}
+
+		int mouthMismatches= 0;
+		for (int frameIdx= 0; frameIdx < replay.getFrameCount(); ++frameIdx)
+		{
+			const RecordedMouth& mouth= replay.getFrame(frameIdx).recorded->mouth;
+			if (frameIdx % 2 != 0)
+			{
+				if (mouth.present)
+					++mouthMismatches;
+				continue;
+			}
+			if (!mouth.present || mouth.audioFrameIndex != (frameIdx % 3 == 0 ? -1 : 300 + frameIdx))
+			{
+				++mouthMismatches;
+				continue;
+			}
+			for (int column= 0; column < MOUTH_COLUMN_COUNT; ++column)
+			{
+				if (mouth.frame.weights[column] != 0.01f * (float)(column + 1) + 0.001f * (float)frameIdx)
+					++mouthMismatches;
+			}
+		}
+		MIKAN_LOG_INFO("test-replay") << "(e) mouth frame mismatches=" << mouthMismatches;
+		if (mouthMismatches != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: the recorded mouth frames must round-trip float-exact";
+			result= 1;
+		}
+
+		// A header without the block, and a frame line without the block (an
+		// older recording), load as absent
+		RecordingHeader plainHeader;
+		plainHeader.formatVersion= TrackingRecording::k_formatVersion;
+		plainHeader.appConfigJsonText= "{}";
+		plainHeader.cameraCount= 1;
+		RecordingHeader loadedHeader;
+		nlohmann::json plainJson= TrackingRecording::headerToJson(plainHeader);
+		RecordedFrame plainFrame;
+		nlohmann::json plainFrameJson= TrackingRecording::frameToJson(plainFrame);
+		RecordedFrame loadedFrame;
+		if (plainJson.contains("audio") || !TrackingRecording::headerFromJson(plainJson, loadedHeader) ||
+			loadedHeader.audio.present || plainFrameJson.contains("mouth") ||
+			!TrackingRecording::frameFromJson(plainFrameJson, loadedFrame) || loadedFrame.mouth.present)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: a recording without audio must load as absent";
+			result= 1;
+		}
+		if (TrackingRecording::makeAudioSidecarPath("recordings/2026-01-01_12-00-00.jsonl") !=
+			"recordings/2026-01-01_12-00-00.wav")
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: the sidecar is named after the recording";
+			result= 1;
 		}
 	}
 

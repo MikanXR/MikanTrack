@@ -636,6 +636,14 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		config.face.headAnchorPresent= true;
 	}
 
+	const json& au= j.value("audio", json::object());
+	config.audio.enabled= au.value("enabled", false);
+	config.audio.deviceName= au.value("deviceName", std::string());
+	config.audio.backend= au.value("backend", std::string("wav2arkit"));
+	config.audio.gainDb= au.value("gainDb", 0.f);
+	config.audio.gateDbfs= au.value("gateDbfs", -45.f);
+	config.audio.profilePath= au.value("profilePath", std::string());
+
 	const json& im= j.value("imu", json::object());
 	config.imu.enabled= im.value("enabled", true);
 	config.imu.visionYawSigma= im.value("visionYawSigma", 0.35f);
@@ -813,6 +821,15 @@ std::string AppConfig::toJsonString() const
 		}
 		j["face"]= faceJson;
 	}
+
+	j["audio"]= {
+		{"enabled", audio.enabled},
+		{"deviceName", audio.deviceName},
+		{"backend", audio.backend},
+		{"gainDb", audio.gainDb},
+		{"gateDbfs", audio.gateDbfs},
+		{"profilePath", audio.profilePath},
+	};
 
 	j["body"]= {
 		{"forearmLengthMeters", body.forearmLengthMeters},

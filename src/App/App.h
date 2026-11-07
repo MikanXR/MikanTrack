@@ -15,6 +15,7 @@ class AppConfig;
 struct AvatarModel;
 class AvatarSkeleton;
 class GlobalSettings;
+class AudioService;
 class FaceService;
 class ImuService;
 class LocalizationManager;
@@ -105,6 +106,10 @@ public:
 	// Pushes AppConfig::face to the face service (rebinds its socket when the
 	// port or enable flag changed)
 	void applyFaceConfig();
+	AudioService* getAudioService() { return m_audioService.get(); }
+	// Pushes AppConfig::audio to the audio service (reopens the device or
+	// recreates the backend when those changed)
+	void applyAudioConfig();
 	VisionThread* getVisionThread() { return m_visionThread.get(); }
 	SDL_Window* getSdlWindow() { return m_sdlWindow; }
 
@@ -127,6 +132,9 @@ private:
 	// Started with a project like the IMU service. Its update() is driven by
 	// the vision thread.
 	std::unique_ptr<FaceService> m_faceService;
+	// Started with a project like the face service. Owns the audio thread;
+	// the vision thread reads its published mouth sample.
+	std::unique_ptr<AudioService> m_audioService;
 	std::unique_ptr<VisionThread> m_visionThread;
 	std::unique_ptr<MainWindow> m_mainWindow;
 
