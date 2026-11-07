@@ -29,6 +29,8 @@ struct BenchOptions
 	int windowMs= 200;
 	int lookaheadFrames= 0;
 	eMouthModel model= eMouthModel::Mfcc;
+	// --cutoff overrides the model's default smoothing
+	bool bCutoffSet= false;
 	// Empty for the volume-only mfcc stage
 	std::string profilePath;
 	MouthFilterConfig filter;
@@ -54,7 +56,10 @@ bool parseOptions(const TestArgs& args, BenchOptions& out)
 				return false;
 		}
 		else if (arg == "--cutoff" && bHasValue)
+		{
 			out.filter.minCutoffHz= std::stof(args[++index]);
+			out.bCutoffSet= true;
+		}
 		else if (arg == "--beta" && bHasValue)
 			out.filter.beta= std::stof(args[++index]);
 		else if (arg.rfind("--", 0) == 0)
@@ -164,6 +169,8 @@ static int runVisemeBench(const TestArgs& args)
 	MouthWindow window;
 	window.configure(windowConfig);
 	MouthFilter filter;
+	if (!options.bCutoffSet)
+		options.filter.minCutoffHz= smoothingCutoffHz(MOUTH_SMOOTHING_DEFAULT_MS[(int)options.model]);
 	filter.configure(options.filter);
 	// The live stream starts where the device opens
 	backend->reset();

@@ -27,6 +27,20 @@ const char* mouthModelName(eMouthModel model);
 // Parses a config name; false (and outModel untouched) for an unknown one
 bool parseMouthModel(const std::string& name, eMouthModel& outModel);
 
+// The emission filter's settling time per model, in ms: the one-euro
+// minimum cutoff's time constant. The loudness mouth settles faster, since
+// it has no vowel calls to steady, only a level to follow.
+constexpr float MOUTH_SMOOTHING_DEFAULT_MS[MOUTH_MODEL_COUNT]= {20.f, 50.f, 50.f};
+constexpr float MOUTH_SMOOTHING_MAX_MS= 200.f;
+// The minimum cutoff in Hz for a settling time, 0 for no filter at 0 ms
+float smoothingCutoffHz(float smoothingMs);
+
+// The Oculus engine's own viseme smoothing, its VisemeSmoothing signal:
+// 1 is the engine's raw prediction, 100 its smoothest response
+constexpr int OVR_SMOOTHING_MIN= 1;
+constexpr int OVR_SMOOTHING_MAX= 100;
+constexpr int OVR_SMOOTHING_DEFAULT= 70;
+
 // Whether an ARKit column is one the voice drives: the four jaw columns, the
 // twenty-three mouth columns, cheekPuff, and tongueOut. Audio cannot see
 // eyes or brows, so the viseme table never touches another column.

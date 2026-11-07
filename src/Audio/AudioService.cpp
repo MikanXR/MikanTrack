@@ -240,15 +240,21 @@ void AudioService::applyPendingConfig()
 	const bool bDeviceChanged= config.enabled != m_threadConfig.enabled || config.deviceName != m_threadConfig.deviceName;
 	const bool bBackendChanged= config.enabled != m_threadConfig.enabled || config.model != m_threadConfig.model ||
 								config.profilePath != m_threadConfig.profilePath;
+	const bool bEngineSmoothingChanged= config.engineSmoothing != m_threadConfig.engineSmoothing;
 	m_threadConfig= config;
 	m_chain.setGainDb(config.gainDb);
 	m_chain.setGateDbfs(config.gateDbfs);
+	m_chain.setSmoothingMs(config.smoothingMs);
 
 	if (bBackendChanged)
 	{
 		destroyBackend();
 		if (config.enabled)
 			createBackend();
+	}
+	else if (bEngineSmoothingChanged && m_backend != nullptr)
+	{
+		m_backend->setEngineSmoothing(config.engineSmoothing);
 	}
 	if (bDeviceChanged)
 	{
@@ -364,9 +370,13 @@ void AudioService::createBackend()
 	// frames stay tied to its sidecar across a model change. The backend
 	// itself starts fresh.
 	if (m_backend != nullptr)
+	{
+		m_backend->setEngineSmoothing(m_threadConfig.engineSmoothing);
 		m_backend->reset();
+	}
 	m_chain.setGainDb(m_threadConfig.gainDb);
 	m_chain.setGateDbfs(m_threadConfig.gateDbfs);
+	m_chain.setSmoothingMs(m_threadConfig.smoothingMs);
 	m_inferMsEma= 0.f;
 	m_bInferEmaValid= false;
 

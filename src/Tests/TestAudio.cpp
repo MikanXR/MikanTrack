@@ -358,6 +358,23 @@ static int runAudioTest(const TestArgs&)
 		}
 		check(bHeld, "a constant input passes through the filter unchanged");
 
+		// The settling time to a cutoff, and the bypass at 0
+		check(smoothingCutoffHz(0.f) == 0.f && std::fabs(smoothingCutoffHz(50.f) - 3.1831f) < 1e-3f &&
+				  smoothingCutoffHz(20.f) > smoothingCutoffHz(50.f),
+			  "the smoothing time maps to the one-euro cutoff, 0 to none");
+		MouthFilterConfig bypassConfig;
+		bypassConfig.minCutoffHz= 0.f;
+		MouthFilter bypass;
+		bypass.configure(bypassConfig);
+		MouthFrame stepIn;
+		stepIn.weights.fill(1.f);
+		bypass.filter(MouthFrame());
+		const MouthFrame stepOut= bypass.filter(stepIn);
+		check(stepOut.weights == stepIn.weights, "a cutoff of 0 passes every frame through as it comes");
+		bypass.setMinCutoffHz(3.f);
+		const MouthFrame eased= bypass.filter(MouthFrame());
+		check(eased.weights[0] > 0.f && eased.weights[0] < 1.f, "a cutoff set on the fly filters from the held state");
+
 		MouthFrame stepUp;
 		stepUp.weights.fill(1.f);
 		out= filter.filter(stepUp);
@@ -1260,6 +1277,27 @@ static int runAudioTest(const TestArgs&)
 			}
 			MIKAN_LOG_INFO("test-audio") << "Oculus reset: last frame max diff " << maxDiff;
 			check(maxDiff < 1e-5f, "a reset engine reproduces the run");
+
+			// The engine's own smoothing survives a reset and changes the response
+			ovr.setEngineSmoothing(OVR_SMOOTHING_MIN);
+			ovr.reset();
+			std::vector<MouthFrame> rawRun;
+			ovr.infer(buzz.data(), buzz.size(), 30, rawRun);
+			ovr.setEngineSmoothing(OVR_SMOOTHING_MAX);
+			ovr.reset();
+			std::vector<MouthFrame> smoothRun;
+			ovr.infer(buzz.data(), buzz.size(), 30, smoothRun);
+			float smoothingDiff= 0.f;
+			for (size_t frameIndex= 0; frameIndex < std::min(rawRun.size(), smoothRun.size()); ++frameIndex)
+			{
+				for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
+					smoothingDiff= std::max(smoothingDiff, std::fabs(rawRun[frameIndex].weights[viseme] -
+																	 smoothRun[frameIndex].weights[viseme]));
+			}
+			MIKAN_LOG_INFO("test-audio") << "Oculus smoothing 1 vs 100: max diff " << smoothingDiff;
+			check(rawRun.size() == 30 && smoothRun.size() == 30 && smoothingDiff > 1e-3f,
+				  "the engine smoothing changes the response");
+			ovr.setEngineSmoothing(OVR_SMOOTHING_DEFAULT);
 
 			// The chain end to end: the replay resets the engine, the gate
 			// opens on the buzz, and the emitted mouth is voiced

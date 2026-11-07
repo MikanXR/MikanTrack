@@ -14,9 +14,9 @@
 // One context per backend, fed each new 30 fps frame's samples at 16 kHz
 // as one ProcessFrameEx call, its fifteen viseme scores remapped from the
 // SDK's order into the stage's and emitted as they come: no volume window,
-// no smoothing signal, the engine's own mouth. The engine is stateful, so
-// it runs while the gate is closed too and only the frames the chain emits
-// are fed, in stream order.
+// the engine's own mouth under its own VisemeSmoothing signal. The engine
+// is stateful, so it runs while the gate is closed too and only the frames
+// the chain emits are fed, in stream order.
 class OvrLipSyncBackend : public IMouthBackend
 {
 public:
@@ -37,14 +37,18 @@ public:
 	std::string getInfo() const override { return m_info; }
 	const std::string& getReason() const override { return m_reason; }
 	bool runsWhileGated() const override { return true; }
+	// Sent to the context now and again after every reset
+	void setEngineSmoothing(int amount) override;
 	void reset() override;
 	bool infer(const float* samples, size_t sampleCount, int newFrameCount, std::vector<MouthFrame>& outFrames) override;
 	double getLastInferMs() const override { return m_lastInferMs; }
 
 private:
+	bool createContext();
 	void destroy();
 
 	unsigned int m_context= 0;
+	int m_smoothing= OVR_SMOOTHING_DEFAULT;
 	bool m_bEngineHeld= false;
 	std::string m_info;
 	std::string m_reason;

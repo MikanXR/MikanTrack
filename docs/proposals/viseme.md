@@ -73,9 +73,9 @@ The three run under equal conditions, so a difference on the avatar is the model
 
 - The same audio: the Oculus engine is stateful, so it is fed every new frame's samples in stream order while the gate is open and while it is closed, and never misses audio. The gate still decides what is emitted, the neutral mouth for a gated hop under every model.
 
-- Raw weights: the engine's fifteen scores are remapped into `eViseme` order and emitted as they come, with no volume window and no smoothing signal sent to the engine.
+- Raw weights: the engine's fifteen scores are remapped into `eViseme` order and emitted as they come, with no volume window. The engine's own viseme smoothing is a panel knob (default 70 of 100), as it is in the Unity integration.
 
-- The same post-filter: `MouthFilter` smooths all three alike after emission.
+- The same post-filter: `MouthFilter` smooths all three after emission, each at its own Smoothing setting (20 ms for Simple Loudness, 50 ms for the other two by default).
 
 The A/B is meant to decide which model drives the mouth by default and whether the Oculus engine earns a place in a release: whether its consonant visemes, which the MFCC model never emits, read on a preset and a perfect-sync avatar, and whether it calls the user's vowels as cleanly as the calibrated profile does. It is judged live on the user's voice and by replaying the vowel recording under each model through `--replay-audio --model`, which is exact for all three, since the engine is deterministic for a given sample sequence.
 

@@ -112,16 +112,11 @@ bool OvrLipSyncBackend::create()
 	}
 	m_bEngineHeld= true;
 
-	ovrLipSyncContext context= 0;
-	result= ovrLipSync_CreateContextEx(&context, ovrLipSyncContextProvider_Enhanced, AUDIO_SAMPLE_RATE, false);
-	if (result != ovrLipSyncSuccess)
+	if (!createContext())
 	{
-		m_reason= resultName(result);
-		MIKAN_MT_LOG_WARNING("OvrLipSyncBackend::create") << "ovrLipSync_CreateContextEx failed: " << m_reason;
 		destroy();
 		return false;
 	}
-	m_context= context;
 
 	// The header's version is the one the shim checked the library against
 	m_info= "Oculus LipSync " + std::to_string(OVR_LIPSYNC_MAJOR_VERSION) + "." +
@@ -145,6 +140,31 @@ void OvrLipSyncBackend::destroy()
 	m_info.clear();
 }
 
+bool OvrLipSyncBackend::createContext()
+{
+	ovrLipSyncContext context= 0;
+	const ovrLipSyncResult result=
+		ovrLipSync_CreateContextEx(&context, ovrLipSyncContextProvider_Enhanced, AUDIO_SAMPLE_RATE, false);
+	if (result != ovrLipSyncSuccess)
+	{
+		m_reason= resultName(result);
+		MIKAN_MT_LOG_WARNING("OvrLipSyncBackend::createContext") << "ovrLipSync_CreateContextEx failed: " << m_reason;
+		return false;
+	}
+	m_context= context;
+	// A new context starts at the engine's own default; the smoothing is
+	// the backend's setting
+	ovrLipSync_SendSignal(m_context, ovrLipSyncSignals_VisemeSmoothing, m_smoothing, 0);
+	return true;
+}
+
+void OvrLipSyncBackend::setEngineSmoothing(int amount)
+{
+	m_smoothing= std::clamp(amount, OVR_SMOOTHING_MIN, OVR_SMOOTHING_MAX);
+	if (m_context != 0)
+		ovrLipSync_SendSignal(m_context, ovrLipSyncSignals_VisemeSmoothing, m_smoothing, 0);
+}
+
 void OvrLipSyncBackend::reset()
 {
 	// ovrLipSync_ResetContext leaves state behind (two runs after it differ
@@ -153,16 +173,7 @@ void OvrLipSyncBackend::reset()
 		return;
 	ovrLipSync_DestroyContext(m_context);
 	m_context= 0;
-	ovrLipSyncContext context= 0;
-	const ovrLipSyncResult result=
-		ovrLipSync_CreateContextEx(&context, ovrLipSyncContextProvider_Enhanced, AUDIO_SAMPLE_RATE, false);
-	if (result != ovrLipSyncSuccess)
-	{
-		m_reason= resultName(result);
-		MIKAN_MT_LOG_WARNING("OvrLipSyncBackend::reset") << "ovrLipSync_CreateContextEx failed: " << m_reason;
-		return;
-	}
-	m_context= context;
+	createContext();
 }
 
 bool OvrLipSyncBackend::infer(const float* samples, size_t sampleCount, int newFrameCount, std::vector<MouthFrame>& outFrames)

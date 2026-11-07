@@ -52,6 +52,13 @@ const char* mouthModelName(eMouthModel model)
 	return (index >= 0 && index < MOUTH_MODEL_COUNT) ? k_mouthModelNames[index] : k_mouthModelNames[(int)eMouthModel::Mfcc];
 }
 
+float smoothingCutoffHz(float smoothingMs)
+{
+	if (smoothingMs <= 0.f)
+		return 0.f;
+	return 1000.f / (2.f * 3.14159265f * smoothingMs);
+}
+
 bool parseMouthModel(const std::string& name, eMouthModel& outModel)
 {
 	for (int index= 0; index < MOUTH_MODEL_COUNT; ++index)

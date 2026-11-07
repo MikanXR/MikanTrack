@@ -644,6 +644,15 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.audio.model= eMouthModel::Mfcc;
 	parseMouthModel(au.value("model", std::string()), config.audio.model);
 	config.audio.profilePath= au.value("profilePath", std::string());
+	const json& smoothing= au.value("smoothingMs", json::object());
+	for (int modelIndex= 0; modelIndex < MOUTH_MODEL_COUNT; ++modelIndex)
+	{
+		config.audio.smoothingMs[(size_t)modelIndex]= std::clamp(
+			smoothing.value(mouthModelName((eMouthModel)modelIndex), MOUTH_SMOOTHING_DEFAULT_MS[modelIndex]), 0.f,
+			MOUTH_SMOOTHING_MAX_MS);
+	}
+	config.audio.ovrSmoothing=
+		std::clamp(au.value("ovrSmoothing", OVR_SMOOTHING_DEFAULT), OVR_SMOOTHING_MIN, OVR_SMOOTHING_MAX);
 
 	const json& im= j.value("imu", json::object());
 	config.imu.enabled= im.value("enabled", true);
@@ -823,6 +832,9 @@ std::string AppConfig::toJsonString() const
 		j["face"]= faceJson;
 	}
 
+	json smoothing= json::object();
+	for (int modelIndex= 0; modelIndex < MOUTH_MODEL_COUNT; ++modelIndex)
+		smoothing[mouthModelName((eMouthModel)modelIndex)]= audio.smoothingMs[(size_t)modelIndex];
 	j["audio"]= {
 		{"enabled", audio.enabled},
 		{"deviceName", audio.deviceName},
@@ -830,6 +842,8 @@ std::string AppConfig::toJsonString() const
 		{"gateDbfs", audio.gateDbfs},
 		{"model", mouthModelName(audio.model)},
 		{"profilePath", audio.profilePath},
+		{"smoothingMs", smoothing},
+		{"ovrSmoothing", audio.ovrSmoothing},
 	};
 
 	j["body"]= {

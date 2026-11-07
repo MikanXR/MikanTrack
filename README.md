@@ -110,7 +110,8 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   volume alone), MFCC (uLipSync, the calibrated default above), and Oculus
   LipSync (Meta's engine; release builds include it, and a source build
   needs the Oculus Lipsync native SDK unpacked to `deps/OVRLipSyncNative`,
-  [build.md](docs/reference/build.md)).
+  [build.md](docs/reference/build.md)). Each model has its own Smoothing
+  slider, and Oculus LipSync also exposes the engine's own smoothing.
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
 - Localized UI (English and Japanese; machine-translated Japanese for now),
   switchable live from the main menu or the Settings panel

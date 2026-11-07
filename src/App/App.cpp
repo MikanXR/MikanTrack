@@ -200,6 +200,8 @@ void App::applyAudioConfig()
 	audioConfig.gateDbfs= m_config->audio.gateDbfs;
 	audioConfig.model= m_config->audio.model;
 	audioConfig.profilePath= m_config->audio.profilePath;
+	audioConfig.smoothingMs= m_config->audio.smoothingMs[(size_t)m_config->audio.model];
+	audioConfig.engineSmoothing= m_config->audio.ovrSmoothing;
 	m_audioService->setConfig(audioConfig);
 }
 

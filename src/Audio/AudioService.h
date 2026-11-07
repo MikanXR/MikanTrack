@@ -31,6 +31,10 @@ struct AudioServiceConfig
 	eMouthModel model= eMouthModel::Mfcc;
 	// The calibration profile the MFCC model loads; empty is volume-only
 	std::string profilePath;
+	// The emission filter's settling time for the model, ms, 0 for none
+	float smoothingMs= MOUTH_SMOOTHING_DEFAULT_MS[(int)eMouthModel::Mfcc];
+	// The Oculus engine's own smoothing, OVR_SMOOTHING_MIN..MAX
+	int engineSmoothing= OVR_SMOOTHING_DEFAULT;
 };
 
 // Snapshot for the panel

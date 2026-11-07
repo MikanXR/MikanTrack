@@ -86,9 +86,12 @@ public:
 	// only, since the frame indices count from the reset
 	void configure(const MouthChainConfig& config);
 	const MouthChainConfig& getConfig() const { return m_config; }
-	// The gain and the gate take effect on the next hop without a reset
+	// The gain, the gate, and the smoothing take effect on the next hop
+	// without a reset
 	void setGainDb(float gainDb);
 	void setGateDbfs(float gateDbfs);
+	// The emission filter's settling time in ms, 0 for no filter
+	void setSmoothingMs(float smoothingMs);
 	// Drops the window, the filter state, the gate, and the sample count
 	void reset();
 

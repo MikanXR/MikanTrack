@@ -69,6 +69,12 @@ void MouthChain::setGainDb(float gainDb)
 	m_gainLinear= std::pow(10.f, gainDb / 20.f);
 }
 
+void MouthChain::setSmoothingMs(float smoothingMs)
+{
+	m_config.filter.minCutoffHz= smoothingCutoffHz(smoothingMs);
+	m_filter.setMinCutoffHz(m_config.filter.minCutoffHz);
+}
+
 void MouthChain::setGateDbfs(float gateDbfs)
 {
 	m_config.gateDbfs= gateDbfs;

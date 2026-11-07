@@ -34,6 +34,10 @@ public:
 	// fully, in dBFS, for the models that open the mouth by level
 	virtual void setVolumeWindow(float minDbfs, float maxDbfs) {}
 
+	// The engine's own viseme smoothing, OVR_SMOOTHING_MIN..MAX, for the
+	// model that has one (the Oculus engine); the others ignore it
+	virtual void setEngineSmoothing(int amount) {}
+
 	// Drops whatever carries between runs; called where a stream starts
 	virtual void reset() {}
 

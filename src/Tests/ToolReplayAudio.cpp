@@ -129,6 +129,8 @@ static int runReplayAudio(const TestArgs& args)
 	chainConfig.gainDb= options.bGainSet ? options.gainDb : recordedAudio.gainDb;
 	chainConfig.gateDbfs= options.bGateSet ? options.gateDbfs : recordedAudio.gateDbfs;
 	const eMouthModel model= options.bModelSet ? options.model : recordedAudio.model;
+	// The recording's smoothing for the model, and the engine's own
+	chainConfig.filter.minCutoffHz= smoothingCutoffHz(recordedAudio.smoothingMs[(size_t)model]);
 	const std::string profilePath= !options.profilePath.empty() ? options.profilePath : recordedAudio.profilePath;
 	std::string reason;
 	const std::unique_ptr<IMouthBackend> backend= createMouthBackend(model, profilePath, reason);
@@ -142,6 +144,7 @@ static int runReplayAudio(const TestArgs& args)
 
 	const MouthReplayAlignment alignment= mouthReplayAlignment(sidecar.startSampleIndex, chainConfig.window);
 	MouthReplayOutput replayed;
+	backend->setEngineSmoothing(recordedAudio.ovrSmoothing);
 	replayMouthChain(clip, alignment.padSamples, chainConfig, *backend, replayed);
 	MIKAN_LOG_INFO("replay-audio") << "model " << mouthModelName(model) << " (" << backend->getInfo() << ") at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
 								   << " dBFS: " << replayed.frames.size() << " frames from " << replayed.runs.size()

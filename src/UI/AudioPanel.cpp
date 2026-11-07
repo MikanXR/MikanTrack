@@ -164,6 +164,17 @@ void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 	}
 	ImGui::SetItemTooltip("%s", locText("audioPanel.modelTooltip"));
 
+	// The emission filter's settling time is the selected model's own
+	bChanged|= ImGui::SliderFloat(locLabel("audioPanel.smoothingSlider"), &audio.smoothingMs[(size_t)audio.model], 0.f,
+								  MOUTH_SMOOTHING_MAX_MS, "%.0f ms");
+	ImGui::SetItemTooltip("%s", locText("audioPanel.smoothingTooltip"));
+	if (audio.model == eMouthModel::OvrLipSync)
+	{
+		bChanged|= ImGui::SliderInt(locLabel("audioPanel.engineSmoothingSlider"), &audio.ovrSmoothing, OVR_SMOOTHING_MIN,
+									OVR_SMOOTHING_MAX);
+		ImGui::SetItemTooltip("%s", locText("audioPanel.engineSmoothingTooltip"));
+	}
+
 	if (audio.model == eMouthModel::Mfcc)
 	{
 		if (audio.profilePath.empty())
