@@ -16,7 +16,7 @@
 // the per-run inference time against the hop.
 //
 //   --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames]
-//                  [--model path] [--cutoff hz] [--beta b]
+//                  [--profile path] [--cutoff hz] [--beta b]
 
 namespace
 {
@@ -25,10 +25,10 @@ struct BenchOptions
 	std::filesystem::path clipPath;
 	std::filesystem::path outPath;
 	int hopMs= 100;
-	int windowMs= 1000;
-	int lookaheadFrames= 2;
-	// Empty for the shipped model
-	std::string modelPath;
+	int windowMs= 200;
+	int lookaheadFrames= 0;
+	// Empty for the volume-only stage
+	std::string profilePath;
 	MouthFilterConfig filter;
 };
 
@@ -44,8 +44,8 @@ bool parseOptions(const TestArgs& args, BenchOptions& out)
 			out.windowMs= std::stoi(args[++index]);
 		else if (arg == "--lookahead" && bHasValue)
 			out.lookaheadFrames= std::stoi(args[++index]);
-		else if (arg == "--model" && bHasValue)
-			out.modelPath= args[++index];
+		else if (arg == "--profile" && bHasValue)
+			out.profilePath= args[++index];
 		else if (arg == "--cutoff" && bHasValue)
 			out.filter.minCutoffHz= std::stof(args[++index]);
 		else if (arg == "--beta" && bHasValue)
@@ -92,7 +92,7 @@ static int runVisemeBench(const TestArgs& args)
 	{
 		MIKAN_LOG_ERROR("viseme-bench")
 			<< "Usage: --viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames] "
-			   "[--model path] [--cutoff hz] [--beta b]";
+			   "[--profile path] [--cutoff hz] [--beta b]";
 		return 1;
 	}
 
@@ -107,15 +107,15 @@ static int runVisemeBench(const TestArgs& args)
 	MIKAN_LOG_INFO("viseme-bench") << options.clipPath.string() << ": " << clip.size() << " samples at 16 kHz, "
 								   << clipSeconds << " s";
 
-	const std::string modelPath= options.modelPath.empty() ? std::string(MfccBackend::k_defaultModelPath) : options.modelPath;
 	MfccBackend backend;
-	if (!backend.create(modelPath))
+	if (!backend.create(options.profilePath) && !options.profilePath.empty())
 	{
-		MIKAN_LOG_ERROR("viseme-bench") << backend.getUnavailableReason();
+		MIKAN_LOG_ERROR("viseme-bench") << backend.getProfileError();
 		return 1;
 	}
-	MIKAN_LOG_INFO("viseme-bench") << "model " << modelPath << ", hop " << options.hopMs << " ms, window "
-								   << options.windowMs << " ms, lookahead " << options.lookaheadFrames << " frames";
+	const std::string profileLabel= options.profilePath.empty() ? std::string("no profile, volume only") : options.profilePath;
+	MIKAN_LOG_INFO("viseme-bench") << profileLabel << ", hop " << options.hopMs << " ms, window " << options.windowMs
+								   << " ms, lookahead " << options.lookaheadFrames << " frames";
 
 	// One run over the whole clip: the reference the chunked tail frames are
 	// measured against
@@ -126,19 +126,19 @@ static int runVisemeBench(const TestArgs& args)
 		offlineMs= backend.getLastInferMs();
 		MIKAN_LOG_INFO("viseme-bench") << "whole clip: " << offlineFrames.size() << " frames in " << offlineMs << " ms";
 
-		// How the clip's hops split across the visemes, the readout that
-		// says whether the classifier is calling anything but silence
+		// How the clip's frames split across the dominant visemes, the
+		// readout that says whether the profile is calling anything but aa
 		std::array<int, VISEME_COUNT> counts{};
-		for (uint8_t viseme : backend.getLastHopVisemes())
-			counts[viseme]++;
+		for (const MouthFrame& frame : offlineFrames)
+			counts[dominantViseme(frame.weights)]++;
 		std::ostringstream shares;
 		for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 		{
 			if (counts[viseme] > 0)
 				shares << " " << visemeName(viseme) << " " << std::fixed << std::setprecision(2)
-					   << (double)counts[viseme] / (double)backend.getLastHopVisemes().size();
+					   << (double)counts[viseme] / (double)offlineFrames.size();
 		}
-		MIKAN_LOG_INFO("viseme-bench") << "viseme share of hops:" << shares.str();
+		MIKAN_LOG_INFO("viseme-bench") << "viseme share of frames:" << shares.str();
 	}
 	else
 	{
@@ -264,7 +264,7 @@ static int runVisemeBench(const TestArgs& args)
 		nlohmann::json out;
 		out["clip"]= PathUtils::pathToUtf8(options.clipPath);
 		out["clipSeconds"]= clipSeconds;
-		out["model"]= modelPath;
+		out["profile"]= options.profilePath;
 		out["sampleRate"]= AUDIO_SAMPLE_RATE;
 		out["frameRate"]= MOUTH_FRAME_RATE;
 		out["hopMs"]= options.hopMs;

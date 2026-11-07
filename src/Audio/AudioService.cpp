@@ -357,8 +357,7 @@ void AudioService::closeDevice()
 void AudioService::createBackend()
 {
 	m_backend= std::make_unique<MfccBackend>();
-	m_backend->create(m_threadConfig.profilePath.empty() ? std::string(MfccBackend::k_defaultModelPath)
-														 : m_threadConfig.profilePath);
+	m_backend->create(m_threadConfig.profilePath);
 	// The stream did not restart with the backend: the window keeps its
 	// samples and the frame indices keep counting, so a recording's mouth
 	// frames stay tied to its sidecar across a profile change
@@ -369,7 +368,8 @@ void AudioService::createBackend()
 
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_status.backendReady= m_backend->isReady();
-	m_status.backendReason= m_backend->getUnavailableReason();
+	m_status.profileLoaded= m_backend->hasProfile();
+	m_status.backendReason= m_backend->getProfileError();
 	m_status.inferMsEma= 0.f;
 }
 
@@ -378,6 +378,7 @@ void AudioService::destroyBackend()
 	m_backend= nullptr;
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_status.backendReady= false;
+	m_status.profileLoaded= false;
 	m_status.backendReason.clear();
 }
 

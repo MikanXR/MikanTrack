@@ -14,6 +14,8 @@
 #include "TrackingTypes.h"
 #include "WeightBars.h"
 
+#include "tinyfiledialogs.h"
+
 namespace
 {
 constexpr float k_meterFloorDbfs= -60.f;
@@ -127,7 +129,7 @@ void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 	ImGui::SetItemTooltip("%s", locText("audioPanel.gainTooltip"));
 
 	if (audio.profilePath.empty())
-		ImGui::TextDisabled("%s", locText("audioPanel.profileShipped"));
+		ImGui::TextDisabled("%s", locText("audioPanel.profileNone"));
 	else
 		ImGui::TextDisabled(locText("audioPanel.profileFmt"), audio.profilePath.c_str());
 
@@ -138,10 +140,24 @@ void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 		outResult.bLaunchAudioWizard= true;
 	ImGui::EndDisabled();
 	ImGui::SetItemTooltip("%s", locText("audioPanel.calibrateTooltip"));
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("audioPanel.importButton")))
+	{
+		// Any uLipSync profile, the one VTube Studio exports included
+		const char* filters[]= {"*.json"};
+		const char* selectedPath= tinyfd_openFileDialog(locText("audioPanel.importButton"), "", 1, filters,
+														 "uLipSync profile (*.json)", 0);
+		if (selectedPath != nullptr && selectedPath[0] != '\0')
+		{
+			audio.profilePath= selectedPath;
+			bChanged= true;
+		}
+	}
+	ImGui::SetItemTooltip("%s", locText("audioPanel.importTooltip"));
 	if (!audio.profilePath.empty())
 	{
 		ImGui::SameLine();
-		if (ImGui::Button(locLabel("audioPanel.useShippedButton")))
+		if (ImGui::Button(locLabel("audioPanel.clearProfileButton")))
 		{
 			audio.profilePath.clear();
 			bChanged= true;
@@ -172,8 +188,10 @@ void AudioPanel::drawStatus()
 	else
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("audioPanel.statusDeviceClosed"));
 
-	if (status.backendReady)
+	if (status.backendReady && status.profileLoaded)
 		ImGui::TextDisabled(locText("audioPanel.statusBackendReadyFmt"), status.inferMsEma);
+	else if (status.backendReady && status.backendReason.empty())
+		ImGui::TextDisabled("%s", locText("audioPanel.statusBackendVolumeOnly"));
 	else if (!status.backendReason.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), locText("audioPanel.statusBackendNotReadyFmt"),
 						   status.backendReason.c_str());

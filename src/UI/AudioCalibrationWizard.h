@@ -4,20 +4,20 @@
 #include <vector>
 
 #include "Countdown.h"
+#include "LipSyncProfile.h"
 #include "MfccFeatures.h"
-#include "VisemeModel.h"
 #include "WizardResult.h"
 
 class App;
 class AppConfig;
 
 // The microphone calibration wizard: six prompts of three seconds each
-// after a countdown, the five vowels of the mfcc backend's vowel visemes
-// held and then the room's silence. The vowel captures are fit as Gaussian
-// prototypes over the shipped model (the consonants and the silence keep
-// theirs), the silence suggests the gate, and the review classifies each
-// vowel's own hops against the new profile before it is written beside the
-// project and pointed at by AudioConfig::profilePath.
+// after a countdown, the five vowels held and then the room's silence. Each
+// prompt's capture becomes the MFCC frames of one phoneme of a uLipSync
+// profile (A, I, U, E, O, and the noise phoneme from the silence), the
+// silence also suggests the gate, and the review scores each vowel's own
+// frames against the new profile before it is written beside the project
+// and pointed at by AudioConfig::profilePath.
 class AudioCalibrationWizard
 {
 public:
@@ -41,6 +41,8 @@ public:
 	static constexpr int k_promptCount= k_vowelCount + 1;
 	static constexpr float k_countdownSeconds= 3.f;
 	static constexpr float k_recordSeconds= 3.f;
+	// The frames a vowel prompt must yield past the gate, half a second
+	static constexpr int k_minFrames= 15;
 
 	AudioCalibrationWizard(App* app, AppConfig* config);
 
@@ -61,7 +63,7 @@ private:
 		bool bCaptured= false;
 		// The localization key of the failure, empty while none
 		std::string errorKey;
-		// A vowel's hops that passed the gate, as seconds of voice
+		// A vowel's frames that passed the gate, as seconds of voice
 		float voiceSeconds= 0.f;
 		// The silence prompt's suggested gate
 		float gateDbfs= 0.f;
@@ -69,9 +71,9 @@ private:
 
 	void beginRecording();
 	void finishRecording();
-	// Fits the vowels over the shipped model and measures them back; false
-	// with the reason when the shipped model cannot be read
-	bool buildProfile(std::string& outError);
+	// Builds the profile from the prompts' frames and scores each vowel's
+	// own frames back against it
+	void buildProfile();
 	bool writeProfile(std::string& outError);
 
 	void drawIntro();
@@ -90,11 +92,13 @@ private:
 	eWizardResult m_result= eWizardResult::None;
 
 	Countdown m_countdown;
-	std::vector<MfccVector> m_vowelVectors[k_vowelCount];
+	MfccExtractor m_extractor;
+	// The vowels' frames, then the silence prompt's
+	std::vector<MfccVector> m_promptFrames[k_promptCount];
 	PromptResult m_results[k_promptCount];
 
 	// The review
-	VisemeModel m_profile;
+	LipSyncProfile m_profile;
 	float m_hitRate[k_vowelCount]= {};
 	float m_suggestedGateDbfs= -45.f;
 	std::string m_profileError;

@@ -49,7 +49,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--loc-test`: localization tables: key parity, printf specifiers, window IDs, glyph coverage
 - `--selftest`: OSC writer packet round-trip
 - `--test-angleprior`: finger-angle prior fitting (mean, correlations, floors)
-- `--test-audio`: audio stage: the mouth columns and the viseme frame, window policy, wav reader, filter, the MFCC chain, the viseme model and table, the backend, the level gate, the audio config round trip, the wav writer, the sidecar recorder, the pacer, the replay alignment and the shared chain, the calibration fit and the profile writer
+- `--test-audio`: audio stage: the mouth columns and the viseme frame, window policy, wav reader, filter, the MFCC chain against a uLipSync reference, the profile JSON round trip, the viseme table, the backend, the level gate, the audio config round trip, the wav writer, the sidecar recorder, the pacer, the replay alignment and the shared chain, the calibration frames and the gate suggestion
 - `--test-bodycalib`: body dimension calibration recovers known landmark separations
 - `--test-bodypose`: body-pose solver: rays + known lengths, root choice, hold, gates
 - `--test-bonecalib`: hand bone calibration from triangulated landmarks
@@ -78,7 +78,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 
 ### Hardware (need a camera or controller physically connected to mean anything)
 
-- `--audio-probe [seconds] [--device name] [--gate dbfs] [--gain db]`: live microphone mouth stage: devices, level, gate, model, frames per second with their dominant visemes, and the calibration wizard's capture tap
+- `--audio-probe [seconds] [--device name] [--gate dbfs] [--gain db]`: live microphone mouth stage: devices, level, gate, backend, frames per second with their dominant visemes, and the calibration wizard's capture tap
 - `--test-imuaxes`: live Joy-Con axis convention measurement
 - `--test-joycon`: Joy-Con sample decode + live HID streaming
 - `--test-posemodel`: body pose ONNX models load + match the reference decode
@@ -99,8 +99,8 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
 - `--pose-report <recording.jsonl> [frameIndex] [outDir]`: re-solves one frame of a direct-mode take or a dump's `dump.jsonl` through the direct retarget and reports the posed avatar against the landmarks (reprojection per joint, arm angles and depths, finger angles) with a compare image, the loop after a solver change
 - `--replay-verify`: re-runs a recording and verifies every frame checksum
-- `--replay-audio <recording.jsonl> [out.json] [--model path] [--gain db] [--gate dbfs]`: re-runs the microphone mouth stage over a recording's audio sidecar on the live hop grid and reports the per-viseme difference against the recorded frames, the A/B for a profile, gain, or gate change; the JSON carries the `recorded` and `replayed` series for `--render-mouth`
-- `--viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames] [--model path] [--cutoff hz] [--beta b]`: runs the mouth backend over a wav clip under the live rolling-window policy (defaults: the shipped model, 100 ms hop, 1 s window, two frames of lookahead) and reports the share of hops each viseme won, the chunked frames' drift from one whole-clip run, the per-run inference p50 and p95 against the hop, and the viseme weights as JSON (the `offline`, `chunked`, and `filtered` series)
+- `--replay-audio <recording.jsonl> [out.json] [--profile path] [--gain db] [--gate dbfs]`: re-runs the microphone mouth stage over a recording's audio sidecar on the live hop grid and reports the per-viseme difference against the recorded frames, the A/B for a profile, gain, or gate change; the JSON carries the `recorded` and `replayed` series for `--render-mouth`
+- `--viseme-bench <clip.wav> [out.json] [--hop ms] [--window ms] [--lookahead frames] [--profile path] [--cutoff hz] [--beta b]`: runs the mouth backend over a wav clip under the live rolling-window policy (defaults: volume-only without a profile, the live hop, window, and lookahead) and reports the share of frames each viseme dominated, the chunked frames' drift from one whole-clip run, the per-run inference p50 and p95 against the hop, and the viseme weights as JSON (the `offline`, `chunked`, and `filtered` series)
 - `--render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]`: renders a contact sheet of the avatar's face under a bench JSON's viseme frames through the scene renderer and the face map from a hidden window, tiles spread evenly over the clip and labelled with the frame index and the dominant viseme
 - `--vrm-info`: prints what the loader reads from a VRM file and the derived skeleton
 - `--test-imupair`: solves the transform between two rigidly coupled IMUs from a dump (categorized as a Tool despite the `--test-` name, since it takes a dump file argument rather than running standalone)

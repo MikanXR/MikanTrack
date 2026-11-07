@@ -16,6 +16,18 @@ float audioLevelDbfs(const float* samples, size_t sampleCount)
 	return std::max(-100.f, 20.f * (float)std::log10(rms + 1e-10));
 }
 
+float suggestGateDbfs(const float* samples, size_t sampleCount, float gainDb)
+{
+	constexpr float k_marginDb= 6.f;
+	const size_t hopSamples= (size_t)MouthWindowConfig().hopSamples;
+	float loudestDbfs= -100.f;
+	for (size_t start= 0; start + hopSamples <= sampleCount; start+= hopSamples)
+		loudestDbfs= std::max(loudestDbfs, audioLevelDbfs(samples + start, hopSamples));
+	if (loudestDbfs <= -100.f && sampleCount > 0)
+		loudestDbfs= audioLevelDbfs(samples, sampleCount);
+	return std::clamp(loudestDbfs + gainDb + k_marginDb, -80.f, 0.f);
+}
+
 bool LevelGate::update(float levelDbfs)
 {
 	if (m_bOpen)
@@ -76,6 +88,8 @@ void MouthChain::push(const float* samples, size_t sampleCount, MfccBackend* bac
 		run.bGateOpen= m_gate.update(run.levelDbfs);
 
 		m_tailFrames.clear();
+		if (run.bGateOpen && backend != nullptr && backend->isReady())
+			backend->setVolumeWindow(m_config.gateDbfs, m_config.gateDbfs + MouthChainConfig::k_volumeSpanDb);
 		if (run.bGateOpen && backend != nullptr && backend->isReady() &&
 			backend->infer(m_windowSamples.data(), m_windowSamples.size(), m_windowFrames))
 		{

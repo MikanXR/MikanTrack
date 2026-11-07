@@ -5,21 +5,23 @@
 #include <vector>
 
 #include "AudioTypes.h"
+#include "MfccFeatures.h"
 
 struct MouthWindowConfig
 {
-	// The span of audio a backend sees on each run, ending at the newest
-	// hop boundary. One second: the run cost is linear in the window and the
-	// bench found a longer one buys no accuracy.
-	int windowSamples= AUDIO_SAMPLE_RATE;
-	// How much new audio arrives between runs. 100 ms is three frames.
+	// How much new audio arrives between runs. 100 ms is three frames, so
+	// a replay's frame grid lands exactly on live's.
 	int hopSamples= AUDIO_SAMPLE_RATE / 10;
+	// The span of audio a backend sees on each run, ending at the newest
+	// hop boundary. Two hops: a whole number of frames, so the frame grid
+	// the backend lays over the window is the stream's own, and the
+	// analysis block the first emitted frame reaches back over is inside it.
+	int windowSamples= 2 * (AUDIO_SAMPLE_RATE / 10);
 	// Frames held back from the tail of each run, so an emitted frame has
-	// that much audio after it for context. Each frame costs 33 ms of
-	// latency and buys the encoder a look past the frame it is scoring; two
-	// frames cut the chunked drift by a third (the bench numbers in the
-	// audio doc).
-	int lookaheadFrames= 2;
+	// that much audio after it for context. The backend scores a frame
+	// from the audio up to its end alone, so none is held back; each frame
+	// held would cost 33 ms of latency.
+	int lookaheadFrames= 0;
 };
 
 // The rolling-window policy of the audio stage, pure accounting with no

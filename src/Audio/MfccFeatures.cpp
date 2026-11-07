@@ -7,25 +7,26 @@
 
 namespace
 {
-constexpr int k_lifter= 22;
-constexpr float k_melLowHz= 30.f;
-constexpr float k_melHighHz= 7800.f;
 constexpr double k_pi= 3.14159265358979323846;
+// Unity.Mathematics EPSILON, under which uLipSync skips the normalization
+constexpr float k_peakEpsilon= 1.1920929e-7f;
 
-double hzToMel(double hz)
+// uLipSync's mel scale, the 1127 ln form, in single precision as it computes
+// it
+float hzToMel(float hz)
 {
-	return 2595.0 * std::log10(1.0 + hz / 700.0);
+	return 1127.f * std::log(hz / 700.f + 1.f);
 }
 
-double melToHz(double mel)
+float melToHz(float mel)
 {
-	return 700.0 * (std::pow(10.0, mel / 2595.0) - 1.0);
+	return 700.f * (std::exp(mel / 1127.f) - 1.f);
 }
 } // namespace
 
 MfccExtractor::MfccExtractor()
 {
-	constexpr int n= MFCC_BLOCK_SAMPLES;
+	constexpr int n= LIPSYNC_BLOCK_SAMPLES;
 
 	const double theta= -2.0 * k_pi / n;
 	for (int index= 0; index < n; ++index)
@@ -47,67 +48,74 @@ MfccExtractor::MfccExtractor()
 	}
 
 	for (int index= 0; index < n; ++index)
-		m_hamming[index]= (float)(0.54 - 0.46 * std::cos(2.0 * k_pi * index / (n - 1)));
+		m_hamming[index]= 0.54f - 0.46f * (float)std::cos(2.0 * k_pi * ((float)index / (n - 1)));
 
+	configure(LIPSYNC_DEFAULT_MEL_CHANNELS);
+}
+
+void MfccExtractor::configure(int melChannels)
+{
+	m_melChannels= std::clamp(melChannels, MFCC_COEFF_COUNT + 1, LIPSYNC_BLOCK_SAMPLES / 2);
 	buildMelFilterbank();
-
-	const double scale= std::sqrt(2.0 / MFCC_MEL_BANDS);
-	for (int row= 0; row <= MFCC_COEFF_COUNT; ++row)
-	{
-		for (int band= 0; band < MFCC_MEL_BANDS; ++band)
-			m_dct[row][band]= (float)(scale * std::cos(k_pi * row * (band + 0.5) / MFCC_MEL_BANDS));
-	}
-
-	for (int index= 1; index <= MFCC_COEFF_COUNT; ++index)
-		m_lifter[index - 1]= (float)(1.0 + (k_lifter / 2.0) * std::sin(k_pi * index / k_lifter));
+	buildDct();
+	m_melDb.assign((size_t)m_melChannels, 0.f);
 }
 
 void MfccExtractor::buildMelFilterbank()
 {
-	// Band edges spaced evenly on the mel scale between the low and high
-	// frequencies, then snapped to FFT bins
-	const double melLow= hzToMel(k_melLowHz);
-	const double melHigh= hzToMel(k_melHighHz);
-	std::array<int, MFCC_MEL_BANDS + 2> bin{};
-	for (int index= 0; index < MFCC_MEL_BANDS + 2; ++index)
-	{
-		const double mel= melLow + (melHigh - melLow) / (MFCC_MEL_BANDS + 1) * index;
-		// The JS builds the edge in single precision before snapping it
-		const float hz= (float)melToHz(mel);
-		bin[index]= (int)std::floor((hz / AUDIO_SAMPLE_RATE) * MFCC_BLOCK_SAMPLES);
-	}
+	// uLipSync's bank: channel edges evenly spaced on the mel scale from 0 to
+	// half the sample rate, each triangle summed over the bins strictly
+	// above its ceil'd start up to its floor'd end, the weights scaled by
+	// half the triangle's width in Hz
+	constexpr int nMax= LIPSYNC_BLOCK_SAMPLES / 2;
+	const float fMax= (float)AUDIO_SAMPLE_RATE / 2.f;
+	const float melMax= hzToMel(fMax);
+	const float df= fMax / nMax;
+	const float dMel= melMax / (float)(m_melChannels + 1);
 
-	for (int band= 0; band < MFCC_MEL_BANDS; ++band)
+	m_melBands.assign((size_t)m_melChannels, MelBand());
+	for (int channel= 0; channel < m_melChannels; ++channel)
 	{
-		std::array<float, MFCC_BLOCK_SAMPLES / 2>& filter= m_melFilters[band];
-		filter.fill(0.f);
-		for (int k= bin[band]; k < bin[band + 1]; ++k)
-			filter[k]= (float)(k - bin[band]) / (float)(bin[band + 1] - bin[band]);
-		for (int k= bin[band + 1]; k < bin[band + 2]; ++k)
-			filter[k]= (float)(bin[band + 2] - k) / (float)(bin[band + 2] - bin[band + 1]);
-	}
-}
+		const float fBegin= melToHz(dMel * (float)channel);
+		const float fCenter= melToHz(dMel * (float)(channel + 1));
+		const float fEnd= melToHz(dMel * (float)(channel + 2));
+		const int iBegin= (int)std::ceil(fBegin / df);
+		const int iCenter= (int)std::round(fCenter / df);
+		const int iEnd= std::min((int)std::floor(fEnd / df), nMax);
 
-void MfccExtractor::preEmphasize(const float* in, size_t count, float* out)
-{
-	float previous= 0.f;
-	for (size_t index= 0; index < count; ++index)
-	{
-		const float sample= in[index];
-		out[index]= sample - MFCC_PREEMPHASIS_ALPHA * previous;
-		previous= sample;
+		MelBand& band= m_melBands[(size_t)channel];
+		band.firstBin= iBegin + 1;
+		for (int bin= iBegin + 1; bin <= iEnd; ++bin)
+		{
+			const float f= df * (float)bin;
+			float weight= bin < iCenter ? (f - fBegin) / (fCenter - fBegin) : (fEnd - f) / (fEnd - fCenter);
+			weight/= (fEnd - fBegin) * 0.5f;
+			band.weights.push_back(weight);
+		}
 	}
 }
 
-void MfccExtractor::hammingAndFft(const float* block)
+void MfccExtractor::buildDct()
 {
-	constexpr int n= MFCC_BLOCK_SAMPLES;
+	// The direct DCT-II uLipSync runs, unnormalized, rows 1..12
+	const double a= k_pi / m_melChannels;
+	for (int row= 1; row <= MFCC_COEFF_COUNT; ++row)
+	{
+		std::vector<float>& coefficients= m_dct[(size_t)(row - 1)];
+		coefficients.resize((size_t)m_melChannels);
+		for (int channel= 0; channel < m_melChannels; ++channel)
+			coefficients[(size_t)channel]= (float)std::cos((channel + 0.5) * row * a);
+	}
+}
 
-	// Load windowed samples straight into bit-reversed order
+void MfccExtractor::fftMagnitude()
+{
+	constexpr int n= LIPSYNC_BLOCK_SAMPLES;
+
 	for (int index= 0; index < n; ++index)
 	{
 		const uint32_t target= m_bitReverse[index];
-		m_spectrum[2 * target]= block[index] * m_hamming[index];
+		m_spectrum[2 * target]= m_block[index];
 		m_spectrum[2 * target + 1]= 0.f;
 	}
 
@@ -137,45 +145,59 @@ void MfccExtractor::hammingAndFft(const float* block)
 			}
 		}
 	}
-}
 
-void MfccExtractor::compute(const float* block, float& outLogEnergy, MfccVector& outRaw)
-{
-	constexpr int halfN= MFCC_BLOCK_SAMPLES / 2;
-
-	hammingAndFft(block);
-
-	double totalEnergy= 0.0;
-	for (int k= 0; k < halfN; ++k)
+	for (int k= 0; k <= n / 2; ++k)
 	{
 		const float re= m_spectrum[2 * k];
 		const float im= m_spectrum[2 * k + 1];
-		m_power[k]= (re * re + im * im) / MFCC_BLOCK_SAMPLES;
-		totalEnergy+= m_power[k];
-	}
-	outLogEnergy= (float)std::log10(totalEnergy + 1e-10);
-
-	for (int band= 0; band < MFCC_MEL_BANDS; ++band)
-	{
-		const std::array<float, halfN>& filter= m_melFilters[band];
-		double sum= 0.0;
-		for (int k= 0; k < halfN; ++k)
-			sum+= m_power[k] * filter[k];
-		m_melEnergies[band]= (float)std::log10(sum + 1e-10);
-	}
-
-	for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-	{
-		const std::array<float, MFCC_MEL_BANDS>& row= m_dct[index + 1];
-		double sum= 0.0;
-		for (int band= 0; band < MFCC_MEL_BANDS; ++band)
-			sum+= row[band] * m_melEnergies[band];
-		outRaw[index]= (float)sum * m_lifter[index];
+		m_magnitude[k]= std::sqrt(re * re + im * im);
 	}
 }
 
-void MfccExtractor::compress(MfccVector& vector)
+void MfccExtractor::compute(const float* block, float& outLevelDbfs, MfccVector& outMfcc)
 {
-	for (float& value : vector)
-		value= std::tanh(value);
+	constexpr int n= LIPSYNC_BLOCK_SAMPLES;
+
+	double sum= 0.0;
+	for (int index= 0; index < n; ++index)
+		sum+= (double)block[index] * block[index];
+	outLevelDbfs= std::max(-100.f, 20.f * (float)std::log10(std::sqrt(sum / n) + 1e-10));
+
+	// Pre-emphasis with the first sample as it was, the Hamming window, then
+	// the peak brought to 1 unless the block is all but silent
+	m_block[0]= block[0];
+	for (int index= 1; index < n; ++index)
+		m_block[index]= block[index] - MFCC_PREEMPHASIS_ALPHA * block[index - 1];
+	float peak= 0.f;
+	for (int index= 0; index < n; ++index)
+	{
+		m_block[index]*= m_hamming[index];
+		peak= std::max(peak, std::fabs(m_block[index]));
+	}
+	if (peak >= k_peakEpsilon)
+	{
+		const float scale= 1.f / peak;
+		for (float& sample : m_block)
+			sample*= scale;
+	}
+
+	fftMagnitude();
+
+	for (int channel= 0; channel < m_melChannels; ++channel)
+	{
+		const MelBand& band= m_melBands[(size_t)channel];
+		float bandSum= 0.f;
+		for (size_t index= 0; index < band.weights.size(); ++index)
+			bandSum+= band.weights[index] * m_magnitude[(size_t)band.firstBin + index];
+		m_melDb[(size_t)channel]= 10.f * std::log10(bandSum + 1e-10f);
+	}
+
+	for (int row= 0; row < MFCC_COEFF_COUNT; ++row)
+	{
+		const std::vector<float>& coefficients= m_dct[(size_t)row];
+		float dot= 0.f;
+		for (int channel= 0; channel < m_melChannels; ++channel)
+			dot+= coefficients[(size_t)channel] * m_melDb[(size_t)channel];
+		outMfcc[(size_t)row]= dot;
+	}
 }

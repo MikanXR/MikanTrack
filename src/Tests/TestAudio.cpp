@@ -11,20 +11,19 @@
 #include "MouthChain.h"
 #include "MouthFilter.h"
 #include "MouthReplay.h"
+#include "LipSyncProfile.h"
 #include "MouthWindow.h"
-#include "VadGate.h"
-#include "VisemeFit.h"
-#include "VisemeModel.h"
+#include "PathUtils.h"
 #include "VisemeTable.h"
 #include "VisemeTypes.h"
 #include "WavFile.h"
 
 // Tests for the audio stage's pieces: the mouth columns and the frame
 // accounting, the rolling-window policy, the wav reader and resampler, the
-// emission filter, the MFCC chain against HeadAudio's vectors, the viseme
-// model and classifier, the viseme table, the backend, the level gate, the
-// config, the wav writer and the sidecar recorder, the pacer, the chain and
-// its replay, and the calibration fit.
+// emission filter, the MFCC chain against uLipSync's, the profile, the
+// viseme table, the backend, the level gate, the config, the wav writer and
+// the sidecar recorder, the pacer, the chain and its replay, and the
+// calibration frames.
 
 namespace
 {
@@ -249,9 +248,9 @@ static int runAudioTest(const TestArgs&)
 			  "reset clears the counters and the samples");
 
 		const MouthWindowConfig defaults;
-		check(defaults.windowSamples == AUDIO_SAMPLE_RATE && defaults.hopSamples == AUDIO_SAMPLE_RATE / 10 &&
-				  defaults.lookaheadFrames == 2,
-			  "the defaults are a 1 s window, a 100 ms hop, and a two-frame lookahead");
+		check(defaults.windowSamples == 2 * (AUDIO_SAMPLE_RATE / 10) && defaults.hopSamples == AUDIO_SAMPLE_RATE / 10 &&
+				  defaults.lookaheadFrames == 0 && defaults.windowSamples >= LIPSYNC_BLOCK_SAMPLES + defaults.hopSamples,
+			  "the defaults are a two-hop window on the frame grid, a 100 ms hop, and no lookahead");
 	}
 
 	// (d) The wav reader and the resampler
@@ -343,9 +342,9 @@ static int runAudioTest(const TestArgs&)
 		check(std::fabs(out.weights[0] - 0.4f) < 1e-6f, "reset restarts from the next value");
 	}
 
-	// (g) The MFCC chain against vectors HeadAudio's JavaScript computed on
-	// the same signal: a 150 Hz buzz under LCG noise, pre-emphasised, one
-	// second at 16 kHz, blocks of 512 at a 256 hop
+	// (g) The MFCC chain against uLipSync's Algorithm.cs run in Python on
+	// the same signal: a 150 Hz buzz under LCG noise, one second at 16 kHz,
+	// the 1024-sample block ending at a frame's end
 	{
 		std::vector<float> signal(16000);
 		uint32_t seed= 12345;
@@ -358,90 +357,173 @@ static int runAudioTest(const TestArgs&)
 				buzz+= std::sin(2.0 * glm::pi<double>() * 150.0 * harmonic * (double)index / 16000.0 + harmonic) / harmonic;
 			signal[index]= (float)(0.03 * buzz + 0.2 * noise);
 		}
-		std::vector<float> emphasized(signal.size());
-		MfccExtractor::preEmphasize(signal.data(), signal.size(), emphasized.data());
-		check(emphasized[0] == signal[0] && std::fabs(emphasized[1] - (signal[1] - 0.97f * signal[0])) < 1e-7f,
-			  "pre-emphasis subtracts 0.97 of the previous raw sample");
 
 		struct Reference
 		{
-			int block;
-			float logEnergy;
-			std::array<float, MFCC_COEFF_COUNT> raw;
+			int frame;
+			float levelDbfs;
+			std::array<float, MFCC_COEFF_COUNT> mfcc;
 		};
 		const Reference references[]= {
-			{0, -0.176817f, {-17.49235f, -1.03007f, -3.42338f, -1.78725f, -2.15971f, -1.47795f, -5.02754f, -2.16766f, -4.60539f, -0.93857f, -1.55210f, -9.00206f}},
-			{30, -0.217089f, {-17.30108f, -2.28640f, -4.39289f, -4.32410f, -4.27136f, 0.77890f, -3.36385f, -6.45078f, -5.17831f, -5.88783f, -3.70380f, -5.90096f}},
-			{60, -0.147579f, {-17.16085f, -2.83122f, -5.83828f, -0.24228f, -2.24084f, -2.47702f, -4.45766f, -3.91879f, -5.09414f, -2.06604f, -0.97480f, -5.36106f}},
+			{5, -23.9000f, {-86.0547f, -13.8630f, -12.0956f, -3.4764f, -7.3946f, -5.5722f, -1.2879f, -6.6664f, -5.9787f, -4.0328f, -6.8480f, -3.9221f}},
+			{15, -23.9107f, {-81.8679f, -13.3102f, -12.2050f, -6.5073f, -6.9149f, -7.1728f, -3.5939f, -0.8741f, -2.3028f, -8.5764f, -5.9658f, -2.4682f}},
+			{25, -23.8512f, {-83.3203f, -17.6725f, -16.8212f, -8.2013f, -7.9032f, -5.7109f, -3.3506f, -6.5332f, -4.8773f, -3.1051f, -3.1589f, -0.7612f}},
 		};
 		MfccExtractor extractor;
+		check(extractor.getMelChannels() == LIPSYNC_DEFAULT_MEL_CHANNELS && LIPSYNC_DEFAULT_MEL_CHANNELS == 30,
+			  "the default bank is uLipSync's 30 mel channels");
 		for (const Reference& reference : references)
 		{
-			const size_t blockEnd= MFCC_BLOCK_SAMPLES + (size_t)reference.block * MFCC_HOP_SAMPLES;
-			float logEnergy= 0.f;
-			MfccVector raw;
-			extractor.compute(emphasized.data() + blockEnd - MFCC_BLOCK_SAMPLES, logEnergy, raw);
-			float worst= std::fabs(logEnergy - reference.logEnergy);
+			const size_t blockEnd= mouthFrameEndSample(reference.frame);
+			float levelDbfs= 0.f;
+			MfccVector mfcc;
+			extractor.compute(signal.data() + blockEnd - LIPSYNC_BLOCK_SAMPLES, levelDbfs, mfcc);
+			float worst= std::fabs(levelDbfs - reference.levelDbfs);
 			for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-				worst= std::max(worst, std::fabs(raw[index] - reference.raw[index]));
-			const std::string label= "block " + std::to_string(reference.block) +
-									 " matches HeadAudio's log energy and coefficients (worst " + std::to_string(worst) + ")";
-			check(worst < 2e-3f, label.c_str());
-			MfccExtractor::compress(raw);
-			bool bCompressed= true;
-			for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-				bCompressed&= std::fabs(raw[index] - std::tanh(reference.raw[index])) < 2e-3f;
-			check(bCompressed, "compression is tanh");
+				worst= std::max(worst, std::fabs(mfcc[index] - reference.mfcc[index]));
+			const std::string label= "frame " + std::to_string(reference.frame) +
+									 " matches uLipSync's level and coefficients (worst " + std::to_string(worst) + ")";
+			check(worst < 0.05f, label.c_str());
 		}
-		check(MfccBackend::hopsForSamples(511) == 0 && MfccBackend::hopsForSamples(512) == 1 &&
-				  MfccBackend::hopsForSamples(16000) == 61,
-			  "a block is 512 samples and a second of audio is 61 hops");
+
+		// The peak normalization: a block a tenth as loud gives the same
+		// coefficients and a level 20 dB lower
+		{
+			const size_t blockEnd= mouthFrameEndSample(15);
+			std::array<float, LIPSYNC_BLOCK_SAMPLES> quiet;
+			for (int index= 0; index < LIPSYNC_BLOCK_SAMPLES; ++index)
+				quiet[index]= 0.1f * signal[blockEnd - LIPSYNC_BLOCK_SAMPLES + index];
+			float levelDbfs= 0.f;
+			MfccVector mfcc;
+			extractor.compute(quiet.data(), levelDbfs, mfcc);
+			float worst= 0.f;
+			for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
+				worst= std::max(worst, std::fabs(mfcc[index] - references[1].mfcc[index]));
+			check(worst < 0.05f && std::fabs(levelDbfs - (references[1].levelDbfs - 20.f)) < 0.01f,
+				  "the coefficients are level-free and the level reads the block's RMS");
+		}
+		check(mouthFrameEndSample(0) == 533 && mouthFrameEndSample(2) == 1600 && mouthFrameEndSample(29) == 16000,
+			  "a frame ends at round((f + 1) * 16000 / 30)");
 	}
 
-	// (h) The model reader and the classifier on the shipped model
+	// (h) The profile: uLipSync's JSON round-trips, a load trims each phoneme
+	// to the data count and takes the means, the names map, the pooled
+	// statistics standardize, and a block scores against the templates
 	{
-		check(VisemeModel::k_recordBytes == 368, "a record is 368 bytes");
-		if (std::filesystem::exists(MfccBackend::k_defaultModelPath))
-		{
-			VisemeModel model;
-			std::string error;
-			check(model.load(MfccBackend::k_defaultModelPath, error) && model.prototypes.size() == 39,
-				  "the shipped model holds 39 prototypes");
-			bool bFirst= !model.prototypes.empty() && model.prototypes.front().phoneme == "\xC3\xB0" &&
-						 model.prototypes.front().viseme == (uint8_t)eViseme::TH &&
-						 model.prototypes.front().group == 0;
-			check(bFirst, "the first record is the eth phoneme on TH in group 0");
-			bool bSilLast= !model.prototypes.empty() && model.prototypes.back().phoneme == "s1" &&
-						   model.prototypes.back().viseme == VISEME_SIL;
-			check(bSilLast, "the last record is the silence prototype");
+		const std::filesystem::path tempDir= std::filesystem::temp_directory_path() / "mikan_audio_test";
+		std::filesystem::create_directories(tempDir);
+		const auto ramp= [](float offset) {
+			MfccVector frame;
+			for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
+				frame[index]= offset + (float)index;
+			return frame;
+		};
 
-			VisemeClassifier classifier;
-			classifier.setModel(model);
-			bool bMeansClassify= true;
-			std::vector<float> distances;
-			for (size_t index= 0; index < model.prototypes.size(); ++index)
-			{
-				const VisemePrototype& prototype= model.prototypes[index];
-				classifier.reset();
-				int predicted= VISEME_SIL;
-				for (int repeat= 0; repeat < 10; ++repeat)
-					predicted= classifier.predict(prototype.mu, &distances);
-				bMeansClassify&= predicted == prototype.viseme && distances[index] < 1e-5f;
-			}
-			check(bMeansClassify, "every prototype's mean classifies as its viseme at zero distance");
+		LipSyncProfile profile;
+		profile.mfccDataCount= 3;
+		profile.addPhoneme("A", {ramp(1.f), ramp(2.f), ramp(3.f), ramp(4.f), ramp(5.f)});
+		profile.addPhoneme("-", {ramp(-20.f), ramp(-22.f)});
+		profile.addPhoneme("xx", {ramp(50.f)});
+		profile.addPhoneme("e", {});
+		profile.finalize();
+		check(profile.phonemes.size() == 4 && profile.phonemes[0].frames.size() == 3 &&
+				  std::fabs(profile.phonemes[0].mean[0] - 4.f) < 1e-6f && std::fabs(profile.phonemes[0].mean[11] - 15.f) < 1e-6f,
+			  "finalize keeps the last mfccDataCount frames and means them");
+		check(profile.phonemes[1].viseme == VISEME_SIL && profile.phonemes[0].viseme == (int)eViseme::aa &&
+				  profile.phonemes[2].viseme == -1 && profile.phonemes[3].viseme == (int)eViseme::E &&
+				  profile.phonemes[3].mean[5] == 0.f,
+			  "the names map to visemes case-insensitively, an unknown name to none, and no frames mean zero");
+		check(visemeForPhonemeName("U") == (int)eViseme::U && visemeForPhonemeName("oo") == (int)eViseme::U &&
+				  visemeForPhonemeName("oh") == (int)eViseme::O && visemeForPhonemeName("ih") == (int)eViseme::I &&
+				  visemeForPhonemeName("Silence") == VISEME_SIL && visemeForPhonemeName("N") == VISEME_SIL,
+			  "uLipSync's names and the wizard's old names both map");
 
-			classifier.reset();
-			check(classifier.predict(MfccVector{}) == VISEME_SIL, "the zero vector is silence");
-		}
-		else
-		{
-			MIKAN_LOG_WARNING("test-audio") << MfccBackend::k_defaultModelPath << " missing - SKIPPING the model checks";
-		}
-
-		VisemeModel missing;
+		const std::filesystem::path profilePath= tempDir / "profile.json";
 		std::string error;
-		check(!missing.load("resources/audio/does_not_exist.bin", error) && error.find("missing") != std::string::npos,
-			  "a missing model file reports the reason");
+		check(profile.save(profilePath, error), "the profile writes");
+		{
+			std::ifstream file(profilePath);
+			const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+			check(text.find("\"mfccCalibrationDataList\"") != std::string::npos && text.find("\"compareMethod\": 1") != std::string::npos &&
+					  text.find("\"melFilterBankChannels\": 30") != std::string::npos && text.find("\"name\": \"A\"") != std::string::npos,
+				  "the file carries uLipSync's field names");
+		}
+		LipSyncProfile loaded;
+		check(loaded.load(profilePath, error) && loaded.phonemes.size() == 4 && loaded.mfccDataCount == 3 &&
+				  loaded.compareMethod == eCompareMethod::L2Norm && !loaded.useStandardization &&
+				  loaded.phonemes[0].frames.size() == 3 && loaded.phonemes[0].mean == profile.phonemes[0].mean &&
+				  loaded.phonemes[1].mean == profile.phonemes[1].mean && loaded.phonemes[1].viseme == VISEME_SIL,
+			  "the profile loads back with the same templates");
+
+		// A uLipSync export by hand, compact as JsonUtility writes it, with
+		// standardization and the cosine method on
+		{
+			const char* exported=
+				"{\"jsonPath\":\"\",\"mfccNum\":12,\"mfccDataCount\":16,\"melFilterBankChannels\":30,\"targetSampleRate\":16000,"
+				"\"sampleCount\":1024,\"useStandardization\":true,\"compareMethod\":2,\"mfccs\":["
+				"{\"name\":\"A\",\"mfccCalibrationDataList\":[{\"array\":[1,2,3,4,5,6,7,8,9,10,11,12]},{\"array\":[3,4,5,6,7,8,9,10,11,12,13,14]}]},"
+				"{\"name\":\"I\",\"mfccCalibrationDataList\":[{\"array\":[0,0,0,0,0,0,0,0,0,0,0,0]}]}]}";
+			const std::filesystem::path exportPath= tempDir / "ulipsync_export.json";
+			{
+				std::ofstream file(exportPath);
+				file << exported;
+			}
+			LipSyncProfile imported;
+			check(imported.load(exportPath, error) && imported.useStandardization &&
+					  imported.compareMethod == eCompareMethod::CosineSimilarity && imported.phonemes.size() == 2 &&
+					  imported.phonemes[0].frames.size() == 2 && std::fabs(imported.phonemes[0].mean[0] - 2.f) < 1e-6f,
+				  "a uLipSync export loads with its switches");
+			// Pooled over the three frames: mean 4/3, population deviation
+			// sqrt(42/27) on the first coefficient
+			check(std::fabs(imported.means[0] - 4.f / 3.f) < 1e-5f && std::fabs(imported.stdDevs[0] - std::sqrt(42.f / 27.f)) < 1e-5f,
+				  "standardization pools every kept frame for the mean and the population deviation");
+		}
+
+		// Scoring: a block on a template is that phoneme's, the scores sum
+		// to one, and the fold lands on the template's viseme
+		{
+			LipSyncProfile two;
+			two.addPhoneme("A", {ramp(0.f)});
+			two.addPhoneme("I", {ramp(30.f)});
+			two.addPhoneme("-", {ramp(-30.f)});
+			two.finalize();
+			LipSyncScores scores;
+			two.score(ramp(0.f), scores);
+			float sum= 0.f;
+			for (float value : scores.perPhoneme)
+				sum+= value;
+			check(scores.perPhoneme.size() == 3 && std::fabs(sum - 1.f) < 1e-5f && scores.perPhoneme[0] > 0.99f &&
+					  scores.mainViseme == (int)eViseme::aa && std::fabs(scores.perViseme[(int)eViseme::aa] - scores.perPhoneme[0]) < 1e-6f,
+				  "a block on the A template scores as A, the shares summing to one");
+			two.score(ramp(15.f), scores);
+			check(std::fabs(scores.perPhoneme[0] - scores.perPhoneme[1]) < 1e-5f && scores.perPhoneme[2] < 1e-6f,
+				  "a block halfway between two templates splits between them");
+			two.compareMethod= eCompareMethod::L1Norm;
+			two.score(ramp(29.f), scores);
+			check(scores.mainViseme == (int)eViseme::I, "the L1 method calls the nearer template");
+			two.compareMethod= eCompareMethod::CosineSimilarity;
+			two.score(ramp(0.f), scores);
+			check(scores.mainViseme == (int)eViseme::aa, "the cosine method calls the aligned template");
+		}
+
+		LipSyncProfile missing;
+		check(!missing.load(tempDir / "does_not_exist.json", error) && error.find("missing") != std::string::npos,
+			  "a missing profile reports the reason");
+		{
+			const std::filesystem::path brokenPath= tempDir / "broken.json";
+			{
+				std::ofstream file(brokenPath);
+				file << "{\"mfccNum\": 13}";
+			}
+			check(!missing.load(brokenPath, error) && error.find("coefficients") != std::string::npos,
+				  "a profile with another coefficient count is refused");
+			{
+				std::ofstream file(brokenPath);
+				file << "not json";
+			}
+			check(!missing.load(brokenPath, error) && error.find("not JSON") != std::string::npos,
+				  "a file that is not JSON reports the reason");
+		}
 	}
 
 	// (i) The viseme table
@@ -460,7 +542,7 @@ static int runAudioTest(const TestArgs&)
 		check(bRowsValid, "every viseme but silence drives at least one mouth column with a weight in 0..1");
 		check(std::string(visemeName((int)eViseme::aa)) == "aa" && std::string(visemeName(VISEME_SIL)) == "sil" &&
 				  std::string(visemeName(15)).empty(),
-			  "the viseme names follow HeadAudio's id order");
+			  "the viseme names follow the id order");
 
 		const int jawOpen= arkitBlendshapeFromName("jawOpen");
 		const int mouthPucker= arkitBlendshapeFromName("mouthPucker");
@@ -514,12 +596,12 @@ static int runAudioTest(const TestArgs&)
 		config.audio.deviceName= "USB Microphone";
 		config.audio.gainDb= 6.f;
 		config.audio.gateDbfs= -38.f;
-		config.audio.profilePath= "audio/profile.bin";
+		config.audio.profilePath= "audio/profile.json";
 		AppConfig loaded;
 		const bool bLoaded= loaded.loadFromJsonString(config.toJsonString());
 		check(bLoaded && loaded.audio.enabled && loaded.audio.deviceName == "USB Microphone" &&
 				  std::fabs(loaded.audio.gainDb - 6.f) < 1e-6f && std::fabs(loaded.audio.gateDbfs + 38.f) < 1e-6f &&
-				  loaded.audio.profilePath == "audio/profile.bin",
+				  loaded.audio.profilePath == "audio/profile.json",
 			  "the audio section round-trips through the project JSON");
 		AppConfig fresh;
 		check(fresh.loadFromJsonString("{}") && !fresh.audio.enabled &&
@@ -527,69 +609,101 @@ static int runAudioTest(const TestArgs&)
 			  "a project without an audio section gets the defaults");
 	}
 
-	// (l) The energy gate
+	// (m) The backend on a window: volume-only without a profile, and a
+	// profile of two phonemes taught on two signals calls each back
 	{
-		VadGate gate;
-		VadGateConfig gateConfig;
-		gateConfig.activeHops= 2;
-		gateConfig.inactiveHops= 3;
-		gate.configure(gateConfig);
-		check(!gate.isActive() && !gate.process(-3.f), "the gate starts closed and one loud hop does not open it");
-		check(gate.process(-3.f), "the second loud hop opens it");
-		check(gate.process(-4.5f) && gate.process(-6.f) && gate.process(-6.f),
-			  "a hop between the thresholds and two quiet hops keep it open");
-		check(!gate.process(-6.f), "the third quiet hop closes it");
-		gate.reset();
-		gate.process(-3.f);
-		check(!gate.isActive(), "reset clears the count toward opening");
-	}
-
-	// (m) The mfcc backend on a window
-	{
-		if (std::filesystem::exists(MfccBackend::k_defaultModelPath))
-		{
-			MfccBackend backend;
-			check(backend.create() && backend.isReady(), "the mfcc backend loads the shipped model");
-
+		const std::filesystem::path tempDir= std::filesystem::temp_directory_path() / "mikan_audio_test";
+		std::filesystem::create_directories(tempDir);
+		const auto chord= [](float f0, float second, float third) {
 			std::vector<float> tone(16000);
 			for (size_t index= 0; index < tone.size(); ++index)
 			{
 				const float t= (float)index / AUDIO_SAMPLE_RATE;
-				tone[index]= 0.3f * (std::sin(2.f * glm::pi<float>() * 150.f * t) +
-									 0.5f * std::sin(2.f * glm::pi<float>() * 450.f * t) +
-									 0.25f * std::sin(2.f * glm::pi<float>() * 900.f * t));
+				tone[index]= 0.3f * (std::sin(2.f * glm::pi<float>() * f0 * t) + 0.5f * std::sin(2.f * glm::pi<float>() * second * t) +
+									 0.25f * std::sin(2.f * glm::pi<float>() * third * t));
 			}
-			std::vector<MouthFrame> frames;
-			check(backend.infer(tone.data(), tone.size(), frames) && frames.size() == 30 &&
-					  backend.getLastHopVisemes().size() == 61,
-				  "a second of audio gives thirty frames from 61 hops");
-			check(backend.getLastHopVisemes().back() != VISEME_SIL, "a loud tone passes the gate");
-			bool bInRange= true;
-			for (const MouthFrame& frame : frames)
-			{
-				for (float weight : frame.weights)
-					bInRange&= weight >= 0.f && weight <= 1.f;
-			}
-			check(bInRange, "every weight is within 0..1");
-			MIKAN_LOG_INFO("test-audio") << "mfcc inference " << backend.getLastInferMs() << " ms for one second, last viseme "
-										 << visemeName(backend.getLastHopVisemes().back());
+			return tone;
+		};
+		const std::vector<float> low= chord(150.f, 450.f, 900.f);
+		const std::vector<float> high= chord(1200.f, 2900.f, 4100.f);
+		const std::vector<float> silence(16000, 0.f);
+		const auto vowelSum= [](const MouthFrame& frame) {
+			return frame.weights[(int)eViseme::aa] + frame.weights[(int)eViseme::E] + frame.weights[(int)eViseme::I] +
+				   frame.weights[(int)eViseme::O] + frame.weights[(int)eViseme::U];
+		};
 
-			std::vector<float> silence(16000, 0.f);
-			check(backend.infer(silence.data(), silence.size(), frames) && frames.size() == 30, "silence runs through the same shape");
-			bool bNeutral= true;
-			for (const MouthFrame& frame : frames)
-			{
-				for (float weight : frame.weights)
-					bNeutral&= weight == 0.f;
-			}
-			check(bNeutral, "digital silence is the neutral mouth");
-			check(!backend.infer(tone.data(), 511, frames) && frames.empty(), "less than a block is refused");
+		MfccBackend backend;
+		check(!backend.create("") && backend.isReady() && !backend.hasProfile() && backend.getProfileError().empty(),
+			  "no profile is ready and volume-only");
+		backend.setVolumeWindow(-45.f, -25.f);
+		std::vector<MouthFrame> frames;
+		check(backend.infer(low.data(), low.size(), frames) && frames.size() == 30 &&
+				  backend.getLastFrameScores().size() == 30,
+			  "a second of audio gives thirty frames");
+		bool bInRange= true;
+		bool bPartition= true;
+		for (const MouthFrame& frame : frames)
+		{
+			for (float weight : frame.weights)
+				bInRange&= weight >= 0.f && weight <= 1.f;
+			bPartition&= std::fabs(vowelSum(frame) + frame.weights[VISEME_SIL] - 1.f) < 1e-5f;
+		}
+		check(bInRange, "every weight is within 0..1");
+		check(bPartition, "the vowels and silence partition one");
+		check(frames.back().weights[(int)eViseme::aa] == 1.f && frames.back().weights[VISEME_SIL] == 0.f &&
+				  backend.getLastFrameScores().back().volume == 1.f,
+			  "a loud tone over the window is all aa, volume-only");
+		MIKAN_LOG_INFO("test-audio") << "volume-only inference " << backend.getLastInferMs() << " ms for one second";
+
+		check(backend.infer(silence.data(), silence.size(), frames) && frames.size() == 30 &&
+				  frames.back().weights[(int)eViseme::aa] == 0.f && frames.back().weights[VISEME_SIL] == 1.f,
+			  "digital silence is silence");
+		check(!backend.infer(low.data(), 0, frames) && frames.empty(), "nothing is refused");
+		check(backend.infer(low.data(), 300, frames) && frames.size() == 1, "less than a block is padded into its frame");
+
+		// Two phonemes taught on the two chords and the noise phoneme on
+		// silence, through the calibration frames and a saved profile
+		{
+			MfccExtractor extractor;
+			std::vector<MfccVector> lowFrames;
+			std::vector<MfccVector> highFrames;
+			std::vector<MfccVector> silentFrames;
+			calibrationFrames(low.data(), low.size(), -100.f, extractor, lowFrames);
+			calibrationFrames(high.data(), high.size(), -100.f, extractor, highFrames);
+			calibrationFrames(silence.data(), silence.size(), -100.f, extractor, silentFrames);
+			LipSyncProfile profile;
+			profile.mfccDataCount= (int)lowFrames.size();
+			profile.addPhoneme("A", lowFrames);
+			profile.addPhoneme("I", highFrames);
+			profile.addPhoneme("-", silentFrames);
+			profile.finalize();
+			const std::filesystem::path profilePath= tempDir / "two_phonemes.json";
+			std::string error;
+			check(profile.save(profilePath, error), "the two-phoneme profile writes");
+
+			MfccBackend taught;
+			check(taught.create(PathUtils::pathToUtf8(profilePath)) && taught.hasProfile() && taught.getProfileError().empty() &&
+					  taught.getProfile().phonemes.size() == 3,
+				  "the backend loads the profile");
+			taught.setVolumeWindow(-45.f, -25.f);
+			check(taught.infer(low.data(), low.size(), frames) && frames.size() == 30, "the low chord runs");
+			const MfccBackend::FrameScores& lowScore= taught.getLastFrameScores().back();
+			check(lowScore.scores.mainViseme == (int)eViseme::aa && lowScore.scores.perViseme[(int)eViseme::aa] > 0.6f &&
+					  std::fabs(frames.back().weights[(int)eViseme::aa] - lowScore.scores.perViseme[(int)eViseme::aa] * lowScore.volume) < 1e-6f,
+				  "the low chord calls A, its weight the share times the volume");
+			check(taught.infer(high.data(), high.size(), frames) && frames.size() == 30 &&
+					  taught.getLastFrameScores().back().scores.mainViseme == (int)eViseme::I &&
+					  frames.back().weights[(int)eViseme::I] > 0.6f,
+				  "the high chord calls I");
+			check(taught.infer(silence.data(), silence.size(), frames) && frames.back().weights[VISEME_SIL] == 1.f,
+				  "silence is silence with a profile too");
+			MIKAN_LOG_INFO("test-audio") << "profile inference " << taught.getLastInferMs() << " ms for one second";
 		}
 
-		MfccBackend missing;
-		check(!missing.create("resources/audio/does_not_exist.bin") && !missing.isReady() &&
-				  missing.getUnavailableReason().find("missing") != std::string::npos,
-			  "a missing model leaves the mfcc backend not ready with the reason");
+		MfccBackend broken;
+		check(!broken.create(PathUtils::pathToUtf8(tempDir / "does_not_exist.json")) && broken.isReady() && !broken.hasProfile() &&
+				  broken.getProfileError().find("missing") != std::string::npos,
+			  "a missing profile leaves the backend volume-only with the reason");
 	}
 
 	// (n) The wav writer and the sidecar recorder
@@ -732,7 +846,6 @@ static int runAudioTest(const TestArgs&)
 	// (q) The shared chain: live and replay run the same code, and a stretch
 	// of the stream replays to the live frames once the window has filled
 	{
-		if (std::filesystem::exists(MfccBackend::k_defaultModelPath))
 		{
 			// Five seconds of a buzz with a slow amplitude envelope, so the
 			// gate and the visemes change along it
@@ -750,7 +863,9 @@ static int runAudioTest(const TestArgs&)
 
 			MfccBackend liveBackend;
 			MfccBackend replayBackend;
-			check(liveBackend.create() && replayBackend.create(), "two backends load the shipped model");
+			liveBackend.create("");
+			replayBackend.create("");
+			check(liveBackend.isReady() && replayBackend.isReady(), "two volume-only backends are ready");
 
 			MouthChainConfig chainConfig;
 			chainConfig.gateDbfs= -40.f;
@@ -776,7 +891,7 @@ static int runAudioTest(const TestArgs&)
 				chain.push(stream.data(), 2 * AUDIO_SAMPLE_RATE, &liveBackend, frames, runs);
 				const int64_t lastBefore= frames.back().frameIndex;
 				MfccBackend swapped;
-				swapped.create();
+				swapped.create("");
 				chain.setGainDb(chainConfig.gainDb);
 				chain.setGateDbfs(chainConfig.gateDbfs);
 				chain.push(stream.data() + 2 * AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE, &swapped, frames, runs);
@@ -795,8 +910,8 @@ static int runAudioTest(const TestArgs&)
 			check(replayed.frames.size() + (size_t)alignment.frameOffset == live.frames.size(),
 				  "the replayed frames count up to the live frames");
 
-			// Past the warm-up both see identical windows, and the mfcc vote
-			// and crossfade have settled on the stationary signal
+			// Past the warm-up both see identical windows, the replay's
+			// zero padding long out of them
 			const int64_t warmup= 2 * MOUTH_FRAME_RATE;
 			float maxDiff= 0.f;
 			int compared= 0;
@@ -856,225 +971,44 @@ static int runAudioTest(const TestArgs&)
 				MIKAN_LOG_INFO("test-audio") << "wrote " << recordingPath << " and its sidecar for --replay-audio";
 			}
 		}
-		else
-		{
-			MIKAN_LOG_WARNING("test-audio") << MfccBackend::k_defaultModelPath << " missing, chain checks skipped";
-		}
 	}
 
-	// (r) The calibration fit: the profile writer round-trips, a fit on
-	// synthetic vowel clusters classifies them back over the shipped model,
-	// and the speech vectors and the gate suggestion read a clip
+	// (r) The calibration frames of a clip and the gate a quiet room suggests
 	{
-		const std::filesystem::path tempDir= std::filesystem::temp_directory_path() / "mikan_audio_test";
-		std::filesystem::create_directories(tempDir);
-
-		// The writer against the reader, with a two-byte phoneme, a one-byte
-		// one, and a three-code-point one cut to two
+		std::vector<float> tone(16000);
+		for (size_t index= 0; index < tone.size(); ++index)
 		{
-			VisemeModel model;
-			VisemePrototype open;
-			open.phoneme= "\xC9\x91";
-			open.group= VISEME_FIT_GROUP;
-			open.viseme= (uint8_t)eViseme::aa;
-			VisemePrototype mid;
-			mid.phoneme= "aa";
-			mid.viseme= (uint8_t)eViseme::E;
-			VisemePrototype silence;
-			silence.phoneme= "s1x";
-			silence.viseme= VISEME_SIL;
-			for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-			{
-				open.mu[index]= 0.1f * index - 0.5f;
-				mid.mu[index]= -0.07f * index;
-			}
-			for (int index= 0; index < VISEME_SIGMA_LOWER_COUNT; ++index)
-			{
-				open.sigmaInvLower[index]= 1.f + 0.01f * index;
-				mid.sigmaInvLower[index]= -0.5f + 0.02f * index;
-				silence.sigmaInvLower[index]= 1200.f;
-			}
-			model.prototypes= {open, mid, silence};
-
-			const auto sameRecord= [](const VisemePrototype& a, const VisemePrototype& b) {
-				return a.phoneme == b.phoneme && a.group == b.group && a.viseme == b.viseme && a.mu == b.mu &&
-					   a.sigmaInvLower == b.sigmaInvLower;
-			};
-			uint8_t bytes[VisemeModel::k_recordBytes];
-			VisemeModel::encodeRecord(open, bytes);
-			check(sameRecord(VisemeModel::decodeRecord(bytes), open) && bytes[5] == VISEME_FIT_GROUP && bytes[7] == 0,
-				  "a record encodes and decodes to itself with the group and viseme bytes in place");
-
-			const std::filesystem::path profilePath= tempDir / "profile.bin";
-			std::string error;
-			VisemeModel loaded;
-			check(model.save(profilePath, error) && std::filesystem::file_size(profilePath) == 3 * VisemeModel::k_recordBytes &&
-					  loaded.load(profilePath, error) && loaded.prototypes.size() == 3,
-				  "a three-prototype model saves to three records and loads back");
-			check(loaded.prototypes.size() == 3 && sameRecord(loaded.prototypes[0], open) && sameRecord(loaded.prototypes[1], mid),
-				  "the loaded prototypes match the saved ones float-exact, the two-byte phoneme included");
-			check(loaded.prototypes.size() == 3 && loaded.prototypes[2].phoneme == "s1" &&
-					  loaded.prototypes[2].viseme == VISEME_SIL,
-				  "a phoneme past two code points is cut to two");
-			check(!model.save(tempDir, error) && error.find("cannot write") != std::string::npos,
-				  "a path that cannot be opened reports the reason");
+			const float t= (float)index / AUDIO_SAMPLE_RATE;
+			tone[index]= 0.3f * (std::sin(2.f * glm::pi<float>() * 150.f * t) + 0.5f * std::sin(2.f * glm::pi<float>() * 450.f * t) +
+								 0.25f * std::sin(2.f * glm::pi<float>() * 900.f * t));
 		}
+		MfccExtractor extractor;
+		std::vector<MfccVector> frames;
+		calibrationFrames(tone.data(), tone.size(), -40.f, extractor, frames);
+		check(frames.size() == 29, "a second of a loud tone gives a frame per 30 fps frame once a block has arrived");
+		calibrationFrames(tone.data(), tone.size(), -5.f, extractor, frames);
+		check(frames.empty(), "a gate above the tone keeps no frame");
+		std::vector<float> silence(16000, 0.f);
+		calibrationFrames(silence.data(), silence.size(), -40.f, extractor, frames);
+		check(frames.empty(), "digital silence gives no frames past a gate");
+		calibrationFrames(silence.data(), silence.size(), -100.f, extractor, frames);
+		check(frames.size() == 29, "and every frame with the gate off, the noise phoneme's capture");
+		calibrationFrames(tone.data(), 300, -100.f, extractor, frames);
+		check(frames.empty(), "less than a block gives no frames");
 
-		// Five synthetic vowel clusters: the fit lands on their centers and
-		// each cluster classifies back as its viseme over the shipped model
+		// Uniform noise at -60 dBFS RMS: the suggestion is 6 dB over it
+		std::vector<float> room(16000);
+		uint32_t seed= 99;
+		for (float& sample : room)
 		{
-			const int clusterCount= 5;
-			const eViseme visemes[clusterCount]= {eViseme::aa, eViseme::I, eViseme::U, eViseme::E, eViseme::O};
-			const char* const phonemes[clusterCount]= {"aa", "ih", "ou", "eh", "oh"};
-			uint32_t seed= 777;
-			const auto gaussian= [&seed]() {
-				float sum= 0.f;
-				for (int draw= 0; draw < 12; ++draw)
-				{
-					seed= seed * 1664525u + 1013904223u;
-					sum+= seed / 4294967296.f;
-				}
-				return sum - 6.f;
-			};
-			MfccVector centers[clusterCount];
-			std::vector<MfccVector> clusters[clusterCount];
-			for (int cluster= 0; cluster < clusterCount; ++cluster)
-			{
-				for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-					centers[cluster][index]= 0.8f * std::sin(1.7f * cluster + 0.9f * index);
-				for (int sample= 0; sample < 60; ++sample)
-				{
-					MfccVector vector;
-					for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-						vector[index]= centers[cluster][index] + 0.25f * gaussian();
-					clusters[cluster].push_back(vector);
-				}
-			}
-
-			std::vector<VisemePrototype> fitted;
-			bool bFit= true;
-			bool bCentered= true;
-			std::string error;
-			for (int cluster= 0; cluster < clusterCount; ++cluster)
-			{
-				VisemePrototype prototype;
-				bFit&= fitVisemePrototype(clusters[cluster], (int)visemes[cluster], phonemes[cluster], prototype, error);
-				bFit&= prototype.viseme == (uint8_t)visemes[cluster] && prototype.group == VISEME_FIT_GROUP &&
-					   prototype.phoneme == phonemes[cluster];
-				for (int index= 0; index < MFCC_COEFF_COUNT; ++index)
-					bCentered&= std::fabs(prototype.mu[index] - centers[cluster][index]) < 0.12f;
-				fitted.push_back(prototype);
-			}
-			check(bFit, "five clusters of sixty vectors fit as prototypes of their visemes");
-			check(bCentered, "each fit lands within 0.12 of its cluster's center");
-			// The floor keeps the prototype from being tighter than the floor
-			// variance: a diagonal term is at most 1 / 0.25
-			bool bFloored= true;
-			for (const VisemePrototype& prototype : fitted)
-			{
-				int packed= 0;
-				for (int row= 0; row < MFCC_COEFF_COUNT; ++row)
-				{
-					packed+= row;
-					bFloored&= prototype.sigmaInvLower[packed] > 0.f && prototype.sigmaInvLower[packed] <= 1.f / VISEME_FIT_VARIANCE_FLOOR + 1e-3f;
-					packed++;
-				}
-			}
-			check(bFloored, "the inverse variances stay under the floor's inverse");
-
-			VisemeModel base;
-			size_t keptCount= 0;
-			if (std::filesystem::exists(MfccBackend::k_defaultModelPath))
-			{
-				check(base.load(MfccBackend::k_defaultModelPath, error), "the shipped model loads as the overlay's base");
-				for (const VisemePrototype& prototype : base.prototypes)
-				{
-					bool bVowel= false;
-					for (eViseme viseme : visemes)
-						bVowel|= prototype.viseme == (uint8_t)viseme;
-					keptCount+= bVowel ? 0 : 1;
-				}
-				check(keptCount < base.prototypes.size() && keptCount >= 15, "the shipped model holds vowel prototypes to replace");
-			}
-			const VisemeModel overlay= overlayVisemePrototypes(base, fitted);
-			check(overlay.prototypes.size() == keptCount + clusterCount, "the overlay keeps the consonants and the silence and adds the five fits");
-			bool bAppended= true;
-			for (int cluster= 0; cluster < clusterCount; ++cluster)
-				bAppended&= overlay.prototypes[keptCount + cluster].viseme == (uint8_t)visemes[cluster];
-			check(bAppended, "the fits sit at the overlay's end in prompt order");
-
-			VisemeClassifier classifier;
-			classifier.setModel(overlay);
-			bool bClassifies= true;
-			for (int cluster= 0; cluster < clusterCount; ++cluster)
-			{
-				int hits= 0;
-				classifier.reset();
-				int voted= VISEME_SIL;
-				for (const MfccVector& vector : clusters[cluster])
-				{
-					float nearest= std::numeric_limits<float>::infinity();
-					int nearestViseme= VISEME_SIL;
-					for (const VisemePrototype& prototype : overlay.prototypes)
-					{
-						const float d= VisemeClassifier::distance(vector, prototype);
-						if (d < nearest)
-						{
-							nearest= d;
-							nearestViseme= prototype.viseme;
-						}
-					}
-					hits+= nearestViseme == (int)visemes[cluster] ? 1 : 0;
-					voted= classifier.predict(vector);
-				}
-				bClassifies&= hits >= 57 && voted == (int)visemes[cluster];
-			}
-			check(bClassifies, "each cluster classifies back as its viseme, by nearest prototype and by the vote");
-
-			std::vector<MfccVector> few(clusters[0].begin(), clusters[0].begin() + VISEME_FIT_MIN_VECTORS - 1);
-			VisemePrototype rejected;
-			check(!fitVisemePrototype(few, (int)eViseme::aa, "aa", rejected, error) && error.find("too few") != std::string::npos,
-				  "twelve vectors are too few to fit");
+			seed= seed * 1664525u + 1013904223u;
+			sample= (seed / 4294967296.f - 0.5f) * 2.f * 0.001f * std::sqrt(3.f);
 		}
-
-		// The speech vectors of a clip and the gate a quiet room suggests
-		{
-			std::vector<float> tone(16000);
-			for (size_t index= 0; index < tone.size(); ++index)
-			{
-				const float t= (float)index / AUDIO_SAMPLE_RATE;
-				tone[index]= 0.3f * (std::sin(2.f * glm::pi<float>() * 150.f * t) +
-									 0.5f * std::sin(2.f * glm::pi<float>() * 450.f * t) +
-									 0.25f * std::sin(2.f * glm::pi<float>() * 900.f * t));
-			}
-			std::vector<MfccVector> vectors;
-			extractSpeechVectors(tone.data(), tone.size(), VadGateConfig(), vectors);
-			check(vectors.size() >= 50 && vectors.size() <= 61, "a second of a loud tone gives most of its 61 hops as vectors");
-			bool bCompressed= true;
-			for (const MfccVector& vector : vectors)
-				for (float value : vector)
-					bCompressed&= value >= -1.f && value <= 1.f;
-			check(bCompressed, "the vectors are compressed into -1..1");
-			std::vector<float> silence(16000, 0.f);
-			extractSpeechVectors(silence.data(), silence.size(), VadGateConfig(), vectors);
-			check(vectors.empty(), "digital silence gives no vectors");
-			extractSpeechVectors(tone.data(), 300, VadGateConfig(), vectors);
-			check(vectors.empty(), "less than a block gives no vectors");
-
-			// Uniform noise at -60 dBFS RMS: the suggestion is 6 dB over it
-			std::vector<float> room(16000);
-			uint32_t seed= 99;
-			for (float& sample : room)
-			{
-				seed= seed * 1664525u + 1013904223u;
-				sample= (seed / 4294967296.f - 0.5f) * 2.f * 0.001f * std::sqrt(3.f);
-			}
-			const float suggested= suggestGateDbfs(room.data(), room.size(), 0.f);
-			check(std::fabs(suggested - (-54.f)) < 1.5f, "a -60 dBFS room suggests a gate near -54 dBFS");
-			check(std::fabs(suggestGateDbfs(room.data(), room.size(), 10.f) - (suggested + 10.f)) < 1e-4f,
-				  "the gain the stage applies moves the suggestion with it");
-			check(suggestGateDbfs(silence.data(), silence.size(), 0.f) == -80.f, "digital silence suggests the gate's floor");
-		}
+		const float suggested= suggestGateDbfs(room.data(), room.size(), 0.f);
+		check(std::fabs(suggested - (-54.f)) < 1.5f, "a -60 dBFS room suggests a gate near -54 dBFS");
+		check(std::fabs(suggestGateDbfs(room.data(), room.size(), 10.f) - (suggested + 10.f)) < 1e-4f,
+			  "the gain the stage applies moves the suggestion with it");
+		check(suggestGateDbfs(silence.data(), silence.size(), 0.f) == -80.f, "digital silence suggests the gate's floor");
 	}
 
 	MIKAN_LOG_INFO("test-audio") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures << " failed)";
@@ -1082,7 +1016,7 @@ static int runAudioTest(const TestArgs&)
 }
 
 MIKAN_REGISTER_TEST("--test-audio",
-					"Audio stage: mouth column group, model column table, window policy, wav reader, filter, the two backends, "
-					"the MFCC chain, the viseme model and table, the wav writer, the sidecar recorder, the pacer, the replay alignment, "
-					"the calibration fit and the profile writer",
+					"Audio stage: mouth column group, window policy, wav reader, filter, the MFCC chain against uLipSync, "
+					"the profile, the viseme table, the backend, the wav writer, the sidecar recorder, the pacer, the replay "
+					"alignment, the chain, the calibration frames and the gate suggestion",
 					eTestCategory::SelfTest, runAudioTest)

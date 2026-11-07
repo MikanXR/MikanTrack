@@ -9,93 +9,82 @@
 
 namespace
 {
-// HeadAudio's easing over a 0..1 ramp: a sigmoid of sharpness 5 rescaled to
-// pass through 0 and 1 at the ends
-float easeRamp(float t)
-{
-	constexpr float k= 5.f;
-	const auto base= [](float x) { return 1.f / (1.f + std::exp(-k * x)) - 0.5f; };
-	const float correction= 0.5f / base(1.f);
-	return correction * base(2.f * std::min(std::max(t, 0.f), 1.f) - 1.f) + 0.5f;
-}
-} // namespace
-
-int MfccBackend::hopsForSamples(size_t sampleCount)
-{
-	if (sampleCount < (size_t)MFCC_BLOCK_SAMPLES)
-		return 0;
-	return 1 + (int)((sampleCount - MFCC_BLOCK_SAMPLES) / MFCC_HOP_SAMPLES);
+constexpr std::array<int, 5> k_vowelVisemes= {(int)eViseme::aa, (int)eViseme::E, (int)eViseme::I, (int)eViseme::O,
+											  (int)eViseme::U};
 }
 
-bool MfccBackend::create(const std::string& modelPath)
+bool MfccBackend::create(const std::string& profilePath)
 {
 	m_lastInferMs= 0.0;
-	m_classifier= VisemeClassifier();
+	m_profile= LipSyncProfile();
+	m_profileError.clear();
+	m_bCreated= true;
+	if (profilePath.empty())
+		return false;
 
-	VisemeModel model;
-	if (!model.load(PathUtils::utf8ToPath(modelPath), m_unavailableReason))
+	if (!m_profile.load(PathUtils::utf8ToPath(profilePath), m_profileError))
 	{
-		MIKAN_MT_LOG_WARNING("MfccBackend::create") << m_unavailableReason;
+		MIKAN_MT_LOG_WARNING("MfccBackend::create") << m_profileError;
+		m_profile= LipSyncProfile();
 		return false;
 	}
-	m_classifier.setModel(model);
-	m_unavailableReason.clear();
+	m_extractor.configure(m_profile.melFilterBankChannels);
 	return true;
+}
+
+void MfccBackend::setVolumeWindow(float minDbfs, float maxDbfs)
+{
+	m_minDbfs= minDbfs;
+	m_maxDbfs= std::max(maxDbfs, minDbfs + 1.f);
 }
 
 bool MfccBackend::infer(const float* samples, size_t sampleCount, std::vector<MouthFrame>& outFrames)
 {
 	outFrames.clear();
-	const int hopCount= hopsForSamples(sampleCount);
-	if (!isReady() || hopCount == 0)
+	if (!m_bCreated || sampleCount == 0)
 		return false;
 
 	const auto start= std::chrono::steady_clock::now();
 
-	m_preEmphasized.resize(sampleCount);
-	MfccExtractor::preEmphasize(samples, sampleCount, m_preEmphasized.data());
-
-	// One vote per hop the gate lets through (a gated hop is silence and
-	// feeds no vote), then the crossfade: the winning viseme ramps toward one
-	// and every other toward zero, a hop's worth per hop
-	m_gate.reset();
-	m_classifier.reset();
-	m_hopVisemes.resize((size_t)hopCount);
-	m_hopWeights.resize((size_t)hopCount);
-	VisemeWeights alphas{};
-	const float rampPerHop= rampMs > 0.f ? (1000.f * MFCC_HOP_SAMPLES / AUDIO_SAMPLE_RATE) / rampMs : 1.f;
-	MfccVector vector;
-	float logEnergy= 0.f;
-	for (int hop= 0; hop < hopCount; ++hop)
-	{
-		const size_t blockEnd= (size_t)MFCC_BLOCK_SAMPLES + (size_t)hop * MFCC_HOP_SAMPLES;
-		m_extractor.compute(m_preEmphasized.data() + blockEnd - MFCC_BLOCK_SAMPLES, logEnergy, vector);
-		MfccExtractor::compress(vector);
-		const int viseme= m_gate.process(logEnergy) ? m_classifier.predict(vector) : VISEME_SIL;
-		m_hopVisemes[(size_t)hop]= (uint8_t)viseme;
-
-		VisemeWeights& weights= m_hopWeights[(size_t)hop];
-		for (int index= 0; index < VISEME_COUNT; ++index)
-		{
-			float& alpha= alphas[index];
-			if (index == viseme && viseme != VISEME_SIL)
-				alpha= std::min(alpha + rampPerHop, 1.f);
-			else
-				alpha= std::max(alpha - rampPerHop, 0.f);
-			weights[index]= alpha <= 0.f ? 0.f : alpha >= 1.f ? 1.f : easeRamp(alpha);
-		}
-	}
-
-	// Each 30 fps frame takes the weights of the latest hop centered at or
-	// before the frame's center; the earliest frames take the first hop
 	const int frameCount= mouthFramesForSamples(sampleCount);
 	outFrames.resize((size_t)frameCount);
+	m_frameScores.resize((size_t)frameCount);
+	const bool bProfile= hasProfile();
+	MfccVector mfcc;
 	for (int frameIndex= 0; frameIndex < frameCount; ++frameIndex)
 	{
-		const double frameCenter= (frameIndex + 0.5) * AUDIO_SAMPLE_RATE / MOUTH_FRAME_RATE;
-		// Hop h is centered at (h + 1) * 256 samples
-		const int hop= std::min(std::max((int)std::floor(frameCenter / MFCC_HOP_SAMPLES) - 1, 0), hopCount - 1);
-		outFrames[(size_t)frameIndex].weights= m_hopWeights[(size_t)hop];
+		// The block ends at the frame's end, zero-padded at the front while
+		// the window has not reached a whole block
+		const size_t end= std::min(mouthFrameEndSample(frameIndex), sampleCount);
+		const size_t available= std::min(end, (size_t)LIPSYNC_BLOCK_SAMPLES);
+		const size_t padding= (size_t)LIPSYNC_BLOCK_SAMPLES - available;
+		std::fill(m_block.begin(), m_block.begin() + (std::ptrdiff_t)padding, 0.f);
+		std::copy(samples + end - available, samples + end, m_block.begin() + (std::ptrdiff_t)padding);
+
+		FrameScores& frame= m_frameScores[(size_t)frameIndex];
+		m_extractor.compute(m_block.data(), frame.levelDbfs, mfcc);
+		frame.volume= std::clamp((frame.levelDbfs - m_minDbfs) / (m_maxDbfs - m_minDbfs), 0.f, 1.f);
+
+		VisemeWeights& weights= outFrames[(size_t)frameIndex].weights;
+		weights.fill(0.f);
+		float vowelSum= 0.f;
+		if (bProfile)
+		{
+			m_profile.score(mfcc, frame.scores);
+			for (int viseme : k_vowelVisemes)
+			{
+				weights[(size_t)viseme]= frame.scores.perViseme[(size_t)viseme] * frame.volume;
+				vowelSum+= weights[(size_t)viseme];
+			}
+		}
+		else
+		{
+			frame.scores= LipSyncScores();
+			frame.scores.mainViseme= frame.volume > 0.f ? (int)eViseme::aa : VISEME_SIL;
+			weights[(size_t)eViseme::aa]= frame.volume;
+			vowelSum= frame.volume;
+		}
+		weights[(size_t)VISEME_SIL]= std::clamp(1.f - vowelSum, 0.f, 1.f);
 	}
 
 	m_lastInferMs= std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

@@ -20,6 +20,9 @@ bool isMouthArkitIndex(int arkitIndex);
 // The number of 30 fps frames the backend emits for a span of samples:
 // ceil(30 * samples / 16000)
 int mouthFramesForSamples(size_t sampleCount);
+// The sample a 30 fps frame ends at, round((frameIndex + 1) * 16000 / 30):
+// the block that scores the frame ends there
+size_t mouthFrameEndSample(int frameIndex);
 
 // One 30 fps frame of viseme weights, 0..1, in eViseme order
 struct MouthFrame

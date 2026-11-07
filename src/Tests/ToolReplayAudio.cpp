@@ -9,12 +9,12 @@
 
 // Re-runs the microphone mouth stage over a recording's audio sidecar and
 // measures the result against the viseme frames the live run recorded, so a
-// model change (another profile, or other gain and gate settings) can be
-// judged against old recordings. The sidecar is aligned to the live hop
-// grid, so the same model under the same settings replays to the live frames
-// within the chunked drift once the window has filled.
+// profile change (or other gain and gate settings) can be judged against old
+// recordings. The sidecar is aligned to the live hop grid, so the same
+// profile under the same settings replays to the live frames once the window
+// has filled.
 //
-//   --replay-audio <recording.jsonl> [out.json] [--model path] [--gain db] [--gate dbfs]
+//   --replay-audio <recording.jsonl> [out.json] [--profile path] [--gain db] [--gate dbfs]
 
 namespace
 {
@@ -22,7 +22,7 @@ struct ReplayAudioOptions
 {
 	std::filesystem::path recordingPath;
 	std::filesystem::path outPath;
-	std::string modelPath;
+	std::string profilePath;
 	bool bGainSet= false;
 	float gainDb= 0.f;
 	bool bGateSet= false;
@@ -36,8 +36,8 @@ bool parseOptions(const TestArgs& args, ReplayAudioOptions& options)
 	{
 		const std::string& arg= args[index];
 		const bool bHasValue= index + 1 < args.size();
-		if (arg == "--model" && bHasValue)
-			options.modelPath= args[++index];
+		if (arg == "--profile" && bHasValue)
+			options.profilePath= args[++index];
 		else if (arg == "--gain" && bHasValue)
 		{
 			options.gainDb= std::stof(args[++index]);
@@ -82,7 +82,7 @@ static int runReplayAudio(const TestArgs& args)
 	if (!parseOptions(args, options))
 	{
 		MIKAN_LOG_ERROR("replay-audio")
-			<< "usage: --replay-audio <recording.jsonl> [out.json] [--model path] [--gain db] [--gate dbfs]";
+			<< "usage: --replay-audio <recording.jsonl> [out.json] [--profile path] [--gain db] [--gate dbfs]";
 		return 1;
 	}
 
@@ -112,25 +112,24 @@ static int runReplayAudio(const TestArgs& args)
 								   << sidecar.startSampleIndex;
 
 	// The chain under the recorded settings unless overridden: the recorded
-	// profile, or the shipped model where the recording had none
+	// profile, or volume-only where the recording had none
 	const AudioConfig& recordedAudio= replay.getRecordedConfig().audio;
 	MouthChainConfig chainConfig;
 	chainConfig.gainDb= options.bGainSet ? options.gainDb : recordedAudio.gainDb;
 	chainConfig.gateDbfs= options.bGateSet ? options.gateDbfs : recordedAudio.gateDbfs;
-	const std::string modelPath= !options.modelPath.empty()		   ? options.modelPath
-								 : !recordedAudio.profilePath.empty() ? recordedAudio.profilePath
-																	  : std::string(MfccBackend::k_defaultModelPath);
+	const std::string profilePath= !options.profilePath.empty() ? options.profilePath : recordedAudio.profilePath;
 	MfccBackend backend;
-	if (!backend.create(modelPath))
+	if (!backend.create(profilePath) && !profilePath.empty())
 	{
-		MIKAN_LOG_ERROR("replay-audio") << backend.getUnavailableReason();
+		MIKAN_LOG_ERROR("replay-audio") << backend.getProfileError();
 		return 1;
 	}
+	const std::string profileLabel= profilePath.empty() ? std::string("no profile, volume only") : profilePath;
 
 	const MouthReplayAlignment alignment= mouthReplayAlignment(sidecar.startSampleIndex, chainConfig.window);
 	MouthReplayOutput replayed;
 	replayMouthChain(clip, alignment.padSamples, chainConfig, backend, replayed);
-	MIKAN_LOG_INFO("replay-audio") << modelPath << " at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
+	MIKAN_LOG_INFO("replay-audio") << profileLabel << " at gain " << chainConfig.gainDb << " dB, gate " << chainConfig.gateDbfs
 								   << " dBFS: " << replayed.frames.size() << " frames from " << replayed.runs.size()
 								   << " runs, padded " << alignment.padSamples
 								   << " samples onto the live hop grid, live frame = replayed frame + "
@@ -248,8 +247,8 @@ static int runReplayAudio(const TestArgs& args)
 		nlohmann::json out;
 		out["recording"]= PathUtils::pathToUtf8(options.recordingPath);
 		out["sidecar"]= sidecar.fileName;
-		out["recordedModel"]= recordedAudio.profilePath;
-		out["model"]= modelPath;
+		out["recordedProfile"]= recordedAudio.profilePath;
+		out["profile"]= profilePath;
 		out["gainDb"]= chainConfig.gainDb;
 		out["gateDbfs"]= chainConfig.gateDbfs;
 		out["sampleRate"]= AUDIO_SAMPLE_RATE;

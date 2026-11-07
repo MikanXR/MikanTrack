@@ -14,6 +14,10 @@ class MfccBackend;
 // The level of a span of samples in dBFS RMS, floored at -100
 float audioLevelDbfs(const float* samples, size_t sampleCount);
 
+// The gate a room's silence suggests: the loudest hop of the samples at
+// the gain, plus a 6 dB margin, clamped to the gate slider's range
+float suggestGateDbfs(const float* samples, size_t sampleCount, float gainDb);
+
 // The noise gate with hysteresis: opens at the threshold, closes 6 dB under
 // it, so a level hovering at the threshold does not flutter the mouth
 class LevelGate
@@ -40,6 +44,9 @@ struct MouthChainConfig
 	float gainDb= 0.f;
 	// Hop level below which the mouth is neutral and no backend runs
 	float gateDbfs= -45.f;
+	// The backend's volume window sits on the gate: closed at the gate,
+	// fully open this far above it
+	static constexpr float k_volumeSpanDb= 20.f;
 };
 
 // An emitted frame with its index in the stream: frame i scores the audio

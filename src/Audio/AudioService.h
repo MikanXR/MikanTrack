@@ -40,7 +40,9 @@ struct AudioServiceStatus
 	std::string deviceName;
 	int deviceSampleRate= 0;
 	bool backendReady= false;
-	// Why the backend is not ready, when it is not
+	// Whether the backend runs a calibration profile; volume-only otherwise
+	bool profileLoaded= false;
+	// Why no profile loaded, empty while one did or none is configured
 	std::string backendReason;
 	// The newest hop's level after gain
 	float levelDbfs= -100.f;

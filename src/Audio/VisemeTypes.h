@@ -2,8 +2,8 @@
 
 #include <array>
 
-// The 15 Oculus visemes in HeadAudio's id order (which is not the Oculus
-// SDK's), the output shape of the mfcc backend and of its shipped model
+// The 15 Oculus visemes in the stage's id order (which is not the Oculus
+// SDK's), the output shape of the mfcc backend
 constexpr int VISEME_COUNT= 15;
 
 enum class eViseme : int

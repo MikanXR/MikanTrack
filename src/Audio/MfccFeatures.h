@@ -3,22 +3,25 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
-// The MFCC feature chain of the mfcc backend, a port of HeadAudio's (MIT,
-// Mika Suominen) stage for stage so its shipped model reads the same
-// vectors: pre-emphasis, 512-sample blocks at a 256-sample hop, a Hamming
-// window, a radix-2 FFT, the power spectrum, 40 triangular mel bands over
-// 30..7800 Hz, a DCT keeping coefficients 1..12 under a sinusoidal lifter,
-// then tanh compression. The input is already 16 kHz, so HeadAudio's
-// polyphase downsampler has no counterpart here.
+// The MFCC feature chain of the mouth stage, a port of uLipSync's (MIT,
+// hecomi) stage for stage so a profile calibrated there reads the same
+// coefficients: over one 1024-sample block at 16 kHz, pre-emphasis, a Hamming
+// window, a peak normalization to 1, a radix-2 FFT to the magnitude
+// spectrum, a mel filterbank of triangles on the 1127 ln scale from 0 to
+// 8 kHz, 10 log10 of each band, a direct DCT-II, and coefficients 1..12.
+// uLipSync's windowed-sinc low-pass and its decimation to 16 kHz have no
+// counterpart here: they anti-alias the host's audio before the downsample,
+// and the capture is already 16 kHz. The block's RMS level comes out beside
+// the coefficients, the volume uLipSync opens the mouth with.
 
-constexpr int MFCC_BLOCK_SAMPLES= 512;
-constexpr int MFCC_HOP_SAMPLES= 256;
+constexpr int LIPSYNC_BLOCK_SAMPLES= 1024;
 constexpr int MFCC_COEFF_COUNT= 12;
-constexpr int MFCC_MEL_BANDS= 40;
+constexpr int LIPSYNC_DEFAULT_MEL_CHANNELS= 30;
 constexpr float MFCC_PREEMPHASIS_ALPHA= 0.97f;
 
-// One feature vector: the 12 coefficients, raw out of the DCT or compressed
+// One feature vector: the 12 coefficients
 using MfccVector= std::array<float, MFCC_COEFF_COUNT>;
 
 class MfccExtractor
@@ -26,31 +29,41 @@ class MfccExtractor
 public:
 	MfccExtractor();
 
-	// out[i]= in[i] - 0.97 * in[i - 1], with in[-1] taken as zero
-	static void preEmphasize(const float* in, size_t count, float* out);
+	// Rebuilds the mel filterbank and the DCT rows for a channel count; the
+	// constructor builds the default
+	void configure(int melChannels);
+	int getMelChannels() const { return m_melChannels; }
 
-	// One block of MFCC_BLOCK_SAMPLES to its log energy (log10 of the summed
-	// power spectrum, HeadAudio's "le", a tenth of the level in dB) and the
-	// 12 raw coefficients
-	void compute(const float* block, float& outLogEnergy, MfccVector& outRaw);
-
-	// The tanh compression the classifier's vectors carry, in place
-	static void compress(MfccVector& vector);
+	// One block of LIPSYNC_BLOCK_SAMPLES to its level in dBFS RMS (floored
+	// at -100, read before the chain touches the samples) and its 12
+	// coefficients. The block is copied, not modified.
+	void compute(const float* block, float& outLevelDbfs, MfccVector& outMfcc);
 
 private:
 	void buildMelFilterbank();
-	void hammingAndFft(const float* block);
+	void buildDct();
+	void fftMagnitude();
 
-	std::array<float, 2 * MFCC_BLOCK_SAMPLES> m_cosSin{};
-	std::array<uint32_t, MFCC_BLOCK_SAMPLES> m_bitReverse{};
-	std::array<float, MFCC_BLOCK_SAMPLES> m_hamming{};
-	std::array<std::array<float, MFCC_BLOCK_SAMPLES / 2>, MFCC_MEL_BANDS> m_melFilters{};
-	std::array<std::array<float, MFCC_MEL_BANDS>, MFCC_COEFF_COUNT + 1> m_dct{};
-	std::array<float, MFCC_COEFF_COUNT> m_lifter{};
+	int m_melChannels= LIPSYNC_DEFAULT_MEL_CHANNELS;
 
-	// Scratch for one block: the complex spectrum, the power spectrum, the
-	// log mel energies
-	std::array<float, 2 * MFCC_BLOCK_SAMPLES> m_spectrum{};
-	std::array<float, MFCC_BLOCK_SAMPLES / 2> m_power{};
-	std::array<float, MFCC_MEL_BANDS> m_melEnergies{};
+	std::array<float, 2 * LIPSYNC_BLOCK_SAMPLES> m_cosSin{};
+	std::array<uint32_t, LIPSYNC_BLOCK_SAMPLES> m_bitReverse{};
+	std::array<float, LIPSYNC_BLOCK_SAMPLES> m_hamming{};
+
+	// A mel band's triangle: the weights over the FFT bins from firstBin up
+	struct MelBand
+	{
+		int firstBin= 0;
+		std::vector<float> weights;
+	};
+	std::vector<MelBand> m_melBands;
+	// Rows 1..12 of the DCT over the mel channels
+	std::array<std::vector<float>, MFCC_COEFF_COUNT> m_dct;
+
+	// Scratch for one block: the processed samples, the complex spectrum,
+	// the magnitudes of bins 0..N/2, the mel energies in dB
+	std::array<float, LIPSYNC_BLOCK_SAMPLES> m_block{};
+	std::array<float, 2 * LIPSYNC_BLOCK_SAMPLES> m_spectrum{};
+	std::array<float, LIPSYNC_BLOCK_SAMPLES / 2 + 1> m_magnitude{};
+	std::vector<float> m_melDb;
 };

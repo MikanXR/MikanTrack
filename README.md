@@ -94,13 +94,16 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   scale is measured continuously by stereo triangulation while tracking runs,
   until calibrated hand skeletons supersede it.
 - **Microphone mouth** (Audio panel): with no phone face streaming, the
-  voice drives the avatar's mouth from the microphone, classified into the
-  15 Oculus visemes at a fraction of a percent of a core. A VRM avatar with
-  the vowel presets gets them straight from the visemes, and one with ARKit
-  shapes gets the jaw and lip shape of each viseme. Pick the device and set
-  the gate just above the room's noise floor (the meter turns green when it
-  opens). Calibrate fits the vowels to your voice through six three-second
-  prompts and sets the gate from the room's silence. The panel shows the
+  voice drives the avatar's mouth from the microphone through uLipSync's
+  method, scored against your own calibrated vowels at a fraction of a
+  percent of a core. A VRM avatar with the vowel presets gets them straight
+  from the visemes, and one with ARKit shapes gets the jaw and lip shape of
+  each viseme. Pick the device and set the gate just above the room's noise
+  floor (the meter turns green when it opens). Before calibration the jaw
+  opens with the voice's volume alone. Calibrate records the five vowels
+  and the room's silence through six three-second prompts, builds your
+  profile, and sets the gate from the silence. Import loads a profile
+  exported from uLipSync or VTube Studio instead. The panel shows the
   viseme weights live, and the OSC Output panel shows what they become on
   the loaded avatar. The phone's face takes the mouth back whenever it
   streams.

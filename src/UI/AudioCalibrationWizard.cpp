@@ -13,14 +13,13 @@
 #include "AppConfig.h"
 #include "AudioService.h"
 #include "AudioTypes.h"
-#include "MfccBackend.h"
+#include "MouthChain.h"
 #include "PathUtils.h"
-#include "VisemeFit.h"
 
 namespace
 {
-// A vowel prompt: its label, the phoneme its prototype is recorded under,
-// and the viseme it replaces
+// A vowel prompt: its label, the uLipSync phoneme its frames are recorded
+// under, and the viseme that phoneme drives
 struct VowelPrompt
 {
 	const char* labelKey;
@@ -29,32 +28,17 @@ struct VowelPrompt
 };
 
 const VowelPrompt k_vowels[AudioCalibrationWizard::k_vowelCount]= {
-	{"audioWizard.promptAa", "aa", eViseme::aa}, {"audioWizard.promptI", "ih", eViseme::I},
-	{"audioWizard.promptU", "ou", eViseme::U},   {"audioWizard.promptE", "eh", eViseme::E},
-	{"audioWizard.promptO", "oh", eViseme::O},
+	{"audioWizard.promptAa", "A", eViseme::aa}, {"audioWizard.promptI", "I", eViseme::I},
+	{"audioWizard.promptU", "U", eViseme::U},   {"audioWizard.promptE", "E", eViseme::E},
+	{"audioWizard.promptO", "O", eViseme::O},
 };
+// uLipSync's noise phoneme, what the silence prompt teaches
+const char* const k_noisePhoneme= "-";
 
-// The hop count as seconds of voice
-float hopsToSeconds(size_t hopCount)
+// A frame count as seconds of voice
+float framesToSeconds(size_t frameCount)
 {
-	return (float)hopCount * MFCC_HOP_SAMPLES / AUDIO_SAMPLE_RATE;
-}
-
-// The viseme of the nearest prototype, the classifier's call before its vote
-int nearestViseme(const MfccVector& vector, const VisemeModel& model)
-{
-	float nearest= std::numeric_limits<float>::infinity();
-	int viseme= VISEME_SIL;
-	for (const VisemePrototype& prototype : model.prototypes)
-	{
-		const float d= VisemeClassifier::distance(vector, prototype);
-		if (d < nearest)
-		{
-			nearest= d;
-			viseme= prototype.viseme;
-		}
-	}
-	return viseme;
+	return (float)frameCount / MOUTH_FRAME_RATE;
 }
 
 const char* promptLabel(int promptIndex)
@@ -72,7 +56,7 @@ AudioCalibrationWizard::AudioCalibrationWizard(App* app, AppConfig* config)
 
 std::string AudioCalibrationWizard::makeProfilePath(const AppConfig& config)
 {
-	return PathUtils::pathToUtf8(config.getProjectDirectory() / "audio" / "profile.bin");
+	return PathUtils::pathToUtf8(config.getProjectDirectory() / "audio" / "profile.json");
 }
 
 void AudioCalibrationWizard::enter()
@@ -85,13 +69,12 @@ void AudioCalibrationWizard::enter()
 	m_promptIndex= 0;
 	m_countdown.cancel();
 	for (int index= 0; index < k_vowelCount; ++index)
-	{
-		m_vowelVectors[index].clear();
 		m_hitRate[index]= 0.f;
-	}
+	for (std::vector<MfccVector>& frames : m_promptFrames)
+		frames.clear();
 	for (PromptResult& result : m_results)
 		result= PromptResult();
-	m_profile= VisemeModel();
+	m_profile= LipSyncProfile();
 	m_suggestedGateDbfs= m_config->audio.gateDbfs;
 	m_profileError.clear();
 }
@@ -142,12 +125,14 @@ void AudioCalibrationWizard::finishRecording()
 		return;
 	}
 
+	std::vector<MfccVector>& frames= m_promptFrames[m_promptIndex];
 	if (m_promptIndex < k_vowelCount)
 	{
-		std::vector<MfccVector>& vectors= m_vowelVectors[m_promptIndex];
-		extractSpeechVectors(samples.data(), samples.size(), VadGateConfig(), vectors);
-		result.voiceSeconds= hopsToSeconds(vectors.size());
-		if ((int)vectors.size() < VISEME_FIT_MIN_VECTORS)
+		// The frames the live gate would let through, so the template is
+		// the held vowel and not the breaths around it
+		calibrationFrames(samples.data(), samples.size(), m_config->audio.gateDbfs, m_extractor, frames);
+		result.voiceSeconds= framesToSeconds(frames.size());
+		if ((int)frames.size() < k_minFrames)
 		{
 			result.errorKey= "audioWizard.errorTooQuietFmt";
 			return;
@@ -155,6 +140,8 @@ void AudioCalibrationWizard::finishRecording()
 	}
 	else
 	{
+		// Every frame of the room: the noise phoneme, and the gate
+		calibrationFrames(samples.data(), samples.size(), -100.f, m_extractor, frames);
 		m_suggestedGateDbfs= suggestGateDbfs(samples.data(), samples.size(), m_config->audio.gainDb);
 		result.gateDbfs= m_suggestedGateDbfs;
 	}
@@ -163,42 +150,38 @@ void AudioCalibrationWizard::finishRecording()
 	if (++m_promptIndex < k_promptCount)
 		return;
 	m_promptIndex= k_promptCount - 1;
-	if (!buildProfile(m_profileError))
-		m_profile= VisemeModel();
+	buildProfile();
 	m_state= eState::Review;
 }
 
-bool AudioCalibrationWizard::buildProfile(std::string& outError)
+void AudioCalibrationWizard::buildProfile()
 {
-	VisemeModel base;
-	if (!base.load(MfccBackend::k_defaultModelPath, outError))
-		return false;
+	// uLipSync's defaults, and every frame kept: the data count is what a
+	// uLipSync import would trim each phoneme to
+	m_profile= LipSyncProfile();
+	size_t largest= 1;
+	for (const std::vector<MfccVector>& frames : m_promptFrames)
+		largest= std::max(largest, frames.size());
+	m_profile.mfccDataCount= (int)largest;
+	for (int index= 0; index < k_vowelCount; ++index)
+		m_profile.addPhoneme(k_vowels[index].phoneme, m_promptFrames[index]);
+	m_profile.addPhoneme(k_noisePhoneme, m_promptFrames[k_vowelCount]);
+	m_profile.finalize();
 
-	std::vector<VisemePrototype> fitted;
+	// Each vowel's own frames against the profile: the share whose best
+	// phoneme is the vowel itself, which drops where two vowels overlap
+	LipSyncScores scores;
 	for (int index= 0; index < k_vowelCount; ++index)
 	{
-		VisemePrototype prototype;
-		if (!fitVisemePrototype(m_vowelVectors[index], (int)k_vowels[index].viseme, k_vowels[index].phoneme, prototype,
-								outError))
-		{
-			return false;
-		}
-		fitted.push_back(prototype);
-	}
-	m_profile= overlayVisemePrototypes(base, fitted);
-
-	// Each vowel's own hops against the profile: the share the fit calls
-	// its viseme, which drops where two vowels overlap
-	for (int index= 0; index < k_vowelCount; ++index)
-	{
-		const std::vector<MfccVector>& vectors= m_vowelVectors[index];
+		const std::vector<MfccVector>& frames= m_promptFrames[index];
 		int hits= 0;
-		for (const MfccVector& vector : vectors)
-			hits+= nearestViseme(vector, m_profile) == (int)k_vowels[index].viseme ? 1 : 0;
-		m_hitRate[index]= vectors.empty() ? 0.f : (float)hits / (float)vectors.size();
+		for (const MfccVector& frame : frames)
+		{
+			m_profile.score(frame, scores);
+			hits+= scores.mainViseme == (int)k_vowels[index].viseme ? 1 : 0;
+		}
+		m_hitRate[index]= frames.empty() ? 0.f : (float)hits / (float)frames.size();
 	}
-	outError.clear();
-	return true;
 }
 
 bool AudioCalibrationWizard::writeProfile(std::string& outError)
@@ -361,7 +344,7 @@ void AudioCalibrationWizard::drawPrompts(float deltaSeconds)
 
 void AudioCalibrationWizard::drawReview()
 {
-	const bool bProfileValid= !m_profile.prototypes.empty();
+	const bool bProfileValid= !m_profile.empty();
 	if (bProfileValid)
 	{
 		ImGui::TextWrapped("%s", locText("audioWizard.reviewIntro"));
@@ -376,12 +359,7 @@ void AudioCalibrationWizard::drawReview()
 		ImGui::TextDisabled(locText("audioWizard.reviewGateFmt"), m_suggestedGateDbfs);
 		ImGui::TextDisabled(locText("audioWizard.reviewProfileFmt"), makeProfilePath(*m_config).c_str());
 	}
-	else
-	{
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), locText("audioWizard.errorBaseModelFmt"),
-						   m_profileError.c_str());
-	}
-	if (!m_profileError.empty() && bProfileValid)
+	if (!m_profileError.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), locText("audioWizard.writeFailedFmt"), m_profileError.c_str());
 	ImGui::Spacing();
 

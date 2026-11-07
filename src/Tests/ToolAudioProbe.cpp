@@ -6,13 +6,14 @@
 #include <thread>
 
 #include "AudioService.h"
+#include "LipSyncProfile.h"
+#include "MouthChain.h"
 #include "SteadyClock.h"
-#include "VisemeFit.h"
 
 // The microphone mouth stage live, without the UI: lists the capture
 // devices, runs the service on one for a few seconds, and reports the level,
 // the gate, the backend's run time, and the mouth frames it published, so a
-// microphone problem is told from a model problem before the panel is
+// microphone problem is told from a profile problem before the panel is
 // involved.
 //
 //   --audio-probe [seconds] [--device name] [--gate dbfs] [--gain db]
@@ -86,25 +87,27 @@ static int runAudioProbe(const TestArgs& args)
 		}
 	}
 
-	// The wizard's capture tap: a second of the raw stream through the fit's
-	// front end, the data path a prompt takes
+	// The wizard's capture tap: a second of the raw stream through the
+	// calibration's front end, the data path a prompt takes
 	std::vector<float> captured;
 	if (service.startCapture(2.f))
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 		service.stopCapture(captured);
 	}
-	std::vector<MfccVector> speechVectors;
-	extractSpeechVectors(captured.data(), captured.size(), VadGateConfig(), speechVectors);
-	MIKAN_LOG_INFO("audio-probe") << "capture tap: " << captured.size() << " samples in 1 s, " << speechVectors.size()
-								  << " hops passed the energy gate, suggested gate "
+	MfccExtractor extractor;
+	std::vector<MfccVector> calibration;
+	calibrationFrames(captured.data(), captured.size(), config.gateDbfs, extractor, calibration);
+	MIKAN_LOG_INFO("audio-probe") << "capture tap: " << captured.size() << " samples in 1 s, " << calibration.size()
+								  << " frames passed the gate, suggested gate "
 								  << suggestGateDbfs(captured.data(), captured.size(), config.gainDb) << " dBFS";
 
 	const AudioServiceStatus status= service.getStatus();
 	MIKAN_LOG_INFO("audio-probe") << "device " << (status.deviceOpen ? "open" : "NOT open") << ": " << status.deviceName
 								  << " at " << status.deviceSampleRate << " Hz";
-	MIKAN_LOG_INFO("audio-probe") << "model " << (status.backendReady ? "ready" : "NOT ready")
-								  << (status.backendReady ? "" : ": " + status.backendReason);
+	MIKAN_LOG_INFO("audio-probe") << "backend " << (status.backendReady ? "ready" : "NOT ready") << ", profile "
+								  << (status.profileLoaded ? "loaded" : "none (volume only)")
+								  << (status.backendReason.empty() ? "" : ": " + status.backendReason);
 	std::ostringstream seen;
 	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 	{

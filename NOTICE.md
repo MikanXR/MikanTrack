@@ -57,11 +57,9 @@ model, downloaded from the MMPose model zoo
 
 - `rtmpose_body.onnx` — rtmpose-m_simcc-body7_pt-body7_420e-256x192
 
-The mouth backend (`src/Audio/MfccFeatures`, `VadGate`, `VisemeModel`, `MfccBackend`) is a C++ port of
-HeadAudio (MIT, Mika Suominen, https://github.com/met4citizen/HeadAudio), its MFCC feature chain, energy
-gate, Gaussian prototype classifier, and binary model format, and ships HeadAudio's pre-trained model:
-
-- `resources/audio/model-en-mixed.bin` — HeadAudio's `dist/model-en-mixed.bin`, Gaussian viseme prototypes trained on four HeadTTS (Kokoro) voices over Harvard Sentences
+The mouth backend (`src/Audio/MfccFeatures`, `src/Audio/LipSyncProfile`, `src/Audio/MfccBackend`) is a
+C++ port of uLipSync (MIT, hecomi, https://github.com/hecomi/uLipSync): its MFCC feature chain, its
+phoneme scoring, and its profile JSON format.
 
 ## Audio bench clips
 
