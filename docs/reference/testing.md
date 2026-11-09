@@ -30,7 +30,7 @@ Every command follows the same contract:
 
 ### Running every self-test in one pass
 
-The 30 self-tests are deterministic and need no hardware or input files, so they run as a batch. This drives the list from `--list-tests` rather than a hardcoded list, so a newly added test is picked up automatically:
+The 31 self-tests are deterministic and need no hardware or input files, so they run as a batch. This drives the list from `--list-tests` rather than a hardcoded list, so a newly added test is picked up automatically:
 
 ```bash
 cd build/Release && ./MikanTrack.exe --list-tests | awk '/^self-tests:/{f=1;next} /^[a-z]/{f=0} f && $1 ~ /^--/{print $1}' | while read -r flag; do ./MikanTrack.exe "$flag" >/dev/null 2>&1 || echo "FAIL $flag"; done; echo done
@@ -126,6 +126,7 @@ Nothing touches a project folder, a saved config, or any recording.
 
 ### App plumbing
 
+- `--test-automation`: the automation server without a window. The tokenizer (runs of spaces and tabs, a quoted span as one token, the quote and backslash escapes, an unterminated quote refused), the reply framing (a zero count for an empty reply, embedded newlines split so the count matches the lines) and the free-text remainder, then a loopback session against a server polled in-process on an ephemeral port: `help` lists every namespace, an empty line answers empty, an unknown namespace names the valid ones, a parse error and a namespace that needs the app answer as error lines, `gui` answers without an ImGui context, `log tail` rejects a zero count and an unknown level and answers the newest lines oldest first filtered by level, and stopping the listener closes the client's connection. The window-bound namespaces (`gui float` on a live panel, `input`, `screenshot`) are verified by the drive loop in [automation.md](./automation.md).
 - `--loc-test`: the localization tables, without a GL context. Load-time validation warnings (key parity both ways, printf specifier mismatches, embedded `##`, `_meta` problems) are hard failures here, window stable IDs must be unique and non-empty because the English text is the ImGui window ID, the unknown-key fallback must pass the key through, and every codepoint of every language must sit inside the glyph ranges the font atlas actually bakes.
 
 ---

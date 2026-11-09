@@ -25,6 +25,22 @@ void LogPanel::addLine(int level, const char* line)
 		m_lines.pop_front();
 }
 
+void LogPanel::copyTail(size_t lineCount, int minLevel, std::vector<std::string>& outLines)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+
+	// Walk back from the newest line until enough match, then emit them in order
+	std::vector<const LogLine*> matched;
+	for (auto it= m_lines.rbegin(); it != m_lines.rend() && matched.size() < lineCount; ++it)
+	{
+		if (it->level >= minLevel)
+			matched.push_back(&*it);
+	}
+
+	for (auto it= matched.rbegin(); it != matched.rend(); ++it)
+		outLines.push_back((*it)->text);
+}
+
 void LogPanel::draw(bool* pOpen)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.log"), pOpen))

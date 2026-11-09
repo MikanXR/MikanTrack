@@ -17,6 +17,10 @@ public:
 
 	void draw(bool* pOpen);
 
+	// The newest lineCount lines at or above minLevel, oldest first, for the
+	// automation server's log tail
+	void copyTail(size_t lineCount, int minLevel, std::vector<std::string>& outLines);
+
 private:
 	struct LogLine
 	{

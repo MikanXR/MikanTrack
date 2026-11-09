@@ -83,6 +83,7 @@ set(TINYFD_SOURCES ${TINYFD_DIR}/tinyfiledialogs.c ${TINYFD_DIR}/tinyfiledialogs
 
 # ---------------------------------------------------------------- sources
 file(GLOB APP_SRC          ${ROOT_DIR}/src/App/*.h          ${ROOT_DIR}/src/App/*.cpp)
+file(GLOB AUTOMATION_SRC   ${ROOT_DIR}/src/Automation/*.h   ${ROOT_DIR}/src/Automation/*.cpp)
 file(GLOB UTILITY_SRC      ${ROOT_DIR}/src/Utility/*.h      ${ROOT_DIR}/src/Utility/*.cpp)
 file(GLOB MATH_SRC         ${ROOT_DIR}/src/Math/*.h         ${ROOT_DIR}/src/Math/*.cpp)
 file(GLOB VIDEO_IFACE_SRC  ${ROOT_DIR}/src/Video/Interfaces/*.h)
@@ -105,6 +106,7 @@ file(GLOB TESTS_SRC        ${ROOT_DIR}/src/Tests/*.h        ${ROOT_DIR}/src/Test
 add_executable(MikanTrack WIN32
     ${ROOT_DIR}/src/main.cpp
     ${APP_SRC}
+    ${AUTOMATION_SRC}
     ${UTILITY_SRC}
     ${MATH_SRC}
     ${VIDEO_IFACE_SRC}
@@ -128,7 +130,7 @@ add_executable(MikanTrack WIN32
 )
 
 source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
-    ${APP_SRC} ${UTILITY_SRC} ${MATH_SRC} ${VIDEO_IFACE_SRC} ${VIDEO_SRC}
+    ${APP_SRC} ${AUTOMATION_SRC} ${UTILITY_SRC} ${MATH_SRC} ${VIDEO_IFACE_SRC} ${VIDEO_SRC}
     ${VIDEO_WMF_SRC} ${IMU_SRC} ${IMU_JOYCON_SRC}
     ${CALIBRATION_SRC} ${VISION_SRC} ${TRACKING_SRC}
     ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
@@ -138,6 +140,7 @@ source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
 target_include_directories(MikanTrack PRIVATE
     ${ROOT_DIR}/src
     ${ROOT_DIR}/src/App
+    ${ROOT_DIR}/src/Automation
     ${ROOT_DIR}/src/Utility
     ${ROOT_DIR}/src/Math
     ${ROOT_DIR}/src/Video

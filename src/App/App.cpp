@@ -12,6 +12,7 @@
 #include "imgui_impl_sdl2.h"
 
 #include "AppConfig.h"
+#include "AutomationServer.h"
 #include "AvatarSkeleton.h"
 #include "FrameTimer.h"
 #include "AudioService.h"
@@ -20,6 +21,7 @@
 #include "FaceProfileLibrary.h"
 #include "FaceService.h"
 #include "GlobalSettings.h"
+#include "GuiViewports.h"
 #include "ImuService.h"
 #include "ImGuiTheme.h"
 #include "LocalizationManager.h"
@@ -51,8 +53,40 @@ App::~App()
 	m_instance= nullptr;
 }
 
+void App::parseCommandLine(int argc, char** argv)
+{
+	m_automationPort= AutomationServer::k_defaultPort;
+
+	for (int argIndex= 1; argIndex < argc; ++argIndex)
+	{
+		const std::string arg(argv[argIndex]);
+		const std::string portPrefix= "--automation-port=";
+
+		if (arg == "--automation-server")
+		{
+			m_bAutomationServerRequested= true;
+		}
+		else if (arg.rfind(portPrefix, 0) == 0)
+		{
+			// A port implies the server, since a port with nothing listening is a trap
+			const int port= atoi(arg.c_str() + portPrefix.size());
+			if (port > 0 && port <= 65535)
+			{
+				m_automationPort= (uint16_t)port;
+				m_bAutomationServerRequested= true;
+			}
+			else
+			{
+				MIKAN_LOG_ERROR("App::parseCommandLine") << "Ignoring invalid automation port '" << arg << "'";
+			}
+		}
+	}
+}
+
 int App::exec(int argc, char** argv)
 {
+	parseCommandLine(argc, argv);
+
 	if (!startup())
 	{
 		shutdown();
@@ -181,6 +215,15 @@ bool App::startup()
 	rebuildFaceBinding();
 
 	m_mainWindow= std::make_unique<MainWindow>(this);
+
+	// The command channel registers its namespaces whether or not it listens
+	m_automationServer= std::make_unique<AutomationServer>();
+	m_automationServer->initialize(this);
+	if (m_bAutomationServerRequested && !m_automationServer->startListener(m_automationPort))
+	{
+		// Tolerated: the app runs on, it just cannot be driven externally
+		MIKAN_LOG_ERROR("App::startup") << "Automation server failed to bind port " << m_automationPort;
+	}
 
 	return true;
 }
@@ -721,6 +764,8 @@ void App::shutdown()
 		m_videoCapture= nullptr;
 	}
 
+	// Before the window goes, so a quit reply still in flight flushes first
+	m_automationServer= nullptr;
 	m_mainWindow= nullptr;
 
 	if (m_localization != nullptr)
@@ -769,6 +814,11 @@ void App::tick(float deltaSeconds)
 		}
 	}
 
+	// The automation channel's commands run here, between frames, so a project
+	// action or a window move lands the way the UI's own would. An input it
+	// injects sits in SDL's queue for the next tick's event loop.
+	m_automationServer->poll();
+
 	// Pump the device manager (hotplug HWND lives on this thread)
 	m_videoCapture->update(deltaSeconds);
 
@@ -776,6 +826,10 @@ void App::tick(float deltaSeconds)
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplSDL2_NewFrame();
 	ImGui::NewFrame();
+
+	// Before any window begins this frame, so a moved window is placed by the
+	// Begin that follows
+	GuiViewports::applyPendingFloatRequests();
 
 	m_mainWindow->update(deltaSeconds);
 
@@ -788,6 +842,13 @@ void App::tick(float deltaSeconds)
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+	// A pending screenshot reads the back buffer before it presents. No panel
+	// renders outside the main window yet, so a torn-out viewport capture
+	// answers with an error rather than leaving its client waiting.
+	m_automationServer->servicePendingWindowCapture(drawableWidth, drawableHeight);
+	m_automationServer->failUnservicedViewportCapture();
+
 	SDL_GL_SwapWindow(m_sdlWindow);
 
 	m_config->updateAutoSave(deltaSeconds);
