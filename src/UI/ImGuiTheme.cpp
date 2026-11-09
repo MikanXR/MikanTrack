@@ -110,6 +110,11 @@ const ImWchar* getJapaneseGlyphRanges()
 	return s_rangeAtlas.GetGlyphRangesJapanese();
 }
 
+namespace
+{
+ImFont* s_monoFont= nullptr;
+}
+
 void loadFonts()
 {
 	ImGuiIO& io= ImGui::GetIO();
@@ -127,6 +132,26 @@ void loadFonts()
 		MIKAN_LOG_WARNING("ImGuiTheme::loadFonts")
 			<< "UI font not found at " << fontPath << ", using the ImGui default";
 	}
+
+	// Added after the UI font so the UI font stays the default. No glyph
+	// ranges: the renderer rasterizes glyphs on demand, so whatever the file
+	// carries renders.
+	const std::filesystem::path monoPath= PathUtils::getFontPath("MPLUS1Code-Regular");
+	if (std::filesystem::exists(monoPath))
+	{
+		s_monoFont= io.Fonts->AddFontFromFileTTF(monoPath.string().c_str(), 15.f);
+	}
+	else
+	{
+		s_monoFont= nullptr;
+		MIKAN_LOG_WARNING("ImGuiTheme::loadFonts")
+			<< "Monospace font not found at " << monoPath << ", expression text uses the UI font";
+	}
+}
+
+ImFont* getMonoFont()
+{
+	return s_monoFont;
 }
 
 } // namespace ImGuiTheme
