@@ -8,6 +8,7 @@
 
 #include "glm/ext/matrix_double4x4.hpp"
 
+#include "AudioTypes.h"
 #include "MikanVideoSourceTypes.h"
 #include "TrackingTypes.h"
 
@@ -163,6 +164,10 @@ struct AnglePriorConfig
 struct BodyPoseCameraConfig
 {
 	bool enabled= false;
+	// Which landmark model runs on this camera: "rtmpose" (RTMPose-m body,
+	// 17 planar keypoints) or "rtmw3d" (RTMW3D-X whole body with a depth
+	// per keypoint). See eBodyPoseBackend.
+	std::string backend= "rtmpose";
 	// Pose models run every Nth frame on this camera
 	int poseFrameDivider= 2;
 	// Rebuild the region of interest from the image every Nth model frame,
@@ -176,6 +181,14 @@ struct CameraProfile
 	IntrinsicsConfig intrinsics;
 	ExtrinsicsConfig extrinsics;
 	BodyPoseCameraConfig bodyPose;
+	// Per side, the factor this camera's monocular lift distance is
+	// multiplied by. The landmark model's depth from one viewpoint carries a
+	// bias that depends on the view and the hand (measured 4 to 8 percent
+	// deep on a left hand from a front camera, within 3 percent either way
+	// on the right), and the scale lands the lift on a depth measured
+	// another way, stereo or the desk plane. 1 = the lift as solved.
+	// Indexed by eHandSide.
+	std::array<float, 2> liftDepthScale{1.f, 1.f};
 };
 
 // Wrist-strapped inertial trackers (Joy-Cons today, SlimeVR later).
@@ -214,6 +227,29 @@ struct FaceConfig
 	glm::quat headAnchor{1.f, 0.f, 0.f, 0.f};
 };
 
+// The microphone mouth stage
+struct AudioConfig
+{
+	bool enabled= false;
+	// The capture device by name, re-resolved at open; empty or a name no
+	// device carries any more takes the system default
+	std::string deviceName;
+	// Applied to the samples before the gate and the backend
+	float gainDb= 0.f;
+	// Hop level under which the mouth is neutral and no backend runs
+	float gateDbfs= -45.f;
+	// The mouth model: the level alone, the MFCC profile, or Oculus LipSync
+	eMouthModel model= eMouthModel::Mfcc;
+	// The calibration profile the MFCC model loads; empty is volume-only
+	std::string profilePath;
+	// The emission filter's settling time per model (eMouthModel order), ms,
+	// 0 for no filter
+	std::array<float, MOUTH_MODEL_COUNT> smoothingMs= {
+		MOUTH_SMOOTHING_DEFAULT_MS[0], MOUTH_SMOOTHING_DEFAULT_MS[1], MOUTH_SMOOTHING_DEFAULT_MS[2]};
+	// The Oculus engine's own viseme smoothing, OVR_SMOOTHING_MIN..MAX
+	int ovrSmoothing= OVR_SMOOTHING_DEFAULT;
+};
+
 // Body proportions shared by every elbow consumer (IMU-measured forearms and
 // the vision body-pose solver alike)
 struct BodyConfig
@@ -248,6 +284,14 @@ struct BodyConfig
 	float headWidthMeters= 0.15f;
 	// Ear-axis midpoint to nose tip, which fixes head yaw and pitch
 	float noseForwardMeters= 0.11f;
+	// Per side (left, right): where the elbow sits when the solver has no
+	// history, relative to the shoulder, as a multiple of the upper-arm
+	// length, in the torso frame (+X facing, +Y the user's left, +Z up). That
+	// coincides with the world frame for a user facing the marker's FORWARD
+	// label. Written from the loaded avatar's rig (its elbowHintOffset over its
+	// upper-arm length), so every project that loads that avatar seeds the
+	// same way and a recording replays with it. Zero = no seed.
+	std::array<glm::vec3, 2> elbowSeedPerUpperArm{};
 };
 
 // Tracking recordings store landmarks, which are abstract enough to share.
@@ -281,6 +325,26 @@ struct AvatarConfig
 	// +Z in degrees (0 = facing world +X, the rest-pose facing)
 	glm::vec3 rootPositionWorld{0.f, 0.f, 0.f};
 	float rootYawDegrees= 0.f;
+};
+
+// The single-camera direct retarget: one camera's landmarks posed straight
+// onto the loaded avatar with no world calibration, the camera being the
+// world. The neutral capture is the user's rest (sitting square, hands
+// resting), the zero every relative rotation is measured from, stored in the
+// camera-fixed frame at zero tilt.
+struct DirectConfig
+{
+	bool enabled= false;
+	// The camera whose landmarks drive the avatar
+	int cameraIndex= 0;
+	// The camera's downward pitch, degrees, positive looking down, set by
+	// the user alone (a webcam on top of the monitor by default; nothing
+	// measures it)
+	float cameraTiltDegrees= 10.f;
+	bool neutralPresent= false;
+	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
+	glm::vec3 neutralShoulderMidpoint{0.f};
+	glm::quat neutralHead{1.f, 0.f, 0.f, 0.f};
 };
 
 struct FusionConfig
@@ -323,6 +387,9 @@ struct FusionConfig
 	// Scale on the fitted angle prior's precision (see AnglePriorConfig);
 	// 1 = trust the fitted distribution as-is, smaller = softer
 	float estimatorAnglePriorWeight= 0.3f;
+	// Sigma (m) of the single-view depth anchor on a side that has not yet
+	// been fitted from two views (see HandStateEstimatorConfig); 0 disables
+	float estimatorMonoDepthAnchorSigmaM= 0.01f;
 };
 
 // Declared here (rather than each caller assembling its own) so the live
@@ -343,6 +410,11 @@ struct AvatarRetargetConfig;
 struct AvatarRigSettings;
 AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
 
+// And for the direct retarget: the vision thread, the 3D view's replay feed
+// and the gate tool all solve from this one mapping
+struct DirectRetargetConfig;
+DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+
 class AppConfig
 {
 public:
@@ -356,9 +428,11 @@ public:
 	FusionConfig fusion;
 	ImuConfig imu;
 	FaceConfig face;
+	AudioConfig audio;
 	BodyConfig body;
 	RecordingConfig recording;
 	AvatarConfig avatar;
+	DirectConfig direct;
 	// Rest-pose zero for the stereo-TRIANGULATED path (one set, not per
 	// camera: triangulated geometry has no per-camera model bias to fold in).
 	// Captured alongside the per-camera rest angles.

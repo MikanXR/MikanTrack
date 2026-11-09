@@ -7,6 +7,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include "AudioTypes.h"
 #include "TrackingTypes.h"
 
 // Tracking recording format: everything the post-MediaPipe stages consume,
@@ -95,6 +96,19 @@ struct RecordedImuOutput
 	float forearmConfidence= 0.f;
 };
 
+// The microphone mouth stage's newest frame at the iteration. Recorded as
+// the stage emitted it (outside the checksum, like the IMU output), so a
+// backend change can be measured against old recordings through the audio
+// sidecar.
+struct RecordedMouth
+{
+	bool present= false;
+	// The frame's index in the audio sidecar's stream, or -1 when the sidecar
+	// does not hold its audio (no sidecar, or the device reopened)
+	int64_t audioFrameIndex= -1;
+	MouthFrame frame;
+};
+
 struct RecordedFrame
 {
 	int64_t seq= -1;
@@ -108,7 +122,35 @@ struct RecordedFrame
 	std::vector<RecordedCameraInput> freshCameras;
 	std::array<RecordedPoseOutput, 2> outPoses;
 	std::array<RecordedImuOutput, 2> imu;
+	RecordedMouth mouth;
 	uint64_t checksum= 0;
+};
+
+// The audio sidecar beside the recording: the microphone as captured, 16 kHz
+// mono PCM, named after the recording. Its first sample is stream sample
+// startSampleIndex, which is what places a frame's audioFrameIndex in it.
+struct RecordedAudioSidecar
+{
+	bool present= false;
+	// The file name alone, resolved beside the recording
+	std::string fileName;
+	int sampleRate= 0;
+	int64_t startSampleIndex= 0;
+	// steadyNowMs() when the sidecar began
+	double startTimestampMs= 0.0;
+};
+
+// The face sidecar beside the recording: the phone's face samples as the
+// vision thread saw them, one line each at the phone's rate, named after the
+// recording. The header names it for every recording, and the file is deleted
+// when the phone sent no sample, so an absent file means no phone.
+struct RecordedFaceSidecar
+{
+	bool present= false;
+	// The file name alone, resolved beside the recording
+	std::string fileName;
+	// steadyNowMs() when the sidecar began
+	double startTimestampMs= 0.0;
 };
 
 struct RecordingHeader
@@ -118,6 +160,8 @@ struct RecordingHeader
 	// AppConfig::loadFromJsonString
 	std::string appConfigJsonText;
 	int cameraCount= 0;
+	RecordedAudioSidecar audio;
+	RecordedFaceSidecar face;
 };
 
 struct RecordingFooter
@@ -146,6 +190,12 @@ void snapshotFusedOutput(const TrackingFrameResult& fused,
 // recording and its frames travel together and either can be deleted alone:
 // <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00_frames
 std::string makeFrameDirectoryPath(const std::string& recordingFilePath);
+// The audio sidecar sits beside the recording under its name:
+// <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.wav
+std::string makeAudioSidecarPath(const std::string& recordingFilePath);
+// The face sidecar likewise:
+// <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.face.jsonl
+std::string makeFaceSidecarPath(const std::string& recordingFilePath);
 
 nlohmann::json headerToJson(const RecordingHeader& header);
 bool headerFromJson(const nlohmann::json& j, RecordingHeader& outHeader);

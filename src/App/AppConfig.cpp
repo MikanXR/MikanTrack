@@ -8,11 +8,13 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include "glm/geometric.hpp"
 #include "nlohmann/json.hpp"
 
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "BodyPoseSolver.h" // BodyDimensions
+#include "DirectRetarget.h"
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
 #include "Logger.h"
@@ -23,6 +25,34 @@ static constexpr int k_configVersion= 2;
 static constexpr float k_autoSaveCooldownSeconds= 3.f;
 
 // -- json helpers ----
+static json quatToJson(const glm::quat& q)
+{
+	return json::array({q.x, q.y, q.z, q.w});
+}
+
+static bool quatFromJson(const json& parent, const char* key, glm::quat& outQuat)
+{
+	if (!parent.contains(key) || !parent[key].is_array() || parent[key].size() != 4)
+		return false;
+	const json& q= parent[key];
+	outQuat= glm::quat((float)q[3], (float)q[0], (float)q[1], (float)q[2]);
+	return true;
+}
+
+static json vec3ToJson(const glm::vec3& v)
+{
+	return json::array({v.x, v.y, v.z});
+}
+
+static bool vec3FromJson(const json& parent, const char* key, glm::vec3& outVec)
+{
+	if (!parent.contains(key) || !parent[key].is_array() || parent[key].size() != 3)
+		return false;
+	const json& v= parent[key];
+	outVec= glm::vec3((float)v[0], (float)v[1], (float)v[2]);
+	return true;
+}
+
 static json matrix3dToJson(const MikanMatrix3d& m)
 {
 	return json::array({m.x0, m.x1, m.x2, m.y0, m.y1, m.y2, m.z0, m.z1, m.z2});
@@ -239,8 +269,16 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 
 	const json& bp= j.value("bodyPose", json::object());
 	profile.bodyPose.enabled= bp.value("enabled", false);
+	profile.bodyPose.backend= bp.value("backend", "rtmpose");
 	profile.bodyPose.poseFrameDivider= bp.value("poseFrameDivider", 2);
 	profile.bodyPose.detectorIntervalFrames= bp.value("detectorIntervalFrames", 20);
+
+	const json& lift= j.value("liftDepthScale", json::array());
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		profile.liftDepthScale[sideIndex]=
+			lift.is_array() && (int)lift.size() > sideIndex ? lift[sideIndex].get<float>() : 1.f;
+	}
 
 	const json& ex= j.value("extrinsics", json::object());
 	profile.extrinsics.present= ex.value("present", false);
@@ -280,9 +318,11 @@ static json cameraProfileToJson(const CameraProfile& profile)
 		{"bodyPose",
 		 {
 			 {"enabled", profile.bodyPose.enabled},
+			 {"backend", profile.bodyPose.backend},
 			 {"poseFrameDivider", profile.bodyPose.poseFrameDivider},
 			 {"detectorIntervalFrames", profile.bodyPose.detectorIntervalFrames},
 		 }},
+		{"liftDepthScale", {profile.liftDepthScale[0], profile.liftDepthScale[1]}},
 		{"extrinsics",
 		 {
 			 {"present", profile.extrinsics.present},
@@ -319,8 +359,34 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		side.fingerEnabled= rigSide.fingerEnabled;
 		side.bThumbPronationOverride= !rigSide.bThumbPronationAuto;
 		side.thumbPronationRad= glm::radians(rigSide.thumbPronationDegrees);
+		side.restElbowOffset= rigSide.restElbowOffset;
+		side.restWristOffset= rigSide.restWristOffset;
+		side.restPalmNormal= rigSide.restPalmNormal;
+		side.restFingerCurlRadians= glm::radians(rigSide.restFingerCurlDegrees);
 	}
 	return retarget;
+}
+
+DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
+{
+	DirectRetargetConfig direct;
+	direct.cameraTiltRadians= glm::radians(config.direct.cameraTiltDegrees);
+	direct.neutral.present= config.direct.neutralPresent;
+	direct.neutral.torso= config.direct.neutralTorso;
+	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
+	direct.neutral.head= config.direct.neutralHead;
+	const BodyDimensions dimensions= makeBodyDimensions(config);
+	direct.userShoulderWidthMeters= dimensions.shoulderWidthMeters;
+	direct.headWidthMeters= dimensions.headWidthMeters;
+	direct.noseForwardMeters= dimensions.noseForwardMeters;
+	direct.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
+	direct.userForearmLengthMeters= dimensions.forearmLengthMeters;
+	// The rig adjustments are the position retarget's, one mapping
+	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
+	direct.headTrimRadians= retarget.headTrimRadians;
+	direct.restBlendMs= rig.restBlendMs;
+	direct.sides= retarget.sides;
+	return direct;
 }
 
 BodyDimensions makeBodyDimensions(const AppConfig& config)
@@ -333,6 +399,12 @@ BodyDimensions makeBodyDimensions(const AppConfig& config)
 	dimensions.shoulderWidthMeters= config.body.shoulderWidthMeters;
 	dimensions.headWidthMeters= config.body.headWidthMeters;
 	dimensions.noseForwardMeters= config.body.noseForwardMeters;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const glm::vec3& seed= config.body.elbowSeedPerUpperArm[sideIndex];
+		dimensions.elbowSeedOffsetMeters[sideIndex]= seed * dimensions.upperArmLengthMeters;
+		dimensions.bHasElbowSeed[sideIndex]= glm::length(seed) > 1e-4f;
+	}
 	return dimensions;
 }
 
@@ -360,6 +432,7 @@ HandFusionConfig makeHandFusionConfig(const AppConfig& config)
 	fusionConfig.estimator.maxStepMetersPerS= config.fusion.estimatorMaxStepMetersPerS;
 	fusionConfig.estimator.jointLimitsEnabled= config.fusion.estimatorJointLimitsEnabled;
 	fusionConfig.estimator.jointLimitSigmaRad= config.fusion.estimatorJointLimitSigmaRad;
+	fusionConfig.estimator.monoDepthAnchorSigmaM= config.fusion.estimatorMonoDepthAnchorSigmaM;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		HandStateEstimatorConfig::AnglePrior& prior= fusionConfig.estimator.anglePrior[sideIndex];
@@ -533,6 +606,7 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.fusion.estimatorMaxStepMetersPerS= fu.value("estimatorMaxStepMetersPerS", 4.f);
 	config.fusion.estimatorJointLimitsEnabled= fu.value("estimatorJointLimitsEnabled", true);
 	config.fusion.estimatorJointLimitSigmaRad= fu.value("estimatorJointLimitSigmaRad", 0.05f);
+	config.fusion.estimatorMonoDepthAnchorSigmaM= fu.value("estimatorMonoDepthAnchorSigmaM", 0.01f);
 	config.fusion.estimatorAnglePriorWeight= fu.value("estimatorAnglePriorWeight", 0.3f);
 
 	restAnglesFromJson(j.value("fusedRestAngles", json::object()), config.fusedRestAngles);
@@ -562,6 +636,24 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		config.face.headAnchorPresent= true;
 	}
 
+	const json& au= j.value("audio", json::object());
+	config.audio.enabled= au.value("enabled", false);
+	config.audio.deviceName= au.value("deviceName", std::string());
+	config.audio.gainDb= au.value("gainDb", 0.f);
+	config.audio.gateDbfs= au.value("gateDbfs", -45.f);
+	config.audio.model= eMouthModel::Mfcc;
+	parseMouthModel(au.value("model", std::string()), config.audio.model);
+	config.audio.profilePath= au.value("profilePath", std::string());
+	const json& smoothing= au.value("smoothingMs", json::object());
+	for (int modelIndex= 0; modelIndex < MOUTH_MODEL_COUNT; ++modelIndex)
+	{
+		config.audio.smoothingMs[(size_t)modelIndex]= std::clamp(
+			smoothing.value(mouthModelName((eMouthModel)modelIndex), MOUTH_SMOOTHING_DEFAULT_MS[modelIndex]), 0.f,
+			MOUTH_SMOOTHING_MAX_MS);
+	}
+	config.audio.ovrSmoothing=
+		std::clamp(au.value("ovrSmoothing", OVR_SMOOTHING_DEFAULT), OVR_SMOOTHING_MIN, OVR_SMOOTHING_MAX);
+
 	const json& im= j.value("imu", json::object());
 	config.imu.enabled= im.value("enabled", true);
 	config.imu.visionYawSigma= im.value("visionYawSigma", 0.35f);
@@ -587,6 +679,26 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.body.shoulderWidthMeters= bd.value("shoulderWidthMeters", 0.40f);
 	config.body.headWidthMeters= bd.value("headWidthMeters", 0.15f);
 	config.body.noseForwardMeters= bd.value("noseForwardMeters", 0.11f);
+	config.body.elbowSeedPerUpperArm= {glm::vec3(0.f), glm::vec3(0.f)};
+	if (bd.contains("elbowSeedPerUpperArm") && bd["elbowSeedPerUpperArm"].is_array() &&
+		bd["elbowSeedPerUpperArm"].size() == 2)
+	{
+		const json& seeds= bd["elbowSeedPerUpperArm"];
+		bool bValid= true;
+		for (const json& seed : seeds)
+		{
+			bValid&= seed.is_array() && seed.size() == 3 &&
+				seed[0].is_number() && seed[1].is_number() && seed[2].is_number();
+		}
+		if (bValid)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const json& seed= seeds[sideIndex];
+				config.body.elbowSeedPerUpperArm[sideIndex]= glm::vec3((float)seed[0], (float)seed[1], (float)seed[2]);
+			}
+		}
+	}
 
 	const json& rec= j.value("recording", json::object());
 	config.recording.recordRawFrames= rec.value("recordRawFrames", false);
@@ -603,6 +715,19 @@ static void applyConfigJson(AppConfig& config, const json& j)
 			glm::vec3((float)av["rootPosition"][0], (float)av["rootPosition"][1], (float)av["rootPosition"][2]);
 	}
 	config.avatar.rootYawDegrees= av.value("rootYawDegrees", 0.f);
+
+	const json& dr= j.value("direct", json::object());
+	config.direct= DirectConfig();
+	config.direct.enabled= dr.value("enabled", false);
+	config.direct.cameraIndex= dr.value("cameraIndex", 0);
+	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", config.direct.cameraTiltDegrees);
+	if (dr.value("neutralPresent", false))
+	{
+		DirectConfig& direct= config.direct;
+		direct.neutralPresent= quatFromJson(dr, "neutralTorso", direct.neutralTorso) &&
+			vec3FromJson(dr, "neutralShoulderMidpoint", direct.neutralShoulderMidpoint);
+		quatFromJson(dr, "neutralHead", direct.neutralHead);
+	}
 
 	const json& hs= j.value("handScale", json::object());
 	config.handScale.present= hs.value("present", false);
@@ -657,6 +782,7 @@ std::string AppConfig::toJsonString() const
 		{"estimatorMaxStepMetersPerS", fusion.estimatorMaxStepMetersPerS},
 		{"estimatorJointLimitsEnabled", fusion.estimatorJointLimitsEnabled},
 		{"estimatorJointLimitSigmaRad", fusion.estimatorJointLimitSigmaRad},
+		{"estimatorMonoDepthAnchorSigmaM", fusion.estimatorMonoDepthAnchorSigmaM},
 		{"estimatorAnglePriorWeight", fusion.estimatorAnglePriorWeight},
 	};
 
@@ -706,6 +832,20 @@ std::string AppConfig::toJsonString() const
 		j["face"]= faceJson;
 	}
 
+	json smoothing= json::object();
+	for (int modelIndex= 0; modelIndex < MOUTH_MODEL_COUNT; ++modelIndex)
+		smoothing[mouthModelName((eMouthModel)modelIndex)]= audio.smoothingMs[(size_t)modelIndex];
+	j["audio"]= {
+		{"enabled", audio.enabled},
+		{"deviceName", audio.deviceName},
+		{"gainDb", audio.gainDb},
+		{"gateDbfs", audio.gateDbfs},
+		{"model", mouthModelName(audio.model)},
+		{"profilePath", audio.profilePath},
+		{"smoothingMs", smoothing},
+		{"ovrSmoothing", audio.ovrSmoothing},
+	};
+
 	j["body"]= {
 		{"forearmLengthMeters", body.forearmLengthMeters},
 		{"upperArmLengthMeters", body.upperArmLengthMeters},
@@ -714,6 +854,11 @@ std::string AppConfig::toJsonString() const
 		{"shoulderWidthMeters", body.shoulderWidthMeters},
 		{"headWidthMeters", body.headWidthMeters},
 		{"noseForwardMeters", body.noseForwardMeters},
+		{"elbowSeedPerUpperArm",
+		 json::array({
+			 json::array({body.elbowSeedPerUpperArm[0].x, body.elbowSeedPerUpperArm[0].y, body.elbowSeedPerUpperArm[0].z}),
+			 json::array({body.elbowSeedPerUpperArm[1].x, body.elbowSeedPerUpperArm[1].y, body.elbowSeedPerUpperArm[1].z}),
+		 })},
 	};
 
 	j["recording"]= {
@@ -728,6 +873,22 @@ std::string AppConfig::toJsonString() const
 		{"rootPosition", json::array({avatar.rootPositionWorld.x, avatar.rootPositionWorld.y, avatar.rootPositionWorld.z})},
 		{"rootYawDegrees", avatar.rootYawDegrees},
 	};
+
+	{
+		json directJson= {
+			{"enabled", direct.enabled},
+			{"cameraIndex", direct.cameraIndex},
+			{"cameraTiltDegrees", direct.cameraTiltDegrees},
+			{"neutralPresent", direct.neutralPresent},
+		};
+		if (direct.neutralPresent)
+		{
+			directJson["neutralTorso"]= quatToJson(direct.neutralTorso);
+			directJson["neutralShoulderMidpoint"]= vec3ToJson(direct.neutralShoulderMidpoint);
+			directJson["neutralHead"]= quatToJson(direct.neutralHead);
+		}
+		j["direct"]= directJson;
+	}
 
 	j["handScale"]= {
 		{"present", handScale.present},

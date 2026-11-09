@@ -1,0 +1,108 @@
+# Proposal: microphone-driven mouth blendshapes
+
+Design decided and built: all five pieces, with the classifier on uLipSync's method (the live stage, the measurements, the config, the panel, the recording sidecar, and the calibration wizard are in `docs/reference/audio.md`). This document is the record of the design: the decisions, the pieces in order, what verifies each one, and the two backends that were evaluated and dropped, the learned model and HeadAudio's classifier. A reader starting from it should not need the conversation that produced it.
+
+## Goal
+
+MikanTrack's face comes from the iFacialMocap phone stream alone (`docs/reference/face.md`). A session without the phone has a still mouth. This work adds an audio stage that listens to a microphone, classifies the voice into the 15 Oculus visemes, and drives the avatar's mouth from them through the same `TrackingFrameResult::face` slot, the same face map, and the same `/VMC/Ext/Blend/Val` output the phone uses: a VRM preset avatar's vowels straight from the visemes, a perfect-sync avatar's ARKit mouth shapes through a fixed viseme table.
+
+The backend is a C++ port of uLipSync's method (MIT, hecomi, version 3.1.5, the engine behind VTube Studio's microphone lip sync): one MFCC vector per 30 fps frame scored against the user's calibrated phoneme templates, the scores folded onto the vowel visemes and opened by the block's level. There is no shipped model: before calibration the mouth is volume-only, and a profile is the user's own or one imported from uLipSync or VTube Studio. It is language-agnostic, since the templates are the speaker's own vowels.
+
+Japanese is a shipping requirement, measured by the bench before anything goes live.
+
+## Decisions
+
+- **Bench before live.** The first deliverable is `--viseme-bench`, a headless command that runs the backend over a wav file under the live window policy, writes the 30 fps viseme weights as JSON, and reports per-run inference milliseconds. Quality is judged by rendering the JSON on the avatar (`--render-mouth`) and by the chunked-versus-offline diff below. The live stage lands only after the numbers pass.
+
+- **Own audio thread.** `AudioService` (`src/Audio/`) owns a dedicated thread that drains the capture ring, keeps the rolling window, runs the backend, and publishes the newest `MouthSample` latest-wins behind a mutex, the shape `FaceService` already uses. The vision thread reads it once per iteration beside the face sample, so a slow audio run can never hitch the vision loop.
+
+- **Fixed window policy: 100 ms hop over a two-hop window.** Every 100 ms the backend runs over the last 3200 samples and the last 3 frames of its output are emitted. Both the hop and the window are whole numbers of frames, so the frame grid the backend lays over the window is the stream's own and a replay's grid lands exactly on live's. The hop and the window are arguments of the bench, not panel knobs. A `lookaheadFrames` setting holds frames back from the tail of each run at 33 ms of latency each; the default is zero, since a frame is scored from the audio up to its end alone.
+
+- **The frame is the visemes.** A `MouthFrame` is the 15 viseme weights. The vision thread puts them on the output face two ways at once: as `FacePose::visemes` with `visemesPresent` set, which the face map reads directly for a preset avatar's five vowels, and through the viseme table onto the ARKit mouth columns, which a perfect-sync avatar, an ARKit-named morph target, and the raw face map read. Audio cannot see eyes or brows, so the table only ever touches the 29 columns the voice can drive (the 4 jaw columns, the 23 mouth columns, `cheekPuff`, and `tongueOut`), named in `AudioTypes.h` and held to by a self-test. The direct path exists because a preset avatar's `aa` is the `aa` viseme: spreading the viseme over ARKit columns and folding them back into the preset through the face map only lost strength on the way.
+
+- **Phone wins while streaming.** `VisionThread::applyFaceToOutput` applies the microphone's visemes only when no phone face sample is live. No blend, no source combo. A frame no camera carried still goes out when a new mouth sample arrives, through the face-only output path generalized to any face source.
+
+- **SDL2 audio captures the microphone.** `SDL_GetNumAudioDevices(1)` and `SDL_GetAudioDeviceName` fill the panel's device combo. `SDL_OpenAudioDevice` opens the chosen device for capture asking for 16 kHz mono float32 and lets SDL convert, so the backend never sees another format. The callback copies into an SPSC ring (`moodycamel::ReaderWriterQueue` of fixed blocks, as the camera slots do), and the audio thread drains it. A level meter in dBFS RMS per hop and a noise gate threshold live beside the device combo. Below the gate the stage emits the neutral mouth, eased over one hop so a gate edge does not snap the jaw.
+
+- **Settings persist per project.** `AudioConfig` on `AppConfig::audio` under `audio` in `project.json`, beside `face`: `enabled`, `deviceName` (re-resolved at open, falling back to the default device with a log line), `gainDb`, `gateDbfs`, and `profilePath` for the calibration profile (empty means the volume-only mouth). A config refresh pushes it through `App::applyAudioConfig` the way the face config goes, and the recording header's snapshot describes it.
+
+- **The backend.** `MfccBackend` takes a window of 16 kHz samples and returns viseme frames at 30 fps, with the reason a profile failed to load beside them. A run is pure over the window and nothing carries between frames; the window policy (`MouthWindow`) decides which frames are new and a one-euro filter per viseme (`MouthFilter`) smooths the emitted frames after that, which is what lets the bench compare chunked and whole-clip output. The method is uLipSync's, ported stage for stage in `MfccFeatures` over one 1024-sample block per frame: pre-emphasis 0.97, a Hamming window, a peak normalization, a radix-2 FFT to the magnitude spectrum, a 30-channel mel filterbank on uLipSync's bin indexing, 10 log10 per band, a direct DCT-II, coefficients 1 to 12. `--test-audio` checks the chain against a Python reference of uLipSync's `Algorithm.cs`. The windowed-sinc low-pass and the decimation are not ported, since they anti-alias a downsample to 16 kHz and the capture is already 16 kHz. Scoring is uLipSync's: L1, L2 (the default), or cosine against each phoneme's mean frame, optionally standardized, normalized to sum to 1. The volume is the block level mapped linearly from the gate (closed) to 20 dB above it (fully open), uLipSync's volume window in the same shape. A vowel's weight is its share times the volume and silence is the remainder. Without a profile the mouth is `aa` at the volume.
+
+- **The profile is uLipSync's JSON.** The file `LipSyncProfile` reads and writes is the one uLipSync's `Export` writes and VTube Studio hands out, field for field, so a profile moves between them in both directions. On load each phoneme keeps its last `mfccDataCount` frames as uLipSync does, so the templates match. Phoneme names map onto visemes case-insensitively (`A`/`aa`, `I`/`ih`, `U`/`ou`/`oo`, `E`/`eh`, `O`/`oh`, the noise phoneme `-` and its aliases to `sil`), and an unknown name folds into silence. `useStandardization` and `compareMethod` are honored from the file with no UI.
+
+- **A fixed viseme table.** The 15 Oculus visemes map onto ARKit mouth columns by a constant table in `VisemeTable.cpp` (`aa` drives `jawOpen`, `PP` drives `mouthClose` and both `mouthPress`, `U` drives `mouthPucker` and `mouthFunnel`, `E` drives `mouthStretch` and `jawOpen` at a third, and so on through the set), each column a weighted sum clamped to one, each vowel leading with its defining column at 0.8 to 0.85 so a full viseme is a full shape. The table is covered by a self-test. It is the perfect-sync and raw path; the preset path reads the visemes.
+
+- **Calibration wizard.** `eWizardKind::AudioCalibration` on the `WizardHost` records six prompts of three seconds each with the countdown the other wizards use: the vowels `aa`, `ih`, `ou`, `eh`, `oh` held, then room silence. Each vowel prompt yields one MFCC frame per 30 fps frame whose level reaches the gate, at least 15 of them, and the silence prompt yields every frame as the noise phoneme `-` and seeds the gate. The profile carries the phonemes `A I U E O -`, uLipSync's defaults, with `mfccDataCount` at the largest prompt's frame count. It is written to `<project>/audio/profile.json` and `AudioConfig::profilePath` points at it, and the panel's Import button points it at any uLipSync profile instead. The prompts are localized through the `audioWizard` section, so the Japanese walkthrough reads the five Japanese vowels.
+
+- **Clips fetched by `InitialSetup_x64.bat`.** Two bench clips, one English and one Japanese, synthesized once with Kokoro, are published as assets of a `bench-audio-1` release on the MikanTrack GitHub repository and fetched into `resources/audio/bench/`. The bench skips a clip that is absent rather than failing.
+
+- **Recordings carry the audio.** A recording writes `<name>.wav` beside its JSONL, 16 kHz mono 16-bit PCM, written by the audio thread into its own bounded queue and a writer the way `TrackingRecorder` works. The header's `audio` block carries the file name and the stream index of the first sample, so a frame's stream index finds its audio. Each frame also records the 15 viseme weights the live run emitted with that index. Replay stays outside the checksum contract, like `BodyPoseSolver`: with `--replay-audio` it re-runs the backend from the wav after the checksum point and reports the per-viseme diff against the recorded weights, so a profile, gain, or gate change can be A/B'd against old recordings.
+
+- **The Audio panel and the OSC panel's mouth section.** A dock window in the left column with Device, Tracking, and Settings, toggled from the View menu like Settings and Avatar. Top to bottom: the enable checkbox, the device combo with a refresh button, the level meter with the gate slider and the gain slider, the profile path with the Calibrate, Import, and Clear profile buttons, a status block (device open and its rate, the backend's run time or the reason the profile did not load, inference milliseconds as a one-second EMA, which source owns the mouth: phone, audio, or gated), and the 15 viseme weights as bars, live or from the timeline's frame. What those weights become on the loaded avatar, the vowel presets or the ARKit mouth expressions after the face map, is a collapsible section of the OSC Output panel, beside the other readouts of what the stream carries. Strings go in the `audioPanel` and `oscPanel` sections of `en.json` and `ja.json`, the title under `windows.audio`.
+
+## The learned model, evaluated and dropped
+
+The design started with two backends behind one interface, the user picking one: the viseme classifier (the prototype classifier of the next section), and `wav2arkit_cpu` (Apache 2.0), a fused ONNX export of a wav2vec2 encoder and the LAM Audio2Expression decoder that takes raw 16 kHz audio and emits all 52 ARKit weights at 30 fps. It was built, benched, and run live, and removed once the viseme path was in place, as a matter of fit with this project's goals rather than the model's quality:
+
+- Its cost was 300 to 500 ms of CPU per second of audio across four threads (30 to 50 ms per 1 s window, which mode a process landed in set at launch by where the runtime placed its threads), beside a vision loop that already fills the machine, against the classifier's 0.6 ms on one thread. Its 0.4 GB of weights were a setup download beside the classifier's 14 kB model.
+- It opened the mouth through the lower lip with the jaw nearly still (`mouthLowerDown` reaching 0.74 while `jawOpen` stayed under 0.2), which a perfect-sync avatar reads and a VRM preset avatar, whose `aa` derives from the jaw, does not. Closing that gap meant a second rule in the face map for one model's habit.
+- Its output had no viseme in it, so a preset avatar could only ever be driven through the ARKit round trip, while the classifier's visemes are the VRM vowels themselves. Once the frame carried visemes, a backend that could not produce them was the odd one out.
+- The GPU was measured and rejected along the way: the shipped graph did not load on DirectML (its `Reshape` nodes carry `allowzero=1`), and a patched export ran slower there than on the CPU while sharing the single DirectML queue with the hand and body models.
+
+The two agreed on mouth openness at a correlation of about 0.3 to 0.5 across the clips, and both lagged the clip's energy envelope by about 100 ms, so the classifier gave up detail (a few columns per viseme instead of a learned 52-column face) and not timing. What it gave up is what a per-avatar expression editor (`docs/plan.md`) would add back by shaping the visemes, which is the direction that serves preset and perfect-sync avatars alike.
+
+## HeadAudio's classifier, evaluated and dropped
+
+The first backend was a C++ port of HeadAudio (MIT, Mika Suominen, https://github.com/met4citizen/HeadAudio), itself a reimplementation of uLipSync's features: 512-sample blocks at a 256 hop, 12 MFCCs plus log energy under tanh compression, an energy gate, Gaussian prototypes scored by Mahalanobis distance, a six-hop vote, and a 100 ms crossfade, with HeadAudio's shipped 14 kB model and a calibration wizard that refit the five vowel prototypes per user over it. It was replaced by uLipSync's method because per-user calibration did not separate the vowels on the user's voice:
+
+- The user's recording of "aa, ih, oo, eh, oh" replayed as `aa` at 52 percent on the first vowel, `ih` mostly as `U` (56 percent) and `PP`, `oo` split five ways, `eh` mostly as `PP` (43 percent) and `U`, and `oh` as `O` at 98 percent.
+
+- The raw MFCC coefficients of this voice average 8.4 in magnitude, with a maximum of 35, so the tanh compression pins nearly every coefficient to plus or minus one and the vectors become sign patterns. The fitted `I`, `E`, and `U` prototypes came out as near-identical sign patterns (`I` and `E` differ in one coefficient), and vowel onsets fell to the broad shipped consonant prototypes.
+
+- The port had been checked line by line against HeadAudio, so this is the method's limit for per-user calibration rather than a port defect.
+
+HeadAudio's design serves a speaker-independent model trained offline over many voices and shipped with the library, which was not this project's goal. uLipSync scores the coefficients against the speaker's own templates, which is the per-user calibration the stage is built around, and its profile format is one VTube Studio users already hold.
+
+## Oculus LipSync, back in for an A/B
+
+The first design kept the Oculus library out, and the stage had settled on one backend, uLipSync's method, with nothing behind an interface. With distinct vowels live from the calibrated profile as the baseline, that is reversed for a measured comparison: the backend is a seam again (`IMouthBackend`, `createMouthBackend`), and the Audio panel's Model combo picks between Simple Loudness (the volume-only rule as a model of its own), MFCC (uLipSync), and Oculus LipSync, the Oculus Lipsync native SDK (OVRLipSync 1.61.0, Meta Platforms). The SDK is a manual download under the Oculus SDK License that the setup script cannot fetch and the repository cannot carry, so it is an optional build-time drop into `deps/OVRLipSyncNative`, and a build without it hides the entry. The mechanics are in `docs/reference/audio.md`.
+
+The three run under equal conditions, so a difference on the avatar is the model's:
+
+- The same gain: the slider scales the input of every model.
+
+- The same audio: the Oculus engine is stateful, so it is fed every new frame's samples in stream order while the gate is open and while it is closed, and never misses audio. The gate still decides what is emitted, the neutral mouth for a gated hop under every model.
+
+- Raw weights: the engine's fifteen scores are remapped into `eViseme` order and emitted as they come, with no volume window. The engine's own viseme smoothing is a panel knob (default 70 of 100), as it is in the Unity integration.
+
+- The same post-filter: `MouthFilter` smooths all three after emission, each at its own Smoothing setting (20 ms for Simple Loudness, 50 ms for the other two by default).
+
+The A/B is meant to decide which model drives the mouth by default and whether the Oculus engine earns a place in a release: whether its consonant visemes, which the MFCC model never emits, read on a preset and a perfect-sync avatar, and whether it calls the user's vowels as cleanly as the calibrated profile does. It is judged live on the user's voice and by replaying the vowel recording under each model through `--replay-audio --model`, which is exact for all three, since the engine is deterministic for a given sample sequence.
+
+The first offline reading, the `2026-11-07_00-30-50` recording (aa, ih, oo, eh, oh held in turn) replayed under each model with the recording's gate:
+- Simple Loudness: aa through every held vowel, as designed.
+- MFCC with the profile built from the first 60 percent of each vowel: aa, I, U, E, O in order, one contiguous run each.
+- Oculus LipSync, uncalibrated: aa for "aa", E for both "ih" and "eh", O for "oh", and nn for most of "oo" after a PP onset and a short U, with FF, SS, PP, and nn lighting at the vowel onsets. The engine's generic model calls three of the five vowels for this voice where the calibrated profile calls five, and it is the only model that emits consonants at all. The live A/B on the avatar is still owed.
+
+
+## Pieces in order
+
+Each piece is one reviewable commit on the `viseme` branch.
+
+1. **Inference core and bench.** Built. `src/Audio/` with `AudioTypes.h` (the mouth frame, `MouthSample`), `MouthWindow`, `MouthFilter`, `WavFile`, and `--viseme-bench` plus `--render-mouth` in `src/Tests/`. The setup script fetches the two clips. `--test-audio` covers the mouth columns, the window policy's frame accounting with and without lookahead, the wav reader, and the filter. NOTICE.md carries the clips' provenance.
+
+2. **The backend into the bench.** Built, then its classifier ported to uLipSync's method. `MfccBackend`, `MfccFeatures`, `LipSyncProfile`, `VisemeTable`, `VisemeTypes`. `--test-audio` covers the MFCC chain against a Python reference of uLipSync's `Algorithm.cs`, the profile JSON round trip, the backend's volume-only and two-phoneme behavior, and the table. NOTICE.md carries the port. `--viseme-bench` and `--replay-audio` take `--profile`.
+
+3. **The live stage and the panel.** Built. `AudioService` with the SDL2 capture, the audio thread, the gate and gain, `AudioConfig`, `App::applyAudioConfig`, the vision thread's merge in `applyFaceToOutput` (the visemes on the frame and through the table), the face map's direct vowel path, the Audio panel with its viseme bars, the OSC panel's mouth section, the dock slot, the View menu entry, and the localization sections. `--loc-test` covers the strings, `--test-vmc` the face map's two paths. The live check is the avatar's mouth in the 3D scene and in VNyan over VMC, with the phone on and off, on a preset avatar and a perfect-sync one.
+
+4. **Recording and replay.** Built. The wav sidecar and its writer, the header block, the per-frame viseme weights, and `--replay-audio`. The recording self-test covers the header round trip and the wav index arithmetic.
+
+5. **The calibration wizard.** Built, then rebuilt on the uLipSync profile. The E viseme's English prompt is "eh, as in bed" rather than `ee`, since `ee` sits close to `ih`. `AudioCalibrationWizard` under `src/UI/`, the calibration frames, the profile JSON writer and reader, the `profilePath` plumbing, and the Calibrate, Import, and Clear profile buttons. `--test-audio` covers the calibration frames, the gate suggestion, and the profile round trip.
+
+Docs land with their piece: `docs/reference/audio.md` (the stage, the backend, the window policy, the gate, the config, the panel, the wizard, the recording sidecar), the module map and threading model in `architecture.md`, the merge rule in `face.md`, the face map's viseme path in `avatar.md`, `build.md`, `commands.md`, `testing.md`, and the sidecar in `debugging.md`. README carries the microphone setup and the Audio panel.
+
+## Verification
+
+- The bench's gate for going live: on each clip, the mean absolute difference per viseme between the chunked output and a single whole-file run, and the per-run inference p50 and p95. The latency budget holds when p95 is under the 100 ms hop. The quality judgment is the avatar rendered under the JSON, in English and in Japanese, with the measured verdict recorded in `audio.md`.
+- Each piece builds the `MikanTrack` target and runs the self-tests it touched. `--loc-test` runs with the panel piece.
+- The live chain is checked once with a phone and once without: the mouth follows the voice in the 3D scene and in VNyan, the gate silences keyboard noise, the phone takes the mouth back when it streams, and a recording's wav replays through `--replay-audio` with a diff near zero under the recorded profile.

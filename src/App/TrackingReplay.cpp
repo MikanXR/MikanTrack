@@ -1,10 +1,13 @@
 #include "TrackingReplay.h"
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 #include "nlohmann/json.hpp"
 
 #include "Logger.h"
+#include "PathUtils.h"
 #include "SpaceTransforms.h"
 
 using json= nlohmann::json;
@@ -13,6 +16,7 @@ bool TrackingReplay::load(const std::string& path, std::string& outError)
 {
 	m_filePath= path;
 	m_recordedFrames.clear();
+	m_faceSamples.clear();
 	m_frames.clear();
 	m_divergentFrames.clear();
 	m_bDidRun= false;
@@ -91,6 +95,22 @@ bool TrackingReplay::load(const std::string& path, std::string& outError)
 	for (size_t frameIndex= 0; frameIndex < m_recordedFrames.size(); ++frameIndex)
 		m_frames[frameIndex].recorded= &m_recordedFrames[frameIndex];
 
+	// The face sidecar is optional: a missing one replays with no phone face.
+	// The recorder deletes a sidecar the phone never wrote to, so an absent
+	// file is the normal no-phone recording.
+	if (m_header.face.present && !m_header.face.fileName.empty())
+	{
+		const std::filesystem::path faceFilePath=
+			PathUtils::utf8ToPath(path).parent_path() / PathUtils::utf8ToPath(m_header.face.fileName);
+		const std::string facePath= PathUtils::pathToUtf8(faceFilePath);
+		std::error_code existsError;
+		std::string faceError;
+		if (!std::filesystem::exists(faceFilePath, existsError))
+			MIKAN_LOG_INFO("TrackingReplay") << "No face sidecar at " << facePath << " - replaying with no phone face";
+		else if (!FaceSidecar::load(facePath, m_faceSamples, faceError))
+			MIKAN_LOG_WARNING("TrackingReplay") << "Face sidecar not loaded: " << faceError;
+	}
+
 	return true;
 }
 
@@ -162,14 +182,12 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 			// would diverge from live for every calibrated recording.
 			landmarkTo3D->clearCalibratedSkeleton();
 			const bool bApplySkeleton= !bWhatIf || whatIfParams->bApplyCalibratedSkeleton;
-			if (bApplySkeleton)
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					if (m_recordedConfig.handSkeleton.present[sideIndex])
-						landmarkTo3D->setCalibratedSkeleton(
-							(eHandSide)sideIndex, m_recordedConfig.handSkeleton.skeleton[sideIndex]);
-				}
+				if (bApplySkeleton && m_recordedConfig.handSkeleton.present[sideIndex])
+					landmarkTo3D->setCalibratedSkeleton(
+						(eHandSide)sideIndex, m_recordedConfig.handSkeleton.skeleton[sideIndex]);
+				landmarkTo3D->setDepthScale((eHandSide)sideIndex, profile.liftDepthScale[sideIndex]);
 			}
 		}
 		m_landmarkTo3D.push_back(std::move(landmarkTo3D));
@@ -206,6 +224,8 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		{
 			const int cameraIndex= fresh.cameraIndex;
 			if (cameraIndex < 0 || cameraIndex >= cameraCount)
+				continue;
+			if (bWhatIf && !whatIfParams->isCameraEnabled(cameraIndex))
 				continue;
 
 			const CameraProfile& profile= m_recordedConfig.camera(cameraIndex);
@@ -281,20 +301,40 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		}
 
 		// Fusion stage over ALL cameras' mirrors (fresh or stale), exactly
-		// like the live candidate vector
-		TrackingFrameResult fused;
-		if (recorded.bFused)
+		// like the live candidate vector. A camera mask narrows the vector
+		// and re-decides the no-world passthrough the way the live loop
+		// would have with only those cameras (any valid mirror with
+		// extrinsics fuses); without a mask the recorded decision stands.
+		candidates.clear();
+		const CameraFrameResult* passthrough= nullptr;
+		bool bFuse= recorded.bFused;
+		if (bWhatIf && !whatIfParams->cameraEnabled.empty())
+			bFuse= false;
+		for (const CameraFrameResult& mirror : m_mirrors)
 		{
-			candidates.clear();
-			for (const CameraFrameResult& mirror : m_mirrors)
-				candidates.push_back(&mirror);
+			if (bWhatIf && !whatIfParams->isCameraEnabled(mirror.cameraIndex))
+				continue;
+			candidates.push_back(&mirror);
+			// The first camera, or the direct camera of a direct-mode recording
+			if (passthrough == nullptr ||
+				(m_recordedConfig.direct.enabled && mirror.cameraIndex == m_recordedConfig.direct.cameraIndex))
+				passthrough= &mirror;
+			if (bWhatIf && !whatIfParams->cameraEnabled.empty() && recorded.bFused &&
+				mirror.valid && mirror.hasExtrinsics)
+				bFuse= true;
+		}
+
+		TrackingFrameResult fused;
+		if (bFuse)
+		{
 			m_fusion.fuse(candidates, recorded.nowTimestampMs, fused);
 		}
 		else
 		{
-			// No-world passthrough: camera 0's result, reconstructed from the
-			// REPLAYED mirror so the checksum still verifies this frame
-			fused= m_mirrors.empty() ? TrackingFrameResult() : m_mirrors[0].result;
+			// No-world passthrough: the passthrough camera's result (camera 0,
+			// or the direct camera), reconstructed from the REPLAYED mirror so
+			// the checksum still verifies this frame
+			fused= passthrough == nullptr ? TrackingFrameResult() : passthrough->result;
 		}
 
 		if (!bWhatIf)
@@ -323,18 +363,19 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		// solver, which fills only sides the IMU didn't claim. Re-running the
 		// solver (rather than replaying its output) is what makes solver
 		// changes A/B-able against old recordings.
+		const bool bApplyImu= !bWhatIf || whatIfParams->bApplyRecordedImu;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			HandPose& pose= fused.poses[sideIndex];
 			const RecordedImuOutput& imu= recorded.imu[sideIndex];
-			pose.hasForearmPose= imu.hasForearmPose;
-			if (imu.hasForearmPose)
+			pose.hasForearmPose= bApplyImu && imu.hasForearmPose;
+			if (pose.hasForearmPose)
 			{
 				pose.forearmOrientationWorld= imu.forearmOrientationWorld;
 				pose.forearmConfidence= imu.forearmConfidence;
 			}
 		}
-		if (recorded.bFused)
+		if (bFuse)
 			m_bodyPoseSolver.solve(candidates, makeBodyDimensions(m_recordedConfig), fused);
 
 		if (bWhatIf)

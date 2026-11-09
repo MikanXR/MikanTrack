@@ -58,6 +58,7 @@ json bodyPoseToJson(const BodyPoseObservation& body)
 		{"providedMask", body.providedMask},
 		{"boxSource", (int)body.boxSource},
 		{"confidence", body.confidence},
+		{"hasDepth", body.hasDepth},
 		{"imagePoints", imagePoints},
 		{"visibility", visibility},
 	};
@@ -202,6 +203,8 @@ void bodyPoseFromJson(const json& j, BodyPoseObservation& outBody)
 	outBody.providedMask= j.value("providedMask", (1ull << POSE_LANDMARK_COUNT) - 1ull);
 	outBody.boxSource= (eBodyBoxSource)j.value("boxSource", (int)eBodyBoxSource::None);
 	outBody.confidence= j.value("confidence", 0.f);
+	// Recordings predating the depth axis carry a zero z with no meaning
+	outBody.hasDepth= j.value("hasDepth", false);
 	const json& imagePoints= j.value("imagePoints", json::array());
 	const json& visibility= j.value("visibility", json::array());
 	for (int landmark= 0; landmark < POSE_LANDMARK_COUNT; ++landmark)

@@ -7,10 +7,25 @@
 
 #include "BodyPoseTypes.h"
 #include "PoseDetector.h"
-#include "RtmPoseBodyModel.h"
+#include "RtmPoseModel.h"
+
+// Which landmark model the body stage runs
+enum class eBodyPoseBackend : int
+{
+	// RTMPose-m body7: 17 planar keypoints, the lighter model. The metric
+	// rig's choice, where depth comes from the stereo wrists.
+	RtmPoseBody= 0,
+	// RTMW3D-X whole body: 133 keypoints with a root-relative depth per
+	// keypoint. The single-camera direct mode's choice, where that depth is
+	// all the depth there is.
+	Rtmw3dWholeBody= 1,
+};
+const char* bodyPoseBackendToString(eBodyPoseBackend backend);
+eBodyPoseBackend bodyPoseBackendFromString(const std::string& name);
 
 struct BodyPoseTrackerConfig
 {
+	eBodyPoseBackend backend= eBodyPoseBackend::RtmPoseBody;
 	// Models run every Nth processed frame
 	int frameDivider= 2;
 	// Re-run the person detector every Nth MODEL frame no matter how
@@ -29,28 +44,33 @@ struct BodyPoseTrackerConfig
 // detect-vs-track cadence between them. Opt-in per camera, so cameras without
 // it pay nothing.
 //
-// The landmark model is RTMPose, which is TOP-DOWN: this class supplies the
-// person box and each keypoint is predicted independently with its own score,
-// so joints outside the frame degrade to low confidence instead of being
-// invented. BlazePose was tried first and lost decisively on this rig - same
-// frames, same session: 99% of frames usable against 70%, and 6-8 px of 2D
-// jitter per joint against 53-83 px. It owned its own crop (a hip-centered
-// square reaching a "full body" point) which has no correct answer for a
-// person truncated at a desk, and it always emitted one coherent full-body
-// skeleton, so it fabricated the unseen legs and dragged the arms with them.
+// The landmark model is from the RTMPose family, which is TOP-DOWN: this
+// class supplies the person box and each keypoint is predicted independently
+// with its own score, so joints outside the frame degrade to low confidence
+// instead of being invented. BlazePose was tried first and lost decisively
+// on this rig - same frames, same session: 99% of frames usable against
+// 70%, and 6-8 px of 2D jitter per joint against 53-83 px. It owned its own
+// crop (a hip-centered square reaching a "full body" point) which has no
+// correct answer for a person truncated at a desk, and it always emitted
+// one coherent full-body skeleton, so it fabricated the unseen legs and
+// dragged the arms with them.
 //
 // The person DETECTOR from that family is still here and still useful: only
 // its keypoints are read, never its box, which is a face box.
 class BodyPoseTracker
 {
 public:
-	// Loads the person detector and the landmark model from modelDir. Missing
-	// models fail soft: returns false, tracker stays a no-op.
+	// Loads the person detector and the configured landmark model from
+	// modelDir. Missing models fail soft: returns false, tracker stays a
+	// no-op.
 	bool load(const std::string& modelDir, const std::string& preferredEp,
 			  const BodyPoseTrackerConfig& config);
 	bool isLoaded() const { return m_bLoaded; }
 	const char* activeEp() const { return m_landmarkModel.activeEp(); }
+	eBodyPoseBackend getBackend() const { return m_config.backend; }
 
+	// The backend is fixed at load; a changed backend here is ignored until
+	// the next load
 	void setConfig(const BodyPoseTrackerConfig& config);
 
 	void process(const cv::Mat& bgrFrame, BodyPoseObservation& outObservation);
@@ -62,12 +82,14 @@ private:
 	// Person box for this model frame, from tracking or from the detector
 	eBodyBoxSource acquireBox(const cv::Mat& bgrFrame, bool bForceDetect,
 							  glm::vec2& outBoxMin, glm::vec2& outBoxMax);
+	// Writes the model result into the 33-slot layout
+	void fillObservation(BodyPoseObservation& outObservation) const;
 
 	bool m_bLoaded= false;
 	BodyPoseTrackerConfig m_config;
 
 	PoseDetector m_detector;
-	RtmPoseBodyModel m_landmarkModel;
+	RtmPoseModel m_landmarkModel;
 
 	bool m_bBoxTracked= false;
 	glm::vec2 m_trackedBoxMin{0.f};

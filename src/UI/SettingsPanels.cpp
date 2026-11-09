@@ -6,9 +6,11 @@
 #include "imgui.h"
 
 #include "glm/gtc/quaternion.hpp"
+#include "glm/trigonometric.hpp"
 
 #include "App.h"
 #include "AppConfig.h"
+#include "AvatarMouthReadout.h"
 #include "FaceService.h"
 #include "HandPoseModel.h"
 #include "HandRoiQuality.h"
@@ -615,6 +617,30 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 			const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
 			bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
 
+			if (bodyPose.enabled)
+			{
+				const bool bWholeBody= bodyPose.backend == "rtmw3d";
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
+				if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
+									  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
+														 : "trackingPanel.bodyBackendRtmPose")))
+				{
+					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
+					{
+						bodyPose.backend= "rtmpose";
+						bChanged= true;
+					}
+					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
+					{
+						bodyPose.backend= "rtmw3d";
+						bChanged= true;
+					}
+					ImGui::EndCombo();
+				}
+				ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
+			}
+
 			ImGui::PopID();
 		}
 
@@ -648,6 +674,82 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.noseForwardTooltip"));
 	}
 
+	ImGui::SeparatorText(locText("trackingPanel.directSection"));
+	{
+		DirectConfig& direct= config->direct;
+		ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
+
+		bChanged|= ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+
+		// A shrinking camera list must not leave the index dangling
+		const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
+		if (direct.cameraIndex < 0 || direct.cameraIndex > lastCameraIndex)
+		{
+			direct.cameraIndex= std::clamp(direct.cameraIndex, 0, lastCameraIndex);
+			bChanged= true;
+		}
+		if (config->cameraCount() > 1)
+		{
+			const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
+			if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
+			{
+				for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+				{
+					ImGui::PushID(cameraIndex);
+					const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+					if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex))
+					{
+						direct.cameraIndex= cameraIndex;
+						bChanged= true;
+					}
+					ImGui::PopID();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
+									  locText("trackingPanel.directTiltFmt"));
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+
+		// A countdown left running while the mode is switched off would fire a
+		// capture nobody is waiting for
+		NeutralCaptureControl& neutral= panelState.directNeutral;
+		if (!direct.enabled)
+			neutral.reset();
+
+		ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
+		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
+			neutral.start();
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
+		ImGui::EndDisabled();
+
+		if (direct.neutralPresent)
+		{
+			ImGui::SameLine();
+			if (ImGui::Button(locLabel("trackingPanel.directClear")))
+			{
+				direct.neutralPresent= false;
+				direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
+				direct.neutralShoulderMidpoint= glm::vec3(0.f);
+				direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+				bChanged= true;
+			}
+		}
+
+		bChanged|= neutral.update(ImGui::GetIO().DeltaTime, visionThread, config);
+		if (neutral.isCountingDown())
+		{
+			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
+							   (int)ceilf(neutral.getRemainingSeconds()));
+			ImGui::ProgressBar(1.f - neutral.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
+							   ImVec2(-1, 4), "");
+		}
+
+		neutral.drawStatus(direct);
+	}
+
 	// -- Hand calibration: one wizard, in the only order that works -----
 	ImGui::SeparatorText(locText("trackingPanel.handCalibrationSection"));
 	{
@@ -657,9 +759,19 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 					config->fusedRestAngles.present[0] ? locText("common.yes") : locText("common.no"),
 					config->fusedRestAngles.present[1] ? locText("common.yes") : locText("common.no"));
 
-		if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
-			panelState.bLaunchHandCalibrationWizard= true;
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
+		// The wizard measures bones against the desk marker or by stereo and
+		// zeroes the fingers from the fuse, none of which a direct project
+		// runs or needs
+		if (config->direct.enabled)
+		{
+			ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));
+		}
+		else
+		{
+			if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
+				panelState.bLaunchHandCalibrationWizard= true;
+			ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
+		}
 
 		const bool bAnyHandCalibration= config->handSkeleton.present[0] ||
 			config->handSkeleton.present[1] || config->fusedRestAngles.present[0] ||
@@ -689,6 +801,14 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 	if (ImGui::Checkbox(locLabel("trackingPanel.showDetectionBoxes"), &bShowBoxes))
 		previewPanel->setShowDetectionBoxes(bShowBoxes);
 
+	if (config->direct.enabled)
+	{
+		bool bShowAllHands= previewPanel->getShowAllHands();
+		if (ImGui::Checkbox(locLabel("trackingPanel.showAllHands"), &bShowAllHands))
+			previewPanel->setShowAllHands(bShowAllHands);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.showAllHandsTooltip"));
+	}
+
 	bool bShowBodyPose= previewPanel->getShowBodyPose();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);
@@ -699,6 +819,14 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 		if (ImGui::Checkbox(locLabel("trackingPanel.showPerCameraSkeletons"), &bShowPerCamera))
 			scene3dPanel->setShowPerCameraSkeletons(bShowPerCamera);
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.showPerCameraSkeletonsTooltip"));
+	}
+	{
+		ImGui::BeginDisabled(!scene3dPanel->hasCameraMatch());
+		bool bViewFromCamera= scene3dPanel->getViewFromCamera();
+		if (ImGui::Checkbox(locLabel("trackingPanel.viewFromCamera"), &bViewFromCamera))
+			scene3dPanel->setViewFromCamera(bViewFromCamera);
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
 	}
 
 	ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
@@ -728,8 +856,20 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 
 	ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
 	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingState")))
-		visionThread->requestDiagnosticDump(config->makeDumpDirectoryPath());
+		panelState.bDumpRequested= true;
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.dumpTrackingStateTooltip"));
+	ImGui::SameLine();
+	ImGui::BeginDisabled(panelState.dumpCountdown.isRunning());
+	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingStateDelayed")))
+		panelState.bDelayedDumpRequested= true;
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.dumpTrackingStateDelayedTooltip"));
+	if (panelState.dumpCountdown.isRunning())
+	{
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.dumpCountdownFmt"),
+						   (int)ceilf(panelState.dumpCountdown.getRemainingSeconds()));
+		ImGui::ProgressBar(panelState.dumpCountdown.getProgress(), ImVec2(-1, 4), "");
+	}
 	{
 		const std::string lastDump= visionThread->getLastDumpPath();
 		if (!lastDump.empty())
@@ -866,8 +1006,9 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 	ImGui::End();
 }
 
-void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread,
-								  const TrackingFrameResult& fusedResult)
+void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
+								  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
+								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.oscOutput")))
 	{
@@ -915,6 +1056,11 @@ void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread,
 
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcBonesInfo"));
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcAvatarBoneLengths"));
+
+	ImGui::Separator();
+	// The avatar's mouth targets as the stream carries them, after the face
+	// profile
+	mouthReadout.draw(avatar, faceBinding, fusedResult.face);
 
 	ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));

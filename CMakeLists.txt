@@ -41,6 +41,23 @@ set(ONNXRUNTIME_LIBRARIES ${ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime
 set(ONNXRUNTIME_DLL ${ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime.dll)
 set(DIRECTML_DLL ${DEPS_DIR}/directml/bin/x64-win/DirectML.dll)
 
+# Oculus LipSync native SDK (a manual download under the Oculus SDK License,
+# which the setup script cannot fetch). The Oculus mouth model compiles only
+# when it is present; without it the Audio panel hides that entry.
+set(OVRLIPSYNC_DIR ${DEPS_DIR}/OVRLipSyncNative)
+set(MIKANTRACK_OVRLIPSYNC OFF)
+if(EXISTS ${OVRLIPSYNC_DIR}/Include/OVRLipSync.h)
+    set(MIKANTRACK_OVRLIPSYNC ON)
+    set(OVRLIPSYNC_INCLUDE_DIR ${OVRLIPSYNC_DIR}/Include)
+    set(OVRLIPSYNC_LIBRARIES
+        optimized ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSyncShim.lib
+        debug ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSyncShimd.lib)
+    set(OVRLIPSYNC_DLL ${OVRLIPSYNC_DIR}/Lib/Win64/OVRLipSync.dll)
+    message(STATUS "Oculus LipSync SDK found: the Oculus mouth model is built")
+else()
+    message(STATUS "Oculus LipSync SDK not found under deps/OVRLipSyncNative: the Oculus mouth model is not built")
+endif()
+
 # Header-only submodules
 set(GLM_INCLUDE_DIR ${THIRDPARTY_DIR}/glm)
 set(NLOHMANN_JSON_INCLUDE_DIR ${THIRDPARTY_DIR}/nlohmann_json/single_include)
@@ -55,6 +72,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
@@ -77,6 +95,8 @@ file(GLOB VISION_SRC       ${ROOT_DIR}/src/Vision/*.h       ${ROOT_DIR}/src/Visi
 file(GLOB TRACKING_SRC     ${ROOT_DIR}/src/Tracking/*.h     ${ROOT_DIR}/src/Tracking/*.cpp)
 file(GLOB OSC_SRC          ${ROOT_DIR}/src/Osc/*.h          ${ROOT_DIR}/src/Osc/*.cpp)
 file(GLOB FACE_SRC         ${ROOT_DIR}/src/Face/*.h         ${ROOT_DIR}/src/Face/*.cpp)
+file(GLOB FACEEXPR_SRC     ${ROOT_DIR}/src/FaceExpr/*.h     ${ROOT_DIR}/src/FaceExpr/*.cpp)
+file(GLOB AUDIO_SRC        ${ROOT_DIR}/src/Audio/*.h        ${ROOT_DIR}/src/Audio/*.cpp)
 file(GLOB AVATAR_SRC       ${ROOT_DIR}/src/Avatar/*.h       ${ROOT_DIR}/src/Avatar/*.cpp)
 file(GLOB RENDER_SRC       ${ROOT_DIR}/src/Render/*.h       ${ROOT_DIR}/src/Render/*.cpp)
 file(GLOB UI_SRC           ${ROOT_DIR}/src/UI/*.h           ${ROOT_DIR}/src/UI/*.cpp)
@@ -97,6 +117,8 @@ add_executable(MikanTrack WIN32
     ${TRACKING_SRC}
     ${OSC_SRC}
     ${FACE_SRC}
+    ${FACEEXPR_SRC}
+    ${AUDIO_SRC}
     ${AVATAR_SRC}
     ${RENDER_SRC}
     ${UI_SRC}
@@ -109,7 +131,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
     ${APP_SRC} ${UTILITY_SRC} ${MATH_SRC} ${VIDEO_IFACE_SRC} ${VIDEO_SRC}
     ${VIDEO_WMF_SRC} ${IMU_SRC} ${IMU_JOYCON_SRC}
     ${CALIBRATION_SRC} ${VISION_SRC} ${TRACKING_SRC}
-    ${OSC_SRC} ${FACE_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
+    ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
 
@@ -128,6 +150,8 @@ target_include_directories(MikanTrack PRIVATE
     ${ROOT_DIR}/src/Tracking
     ${ROOT_DIR}/src/Osc
     ${ROOT_DIR}/src/Face
+    ${ROOT_DIR}/src/FaceExpr
+    ${ROOT_DIR}/src/Audio
     ${ROOT_DIR}/src/Avatar
     ${ROOT_DIR}/src/Render
     ${ROOT_DIR}/src/UI
@@ -165,6 +189,15 @@ target_link_libraries(MikanTrack PRIVATE
 
 # ImGui GL loader: use GLEW (already linked) instead of the built-in loader
 target_compile_definitions(MikanTrack PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLEW GLEW_NO_GLU)
+
+if(MIKANTRACK_OVRLIPSYNC)
+    target_compile_definitions(MikanTrack PRIVATE MIKANTRACK_OVRLIPSYNC)
+    target_include_directories(MikanTrack PRIVATE ${OVRLIPSYNC_INCLUDE_DIR})
+    target_link_libraries(MikanTrack PRIVATE ${OVRLIPSYNC_LIBRARIES})
+    add_custom_command(TARGET MikanTrack POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OVRLIPSYNC_DLL} $<TARGET_FILE_DIR:MikanTrack>
+    )
+endif()
 
 set_property(TARGET MikanTrack PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:MikanTrack>")
 set_property(DIRECTORY ${CMAKE_CURRENT_LIST_DIR} PROPERTY VS_STARTUP_PROJECT MikanTrack)

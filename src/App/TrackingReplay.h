@@ -8,6 +8,7 @@
 #include "BodyPoseSolver.h"
 #include "HandFusion.h"
 #include "LandmarkTo3D.h"
+#include "FaceRecorder.h"
 #include "TrackingRecording.h"
 #include "TrackingTypes.h"
 
@@ -77,6 +78,21 @@ public:
 		// the same recorded hands (--replay-extrinsics).
 		bool bOverrideExtrinsics= false;
 		std::vector<ExtrinsicsConfig> extrinsicsOverride;
+		// Cameras that take part in the pass, indexed by camera; empty = all.
+		// A disabled camera is as if it never popped a frame: its mirror stays
+		// invalid, so fusion, the body solver and the no-world decision see
+		// only the remaining cameras. This is how a tri-camera recording
+		// replays as its front camera alone (--replay-mono-baseline).
+		std::vector<bool> cameraEnabled;
+		// Off = the recorded IMU forearm output is not overlaid, so the body
+		// solver fills every side from the camera (a cameras-only pass)
+		bool bApplyRecordedImu= true;
+
+		bool isCameraEnabled(int cameraIndex) const
+		{
+			return cameraEnabled.empty() ||
+				(cameraIndex >= 0 && cameraIndex < (int)cameraEnabled.size() && cameraEnabled[cameraIndex]);
+		}
 	};
 
 	// Loads and parses the whole file (header + frames; a missing footer is
@@ -85,9 +101,13 @@ public:
 
 	int getFrameCount() const { return (int)m_frames.size(); }
 	const AppConfig& getRecordedConfig() const { return m_recordedConfig; }
+	const RecordingHeader& getHeader() const { return m_header; }
 	const RecordingFooter& getFooter() const { return m_footer; }
 	bool hasFooter() const { return m_bHasFooter; }
 	const std::string& getFilePath() const { return m_filePath; }
+	// The face sidecar's phone samples in timestamp order; empty for a
+	// recording without one (or whose file is gone)
+	const std::vector<RecordedFaceSample>& getFaceSamples() const { return m_faceSamples; }
 
 	// Replays every frame from frame 0, filling the cache and the checksum
 	// comparison. Optionally captures fusion diagnostics for a frame range
@@ -122,6 +142,7 @@ private:
 	bool m_bHasFooter= false;
 
 	std::vector<RecordedFrame> m_recordedFrames;
+	std::vector<RecordedFaceSample> m_faceSamples;
 	std::vector<ReplayFrame> m_frames;
 	std::vector<int> m_divergentFrames;
 	bool m_bDidRun= false;

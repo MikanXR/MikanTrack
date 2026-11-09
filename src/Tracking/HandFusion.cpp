@@ -83,6 +83,8 @@ void HandFusion::resetTransientState()
 		m_triPalmarMemory[sideIndex].reset();
 		m_rawTriAngles[sideIndex]= {};
 		m_bRawTriAnglesValid[sideIndex]= false;
+		m_rawFitAngles[sideIndex]= {};
+		m_bRawFitAnglesValid[sideIndex]= false;
 		m_lastTriPoints[sideIndex]= {};
 		m_bLastTriPointsValid[sideIndex]= false;
 		m_lastFusedPalm[sideIndex]= glm::vec3(0.f);
@@ -781,6 +783,8 @@ void HandFusion::fuse(const std::vector<const CameraFrameResult*>& candidates, d
 	m_bStereoScaleFresh= false;
 	m_bRawTriAnglesValid[0]= false;
 	m_bRawTriAnglesValid[1]= false;
+	m_bRawFitAnglesValid[0]= false;
+	m_bRawFitAnglesValid[1]= false;
 	m_bLastTriPointsValid[0]= false;
 	m_bLastTriPointsValid[1]= false;
 
@@ -1236,6 +1240,10 @@ void HandFusion::applyEstimator(eHandSide side, HandCluster& cluster, TrackedHan
 		observation.cx= candidate.camera->cx;
 		observation.cy= candidate.camera->cy;
 		observation.imagePoints= &candidate.hand->imagePoints;
+		// The camera's own lift, the depth anchor of a side that has not yet
+		// been fitted from two views
+		observation.hasLiftPalm= candidate.pose->hasWorldPose;
+		observation.liftPalmWorld= candidate.pose->palmPositionWorld;
 		observations.push_back(observation);
 
 		freshestTimestampMs= std::max(freshestTimestampMs, candidate.camera->timestampMs);
@@ -1285,6 +1293,8 @@ void HandFusion::applyEstimator(eHandSide side, HandCluster& cluster, TrackedHan
 		m_rawTriAngles[sideIndex]= fitted.rawAngles;
 		m_bRawTriAnglesValid[sideIndex]= true;
 	}
+	m_rawFitAngles[sideIndex]= fitted.rawAngles;
+	m_bRawFitAnglesValid[sideIndex]= true;
 
 	// Streamed convention: rest offset applied at output, state stays raw
 	std::array<FingerAngles, FINGER_COUNT> streamedAngles= fitted.rawAngles;

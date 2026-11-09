@@ -89,6 +89,43 @@ static int runHandPoseTest(const TestArgs& args)
 		result= 1;
 	}
 
+	// A fist seen from the front: the proximal bone folds past 90 degrees,
+	// so its palm-plane projection points back at the wrist. The lateral
+	// must stay a splay (within a quarter turn) and the proximal must read
+	// past 90, rather than a half-turn lateral with the later bends
+	// negative about a reversed hinge.
+	std::array<FingerAngles, FINGER_COUNT> anglesFolded{};
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		anglesFolded[finger].lateral= 0.1f * (float)(finger - 2);
+		anglesFolded[finger].proximal= 1.85f;
+		anglesFolded[finger].intermediate= 1.2f;
+		anglesFolded[finger].distal= 0.8f;
+	}
+	if (roundTrip(anglesFolded, "proximal folded past 90 (fist from the front)") > 0.02f)
+	{
+		MIKAN_LOG_ERROR("test-handpose") << "FAILED: folded-proximal round-trip error too large "
+											"(the lateral took the half-turn branch)";
+		result= 1;
+	}
+
+	// The base bone exactly on the palm normal, where its projection has
+	// no length to read a lateral from: the finger's bend plane carries it
+	std::array<FingerAngles, FINGER_COUNT> anglesOnNormal{};
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		anglesOnNormal[finger].lateral= finger == (int)eFinger::Thumb ? 0.f : 0.3f - 0.15f * (float)finger;
+		anglesOnNormal[finger].proximal= glm::half_pi<float>();
+		anglesOnNormal[finger].intermediate= 1.0f;
+		anglesOnNormal[finger].distal= 0.6f;
+	}
+	if (roundTrip(anglesOnNormal, "base bone on the palm normal (lateral from the bend plane)") > 0.02f)
+	{
+		MIKAN_LOG_ERROR("test-handpose") << "FAILED: on-normal round-trip error too large "
+											"(the lateral did not come from the bend plane)";
+		result= 1;
+	}
+
 	// Thumb opposition: large MCP/IP flexion must round-trip AND must
 	// actually sweep the thumb tip ACROSS the palm toward the pinky
 	// (the pronated-hinge behavior; on the finger-style hinge this
@@ -309,6 +346,56 @@ static int runHandPoseTest(const TestArgs& args)
 		{
 			MIKAN_LOG_ERROR("test-handpose")
 				<< "FAILED: rest-relative angles must still report true deviation";
+			result= 1;
+		}
+	}
+
+	// The metacarpal zero (the single view's convention, no capture): a
+	// hand whose fingers continue their own metacarpals reads zero on every
+	// angle, and a finger splayed past its metacarpal reads that splay
+	{
+		HandSkeleton fanned= skeleton;
+		const glm::vec3 wristInPalm(-skeleton.baseInPalm[(int)eFinger::Middle].x, 0.f, 0.f);
+		for (int finger= 0; finger < FINGER_COUNT; ++finger)
+		{
+			const glm::vec3 metacarpal= skeleton.baseInPalm[finger] - wristInPalm;
+			fanned.neutralDirInPalm[finger]= glm::normalize(glm::vec3(metacarpal.x, metacarpal.y, 0.f));
+		}
+		auto measure= [&](const std::array<FingerAngles, FINGER_COUNT>& anglesIn,
+						  std::array<FingerAngles, FINGER_COUNT>& anglesOut) {
+			std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
+			HandPoseModel::buildFingerJoints(glm::mat4(1.f), fanned, anglesIn, joints);
+			std::array<glm::vec3, HAND_LANDMARK_COUNT> fannedPoints{};
+			fannedPoints[(int)eHandLandmark::WRIST]= wristInPalm;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+				for (int joint= 0; joint < 4; ++joint)
+					fannedPoints[FINGER_JOINTS[finger][joint]]= joints[finger][joint];
+			HandPoseModel::computeMetacarpalFingerAngles(fannedPoints, eHandSide::Right, anglesOut);
+		};
+		std::array<FingerAngles, FINGER_COUNT> open{};
+		std::array<FingerAngles, FINGER_COUNT> openMeasured{};
+		measure(open, openMeasured);
+		float maxOpen= 0.f;
+		for (const FingerAngles& angles : openMeasured)
+		{
+			maxOpen= std::max(maxOpen, fabsf(angles.lateral));
+			maxOpen= std::max(maxOpen, fabsf(angles.proximal));
+			maxOpen= std::max(maxOpen, fabsf(angles.intermediate));
+			maxOpen= std::max(maxOpen, fabsf(angles.distal));
+		}
+		std::array<FingerAngles, FINGER_COUNT> splayed{};
+		splayed[(int)eFinger::Index].lateral= 0.2f;
+		splayed[(int)eFinger::Ring].proximal= 0.4f;
+		std::array<FingerAngles, FINGER_COUNT> splayedMeasured{};
+		measure(splayed, splayedMeasured);
+		const float splayError= fabsf(splayedMeasured[(int)eFinger::Index].lateral - 0.2f);
+		const float bendError= fabsf(splayedMeasured[(int)eFinger::Ring].proximal - 0.4f);
+		MIKAN_LOG_INFO("test-handpose") << "metacarpal zero: open max rad=" << maxOpen
+			<< " splay error rad=" << splayError << " bend error rad=" << bendError;
+		if (maxOpen > 1e-4f || splayError > 1e-3f || bendError > 1e-3f)
+		{
+			MIKAN_LOG_ERROR("test-handpose")
+				<< "FAILED: against the metacarpal zero an open hand reads zero and a splay reads itself";
 			result= 1;
 		}
 	}

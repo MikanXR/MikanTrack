@@ -5,7 +5,7 @@
 #include "UdpSocket.h"
 #include "VmcRetarget.h"
 #include "AvatarRetarget.h"
-#include "AvatarFaceMap.h"
+#include "FaceProfileBinding.h"
 
 #include <atomic>
 #include <chrono>
@@ -65,9 +65,10 @@ struct OscStreamerConfig
 	std::string avatarPath;
 	std::string avatarTitle;
 	std::string avatarSha256;
-	// The face stream's blendshapes as the avatar's names. Null streams the
-	// ARKit names verbatim.
-	std::shared_ptr<const AvatarFaceMap> faceMap;
+	// The face profile binding whose targets name the blendshapes. A frame's
+	// face values go out only when they come from this binding's generation.
+	// Null sends no blendshapes.
+	std::shared_ptr<const FaceProfileBinding> faceBinding;
 };
 
 /// Streams per-frame tracked poses as the VMC protocol (OSC 1.0 bundles over
@@ -81,12 +82,17 @@ struct OscStreamerConfig
 ///     room-scale root, so pushing the marker frame onto the avatar would
 ///     teleport it.
 ///   /VMC/Ext/Bone/Pos ,sfffffff name + local position xyz + rotation xyzw,
-///     once per measured bone (head, clavicles, arms, hands, fingers)
-///   while the phone face stream is live (see AvatarFaceMap for the names):
-///     /VMC/Ext/Blend/Val ,sf name + value [0,1], once per mapped blendshape
-///     /VMC/Ext/Blend/Apply , after the last value. The frame the stream
-///       stops sends every value once more at zero, so the face relaxes
-///       instead of holding its last expression.
+///     once per measured bone (head, clavicles, arms, hands, fingers, and
+///     the spine, chest, upper chest and neck when a direct pose places them)
+///   while either face source is live (the phone stream or the microphone),
+///   the face profile's targets (see FaceProfileBinding for the names):
+///     /VMC/Ext/Blend/Val ,sf name + value [0,1], once per target name, the
+///       max of the outputs on it. A morph-target output goes out under its
+///       morph name.
+///     /VMC/Ext/Blend/Apply , after the last value. The frame both sources
+///       stop sends every value once more at zero, so the face relaxes
+///       instead of holding its last expression, and a frame after a
+///       binding swap sends zero once for the names the new binding lacks.
 ///   /VMC/Ext/VRM ,sss path title sha256 (at most once per second, only with
 ///     an avatar loaded): the local file path (UTF-8), the avatar's title,
 ///     and the lowercase hex SHA-256 of the file bytes
@@ -112,7 +118,16 @@ public:
 	/// Encode and send one bundle for the given frame.
 	/// Called from the inference thread; allocation-light after warm-up
 	/// (reuses a pooled bundle and a scratch encode buffer).
-	void sendFrame(const TrackingFrameResult& frame);
+	/// directPose is the pose the single-camera direct retarget solved for this
+	/// frame, or null on the stereo path. When it is non-null and valid the
+	/// streamer skips its own confidence gate, dropout hold, freeze rule and
+	/// AvatarRetarget (the direct solver holds and rests on its own) and
+	/// streams that pose through the configured avatar skeleton: with no
+	/// skeleton the frame carries no bones, while the blendshapes and the OK,
+	/// T, Root and VRM messages go out as usual. The OK tracking status is 1
+	/// when either upper arm is present in the pose. A null or invalid
+	/// directPose leaves the stereo behavior exactly as it was.
+	void sendFrame(const TrackingFrameResult& frame, const AvatarPose* directPose= nullptr);
 
 	/// Encode one frame without touching the socket, advancing the same
 	/// streaming state (dropout holds, freeze-on-loss, face and avatar throttles).
@@ -120,7 +135,9 @@ public:
 	/// exactly the bytes a receiver would rather than a reconstruction of them.
 	/// One entry per datagram: a frame too large for a single packet is split
 	/// into several complete bundles (see k_maxDatagramBytes).
-	void encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets);
+	/// directPose has the meaning it has on sendFrame.
+	void encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets,
+					 const AvatarPose* directPose= nullptr);
 
 	/// Largest datagram the streamer will put on the wire. Sized to stay inside
 	/// a 1500-byte ethernet MTU (so nothing depends on IP fragmentation, where
@@ -159,9 +176,10 @@ public:
 private:
 	using ClockTimePoint= std::chrono::steady_clock::time_point;
 
-	void encodeFrameLocked(const TrackingFrameResult& frame, const ClockTimePoint& now,
-						   std::vector<std::vector<uint8_t>>& outPackets);
-	void appendVmcMessages(const TrackingFrameResult& frame, const ClockTimePoint& now);
+	void encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* directPose,
+						   const ClockTimePoint& now, std::vector<std::vector<uint8_t>>& outPackets);
+	void appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* directPose,
+						   const ClockTimePoint& now);
 	void appendVmcBlendMessages(const TrackingFrameResult& frame);
 	void appendVmcAvatarMessage(const ClockTimePoint& now);
 	void updateSendStats(const ClockTimePoint& now);
@@ -184,11 +202,12 @@ private:
 	AvatarRetarget m_avatarRetarget;
 	AvatarPose m_avatarPose;
 	ClockTimePoint m_startTime;
-	// Face blendshape state: the ARKit fallback map, the evaluate scratch, and
-	// whether the last frame carried a face (for the one relaxing frame)
-	std::shared_ptr<const AvatarFaceMap> m_rawFaceMap;
+	// Face blendshape state: the wire scratch, whether the last frame carried
+	// a face (for the one relaxing frame), and the names it sent (zeroed once
+	// when a new binding drops them)
 	std::vector<float> m_blendValues;
 	bool m_bFaceWasPresent= false;
+	std::vector<std::string> m_sentBlendNames;
 	// /VMC/Ext/VRM throttling (wall clock)
 	bool m_hasSentAvatar= false;
 	ClockTimePoint m_lastAvatarTime;

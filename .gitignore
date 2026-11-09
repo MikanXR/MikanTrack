@@ -5,3 +5,5 @@ models/
 *.user
 imgui.ini
 *.log
+resources/audio/bench/
+

@@ -1,5 +1,7 @@
 #include "OscStreamer.h"
 
+#include <algorithm>
+
 #include "Logger.h"
 #include "TrackingTypes.h"
 
@@ -50,6 +52,7 @@ bool OscStreamer::startup()
 	m_lastVmcPose[0]= HeldPoseState();
 	m_lastVmcPose[1]= HeldPoseState();
 	m_bFaceWasPresent= false;
+	m_sentBlendNames.clear();
 	m_hasSentAvatar= false;
 
 	// The target is logged by setConfig instead: startup runs before the app's
@@ -85,8 +88,14 @@ void OscStreamer::setConfig(const OscStreamerConfig& config)
 
 	if (config.avatarSkeleton != m_config.avatarSkeleton)
 		m_avatarRetarget.reset();
+	// Announce at once to a new target or for a new avatar, rather than at
+	// the next one-second repeat. A face profile edit swaps only the binding
+	// and leaves the repeat alone.
+	const bool bAvatarChanged= config.avatarPath != m_config.avatarPath || config.avatarTitle != m_config.avatarTitle ||
+							   config.avatarSha256 != m_config.avatarSha256;
 	m_config= config;
-	m_hasSentAvatar= false; // re-announce the avatar on config change
+	if (bAvatarChanged || bTargetChanged)
+		m_hasSentAvatar= false;
 
 	if (bTargetChanged)
 	{
@@ -95,7 +104,7 @@ void OscStreamer::setConfig(const OscStreamerConfig& config)
 	}
 }
 
-void OscStreamer::sendFrame(const TrackingFrameResult& frame)
+void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* directPose)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -115,7 +124,7 @@ void OscStreamer::sendFrame(const TrackingFrameResult& frame)
 
 	const ClockTimePoint now= std::chrono::steady_clock::now();
 
-	encodeFrameLocked(frame, now, m_scratchPackets);
+	encodeFrameLocked(frame, directPose, now, m_scratchPackets);
 
 	// One frame can be several datagrams. The stats count FRAMES, so the rate
 	// readout does not depend on how the frame was split.
@@ -131,19 +140,20 @@ void OscStreamer::sendFrame(const TrackingFrameResult& frame)
 	updateSendStats(now);
 }
 
-void OscStreamer::encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets)
+void OscStreamer::encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets,
+							  const AvatarPose* directPose)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	encodeFrameLocked(frame, std::chrono::steady_clock::now(), outPackets);
+	encodeFrameLocked(frame, directPose, std::chrono::steady_clock::now(), outPackets);
 }
 
-void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const ClockTimePoint& now,
-									std::vector<std::vector<uint8_t>>& outPackets)
+void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* directPose,
+									const ClockTimePoint& now, std::vector<std::vector<uint8_t>>& outPackets)
 {
 	m_bundle.clear();
 	m_bundle.setTimeTag(k_oscTimeTagImmediate);
 
-	appendVmcMessages(frame, now);
+	appendVmcMessages(frame, directPose, now);
 
 	// Pack the frame's messages into as few complete bundles as fit. Splitting
 	// here rather than letting IP fragment the datagram matters because a
@@ -190,42 +200,64 @@ void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const Cloc
 	outPackets.resize(packetCount);
 }
 
-void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const ClockTimePoint& now)
+void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* directPose,
+									const ClockTimePoint& now)
 {
-	// The confidence gate and the dropout hold run first, then the freeze rule
-	// decides what a hand that is still lost looks like on a wire that has no
-	// way to say "unmeasured"
-	std::array<HandPose, 2> streamedPoses;
-	bool bSideValid[2]= {false, false};
-	for (int sideIndex= 0; sideIndex < static_cast<int>(eHandSide::Count); ++sideIndex)
-	{
-		HandPose resolved;
-		const bool bPoseSent= resolveOutputPose(frame.poses[sideIndex], frame.timestampMs,
-												m_config.minConfidence, m_config.holdOnDropoutMs,
-												m_heldPose[sideIndex], resolved);
+	// A valid direct pose replaces the whole stereo resolve below: the direct
+	// solver has already gated, held and rested its own output, and none of the
+	// hand state here has seen this frame
+	const bool bDirect= directPose != nullptr && directPose->valid;
+	bool bTracking= false;
 
-		bSideValid[sideIndex]= resolveVmcOutputPose(resolved, bPoseSent, m_config.vmcFreezeOnLoss,
-													m_lastVmcPose[sideIndex], streamedPoses[sideIndex]);
-	}
-
-	if (m_config.avatarSkeleton != nullptr)
+	if (bDirect)
 	{
-		// The retarget consumes the RESOLVED poses, so the hold and the
-		// freeze above shape what the avatar does on a dropout exactly as
-		// they shape the measured-length stream
-		m_avatarRetarget.solve(streamedPoses, bSideValid, frame.head, frame.timestampMs, m_config.bodyDimensions,
-							   *m_config.avatarSkeleton, m_config.avatarRetarget, m_avatarPose);
-		VmcRetarget::buildPoseFromAvatar(m_avatarPose, *m_config.avatarSkeleton, m_vmcPose);
+		if (m_config.avatarSkeleton != nullptr)
+			VmcRetarget::buildPoseFromAvatar(*directPose, *m_config.avatarSkeleton, m_vmcPose);
+		else
+			m_vmcPose.clear();
+
+		bTracking= directPose->bones[(int)eHumanoidBone::LeftUpperArm].present ||
+				   directPose->bones[(int)eHumanoidBone::RightUpperArm].present;
 	}
 	else
 	{
-		VmcRetarget::VmcBodyLengths lengths;
-		lengths.shoulderWidthMeters= m_config.shoulderWidthMeters;
-		lengths.upperArmLengthMeters= m_config.upperArmLengthMeters;
-		lengths.forearmLengthMeters= m_config.forearmLengthMeters;
-		lengths.headOffsetMeters= m_config.vmcHeadOffsetMeters;
+		// The confidence gate and the dropout hold run first, then the freeze rule
+		// decides what a hand that is still lost looks like on a wire that has no
+		// way to say "unmeasured"
+		std::array<HandPose, 2> streamedPoses;
+		bool bSideValid[2]= {false, false};
+		for (int sideIndex= 0; sideIndex < static_cast<int>(eHandSide::Count); ++sideIndex)
+		{
+			HandPose resolved;
+			const bool bPoseSent= resolveOutputPose(frame.poses[sideIndex], frame.timestampMs,
+													m_config.minConfidence, m_config.holdOnDropoutMs,
+													m_heldPose[sideIndex], resolved);
 
-		VmcRetarget::buildPose(streamedPoses, bSideValid, frame.head, lengths, m_vmcPose);
+			bSideValid[sideIndex]= resolveVmcOutputPose(resolved, bPoseSent, m_config.vmcFreezeOnLoss,
+														m_lastVmcPose[sideIndex], streamedPoses[sideIndex]);
+		}
+
+		if (m_config.avatarSkeleton != nullptr)
+		{
+			// The retarget consumes the RESOLVED poses, so the hold and the
+			// freeze above shape what the avatar does on a dropout exactly as
+			// they shape the measured-length stream
+			m_avatarRetarget.solve(streamedPoses, bSideValid, frame.head, frame.timestampMs, m_config.bodyDimensions,
+								   *m_config.avatarSkeleton, m_config.avatarRetarget, m_avatarPose);
+			VmcRetarget::buildPoseFromAvatar(m_avatarPose, *m_config.avatarSkeleton, m_vmcPose);
+		}
+		else
+		{
+			VmcRetarget::VmcBodyLengths lengths;
+			lengths.shoulderWidthMeters= m_config.shoulderWidthMeters;
+			lengths.upperArmLengthMeters= m_config.upperArmLengthMeters;
+			lengths.forearmLengthMeters= m_config.forearmLengthMeters;
+			lengths.headOffsetMeters= m_config.vmcHeadOffsetMeters;
+
+			VmcRetarget::buildPose(streamedPoses, bSideValid, frame.head, lengths, m_vmcPose);
+		}
+
+		bTracking= bSideValid[0] || bSideValid[1];
 	}
 
 	// /VMC/Ext/OK ,iiii -- loaded, calibration state, calibration mode,
@@ -233,7 +265,6 @@ void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const Cloc
 	// rig calibrates itself against a printed board long before it streams, so
 	// there is no receiver-driven calibration step for anyone to wait on.
 	{
-		const bool bTracking= bSideValid[0] || bSideValid[1];
 		OscMessage& okMessage= m_bundle.addMessage(k_vmcOkAddress);
 		okMessage.addInt32(1).addInt32(3).addInt32(0).addInt32(bTracking ? 1 : 0);
 	}
@@ -276,28 +307,43 @@ void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const Cloc
 
 void OscStreamer::appendVmcBlendMessages(const TrackingFrameResult& frame)
 {
-	const bool bFacePresent= frame.face.present;
+	const bool bFacePresent= frame.face.isPresent();
 	if (!bFacePresent && !m_bFaceWasPresent)
+		return;
+	const FaceProfileBinding* binding= m_config.faceBinding.get();
+	if (binding == nullptr)
+		return;
+	// Values evaluated under another binding name other targets; the next
+	// frame carries this binding's
+	if (bFacePresent && frame.face.outputs.generation != binding->getGeneration())
 		return;
 	m_bFaceWasPresent= bFacePresent;
 
-	if (m_rawFaceMap == nullptr)
-		m_rawFaceMap= AvatarFaceMap::buildRaw();
-	const AvatarFaceMap& faceMap= m_config.faceMap != nullptr ? *m_config.faceMap : *m_rawFaceMap;
-
-	// A stopped stream sends zeros once: a receiver holds the last value of a
+	// A stopped face sends zeros once: a receiver holds the last value of a
 	// blendshape that stops arriving, which would freeze a blink mid-closure
+	const std::vector<std::string>& names= binding->getWireNames();
 	if (bFacePresent)
-		faceMap.evaluate(frame.face.blendshapes, m_blendValues);
+		binding->combineWire(frame.face.outputs.targetValues, m_blendValues);
 	else
-		m_blendValues.assign(faceMap.getOutputs().size(), 0.f);
+		m_blendValues.assign(names.size(), 0.f);
 
-	for (size_t outputIndex= 0; outputIndex < faceMap.getOutputs().size(); ++outputIndex)
+	for (size_t nameIndex= 0; nameIndex < names.size(); ++nameIndex)
 	{
 		OscMessage& blendMessage= m_bundle.addMessage(k_vmcBlendValueAddress);
-		blendMessage.addString(faceMap.getOutputs()[outputIndex].name.c_str()).addFloat(m_blendValues[outputIndex]);
+		blendMessage.addString(names[nameIndex].c_str()).addFloat(m_blendValues[nameIndex]);
+	}
+	// The names a previous binding sent and this one does not relax too
+	for (const std::string& sentName : m_sentBlendNames)
+	{
+		if (std::find(names.begin(), names.end(), sentName) == names.end())
+		{
+			OscMessage& blendMessage= m_bundle.addMessage(k_vmcBlendValueAddress);
+			blendMessage.addString(sentName.c_str()).addFloat(0.f);
+		}
 	}
 	m_bundle.addMessage(k_vmcBlendApplyAddress);
+	if (m_sentBlendNames != names)
+		m_sentBlendNames= names;
 }
 
 void OscStreamer::appendVmcAvatarMessage(const ClockTimePoint& now)

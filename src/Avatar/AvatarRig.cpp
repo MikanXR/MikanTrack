@@ -52,6 +52,9 @@ std::string avatarRigToJson(const AvatarRigSettings& settings)
 	}
 	j["boneNodes"]= boneNodes;
 	j["rotationTrimDegrees"]= trims;
+	j["restBlendMs"]= settings.restBlendMs;
+	j["faceProfiles"]= settings.faceProfiles;
+	j["activeFaceProfile"]= settings.activeFaceProfile;
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -67,6 +70,10 @@ std::string avatarRigToJson(const AvatarRigSettings& settings)
 			{"curlGain", side.curlGain},
 			{"splayGain", side.splayGain},
 			{"fingerEnabled", fingers},
+			{"restElbowOffset", vec3ToJson(side.restElbowOffset)},
+			{"restWristOffset", vec3ToJson(side.restWristOffset)},
+			{"restPalmNormal", vec3ToJson(side.restPalmNormal)},
+			{"restFingerCurlDegrees", side.restFingerCurlDegrees},
 		};
 	}
 	return j.dump(2);
@@ -107,6 +114,14 @@ bool avatarRigFromJson(const std::string& text, AvatarRigSettings& outSettings, 
 			}
 			settings.rotationTrimDegrees[(int)bone]= vec3FromJson(it.value(), glm::vec3(0.f));
 		}
+		settings.restBlendMs= j.value("restBlendMs", settings.restBlendMs);
+		const json& faceProfiles= j.value("faceProfiles", json::array());
+		for (const json& id : faceProfiles)
+		{
+			if (id.is_string())
+				settings.faceProfiles.push_back(id.get<std::string>());
+		}
+		settings.activeFaceProfile= j.value("activeFaceProfile", std::string());
 
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
@@ -123,6 +138,10 @@ bool avatarRigFromJson(const std::string& text, AvatarRigSettings& outSettings, 
 			const json& fingers= sj.value("fingerEnabled", json::array());
 			for (int finger= 0; finger < FINGER_COUNT && finger < (int)fingers.size(); ++finger)
 				side.fingerEnabled[finger]= fingers[finger].get<bool>();
+			side.restElbowOffset= vec3FromJson(sj.value("restElbowOffset", json()), side.restElbowOffset);
+			side.restWristOffset= vec3FromJson(sj.value("restWristOffset", json()), side.restWristOffset);
+			side.restPalmNormal= vec3FromJson(sj.value("restPalmNormal", json()), side.restPalmNormal);
+			side.restFingerCurlDegrees= sj.value("restFingerCurlDegrees", side.restFingerCurlDegrees);
 		}
 	}
 	catch (const std::exception& exception)

@@ -238,8 +238,10 @@ static int runAvatarRetargetTest(const TestArgs&)
 			bVmcRest&= nearlyEqual(unityToWorldPosition(bone.localPosition),
 								   rest.skeleton->getBone(humanoid).restOffsetFromParentWorld, kTolerance);
 		}
-		check(bVmcRest && streamedCount == VmcRetarget::VMC_BONE_COUNT,
-			  "(a) the VMC stream of the rest pose is all 39 bones at identity with the avatar's own offsets");
+		// The torso and neck bones are left to the direct retarget, which is
+		// the only solver that places them
+		check(bVmcRest && streamedCount == VmcRetarget::VMC_BONE_COUNT - 4,
+			  "(a) the VMC stream of the rest pose is all 39 arm, hand and head bones at identity with the avatar's own offsets");
 		check(VmcRetarget::humanoidBoneForVmc(VmcRetarget::eVmcBone::LeftThumbProximal) == B::LeftThumbProximal &&
 				  VmcRetarget::humanoidBoneForVmc(VmcRetarget::eVmcBone::RightLittleDistal) == B::RightLittleDistal &&
 				  VmcRetarget::humanoidBoneForVmc(VmcRetarget::eVmcBone::Head) == B::Head,

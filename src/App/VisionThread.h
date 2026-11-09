@@ -11,6 +11,9 @@
 #include "BodyPoseSolver.h"
 #include "CameraContext.h"
 #include "DiagnosticDump.h"
+#include "DirectRetarget.h"
+#include "FaceProfileRunner.h"
+#include "FaceRecorder.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
 #include "HandBoneCalibrator.h"
@@ -20,8 +23,8 @@
 #include "TrackingTypes.h"
 
 class AppConfig;
-class AvatarFaceMap;
 class AvatarSkeleton;
+class AudioService;
 class FaceService;
 class VideoCaptureSystem;
 class OscStreamer;
@@ -38,7 +41,7 @@ class VisionThread
 {
 public:
 	VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
-				 AppConfig* config);
+				 AudioService* audioService, AppConfig* config);
 	~VisionThread();
 
 	// Sizes the per-camera contexts from the config's camera count and spawns
@@ -64,9 +67,12 @@ public:
 	// Returns false if nothing new arrived since the last call.
 	bool fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFrame);
 
-	// Copies the newest fused (world-space, smoothed) tracking result.
-	// Returns false if nothing new arrived since the last call.
-	bool fetchFusedResult(TrackingFrameResult& outResult);
+	// Copies the newest fused (world-space, smoothed) tracking result, and
+	// in direct mode the avatar pose the direct retarget solved for it (an
+	// invalid pose otherwise). Returns false if nothing new arrived since
+	// the last call.
+	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr,
+						  DirectRetarget::SolveState* outDirectState= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
 	int getDominantCamera(eHandSide side) const { return m_dominantCamera[(int)side].load(); }
@@ -90,15 +96,16 @@ public:
 	// config refresh, which would end a recording. Survives a stop/start.
 	void setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skeleton, const AvatarRigSettings& rig);
 
-	// The loaded avatar's identity and face map, for the VMC output's
-	// /VMC/Ext/VRM announcement and blendshape names. Applied like the
-	// skeleton; an empty path clears both.
+	// The loaded avatar's identity and face profile binding, for the VMC
+	// output's /VMC/Ext/VRM announcement and the face evaluation. Applied like
+	// the skeleton; an empty path clears the identity. A null binding keeps
+	// the no-avatar Auto profile.
 	struct AvatarIdentity
 	{
 		std::string path;   // UTF-8
 		std::string title;
 		std::string sha256; // lowercase hex of the file bytes
-		std::shared_ptr<const AvatarFaceMap> faceMap;
+		std::shared_ptr<const FaceProfileBinding> faceBinding;
 	};
 	void setAvatarIdentity(const AvatarIdentity& identity);
 
@@ -141,7 +148,7 @@ public:
 
 	// The captured rest angles for both sides (RAW multi-view angles from the
 	// fuse that serviced the capture; a side is only captured when it was
-	// stereo-quality at that moment)
+	// stereo-quality at that moment, or fitted at all on a one-camera rig)
 	struct RestPoseCapture
 	{
 		std::array<std::array<FingerAngles, FINGER_COUNT>, 2> angles{};
@@ -149,6 +156,19 @@ public:
 	};
 	// Fetches a completed capture; returns false if none is pending
 	bool fetchRestPoseCapture(RestPoseCapture& outFused);
+
+	// Direct retarget: captures the solver's current filtered measurements
+	// as the neutral pose (the fingers need no zero there), and while the
+	// phone streams captures the face anchor with it (fetched separately,
+	// above). The UI fetches the capture and persists it in the direct
+	// config. False from fetch until a capture lands; a request with no
+	// solved torso is dropped.
+	struct NeutralCapture
+	{
+		DirectNeutralPose neutral;
+	};
+	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
+	bool fetchNeutralCapture(NeutralCapture& outCapture);
 
 	// Hand bone calibration: measures the user's own skeleton from the
 	// stereo-triangulated landmarks over a sampling window. Unlike the rest
@@ -193,6 +213,8 @@ public:
 	uint64_t getRecordingBytes() const { return m_recorder != nullptr ? m_recorder->getBytesWritten() : 0; }
 	bool didLastRecordingAbort() const { return m_recorder != nullptr && m_recorder->wasAborted(); }
 	bool isRecordingRawFrames() const { return m_frameRecorder != nullptr && m_frameRecorder->isRecording(); }
+	// Seconds of audio the recording's sidecar holds, or -1 while none is written
+	double getAudioRecordingSeconds() const;
 	int64_t getRecordedFrameCount() const
 	{
 		return m_frameRecorder != nullptr ? m_frameRecorder->getFramesWritten() : 0;
@@ -209,9 +231,12 @@ public:
 	std::string getLastRecordingPath();
 
 	// Diagnostic dump (F9): the vision thread writes its rolling state history,
-	// the current camera frames (raw + annotated PNGs) and the live config to
-	// dumpDir on its next loop iteration
-	void requestDiagnosticDump(const std::string& dumpDir);
+	// the current camera frames (raw + annotated PNGs), the live config, the
+	// frame as a one-frame recording and, in direct mode, the posed avatar
+	// to dumpDir on its next loop iteration. avatarRender: the avatar as the
+	// UI rendered it from the direct camera this frame, saved beside the
+	// frame it should match (empty for none).
+	void requestDiagnosticDump(const std::string& dumpDir, const cv::Mat& avatarRender= cv::Mat());
 	// Directory of the last completed dump ("" until one succeeds)
 	std::string getLastDumpPath();
 
@@ -254,6 +279,9 @@ private:
 		// The frame's output: fused world space, or camera 0's camera-space
 		// passthrough when no calibrated camera contributed
 		TrackingFrameResult outputResult;
+		// Direct mode this iteration: the output is the direct camera's result
+		// and the direct retarget poses the avatar from it
+		bool bDirect= false;
 		// The recording record under assembly, live only while recording
 		bool bRecordingThisFrame= false;
 		RecordedFrame recordFrame;
@@ -269,19 +297,31 @@ private:
 	// Cross-camera fusion (or the camera-space passthrough) and the fused
 	// checksum tap
 	void runFusionStage(IterationState& iteration);
+	// Direct mode: the direct camera's result as the output (the camera is
+	// the world), recorded as a passthrough of that camera, in place of the
+	// fusion, IMU and body-solve stages
+	bool isDirectModeActive() const;
+	void runDirectStage(IterationState& iteration);
+	// The direct retarget over the direct camera's result, after the face
+	// stage so the phone head reaches it; an invalid pose without a skeleton
+	void solveDirectPose(IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
 	// dominant camera, per-camera confidence, auto hand-scale)
 	void runBodySolveStage(IterationState& iteration);
-	// OSC send and the fused-result publish
+	// The face profile evaluation, the OSC send and the fused-result publish
 	void runOutputStage(IterationState& iteration);
-	// The face stream's blendshapes and head onto the output, phone head
-	// winning over the camera head while the stream is live
+	// The microphone's visemes onto the output's viseme source
+	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
+	// The face stream's blendshapes onto the output's phone source, and its
+	// head, which wins over the camera head while the stream is live and
+	// tracked. Fills the viseme source beside it.
 	void applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead);
-	// A face sample with no camera frame this iteration still goes out: the
-	// stream runs at the phone's rate, faster than the cameras, and must keep
-	// flowing with the cameras stopped. Returns true when it produced output.
+	// A new face or mouth sample with no camera frame this iteration still
+	// goes out: the sources run at their own rates, faster than the cameras,
+	// and must keep flowing with the cameras stopped. Returns true when it
+	// produced output.
 	bool runFaceOnlyOutput(IterationState& iteration, double nowMs);
 	// Bone calibration window and rest-pose capture
 	void runCalibrationCaptures();
@@ -324,6 +364,9 @@ private:
 	// Phone face stream. Owned by App; this thread drains it.
 	FaceService* m_faceService= nullptr;
 	uint64_t m_lastFaceSequence= 0;
+	// Microphone mouth stage. Owned by App; this thread reads its sample.
+	AudioService* m_audioService= nullptr;
+	uint64_t m_lastMouthSequence= 0;
 	// The timestamp of the last output a camera produced, so a face-only
 	// frame can tell when the hands it repeats have gone stale
 	double m_lastCameraOutputMs= -1.0;
@@ -348,6 +391,8 @@ private:
 	AvatarIdentity m_pendingAvatarIdentity;
 	std::atomic<bool> m_bAvatarIdentityChanged{false};
 	AvatarIdentity m_avatarIdentity;
+	// The face profile over the output frames (vision thread only)
+	FaceProfileRunner m_faceRunner;
 
 	std::thread m_thread;
 	std::atomic_bool m_bRunning{false};
@@ -365,10 +410,25 @@ private:
 	static constexpr int k_maxReportedCameras= 8;
 	std::atomic<float> m_observationConfidence[k_maxReportedCameras * 2];
 
+	// A mouth sample older than this is a stage that stopped, not a mouth
+	static constexpr double k_mouthStaleMs= 1000.0;
+
 	// Fused result handoff (mutex-guarded, latest-wins)
 	std::mutex m_fusedMutex;
 	TrackingFrameResult m_fusedResult;
+	AvatarPose m_fusedDirectPose;
+	DirectRetarget::SolveState m_fusedDirectState;
 	bool m_bFusedFresh= false;
+
+	// Direct retarget (single camera, no world calibration): the solver and
+	// its pose for the frame, and the neutral capture handoff
+	DirectRetarget m_directRetarget;
+	DirectRetargetConfig m_directConfig;
+	AvatarPose m_directPose;
+	std::atomic_bool m_bNeutralCaptureRequested{false};
+	std::mutex m_neutralCaptureMutex;
+	NeutralCapture m_capturedNeutral;
+	bool m_bNeutralCaptureReady= false;
 
 	// Rest-pose capture handoff
 	std::atomic_bool m_bRestPoseCaptureRequested{false};
@@ -409,6 +469,13 @@ private:
 	std::string m_requestedRecordingPath;
 	std::string m_lastRecordingPath;
 	int64_t m_recordingSeq= 0;
+	// The audio sidecar's stream, so a mouth frame from another stream (the
+	// device reopened) records without an index into it
+	bool m_bRecordingAudio= false;
+	uint32_t m_recordingAudioEpoch= 0;
+	// The face sidecar's writer, and the last phone sample it took
+	FaceRecorder m_faceRecorder;
+	uint64_t m_lastRecordedFaceSequence= 0;
 
 	// Diagnostic dump: history lives on the vision thread; the request path
 	// and completion path are the only cross-thread strings (mutex-guarded)
@@ -416,5 +483,6 @@ private:
 	std::atomic_bool m_bDumpRequested{false};
 	std::mutex m_dumpMutex;
 	std::string m_requestedDumpDir;
+	cv::Mat m_requestedAvatarRender;
 	std::string m_lastDumpPath;
 };

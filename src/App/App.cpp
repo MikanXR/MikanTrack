@@ -12,9 +12,12 @@
 #include "imgui_impl_sdl2.h"
 
 #include "AppConfig.h"
-#include "AvatarFaceMap.h"
 #include "AvatarSkeleton.h"
 #include "FrameTimer.h"
+#include "AudioService.h"
+#include "FaceAutoProfile.h"
+#include "FaceProfileBinding.h"
+#include "FaceProfileLibrary.h"
 #include "FaceService.h"
 #include "GlobalSettings.h"
 #include "ImuService.h"
@@ -34,6 +37,9 @@ App* App::m_instance= nullptr;
 // Rig edits arrive per frame while a control is dragged; the sidecar is
 // written once they settle
 static constexpr float k_avatarRigAutoSaveSeconds= 3.f;
+// Face profile edits arrive per keystroke; the file is written once they
+// settle, the same way
+static constexpr float k_faceProfileAutoSaveSeconds= 3.f;
 
 App::App()
 {
@@ -166,8 +172,13 @@ bool App::startup()
 	// activated
 	m_imuService= std::make_unique<ImuService>();
 	m_faceService= std::make_unique<FaceService>();
+	m_audioService= std::make_unique<AudioService>();
 	m_visionThread= std::make_unique<VisionThread>(m_videoCapture.get(), m_imuService.get(), m_faceService.get(),
-												   m_config.get());
+												   m_audioService.get(), m_config.get());
+
+	m_faceProfiles= std::make_unique<FaceProfileLibrary>();
+	m_faceProfiles->refresh();
+	rebuildFaceBinding();
 
 	m_mainWindow= std::make_unique<MainWindow>(this);
 
@@ -186,6 +197,23 @@ void App::applyFaceConfig()
 	m_faceService->setConfig(faceConfig);
 }
 
+void App::applyAudioConfig()
+{
+	if (m_audioService == nullptr || m_config == nullptr)
+		return;
+
+	AudioServiceConfig audioConfig;
+	audioConfig.enabled= m_config->audio.enabled;
+	audioConfig.deviceName= m_config->audio.deviceName;
+	audioConfig.gainDb= m_config->audio.gainDb;
+	audioConfig.gateDbfs= m_config->audio.gateDbfs;
+	audioConfig.model= m_config->audio.model;
+	audioConfig.profilePath= m_config->audio.profilePath;
+	audioConfig.smoothingMs= m_config->audio.smoothingMs[(size_t)m_config->audio.model];
+	audioConfig.engineSmoothing= m_config->audio.ovrSmoothing;
+	m_audioService->setConfig(audioConfig);
+}
+
 bool App::activateProject(const std::filesystem::path& projectFile)
 {
 	// Stop the config's consumers before loadProject mutates it in place
@@ -197,6 +225,7 @@ bool App::activateProject(const std::filesystem::path& projectFile)
 	{
 		m_imuService->shutdown();
 		m_faceService->shutdown();
+		m_audioService->shutdown();
 		m_appState= eAppState::MainMenu;
 		return false;
 	}
@@ -205,6 +234,8 @@ bool App::activateProject(const std::filesystem::path& projectFile)
 	m_imuService->startup();
 	m_faceService->startup();
 	applyFaceConfig();
+	m_audioService->startup();
+	applyAudioConfig();
 	m_visionThread->start();
 	m_mainWindow->tryRestoreVideoDeviceFromConfig();
 	loadConfiguredAvatar();
@@ -240,6 +271,7 @@ void App::returnToMainMenu()
 	m_visionThread->stop();
 	m_imuService->shutdown();
 	m_faceService->shutdown();
+	m_audioService->shutdown();
 	for (int cameraIndex= 0; cameraIndex < (int)m_videoCapture->getCameraSlotCount(); ++cameraIndex)
 		m_videoCapture->closeDevice(cameraIndex);
 	m_appState= eAppState::MainMenu;
@@ -253,6 +285,7 @@ void App::discardNewProjectAndReturnToMenu()
 	m_visionThread->stop();
 	m_imuService->shutdown();
 	m_faceService->shutdown();
+	m_audioService->shutdown();
 	for (int cameraIndex= 0; cameraIndex < (int)m_videoCapture->getCameraSlotCount(); ++cameraIndex)
 		m_videoCapture->closeDevice(cameraIndex);
 
@@ -300,6 +333,7 @@ bool App::loadAvatar(const std::filesystem::path& path)
 
 	// The previous avatar's pending rig edits belong to its own sidecar
 	saveAvatarRigIfDirty();
+	saveFaceProfileIfDirty();
 
 	m_avatarModel= result.model;
 	m_avatarRigLoadWarnings.clear();
@@ -309,14 +343,22 @@ bool App::loadAvatar(const std::filesystem::path& path)
 	m_avatarLoadError.clear();
 	++m_avatarGeneration;
 	m_visionThread->setAvatarSkeleton(m_avatarSkeleton, m_avatarRig);
-
-	VisionThread::AvatarIdentity identity;
-	identity.path= m_avatarModel->sourcePath;
-	identity.title= m_avatarModel->meta.name;
-	identity.sha256= m_avatarModel->sha256Hex;
-	identity.faceMap= AvatarFaceMap::build(*m_avatarModel);
-	m_visionThread->setAvatarIdentity(identity);
+	rebuildFaceBinding();
+	applyAvatarElbowSeed();
 	return true;
+}
+
+void App::pushAvatarIdentity()
+{
+	VisionThread::AvatarIdentity identity;
+	if (m_avatarModel != nullptr)
+	{
+		identity.path= m_avatarModel->sourcePath;
+		identity.title= m_avatarModel->meta.name;
+		identity.sha256= m_avatarModel->sha256Hex;
+	}
+	identity.faceBinding= m_faceBinding;
+	m_visionThread->setAvatarIdentity(identity);
 }
 
 void App::rebuildAvatarSkeleton()
@@ -328,6 +370,31 @@ void App::rebuildAvatarSkeleton()
 							   m_avatarSkeleton->getWarnings().end());
 	for (const std::string& warning : m_avatarRigWarnings)
 		MIKAN_LOG_WARNING("App::rebuildAvatarSkeleton") << warning;
+}
+
+void App::applyAvatarElbowSeed()
+{
+	// The solver reads the seed from the config rather than the avatar, so a
+	// recording carries it and replays with it. Written only on change, so
+	// reloading the same avatar leaves the config clean.
+	bool bChanged= false;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		glm::vec3 seed(0.f);
+		if (m_avatarSkeleton != nullptr)
+		{
+			const float upperArmLength= m_avatarSkeleton->getUpperArmLength((eHandSide)sideIndex);
+			if (upperArmLength > 1e-3f)
+				seed= m_avatarRig.sides[sideIndex].elbowHintOffset / upperArmLength;
+		}
+		if (m_config->body.elbowSeedPerUpperArm[sideIndex] != seed)
+		{
+			m_config->body.elbowSeedPerUpperArm[sideIndex]= seed;
+			bChanged= true;
+		}
+	}
+	if (bChanged)
+		m_config->markDirty();
 }
 
 void App::setAvatarRig(const AvatarRigSettings& rig)
@@ -342,7 +409,13 @@ void App::setAvatarRig(const AvatarRigSettings& rig)
 	if (bMappingChanged)
 		rebuildAvatarSkeleton();
 	m_visionThread->setAvatarSkeleton(m_avatarSkeleton, m_avatarRig);
+	applyAvatarElbowSeed();
 
+	markAvatarRigDirty();
+}
+
+void App::markAvatarRigDirty()
+{
 	if (!m_bAvatarRigDirty)
 		m_avatarRigSecondsSinceDirty= 0.f;
 	m_bAvatarRigDirty= true;
@@ -370,6 +443,7 @@ void App::saveAvatarRigIfDirty()
 void App::clearAvatar()
 {
 	saveAvatarRigIfDirty();
+	saveFaceProfileIfDirty();
 	if (m_avatarModel == nullptr && m_avatarLoadError.empty())
 		return;
 	m_avatarModel= nullptr;
@@ -380,7 +454,166 @@ void App::clearAvatar()
 	m_avatarLoadError.clear();
 	++m_avatarGeneration;
 	m_visionThread->setAvatarSkeleton(nullptr, m_avatarRig);
-	m_visionThread->setAvatarIdentity(VisionThread::AvatarIdentity());
+	rebuildFaceBinding();
+	// The elbow seed outlives its avatar on purpose: closing a project clears
+	// the avatar after the save, and zeroing the seed there would dirty the
+	// saved config every time, while the seed itself is only a prior
+}
+
+bool App::isActiveFaceProfileAuto() const
+{
+	return isAutoFaceProfileId(m_activeFaceProfile.id);
+}
+
+bool App::isActiveFaceProfileMissing() const
+{
+	const std::string& id= m_avatarRig.activeFaceProfile;
+	return m_avatarModel != nullptr && !id.empty() && !isAutoFaceProfileId(id) && m_faceProfiles->find(id) == nullptr;
+}
+
+void App::rebuildFaceBinding()
+{
+	// Pending edits belong to the profile that was active
+	saveFaceProfileIfDirty();
+	m_faceProfileErrors.clear();
+	const AvatarModel* model= m_avatarModel.get();
+	const std::string id= model != nullptr ? m_avatarRig.activeFaceProfile : std::string();
+	const FaceProfile* stored= !id.empty() && !isAutoFaceProfileId(id) ? m_faceProfiles->find(id) : nullptr;
+
+	std::shared_ptr<const FaceProfileBinding> binding;
+	if (stored != nullptr)
+	{
+		m_activeFaceProfile= *stored;
+		binding= compileFaceBinding(m_activeFaceProfile, model, &m_faceProfileErrors);
+	}
+	else
+	{
+		m_activeFaceProfile= makeAutoFaceProfile(model);
+	}
+	// A profile that never compiled runs Auto, with its errors shown
+	if (binding == nullptr)
+		binding= makeAutoFaceBinding(model);
+	m_faceBinding= binding;
+	if (m_visionThread != nullptr)
+		pushAvatarIdentity();
+}
+
+void App::setActiveFaceProfile(const std::string& id)
+{
+	const std::string activeId= isAutoFaceProfileId(id) ? std::string() : id;
+	if (m_avatarModel == nullptr || m_avatarRig.activeFaceProfile == activeId)
+		return;
+	saveFaceProfileIfDirty();
+	m_avatarRig.activeFaceProfile= activeId;
+	markAvatarRigDirty();
+	rebuildFaceBinding();
+}
+
+void App::assignFaceProfile(const std::string& id)
+{
+	if (m_avatarModel == nullptr || id.empty() || isAutoFaceProfileId(id))
+		return;
+	std::vector<std::string>& assigned= m_avatarRig.faceProfiles;
+	if (std::find(assigned.begin(), assigned.end(), id) != assigned.end())
+		return;
+	assigned.push_back(id);
+	markAvatarRigDirty();
+}
+
+void App::unassignFaceProfile(const std::string& id)
+{
+	if (m_avatarModel == nullptr)
+		return;
+	std::vector<std::string>& assigned= m_avatarRig.faceProfiles;
+	assigned.erase(std::remove(assigned.begin(), assigned.end(), id), assigned.end());
+	markAvatarRigDirty();
+	if (m_avatarRig.activeFaceProfile == id)
+		setActiveFaceProfile(std::string());
+}
+
+void App::editActiveFaceProfile(const FaceProfile& profile)
+{
+	if (isActiveFaceProfileAuto() || profile.id != m_activeFaceProfile.id)
+		return;
+	m_activeFaceProfile= profile;
+	std::shared_ptr<const FaceProfileBinding> binding=
+		compileFaceBinding(m_activeFaceProfile, m_avatarModel.get(), &m_faceProfileErrors);
+	// An edit that does not compile leaves the last good binding running
+	if (binding != nullptr)
+	{
+		m_faceBinding= binding;
+		pushAvatarIdentity();
+	}
+	if (!m_bFaceProfileDirty)
+		m_faceProfileSecondsSinceDirty= 0.f;
+	m_bFaceProfileDirty= true;
+}
+
+std::string App::createFaceProfile(const std::string& name)
+{
+	if (m_avatarModel == nullptr)
+		return std::string();
+	saveFaceProfileIfDirty();
+	const std::string id= m_faceProfiles->create(name);
+	if (!id.empty())
+	{
+		assignFaceProfile(id);
+		setActiveFaceProfile(id);
+	}
+	return id;
+}
+
+std::string App::duplicateFaceProfile(const FaceProfile& source, const std::string& name)
+{
+	if (m_avatarModel == nullptr)
+		return std::string();
+	saveFaceProfileIfDirty();
+	const std::string id= m_faceProfiles->duplicate(source, name);
+	if (!id.empty())
+	{
+		assignFaceProfile(id);
+		setActiveFaceProfile(id);
+	}
+	return id;
+}
+
+bool App::renameFaceProfile(const std::string& id, const std::string& name)
+{
+	saveFaceProfileIfDirty();
+	if (!m_faceProfiles->rename(id, name))
+		return false;
+	if (m_activeFaceProfile.id == id)
+		m_activeFaceProfile.name= name;
+	return true;
+}
+
+bool App::deleteFaceProfile(const std::string& id)
+{
+	if (m_activeFaceProfile.id == id)
+		m_bFaceProfileDirty= false;
+	const bool bRemoved= m_faceProfiles->remove(id);
+	if (m_avatarRig.activeFaceProfile == id)
+		rebuildFaceBinding();
+	return bRemoved;
+}
+
+void App::updateFaceProfileAutoSave(float deltaSeconds)
+{
+	if (!m_bFaceProfileDirty)
+		return;
+	m_faceProfileSecondsSinceDirty+= deltaSeconds;
+	if (m_faceProfileSecondsSinceDirty >= k_faceProfileAutoSaveSeconds)
+		saveFaceProfileIfDirty();
+}
+
+void App::saveFaceProfileIfDirty()
+{
+	if (!m_bFaceProfileDirty)
+		return;
+	m_bFaceProfileDirty= false;
+	m_faceProfileSecondsSinceDirty= 0.f;
+	if (!isActiveFaceProfileAuto())
+		m_faceProfiles->save(m_activeFaceProfile);
 }
 
 void App::loadConfiguredAvatar()
@@ -456,6 +689,7 @@ void App::shutdown()
 	if (m_config != nullptr)
 		m_config->save();
 	saveAvatarRigIfDirty();
+	saveFaceProfileIfDirty();
 
 	if (m_visionThread != nullptr)
 	{
@@ -473,6 +707,12 @@ void App::shutdown()
 	{
 		m_faceService->shutdown();
 		m_faceService= nullptr;
+	}
+
+	if (m_audioService != nullptr)
+	{
+		m_audioService->shutdown();
+		m_audioService= nullptr;
 	}
 
 	if (m_videoCapture != nullptr)
@@ -552,4 +792,5 @@ void App::tick(float deltaSeconds)
 
 	m_config->updateAutoSave(deltaSeconds);
 	updateAvatarRigAutoSave(deltaSeconds);
+	updateFaceProfileAutoSave(deltaSeconds);
 }

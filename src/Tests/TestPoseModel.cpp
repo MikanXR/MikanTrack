@@ -1,7 +1,7 @@
 #include "TestCommon.h"
 
 #include "PoseDetector.h"
-#include "RtmPoseBodyModel.h"
+#include "RtmPoseModel.h"
 
 // Ground truth from the Python reference implementation of the same pipeline
 // (rtm_demo.jpg with the whole image as the person box), which is how the
@@ -51,13 +51,47 @@ static int runPoseModelTest(const TestArgs&)
 	}
 	MIKAN_LOG_INFO("test-posemodel") << "person detector loaded (ep=" << detector.activeEp() << ")";
 
-	RtmPoseBodyModel rtmPose;
+	RtmPoseModel rtmPose;
 	if (!rtmPose.load("models/rtmpose_body.onnx", "directml"))
 	{
 		MIKAN_LOG_ERROR("test-posemodel") << "RTMPose model failed to load";
 		return 1;
 	}
+	// The MMDeploy export leaves the keypoint count dynamic, so it is only
+	// known after the first estimate; checked below with the decode
+	if (rtmPose.hasDepth())
+	{
+		MIKAN_LOG_ERROR("test-posemodel") << "RTMPose body model read with a depth axis";
+		return 1;
+	}
 	MIKAN_LOG_INFO("test-posemodel") << "RTMPose model loaded (ep=" << rtmPose.activeEp() << ")";
+
+	// The whole-body 3D model is the single-camera direct mode's backend.
+	// Its sizes are read from the tensors, so a load that reports 133
+	// keypoints with a depth axis is the contract check; the decode shares
+	// every line with the body model's, which the reference cross-checks.
+	RtmPoseModel rtmw3d;
+	const bool bHaveRtmw3d= std::filesystem::exists("models/rtmw3d_wholebody.onnx");
+	if (bHaveRtmw3d)
+	{
+		if (!rtmw3d.load("models/rtmw3d_wholebody.onnx", "directml"))
+		{
+			MIKAN_LOG_ERROR("test-posemodel") << "RTMW3D model failed to load";
+			return 1;
+		}
+		if (rtmw3d.getKeypointCount() != WHOLEBODY_KEYPOINT_COUNT || !rtmw3d.hasDepth())
+		{
+			MIKAN_LOG_ERROR("test-posemodel") << "RTMW3D model read as " << rtmw3d.getKeypointCount()
+											  << " keypoints, depth " << rtmw3d.hasDepth();
+			return 1;
+		}
+		MIKAN_LOG_INFO("test-posemodel") << "RTMW3D model loaded (ep=" << rtmw3d.activeEp() << ")";
+	}
+	else
+	{
+		MIKAN_LOG_WARNING("test-posemodel")
+			<< "models/rtmw3d_wholebody.onnx missing - SKIPPING the whole-body check (re-run InitialSetup_x64.bat)";
+	}
 
 	// A gradient frame with a bright vertical bar: deterministic, cheap, and
 	// enough structure to exercise the full pre/postprocess path
@@ -83,9 +117,9 @@ static int runPoseModelTest(const TestArgs&)
 	RtmPoseResult rtmResult;
 	rtmPose.estimate(referenceImage, glm::vec2(0.f, 0.f),
 					 glm::vec2((float)referenceImage.cols, (float)referenceImage.rows), rtmResult);
-	if (!rtmResult.valid)
+	if (!rtmResult.valid || rtmResult.keypointCount != COCO_KEYPOINT_COUNT)
 	{
-		MIKAN_LOG_ERROR("test-posemodel") << "RTMPose produced no result on the reference image";
+		MIKAN_LOG_ERROR("test-posemodel") << "RTMPose produced no 17-keypoint result on the reference image";
 		return 1;
 	}
 
@@ -96,7 +130,7 @@ static int runPoseModelTest(const TestArgs&)
 	for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
 	{
 		const ReferenceKeypoint& expected= k_rtmReference[keypoint];
-		const float error= glm::length(rtmResult.points[keypoint] - glm::vec2(expected.x, expected.y));
+		const float error= glm::length(glm::vec2(rtmResult.points[keypoint]) - glm::vec2(expected.x, expected.y));
 		if (error > worstError)
 		{
 			worstError= error;
@@ -132,6 +166,26 @@ static int runPoseModelTest(const TestArgs&)
 		});
 		MIKAN_LOG_INFO("test-posemodel")
 			<< "person detector " << detectMs << " ms, RTMPose " << rtmMs << " ms";
+
+		if (bHaveRtmw3d)
+		{
+			RtmPoseResult wholeBodyResult;
+			const double rtmw3dMs= timeCalls([&]() {
+				rtmw3d.estimate(referenceImage, glm::vec2(0.f, 0.f),
+								glm::vec2((float)referenceImage.cols, (float)referenceImage.rows),
+								wholeBodyResult);
+			});
+			if (!wholeBodyResult.valid || !wholeBodyResult.hasDepth)
+			{
+				MIKAN_LOG_ERROR("test-posemodel") << "RTMW3D produced no result on the reference image";
+				return 1;
+			}
+			// The reference photo is a standing person facing the camera:
+			// the nose sits nearer than the hips, the depth axis's sign
+			const float noseDepth= wholeBodyResult.points[(int)eCocoKeypoint::NOSE].z;
+			MIKAN_LOG_INFO("test-posemodel")
+				<< "RTMW3D " << rtmw3dMs << " ms, nose depth relative to the hips " << noseDepth << " m";
+		}
 	}
 
 	MIKAN_LOG_INFO("test-posemodel") << "Pose model smoke test passed";

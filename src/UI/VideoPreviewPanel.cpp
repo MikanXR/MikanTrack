@@ -145,7 +145,9 @@ void VideoPreviewPanel::draw(const std::vector<const TrackingFrameResult*>& resu
 		{
 			if (result != nullptr)
 			{
-				HandOverlay::drawTrackingResult(m_lastDrawList, *result, pane.mapping, m_bShowDetectionBoxes);
+				const std::array<bool, 2>* handUsed=
+					!m_bShowAllHands && cameraIndex == m_handUseCamera ? &m_handUsed : nullptr;
+				HandOverlay::drawTrackingResult(m_lastDrawList, *result, pane.mapping, m_bShowDetectionBoxes, handUsed);
 				// Only body-pose cameras carry an observation, so this draws
 				// on exactly the camera the stage is enabled for
 				if (m_bShowBodyPose)

@@ -55,6 +55,8 @@ The lift is `cv::solvePnP` against a dynamic per-frame metric object model. Arti
 
 The solve is warm-started per side from the previous frame's rvec/tvec with `SOLVEPNP_ITERATIVE`, and cold-started with `SOLVEPNP_SQPNP`. ITERATIVE's cold-start DLT is ill-conditioned on near-planar point sets, and a flat hand posed by FK is exactly that, collapsing to near-zero or negative depth repeatedly until the hand curls. SQPnP has no planar degeneracy. A rare solve failure just skips camera space for the frame, and fusion's staleness window absorbs the gap.
 
+The solved camera-space points are then multiplied by that camera's per-side `liftDepthScale` (`cameras[i].liftDepthScale` in the config, `setDepthScale`, 1 by default), a similarity about the optical center that moves the hand along its rays and leaves the reprojection untouched. The landmark model's depth from one viewpoint carries a bias that depends on the view and the hand, measured 4 to 8 percent deep on a left hand from a front camera and 2 percent either way on the right, and the scale lands the lift on a depth measured another way (stereo offline, the desk plane in the single-camera wizard). In a multi-camera rig the lift only seeds fusion, so the scale matters there only through the single-view depth anchor below.
+
 `LandmarkTo3D` also fills the parametric `HandPose` (palm transform, finger angles, skeleton) and its `fkReprojectionPx` validation metric, the mean pixel error between the 2D landmarks and the FK hand rebuilt from the extracted pose.
 
 ## The hand pose model
@@ -63,6 +65,7 @@ The solve is warm-started per side from the previous frame's rvec/tvec with `SOL
 
 - `computePalmFrame`: palm center origin, +X toward the fingers, +Z out of the palmar surface, +Y completing right-handed (Ultraleap-compatible)
 - `computeFingerAngles`: per finger a `FingerAngles` of [`lateral`, `proximal`, `intermediate`, `distal`], all zero in the rest pose, with the two distal bends measured relative to their parent bone
+- `computeMetacarpalFingerAngles`: the same angles against each finger's own metacarpal as the zero instead of the skeleton's neutral directions, so a relaxed open hand reads zero with no capture: the single-camera direct retarget's convention (avatar.md), never the wire's
 - `computeSkeleton`: `HandSkeleton`, finger base positions in the palm frame plus phalanx lengths and the flat-hand neutral directions
 - `buildFingerJoints`: forward kinematics that exactly inverts `computeFingerAngles` given the same skeleton
 
@@ -105,6 +108,8 @@ The priors and guards:
 - a temporal prior holds the state near its prediction, scaled per second by `palmPosSigmaMPerS`, `palmRotSigmaRadPerS`, and `angleSigmaRadPerS`. It is a soft leash: strong measurements override it freely, so it binds only when the measurement is weak, which is exactly when the classic pipeline pops.
 
 - single-camera fits make the position prior anisotropic via `monoDepthPriorFactor` (0.2): tight along the observing camera's view ray, normal laterally. A mono fit's only depth signal is apparent scale, which carries the per-camera bias stereo exists to remove.
+
+- a side that has never been fitted from two views has no stereo depth for that hold to protect, and a free-angle fit to one camera's landmarks settles at a scale rather than a depth (measured 16 cm deep of the stereo truth from a front camera, where the same camera's PnP lift sat 4 cm deep). Until a second view arrives, the palm's along-ray coordinate is pulled toward that camera's own lift with `monoDepthAnchorSigmaM` (10 mm, `fusion.estimatorMonoDepthAnchorSigmaM` in the config, 0 disables). The anchor goes silent for good once the side has seen stereo, so a mono stretch in a multi-camera rig still holds the stereo depth. This is the single-camera rig's depth path, and `--replay-mono-baseline` is how it is measured.
 
 - one-sided quadratic joint-limit penalties (`jointLimitsEnabled`, `jointLimitSigmaRad`, limits from `angleLimits`) cost nothing inside the anatomical range and absorb single-finger landmark snaps.
 

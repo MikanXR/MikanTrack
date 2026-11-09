@@ -27,19 +27,25 @@ class AvatarSkeleton;
 //
 // FRAMES. The avatar frame is the world frame unchanged: the calibration board
 // fixes world +X forward, +Y toward the person's left and +Z up, which is a
-// right-handed reading of the same axes a Unity humanoid rests on. The torso
-// is deliberately NOT streamed, so it stays at the avatar's rest pose and any
-// torso yaw the person performs lands in the clavicle rotations, where a
-// receiver can see it.
+// right-handed reading of the same axes a Unity humanoid rests on. The
+// measured-length buildPose does not stream the torso, so it stays at the
+// avatar's rest pose and any torso yaw the person performs lands in the
+// clavicle rotations, where a receiver can see it.
 namespace VmcRetarget
 {
 // The bones this streams, named exactly as Unity's HumanBodyBones spells them
 // (which is what a VMC receiver matches on). Deliberately partial: this rig
-// measures an upper body, so legs, spine, neck, eyes and jaw are left to the
-// avatar's rest pose rather than being invented.
+// measures an upper body, so legs, eyes and jaw are left to the avatar's rest
+// pose rather than being invented. The torso and neck bones are on the list
+// but only a retargeted avatar pose that places them (the direct retarget's
+// lean) ever fills them.
 enum class eVmcBone : int
 {
 	Head= 0,
+	Spine,
+	Chest,
+	UpperChest,
+	Neck,
 
 	LeftShoulder,
 	LeftUpperArm,
@@ -165,8 +171,10 @@ eHumanoidBone humanoidBoneForVmc(eVmcBone bone);
 
 // Fills outPose from a retargeted avatar pose instead of the measured
 // lengths: each streamed bone's local rotation is its delta measured against
-// the nearest streamed ancestor's delta (the torso is never streamed, so an
-// arm hangs off the rest chest exactly as in buildPose), and its local
+// the nearest streamed ancestor's delta (the torso is streamed only when the
+// pose placed it: the direct retarget does, so an arm hangs off the leaned
+// torso, and the position retarget never does, so an arm hangs off the rest
+// chest exactly as in buildPose), and its local
 // position is the AVATAR's own rest offset from its humanoid parent, so a
 // receiver loading the same file keeps the character's proportions. Bones the
 // pose did not place, or the avatar lacks, are left out.

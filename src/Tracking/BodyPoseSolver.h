@@ -28,6 +28,11 @@ struct BodyDimensions
 	// collapses the forward direction (its whole signal is that it sits
 	// closer to the camera than the ears do).
 	float noseForwardMeters= 0.11f;
+	// Per side (left, right): where the elbow sits when the arm has no
+	// history, relative to the shoulder, in the world frame. Breaks the tie
+	// between two valid elbow candidates before the camera-distance prior.
+	bool bHasElbowSeed[2]= {false, false};
+	glm::vec3 elbowSeedOffsetMeters[2]{};
 };
 
 // Post-fusion world-space solve for the vision body pose: takes the fused
@@ -143,6 +148,20 @@ public:
 		const glm::vec3& shoulder, const glm::vec3& wrist,
 		float upperArmLength, float forearmLength,
 		const glm::vec3& target, glm::vec3& outElbow);
+
+	// The bone circle point that agrees with a camera ray AND stays near a
+	// target: the sum of the squared distance to the ray's line over
+	// raySigma and the squared distance to the target over targetSigma,
+	// minimized around the circle. Where the ray grazes the circle its
+	// nearest point is sharp and wins; where the ray pierces the circle's
+	// plane near its center every point is about as near the ray, and the
+	// target decides rather than noise. A non-positive sigma drops its term.
+	// Same sampling as the ray-only solve, so replay matches.
+	static bool solveElbowOnBoneCircleNear(
+		const glm::vec3& shoulder, const glm::vec3& wrist,
+		float upperArmLength, float forearmLength,
+		const glm::vec3& rayOrigin, const glm::vec3& rayDir, float raySigma,
+		const glm::vec3& target, float targetSigma, glm::vec3& outElbow);
 
 private:
 	// The bone circle itself, shared by the ray-picked and target-picked

@@ -2,10 +2,14 @@
 
 #include "glm/matrix.hpp"
 
-#include "AvatarFaceMap.h"
+#include "FaceAutoProfile.h"
+#include "FaceProfileRunner.h"
+#include "AvatarRetarget.h"
+#include "AvatarSkeleton.h"
 #include "AvatarTypes.h"
 #include "FaceHead.h"
 #include "OscStreamer.h"
+#include "SyntheticAvatar.h"
 
 // Synthetic tests for the VMC retarget. The whole conversion is pure, so every
 // case here is exact: a hand at the rest pose must emit identity rotations, and
@@ -678,7 +682,8 @@ static int runVmcTest(const TestArgs&)
 				boneNames.push_back(message.strings[0]);
 		}
 		check(bBonesWellFormed, "every bone message is ,sfffffff");
-		check(boneNames.size() == 39, "a fully tracked frame streams the head and all 38 body bones");
+		check(boneNames.size() == 39,
+			  "a measured-length frame streams 39 bones: the head, 8 arm bones and 30 finger bones");
 
 		std::sort(boneNames.begin(), boneNames.end());
 		check(std::adjacent_find(boneNames.begin(), boneNames.end()) == boneNames.end(),
@@ -733,9 +738,132 @@ static int runVmcTest(const TestArgs&)
 			  "finger bones use Unity's HumanBodyBones spelling");
 	}
 
+	// (i2) The torso and neck bones. They only go out when a pose places them,
+	// which the direct retarget does and the position retarget never does.
+	{
+		check(strcmp(boneName(eVmcBone::Spine), "Spine") == 0 && strcmp(boneName(eVmcBone::Chest), "Chest") == 0 &&
+				  strcmp(boneName(eVmcBone::UpperChest), "UpperChest") == 0 &&
+				  strcmp(boneName(eVmcBone::Neck), "Neck") == 0,
+			  "torso and neck bones use Unity's HumanBodyBones spelling");
+		check(humanoidBoneForVmc(eVmcBone::Spine) == eHumanoidBone::Spine &&
+				  humanoidBoneForVmc(eVmcBone::Chest) == eHumanoidBone::Chest &&
+				  humanoidBoneForVmc(eVmcBone::UpperChest) == eHumanoidBone::UpperChest &&
+				  humanoidBoneForVmc(eVmcBone::Neck) == eHumanoidBone::Neck,
+			  "torso and neck VMC bones name the matching humanoid bones");
+
+		// The synthetic rig has a spine, chest and neck but no upper chest
+		const AvatarModel model= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
+		OscStreamerConfig config;
+		config.maxRateHz= 0.f;
+		config.avatarSkeleton= std::make_shared<AvatarSkeleton>(model);
+		OscStreamer streamer;
+		streamer.setConfig(config);
+
+		// A direct pose leaning 20 degrees about up, torso chain at one world
+		// delta, with one arm placed at identity
+		const glm::quat lean= glm::angleAxis(glm::radians(20.f), glm::vec3(0.f, 0.f, 1.f));
+		AvatarPose pose;
+		pose.valid= true;
+		for (eHumanoidBone torsoBone : {eHumanoidBone::Spine, eHumanoidBone::Chest, eHumanoidBone::Neck})
+		{
+			pose.bones[(int)torsoBone].present= true;
+			pose.bones[(int)torsoBone].deltaWorld= lean;
+		}
+		pose.bones[(int)eHumanoidBone::LeftUpperArm].present= true;
+
+		auto decodeFrame= [&streamer](const AvatarPose* directPose, std::vector<DecodedMessage>& outMessages) {
+			TrackingFrameResult emptyFrame;
+			std::vector<std::vector<uint8_t>> packets;
+			streamer.encodeFrame(emptyFrame, packets, directPose);
+			outMessages.clear();
+			bool bWellFormed= !packets.empty();
+			for (const std::vector<uint8_t>& packet : packets)
+				bWellFormed&= decodeBundle(packet, outMessages);
+			return bWellFormed;
+		};
+		auto findBone= [](const std::vector<DecodedMessage>& messages, const char* name) -> const DecodedMessage* {
+			for (const DecodedMessage& message : messages)
+			{
+				if (message.address == "/VMC/Ext/Bone/Pos" && !message.strings.empty() && message.strings[0] == name &&
+					message.floats.size() == 7)
+					return &message;
+			}
+			return nullptr;
+		};
+
+		std::vector<DecodedMessage> messages;
+		check(decodeFrame(&pose, messages), "a direct pose frame is complete bundles");
+
+		const DecodedMessage* spine= findBone(messages, "Spine");
+		const DecodedMessage* neck= findBone(messages, "Neck");
+		check(spine != nullptr && neck != nullptr && findBone(messages, "Chest") != nullptr,
+			  "a direct pose streams the torso bones it placed");
+		check(findBone(messages, "UpperChest") == nullptr, "an upper chest the pose never placed is not streamed");
+		check(findBone(messages, "LeftUpperArm") != nullptr, "a direct pose streams the arm it placed");
+
+		bool bFingerStreamed= false;
+		for (const DecodedMessage& message : messages)
+		{
+			if (message.address != "/VMC/Ext/Bone/Pos" || message.strings.empty())
+				continue;
+			const std::string& name= message.strings[0];
+			bFingerStreamed|= name.find("Thumb") != std::string::npos || name.find("Index") != std::string::npos ||
+							  name.find("Middle") != std::string::npos || name.find("Ring") != std::string::npos ||
+							  name.find("Little") != std::string::npos;
+		}
+		check(!bFingerStreamed, "a direct pose that placed no fingers streams none");
+
+		// The spine hangs off the unplaced hips, so it carries the whole lean
+		const glm::quat expectedSpine= worldToUnityRotation(lean);
+		check(spine != nullptr &&
+				  fabsf(fabsf(glm::dot(glm::quat(spine->floats[6], spine->floats[3], spine->floats[4], spine->floats[5]),
+									   expectedSpine)) - 1.f) < 1e-4f,
+			  "the spine carries the lean as its local rotation");
+		// The arm hangs off the leaned chest, so it undoes the lean locally
+		const DecodedMessage* upperArm= findBone(messages, "LeftUpperArm");
+		const glm::quat expectedArm= worldToUnityRotation(glm::inverse(lean));
+		check(upperArm != nullptr &&
+				  fabsf(fabsf(glm::dot(glm::quat(upperArm->floats[6], upperArm->floats[3], upperArm->floats[4],
+												 upperArm->floats[5]),
+									   expectedArm)) - 1.f) < 1e-4f,
+			  "an arm measured against the leaned chest streams relative to it");
+
+		const DecodedMessage* ok= findMessage(messages, "/VMC/Ext/OK");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 1, "a direct pose with an arm reports tracking");
+
+		AvatarPose torsoOnly= pose;
+		torsoOnly.bones[(int)eHumanoidBone::LeftUpperArm].present= false;
+		decodeFrame(&torsoOnly, messages);
+		ok= findMessage(messages, "/VMC/Ext/OK");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 0, "a direct pose with no arm reports not tracking");
+
+		// The position path never places the torso
+		decodeFrame(nullptr, messages);
+		check(findBone(messages, "Spine") == nullptr && findBone(messages, "Neck") == nullptr,
+			  "with no direct pose the torso bones are not streamed");
+
+		// No skeleton, no bones, but the rest of the frame still goes out
+		OscStreamerConfig bareConfig;
+		bareConfig.maxRateHz= 0.f;
+		OscStreamer bareStreamer;
+		bareStreamer.setConfig(bareConfig);
+		TrackingFrameResult emptyFrame;
+		std::vector<std::vector<uint8_t>> packets;
+		bareStreamer.encodeFrame(emptyFrame, packets, &pose);
+		messages.clear();
+		for (const std::vector<uint8_t>& packet : packets)
+			decodeBundle(packet, messages);
+		bool bAnyBone= false;
+		for (const DecodedMessage& message : messages)
+			bAnyBone|= message.address == "/VMC/Ext/Bone/Pos";
+		check(!bAnyBone && findMessage(messages, "/VMC/Ext/OK") != nullptr &&
+				  findMessage(messages, "/VMC/Ext/T") != nullptr && findMessage(messages, "/VMC/Ext/Root/Pos") != nullptr,
+			  "a direct pose with no avatar skeleton streams no bones but the rest of the frame");
+	}
+
 	// (j) The face stream and the avatar announcement on the wire. The names
 	// are the contract here too: a receiver matches them exactly and ignores
-	// the rest.
+	// the rest. The face reaches the wire through the Auto face profile.
 	{
 		auto arkit= [](const char* name) { return arkitBlendshapeFromName(name); };
 
@@ -747,6 +875,7 @@ static int runVmcTest(const TestArgs&)
 			model.expressions.push_back(expression);
 		};
 		addExpression("A", "aa");
+		addExpression("U", "ou");
 		addExpression("Blink", "blink");
 		addExpression("Blink_L", "blinkLeft");
 		addExpression("Blink_R", "blinkRight");
@@ -755,27 +884,34 @@ static int runVmcTest(const TestArgs&)
 		mesh.morphTargetNames= {"jawOpen", "eyeBlinkLeft", "Custom"};
 		model.meshes.push_back(mesh);
 
+		FaceProfileRunner runner;
+		runner.setBinding(makeAutoFaceBinding(&model));
+		check(runner.getBinding() != nullptr, "the Auto profile of a preset avatar compiles");
+
 		TrackingFrameResult frame;
 		frame.timestampMs= 1000.0;
-		frame.face.present= true;
-		frame.face.blendshapes[arkit("jawOpen")]= 0.6f;
-		frame.face.blendshapes[arkit("eyeBlinkLeft")]= 0.8f;
-		frame.face.blendshapes[arkit("eyeBlinkRight")]= 0.2f;
-		frame.face.blendshapes[arkit("mouthSmileLeft")]= 0.4f;
+		frame.face.phone.present= true;
+		frame.face.phone.tracked= true;
+		frame.face.phone.blendshapes[arkit("jawOpen")]= 0.6f;
+		frame.face.phone.blendshapes[arkit("eyeBlinkLeft")]= 0.8f;
+		frame.face.phone.blendshapes[arkit("eyeBlinkRight")]= 0.2f;
+		frame.face.phone.blendshapes[arkit("mouthSmileLeft")]= 0.4f;
+		runner.evaluate(frame.face, frame.timestampMs);
 
 		OscStreamerConfig config;
 		config.maxRateHz= 0.f;
 		config.avatarPath= "C:\\avatars\\test.vrm";
 		config.avatarTitle= "Test";
 		config.avatarSha256= std::string(64, 'a');
-		config.faceMap= AvatarFaceMap::build(model);
+		config.faceBinding= runner.getBinding();
 
 		OscStreamer streamer;
 		streamer.setConfig(config);
 
-		auto encode= [&streamer](const TrackingFrameResult& sourceFrame, std::vector<DecodedMessage>& outMessages) {
+		auto encodeOn= [](OscStreamer& targetStreamer, const TrackingFrameResult& sourceFrame,
+						  std::vector<DecodedMessage>& outMessages) {
 			std::vector<std::vector<uint8_t>> packets;
-			streamer.encodeFrame(sourceFrame, packets);
+			targetStreamer.encodeFrame(sourceFrame, packets);
 			outMessages.clear();
 			bool bWellFormed= !packets.empty();
 			for (const std::vector<uint8_t>& packet : packets)
@@ -785,11 +921,35 @@ static int runVmcTest(const TestArgs&)
 			}
 			return bWellFormed;
 		};
+		auto encode= [&encodeOn, &streamer](const TrackingFrameResult& sourceFrame,
+											std::vector<DecodedMessage>& outMessages) {
+			return encodeOn(streamer, sourceFrame, outMessages);
+		};
+		auto collectBlends= [](const std::vector<DecodedMessage>& messages) {
+			std::vector<std::pair<std::string, float>> blends;
+			for (const DecodedMessage& message : messages)
+			{
+				if (message.address == "/VMC/Ext/Blend/Val" && message.strings.size() == 1 && message.floats.size() == 1)
+					blends.emplace_back(message.strings[0], message.floats[0]);
+			}
+			return blends;
+		};
+		auto blendValue= [](const std::vector<std::pair<std::string, float>>& blends, const char* name, float& outValue) {
+			int count= 0;
+			for (const auto& blend : blends)
+			{
+				if (blend.first == name)
+				{
+					outValue= blend.second;
+					++count;
+				}
+			}
+			return count == 1;
+		};
 
 		std::vector<DecodedMessage> messages;
 		check(encode(frame, messages), "a frame with a face is complete bundles within the size limit");
 
-		std::vector<std::pair<std::string, float>> blends;
 		bool bBlendsWellFormed= true;
 		size_t lastValueIndex= 0;
 		size_t applyIndex= SIZE_MAX;
@@ -799,8 +959,6 @@ static int runVmcTest(const TestArgs&)
 			if (message.address == "/VMC/Ext/Blend/Val")
 			{
 				bBlendsWellFormed&= message.tags == "sf" && message.strings.size() == 1 && message.floats.size() == 1;
-				if (message.strings.size() == 1 && message.floats.size() == 1)
-					blends.emplace_back(message.strings[0], message.floats[0]);
 				lastValueIndex= messageIndex;
 			}
 			else if (message.address == "/VMC/Ext/Blend/Apply")
@@ -812,26 +970,17 @@ static int runVmcTest(const TestArgs&)
 		check(bBlendsWellFormed, "every blendshape is ,sf and Apply carries no arguments");
 		check(applyIndex != SIZE_MAX && applyIndex > lastValueIndex, "Apply follows the last blendshape value");
 
-		auto blendValue= [&blends](const char* name, float& outValue) {
-			for (const auto& blend : blends)
-			{
-				if (blend.first == name)
-				{
-					outValue= blend.second;
-					return true;
-				}
-			}
-			return false;
-		};
+		std::vector<std::pair<std::string, float>> blends= collectBlends(messages);
 		float value= 0.f;
-		check(blends.size() == 5, "the avatar's presets and ARKit morph names are streamed, nothing else");
-		check(blendValue("A", value) && fabsf(value - 0.6f) < 1e-6f, "the aa preset follows the jaw");
-		check(blendValue("Blink_L", value) && fabsf(value - 0.8f) < 1e-6f &&
-				  blendValue("Blink_R", value) && fabsf(value - 0.2f) < 1e-6f,
+		check(blends.size() == 6, "the avatar's presets and ARKit morph names are streamed, nothing else");
+		check(blendValue(blends, "A", value) && fabsf(value - 0.6f) < 1e-6f, "the aa preset follows the jaw");
+		check(blendValue(blends, "Blink_L", value) && fabsf(value - 0.8f) < 1e-6f &&
+				  blendValue(blends, "Blink_R", value) && fabsf(value - 0.2f) < 1e-6f,
 			  "each eye's blink preset follows its own eye, in the avatar's spelling");
-		check(!blendValue("Blink", value), "the two-eyed blink stays silent when each eye blinks on its own");
-		check(!blendValue("Joy", value), "an emotion preset is never driven");
-		check(blendValue("jawOpen", value) && fabsf(value - 0.6f) < 1e-6f && blendValue("eyeBlinkLeft", value),
+		check(!blendValue(blends, "Blink", value), "the two-eyed blink stays silent when each eye blinks on its own");
+		check(!blendValue(blends, "Joy", value), "an emotion preset is never driven");
+		check(blendValue(blends, "jawOpen", value) && fabsf(value - 0.6f) < 1e-6f &&
+				  blendValue(blends, "eyeBlinkLeft", value),
 			  "ARKit-named morph targets ride along under their own names");
 
 		const DecodedMessage* avatar= findMessage(messages, "/VMC/Ext/VRM");
@@ -843,8 +992,60 @@ static int runVmcTest(const TestArgs&)
 		encode(frame, messages);
 		check(findMessage(messages, "/VMC/Ext/VRM") == nullptr, "/VMC/Ext/VRM goes out at most once a second");
 
+		// The microphone alone: the vowel reads its viseme, as before the
+		// profiles
+		TrackingFrameResult micFrame;
+		micFrame.timestampMs= 1010.0;
+		micFrame.face.viseme.present= true;
+		micFrame.face.viseme.weights[(int)eViseme::aa]= 0.9f;
+		runner.evaluate(micFrame.face, micFrame.timestampMs);
+		encode(micFrame, messages);
+		blends= collectBlends(messages);
+		check(blendValue(blends, "A", value) && fabsf(value - 0.9f) < 1e-6f &&
+				  blendValue(blends, "jawOpen", value) && fabsf(value - 0.85f * 0.9f) < 1e-6f &&
+				  blendValue(blends, "Blink_L", value) && value == 0.f,
+			  "the microphone alone drives the vowel from its viseme and the ARKit morphs through the table");
+
+		TrackingFrameResult puckerFrame;
+		puckerFrame.timestampMs= 1012.0;
+		puckerFrame.face.viseme.present= true;
+		puckerFrame.face.viseme.weights[(int)eViseme::U]= 0.7f;
+		runner.evaluate(puckerFrame.face, puckerFrame.timestampMs);
+		encode(puckerFrame, messages);
+		blends= collectBlends(messages);
+		check(blendValue(blends, "U", value) && fabsf(value - 0.7f) < 1e-6f &&
+				  blendValue(blends, "A", value) && value == 0.f,
+			  "the microphone alone drives the ou preset from the U viseme");
+
+		// aa and O both open the jaw: 0.85 + 0.5 on the shared column
+		TrackingFrameResult sumFrame;
+		sumFrame.timestampMs= 1014.0;
+		sumFrame.face.viseme.present= true;
+		sumFrame.face.viseme.weights[(int)eViseme::aa]= 1.f;
+		sumFrame.face.viseme.weights[(int)eViseme::O]= 1.f;
+		runner.evaluate(sumFrame.face, sumFrame.timestampMs);
+		encode(sumFrame, messages);
+		blends= collectBlends(messages);
+		check(blendValue(blends, "jawOpen", value) && value == 1.f,
+			  "viseme weights summing past one on a shared column arrive clamped to one");
+
+		// A phone that is present but has lost the face reads zero
+		TrackingFrameResult lostFace= frame;
+		lostFace.timestampMs= 1020.0;
+		lostFace.face.phone.tracked= false;
+		runner.evaluate(lostFace.face, lostFace.timestampMs);
+		encode(lostFace, messages);
+		blends= collectBlends(messages);
+		bool bLostZero= blends.size() == 6;
+		for (const auto& blend : blends)
+			bLostZero&= blend.second == 0.f;
+		check(bLostZero, "a source that is present but not tracked reads zero, and the face still goes out");
+
 		TrackingFrameResult lostFrame= frame;
-		lostFrame.face.present= false;
+		lostFrame.timestampMs= 1030.0;
+		lostFrame.face.phone= FaceSources::Phone();
+		lostFrame.face.viseme= FaceSources::Viseme();
+		runner.evaluate(lostFrame.face, lostFrame.timestampMs);
 		encode(lostFrame, messages);
 		bool bAllZero= true;
 		int zeroCount= 0;
@@ -855,19 +1056,107 @@ static int runVmcTest(const TestArgs&)
 			bAllZero&= message.floats.size() == 1 && message.floats[0] == 0.f;
 			++zeroCount;
 		}
-		check(bAllZero && zeroCount == 5 && findMessage(messages, "/VMC/Ext/Blend/Apply") != nullptr,
-			  "the frame the stream stops relaxes every blendshape to zero once");
+		check(bAllZero && zeroCount == 6 && findMessage(messages, "/VMC/Ext/Blend/Apply") != nullptr,
+			  "the frame both sources stop relaxes every blendshape to zero once");
 		encode(lostFrame, messages);
 		check(findMessage(messages, "/VMC/Ext/Blend/Val") == nullptr &&
 				  findMessage(messages, "/VMC/Ext/Blend/Apply") == nullptr,
-			  "no blendshapes go out while the stream stays stopped");
+			  "no blendshapes go out while both sources stay stopped");
 
-		config.faceMap= nullptr;
+		// Presence is the union of the sources: the phone stopping while the
+		// microphone continues is not the face stopping
+		auto countBlends= [](const std::vector<DecodedMessage>& frameMessages, int& outZeroCount) {
+			int count= 0;
+			outZeroCount= 0;
+			for (const DecodedMessage& message : frameMessages)
+			{
+				if (message.address != "/VMC/Ext/Blend/Val")
+					continue;
+				++count;
+				if (message.floats.size() == 1 && message.floats[0] == 0.f)
+					++outZeroCount;
+			}
+			return count;
+		};
+		int unionZeros= 0;
+		TrackingFrameResult bothFrame= frame;
+		bothFrame.timestampMs= 1040.0;
+		bothFrame.face.viseme.present= true;
+		bothFrame.face.viseme.weights[(int)eViseme::aa]= 0.5f;
+		runner.evaluate(bothFrame.face, bothFrame.timestampMs);
+		encode(bothFrame, messages);
+		const int bothCount= countBlends(messages, unionZeros);
+		check(bothCount == 6 && unionZeros < bothCount, "the phone and the microphone together send values");
+
+		TrackingFrameResult micOnlyFrame= bothFrame;
+		micOnlyFrame.timestampMs= 1050.0;
+		micOnlyFrame.face.phone= FaceSources::Phone();
+		runner.evaluate(micOnlyFrame.face, micOnlyFrame.timestampMs);
+		encode(micOnlyFrame, messages);
+		const int micOnlyCount= countBlends(messages, unionZeros);
+		blends= collectBlends(messages);
+		check(micOnlyCount == 6 && unionZeros < micOnlyCount && blendValue(blends, "A", value) &&
+				  fabsf(value - 0.5f) < 1e-6f,
+			  "the phone stopping while the microphone continues sends values, no zero frame");
+
+		TrackingFrameResult noneFrame= micOnlyFrame;
+		noneFrame.timestampMs= 1060.0;
+		noneFrame.face.viseme= FaceSources::Viseme();
+		runner.evaluate(noneFrame.face, noneFrame.timestampMs);
+		encode(noneFrame, messages);
+		const int noneCount= countBlends(messages, unionZeros);
+		check(noneCount == 6 && unionZeros == 6, "only both sources stopping sends the one relaxing zero frame");
+		noneFrame.timestampMs= 1070.0;
+		runner.evaluate(noneFrame.face, noneFrame.timestampMs);
+		encode(noneFrame, messages);
+		check(countBlends(messages, unionZeros) == 0 && findMessage(messages, "/VMC/Ext/Blend/Apply") == nullptr,
+			  "silence follows the relaxing zero frame");
+
+		// The perfect-sync Auto profile on the wire: the ARKit-named
+		// expressions alone, under the avatar's spelling
+		{
+			AvatarModel perfectSync;
+			auto addPerfectSync= [&perfectSync](const char* name, const char* preset) {
+				AvatarExpression expression;
+				expression.name= name;
+				expression.preset= preset;
+				perfectSync.expressions.push_back(expression);
+			};
+			addPerfectSync("EyeBlinkLeft", "");
+			addPerfectSync("jawOpen", "");
+			addPerfectSync("A", "aa");
+			FaceProfileRunner syncRunner;
+			syncRunner.setBinding(makeAutoFaceBinding(&perfectSync));
+			check(syncRunner.getBinding() != nullptr, "the Auto profile of a perfect-sync avatar compiles");
+
+			TrackingFrameResult syncFrame= frame;
+			syncFrame.timestampMs= 1080.0;
+			syncRunner.evaluate(syncFrame.face, syncFrame.timestampMs);
+			OscStreamerConfig syncConfig= config;
+			syncConfig.faceBinding= syncRunner.getBinding();
+			OscStreamer syncStreamer;
+			syncStreamer.setConfig(syncConfig);
+			std::vector<DecodedMessage> syncMessages;
+			check(encodeOn(syncStreamer, syncFrame, syncMessages), "a perfect-sync frame is complete bundles");
+			const std::vector<std::pair<std::string, float>> syncBlends= collectBlends(syncMessages);
+			float syncValue= 0.f;
+			check(syncBlends.size() == 2 && blendValue(syncBlends, "EyeBlinkLeft", syncValue) &&
+					  fabsf(syncValue - 0.8f) < 1e-6f && blendValue(syncBlends, "jawOpen", syncValue) &&
+					  fabsf(syncValue - 0.6f) < 1e-6f,
+				  "the perfect-sync Auto profile sends its ARKit-named expressions with their values, nothing else");
+		}
+
+		// The no-avatar Auto profile
+		FaceProfileRunner rawRunner;
+		rawRunner.setBinding(makeAutoFaceBinding(nullptr));
+		TrackingFrameResult rawFrame= frame;
+		rawRunner.evaluate(rawFrame.face, rawFrame.timestampMs);
+		config.faceBinding= rawRunner.getBinding();
 		config.avatarPath.clear();
 		OscStreamer rawStreamer;
 		rawStreamer.setConfig(config);
 		std::vector<std::vector<uint8_t>> packets;
-		rawStreamer.encodeFrame(frame, packets);
+		rawStreamer.encodeFrame(rawFrame, packets);
 		messages.clear();
 		for (const std::vector<uint8_t>& packet : packets)
 			decodeBundle(packet, messages);
@@ -883,9 +1172,21 @@ static int runVmcTest(const TestArgs&)
 		check(rawCount == ARKIT_BLENDSHAPE_COUNT && bRawNamesKnown,
 			  "with no avatar the 52 ARKit names go out verbatim");
 		check(findMessage(messages, "/VMC/Ext/VRM") == nullptr, "with no avatar nothing is announced");
+
+		// A frame evaluated under another binding sends no face
+		OscStreamerConfig mismatched= config;
+		mismatched.faceBinding= runner.getBinding();
+		OscStreamer mismatchedStreamer;
+		mismatchedStreamer.setConfig(mismatched);
+		mismatchedStreamer.encodeFrame(rawFrame, packets);
+		messages.clear();
+		for (const std::vector<uint8_t>& packet : packets)
+			decodeBundle(packet, messages);
+		check(findMessage(messages, "/VMC/Ext/Blend/Val") == nullptr,
+			  "values from another binding's generation are not sent under this binding's names");
 	}
 
-	// (k) The face map's rules, which decide what any receiver can drive
+	// (k) The binding's rules, which decide what any receiver can drive
 	{
 		auto addExpression= [](AvatarModel& model, const char* name, const char* preset) {
 			AvatarExpression expression;
@@ -893,33 +1194,50 @@ static int runVmcTest(const TestArgs&)
 			expression.preset= preset;
 			model.expressions.push_back(expression);
 		};
+		auto phoneFrame= [](std::initializer_list<std::pair<const char*, float>> values) {
+			FaceSources sources;
+			sources.phone.present= true;
+			sources.phone.tracked= true;
+			for (const auto& entry : values)
+				sources.phone.blendshapes[arkitBlendshapeFromName(entry.first)]= entry.second;
+			return sources;
+		};
+
 		AvatarModel perfectSync;
 		addExpression(perfectSync, "EyeBlinkLeft", "");
 		addExpression(perfectSync, "jawOpen", "");
 		addExpression(perfectSync, "A", "aa");
-		std::shared_ptr<const AvatarFaceMap> map= AvatarFaceMap::build(perfectSync);
-		check(map->isPerfectSync() && map->getOutputs().size() == 2 && map->getOutputs()[0].name == "EyeBlinkLeft",
+		FaceProfileRunner runner;
+		runner.setBinding(makeAutoFaceBinding(&perfectSync));
+		const FaceProfileBinding* binding= runner.getBinding().get();
+		check(binding != nullptr && binding->getWireNames().size() == 2 && binding->getWireNames()[0] == "EyeBlinkLeft",
 			  "perfect sync streams its ARKit expressions alone, in the avatar's spelling");
-
-		std::array<float, ARKIT_BLENDSHAPE_COUNT> arkitValues{};
-		arkitValues[arkitBlendshapeFromName("jawOpen")]= 1.7f;
-		std::vector<float> values;
-		map->evaluate(arkitValues, values);
-		check(values.size() == 2 && values[1] == 1.f, "a value past full is clamped to one");
+		FaceSources sources= phoneFrame({{"jawOpen", 1.7f}, {"eyeBlinkLeft", 0.25f}});
+		runner.evaluate(sources, 0.0);
+		check(binding != nullptr && sources.outputs.targetValues.size() == 2 && sources.outputs.targetValues[1] == 1.f &&
+				  fabsf(sources.outputs.targetValues[0] - 0.25f) < 1e-6f,
+			  "a perfect-sync expression follows its column, a value past full clamped to one");
+		sources= FaceSources();
+		sources.viseme.present= true;
+		sources.viseme.weights[(int)eViseme::aa]= 1.f;
+		runner.evaluate(sources, 0.0);
+		check(binding != nullptr && fabsf(sources.outputs.targetValues[1] - 0.85f) < 1e-6f,
+			  "a perfect-sync jawOpen reads the visemes through the table while the phone sees no face");
 
 		AvatarModel blinkOnly;
 		addExpression(blinkOnly, "Blink", "blink");
-		map= AvatarFaceMap::build(blinkOnly);
-		arkitValues= {};
-		arkitValues[arkitBlendshapeFromName("eyeBlinkLeft")]= 1.f;
-		map->evaluate(arkitValues, values);
-		check(!map->isPerfectSync() && map->getOutputs().size() == 1 && fabsf(values[0] - 0.5f) < 1e-6f,
+		runner.setBinding(makeAutoFaceBinding(&blinkOnly));
+		sources= phoneFrame({{"eyeBlinkLeft", 1.f}});
+		runner.evaluate(sources, 0.0);
+		check(runner.getBinding() != nullptr && runner.getBinding()->getWireNames().size() == 1 &&
+				  fabsf(sources.outputs.targetValues[0] - 0.5f) < 1e-6f,
 			  "an avatar with only the two-eyed blink gets the average of both eyes");
 
-		// The receiver half: outputs onto morph targets, as the preview applies them
+		// The receiver half and the combine rules on one avatar
 		AvatarModel morphed;
 		AvatarMesh face;
-		face.morphTargetNames= {"jawOpen", "blinkShape"};
+		face.name= "Face";
+		face.morphTargetNames= {"jawOpen", "blinkShape", "browShape"};
 		morphed.meshes.push_back(face);
 		AvatarExpression aa;
 		aa.name= "A";
@@ -932,19 +1250,131 @@ static int runVmcTest(const TestArgs&)
 		blinkLeft.morphBinds.push_back(AvatarMorphBind{0, 1, 0.5f});
 		morphed.expressions.push_back(blinkLeft);
 
-		const AvatarFaceMorphs faceMorphs(morphed, AvatarFaceMap::build(morphed));
-		arkitValues= {};
-		arkitValues[arkitBlendshapeFromName("jawOpen")]= 0.6f;
-		arkitValues[arkitBlendshapeFromName("eyeBlinkLeft")]= 1.f;
+		runner.setBinding(makeAutoFaceBinding(&morphed));
+		sources= phoneFrame({{"jawOpen", 0.6f}, {"eyeBlinkLeft", 1.f}});
+		runner.evaluate(sources, 0.0);
 		std::vector<std::vector<float>> meshWeights;
-		faceMorphs.evaluate(&arkitValues, meshWeights);
-		check(meshWeights.size() == 1 && meshWeights[0].size() == 2 && fabsf(meshWeights[0][0] - 0.6f) < 1e-6f,
+		bool bAutoMorphs= runner.getBinding() != nullptr;
+		if (bAutoMorphs)
+			runner.getBinding()->evaluateMorphs(&sources.outputs.targetValues, meshWeights);
+		check(bAutoMorphs && meshWeights.size() == 1 && meshWeights[0].size() == 3 &&
+				  fabsf(meshWeights[0][0] - 0.6f) < 1e-6f,
 			  "a morph driven by a preset and by its own ARKit name takes the larger weight, not the sum");
-		check(meshWeights.size() == 1 && fabsf(meshWeights[0][1] - 0.5f) < 1e-6f,
+		check(bAutoMorphs && fabsf(meshWeights[0][1] - 0.5f) < 1e-6f,
 			  "an expression scales the morphs it binds by the bind weight");
-		faceMorphs.evaluate(nullptr, meshWeights);
-		check(meshWeights.size() == 1 && meshWeights[0][0] == 0.f && meshWeights[0][1] == 0.f,
-			  "no face rests every morph");
+		if (bAutoMorphs)
+			runner.getBinding()->evaluateMorphs(nullptr, meshWeights);
+		check(bAutoMorphs && meshWeights[0][0] == 0.f && meshWeights[0][1] == 0.f, "no face rests every morph");
+
+		// A user profile: a direct morph output, two outputs on one target,
+		// and a target the avatar lacks
+		FaceProfile profile;
+		profile.id= "test";
+		auto addOutput= [&profile](eFaceTargetKind kind, const char* target, const char* expr, const char* mesh= "") {
+			FaceProfileOutput output;
+			output.targetKind= kind;
+			output.target= target;
+			output.mesh= mesh;
+			output.vrmExpressionFunction= expr;
+			profile.outputs.push_back(output);
+		};
+		addOutput(eFaceTargetKind::Morph, "browShape", "phone.browInnerUp", "Face");
+		addOutput(eFaceTargetKind::Expression, "A", "phone.jawOpen");
+		addOutput(eFaceTargetKind::Expression, "a", "viseme.aa");
+		addOutput(eFaceTargetKind::Morph, "jawOpen", "0.3");
+		addOutput(eFaceTargetKind::Expression, "Missing", "1");
+		addOutput(eFaceTargetKind::Morph, "browShape", "1", "Body");
+		std::vector<FaceExprCompileError> errors;
+		std::shared_ptr<const FaceProfileBinding> userBinding= compileFaceBinding(profile, &morphed, &errors);
+		const bool bUser= userBinding != nullptr && errors.empty();
+		check(bUser, "a user profile compiles and binds");
+		if (bUser)
+		{
+			const std::vector<int>& outputTargets= userBinding->getOutputTargets();
+			check(outputTargets[1] >= 0 && outputTargets[1] == outputTargets[2],
+				  "two outputs naming one expression, in either case, share its target");
+			check(outputTargets[4] < 0 && !userBinding->getOutputProblems()[4].empty() && outputTargets[5] < 0 &&
+					  !userBinding->getOutputProblems()[5].empty(),
+				  "a missing expression and a missing mesh are reported and skipped");
+			check(std::find(userBinding->getWireNames().begin(), userBinding->getWireNames().end(), "Missing") ==
+					  userBinding->getWireNames().end(),
+				  "an unresolved target is not sent");
+
+			FaceProfileRunner userRunner;
+			userRunner.setBinding(userBinding);
+			FaceSources userSources= phoneFrame({{"jawOpen", 0.2f}, {"browInnerUp", 0.7f}});
+			userSources.viseme.present= true;
+			userSources.viseme.weights[(int)eViseme::aa]= 0.9f;
+			userRunner.evaluate(userSources, 0.0);
+
+			std::vector<int> targetWinners;
+			std::vector<float> targetValues;
+			userBinding->combineTargets(userSources.outputs.outputValues, targetValues, &targetWinners);
+			const int aTarget= outputTargets[1];
+			check(fabsf(targetValues[(size_t)aTarget] - 0.9f) < 1e-6f && targetWinners[(size_t)aTarget] == 2,
+				  "two outputs on one target combine with max, and the winner is reported");
+
+			std::vector<std::vector<int>> morphWinners;
+			userBinding->evaluateMorphs(&userSources.outputs.targetValues, meshWeights, &morphWinners);
+			check(fabsf(meshWeights[0][2] - 0.7f) < 1e-6f && morphWinners[0][2] == outputTargets[0],
+				  "a direct morph target output reaches its morph at weight 1");
+			check(fabsf(meshWeights[0][0] - 0.9f) < 1e-6f && morphWinners[0][0] == aTarget,
+				  "max combine across targets reports the winning target per morph");
+			// The morph's winning output: through its winning target to the
+			// output that won that target, the second of the two on it
+			const int jawWinner= morphWinners[0][0];
+			check(jawWinner == aTarget && targetWinners[(size_t)jawWinner] == 2 &&
+					  userBinding->getTargets()[(size_t)jawWinner].outputs.size() == 2 &&
+					  userBinding->getTargets()[(size_t)jawWinner].outputs[1] == 2,
+				  "a morph's winner names the target, and that target's winner is the second output on it");
+
+			OscStreamerConfig config;
+			config.maxRateHz= 0.f;
+			config.faceBinding= userBinding;
+			OscStreamer streamer;
+			streamer.setConfig(config);
+			TrackingFrameResult frame;
+			frame.timestampMs= 1000.0;
+			frame.face= userSources;
+			std::vector<std::vector<uint8_t>> packets;
+			streamer.encodeFrame(frame, packets);
+			std::vector<DecodedMessage> messages;
+			for (const std::vector<uint8_t>& packet : packets)
+				decodeBundle(packet, messages);
+			int aCount= 0;
+			float aValue= 0.f;
+			for (const DecodedMessage& message : messages)
+			{
+				if (message.address == "/VMC/Ext/Blend/Val" && message.strings.size() == 1 && message.strings[0] == "A")
+				{
+					++aCount;
+					aValue= message.floats.empty() ? 0.f : message.floats[0];
+				}
+			}
+			check(aCount == 1 && fabsf(aValue - 0.9f) < 1e-6f, "two outputs on one target send one message carrying the max");
+
+			// A binding swap relaxes the names the new binding does not send
+			OscStreamerConfig swapped= config;
+			std::shared_ptr<const FaceProfileBinding> autoBinding= makeAutoFaceBinding(&morphed);
+			swapped.faceBinding= autoBinding;
+			streamer.setConfig(swapped);
+			FaceProfileRunner autoRunner;
+			autoRunner.setBinding(autoBinding);
+			frame.timestampMs= 1010.0;
+			autoRunner.evaluate(frame.face, frame.timestampMs);
+			streamer.encodeFrame(frame, packets);
+			messages.clear();
+			for (const std::vector<uint8_t>& packet : packets)
+				decodeBundle(packet, messages);
+			bool bBrowRelaxed= false;
+			for (const DecodedMessage& message : messages)
+			{
+				if (message.address == "/VMC/Ext/Blend/Val" && message.strings.size() == 1 &&
+					message.strings[0] == "browShape")
+					bBrowRelaxed= message.floats.size() == 1 && message.floats[0] == 0.f;
+			}
+			check(bBrowRelaxed, "a binding swap sends zero once for a name the new binding drops");
+		}
 	}
 
 	// (l) The phone's head in the head frame (+X facing, +Y left, +Z up)
@@ -979,5 +1409,7 @@ static int runVmcTest(const TestArgs&)
 	return failures == 0 ? 0 : 1;
 }
 
-MIKAN_REGISTER_TEST("--test-vmc", "VMC retarget: axis conversion, rest identity, chain round trip",
+MIKAN_REGISTER_TEST("--test-vmc",
+					"VMC retarget: axis conversion, rest identity, chain round trip, the face profile binding and "
+					"blend messages",
 					eTestCategory::SelfTest, runVmcTest);

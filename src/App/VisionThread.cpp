@@ -1,8 +1,12 @@
 #include "VisionThread.h"
 
+#include <filesystem>
+
 #include "AppConfig.h"
+#include "AudioService.h"
 #include "AvatarRetarget.h"
 #include "AvatarSkeleton.h"
+#include "FaceAutoProfile.h"
 #include "FaceHead.h"
 #include "FaceService.h"
 #include "Logger.h"
@@ -63,12 +67,14 @@ void VisionThread::reportHitchIfSlow(double totalMs, const double* phaseMs)
 }
 
 VisionThread::VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
-						   AppConfig* config)
+						   AudioService* audioService, AppConfig* config)
 	: m_videoCapture(videoCapture)
 	, m_config(config)
 	, m_imuService(imuService)
 	, m_faceService(faceService)
+	, m_audioService(audioService)
 {
+	m_faceRunner.setBinding(makeAutoFaceBinding(nullptr));
 }
 
 VisionThread::~VisionThread()
@@ -136,14 +142,30 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 	return m_cameras[cameraIndex]->fetchPreviewFrame(outFrame);
 }
 
-bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult)
+bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose,
+									DirectRetarget::SolveState* outDirectState)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
 	if (!m_bFusedFresh)
 		return false;
 
 	outResult= m_fusedResult;
+	if (outDirectPose != nullptr)
+		*outDirectPose= m_fusedDirectPose;
+	if (outDirectState != nullptr)
+		*outDirectState= m_fusedDirectState;
 	m_bFusedFresh= false;
+	return true;
+}
+
+bool VisionThread::fetchNeutralCapture(NeutralCapture& outCapture)
+{
+	std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
+	if (!m_bNeutralCaptureReady)
+		return false;
+
+	outCapture= m_capturedNeutral;
+	m_bNeutralCaptureReady= false;
 	return true;
 }
 
@@ -235,9 +257,50 @@ void VisionThread::handleRecordingStartOnThread()
 	header.appConfigJsonText= m_config->toJsonString();
 	header.cameraCount= (int)m_cameras.size();
 
+	// The audio sidecar starts first, since the header carries where in the
+	// capture stream it begins
+	m_bRecordingAudio= false;
+	if (m_audioService != nullptr && m_config->audio.enabled)
+	{
+		const std::string wavPath= TrackingRecording::makeAudioSidecarPath(filePath);
+		AudioRecordingStart start;
+		if (m_audioService->startRecording(wavPath, start))
+		{
+			header.audio.present= true;
+			header.audio.fileName= std::filesystem::path(wavPath).filename().string();
+			header.audio.sampleRate= AUDIO_SAMPLE_RATE;
+			header.audio.startSampleIndex= start.startSampleIndex;
+			header.audio.startTimestampMs= start.timestampMs;
+			m_bRecordingAudio= true;
+			m_recordingAudioEpoch= start.captureEpoch;
+		}
+	}
+
 	if (m_recorder == nullptr)
 		m_recorder= std::make_unique<TrackingRecorder>();
-	m_recorder->start(filePath, TrackingRecording::headerToJson(header));
+	// The face sidecar opens with every recording, so a phone that connects
+	// mid-recording is captured. The recorder deletes the file when the
+	// recording ends with no sample written.
+	if (m_faceService != nullptr)
+	{
+		const std::string facePath= TrackingRecording::makeFaceSidecarPath(filePath);
+		if (m_faceRecorder.start(facePath))
+		{
+			header.face.present= true;
+			header.face.fileName= std::filesystem::path(facePath).filename().string();
+			header.face.startTimestampMs= steadyNowMs();
+			m_lastRecordedFaceSequence= 0;
+		}
+	}
+
+	if (!m_recorder->start(filePath, TrackingRecording::headerToJson(header)))
+	{
+		if (m_bRecordingAudio)
+			m_audioService->stopRecording();
+		m_bRecordingAudio= false;
+		m_faceRecorder.stop();
+		return;
+	}
 
 	// Raw frames are opt-in and local: a landmark recording is abstract
 	// enough to share, frames are video of the room
@@ -258,15 +321,28 @@ void VisionThread::finalizeRecordingOnThread(bool bAborted, const std::string& r
 	m_recorder->stop(bAborted, reason);
 	if (m_frameRecorder != nullptr)
 		m_frameRecorder->stop();
+	if (m_bRecordingAudio && m_audioService != nullptr)
+		m_audioService->stopRecording();
+	m_bRecordingAudio= false;
+	m_faceRecorder.stop();
 	std::lock_guard<std::mutex> lock(m_recordingMutex);
 	m_lastRecordingPath= m_recorder->getFilePath();
 }
 
-void VisionThread::requestDiagnosticDump(const std::string& dumpDir)
+double VisionThread::getAudioRecordingSeconds() const
+{
+	if (m_audioService == nullptr)
+		return -1.0;
+	const AudioServiceStatus status= m_audioService->getStatus();
+	return status.recording ? (double)status.recordedSamples / AUDIO_SAMPLE_RATE : -1.0;
+}
+
+void VisionThread::requestDiagnosticDump(const std::string& dumpDir, const cv::Mat& avatarRender)
 {
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
 		m_requestedDumpDir= dumpDir;
+		m_requestedAvatarRender= avatarRender;
 	}
 	m_bDumpRequested= true;
 }
@@ -280,12 +356,42 @@ std::string VisionThread::getLastDumpPath()
 void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput)
 {
 	std::string dumpDir;
+	DiagAvatarSnapshot avatar;
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
 		dumpDir= m_requestedDumpDir;
+		avatar.render= m_requestedAvatarRender;
+		m_requestedAvatarRender= cv::Mat();
 	}
 	if (dumpDir.empty())
 		return;
+
+	// The frame as a one-frame recording: every camera's last inputs, the
+	// output snapshot and its checksum the way the recorder takes them
+	RecordedFrame recordFrame;
+	recordFrame.seq= 0;
+	recordFrame.nowTimestampMs= latestOutput.timestampMs;
+	recordFrame.bFused= false;
+	for (const std::unique_ptr<CameraContext>& context : m_cameras)
+	{
+		const RecordedCameraInput& input= context->getLastRecordInput();
+		if (input.frameIndex >= 0)
+			recordFrame.freshCameras.push_back(input);
+	}
+	TrackingRecording::snapshotFusedOutput(latestOutput, recordFrame.outPoses);
+	recordFrame.checksum= TrackingRecording::computeFusedChecksum(latestOutput);
+
+	// The avatar half: the direct solver's pose for this output and the
+	// state behind it
+	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_directPose.valid;
+	if (bAvatar)
+	{
+		avatar.skeleton= m_avatar.skeleton.get();
+		avatar.pose= &m_directPose;
+		avatar.solveState= &m_directRetarget.getSolveState();
+		avatar.modelPath= m_avatarIdentity.path;
+		avatar.cameraIndex= m_config->direct.cameraIndex;
+	}
 
 	std::vector<DiagCameraSnapshot> snapshots;
 	for (const std::unique_ptr<CameraContext>& contextPtr : m_cameras)
@@ -348,8 +454,9 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 		out.palmarSource= (int)capture.palmarSource;
 	}
 
-	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(),
-										rawImu, lastCapture);
+	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(), rawImu,
+										lastCapture, recordFrame.freshCameras.empty() ? nullptr : &recordFrame,
+										bAvatar ? &avatar : nullptr);
 	if (bOk)
 	{
 		std::lock_guard<std::mutex> lock(m_dumpMutex);
@@ -426,6 +533,9 @@ void VisionThread::refreshConfigOnThread()
 		m_imuService->setConfig(imuConfig);
 	}
 
+	// Direct retarget: the solver config follows the project and the rig
+	m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
+
 	// OSC
 	applyOscConfigOnThread();
 }
@@ -468,7 +578,7 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.avatarPath= m_avatarIdentity.path;
 		oscConfig.avatarTitle= m_avatarIdentity.title;
 		oscConfig.avatarSha256= m_avatarIdentity.sha256;
-		oscConfig.faceMap= m_avatarIdentity.faceMap;
+		oscConfig.faceBinding= m_faceRunner.getBinding();
 		m_oscStreamer->setConfig(oscConfig);
 	}
 }
@@ -531,18 +641,26 @@ void VisionThread::threadLoop()
 			continue;
 		}
 
-		runFusionStage(iteration);
-		lapPhase(eVisionPhase::Fusion);
-
-		if (iteration.bAnyWorldCandidate)
+		if (isDirectModeActive())
 		{
-			runImuStage(iteration);
-			lapPhase(eVisionPhase::Imu);
-
-			// The body solve and the fusion bookkeeping belong to the fusion
-			// phase
-			runBodySolveStage(iteration);
+			runDirectStage(iteration);
 			lapPhase(eVisionPhase::Fusion);
+		}
+		else
+		{
+			runFusionStage(iteration);
+			lapPhase(eVisionPhase::Fusion);
+
+			if (iteration.bAnyWorldCandidate)
+			{
+				runImuStage(iteration);
+				lapPhase(eVisionPhase::Imu);
+
+				// The body solve and the fusion bookkeeping belong to the
+				// fusion phase
+				runBodySolveStage(iteration);
+				lapPhase(eVisionPhase::Fusion);
+			}
 		}
 
 		runOutputStage(iteration);
@@ -614,6 +732,19 @@ void VisionThread::servicePendingRequests()
 				m_avatar= m_pendingAvatar;
 			if (bIdentityChanged)
 				m_avatarIdentity= m_pendingAvatarIdentity;
+		}
+		// The evaluator state carries over to the new binding by call site
+		if (bIdentityChanged)
+		{
+			m_faceRunner.setBinding(m_avatarIdentity.faceBinding != nullptr ? m_avatarIdentity.faceBinding
+																			 : makeAutoFaceBinding(nullptr));
+		}
+		if (bSkeletonChanged)
+		{
+			// A new skeleton means new lengths: the direct solver starts over
+			// on them with the rig that came with it
+			m_directRetarget.reset();
+			m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
 		}
 		applyOscConfigOnThread();
 	}
@@ -697,6 +828,55 @@ void VisionThread::runFusionStage(IterationState& iteration)
 			iteration.recordFrame.checksum= TrackingRecording::computeFusedChecksum(iteration.outputResult);
 		}
 	}
+}
+
+bool VisionThread::isDirectModeActive() const
+{
+	const int cameraIndex= m_config->direct.cameraIndex;
+	return m_config->direct.enabled && cameraIndex >= 0 && cameraIndex < (int)m_cameras.size();
+}
+
+void VisionThread::runDirectStage(IterationState& iteration)
+{
+	// Every camera still feeds the diagnostics; the output is the direct
+	// camera's result as it stands, camera space, no fusion
+	for (const std::unique_ptr<CameraContext>& context : m_cameras)
+		iteration.fusionCandidates.push_back(&context->getLastResult());
+	iteration.bDirect= true;
+	iteration.outputResult= m_cameras[m_config->direct.cameraIndex]->getLastResult().result;
+	m_lastFusedForHints= TrackingFrameResult(); // camera-space - can't project
+	m_dominantCamera[0]= -1;
+	m_dominantCamera[1]= -1;
+
+	// Recording: a passthrough of the direct camera, which replay rebuilds
+	// from that camera's mirror under the recorded config
+	iteration.bRecordingThisFrame= m_recorder != nullptr && m_recorder->isRecording();
+	if (iteration.bRecordingThisFrame)
+	{
+		iteration.recordFrame.bFused= false;
+		TrackingRecording::snapshotFusedOutput(iteration.outputResult, iteration.recordFrame.outPoses);
+		iteration.recordFrame.checksum= TrackingRecording::computeFusedChecksum(iteration.outputResult);
+	}
+}
+
+void VisionThread::solveDirectPose(IterationState& iteration)
+{
+	m_directPose.clear();
+	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
+	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
+		return;
+
+	DirectCameraModel cameraModel;
+	cameraModel.fx= camera.fx;
+	cameraModel.fy= camera.fy;
+	cameraModel.cx= camera.cx;
+	cameraModel.cy= camera.cy;
+	cameraModel.width= camera.result.frameWidth;
+	cameraModel.height= camera.result.frameHeight;
+	// The only head on a camera-space result is the phone's, which the face
+	// stage just placed on the output when it streams
+	m_directRetarget.solve(camera.result, cameraModel, iteration.outputResult.head, camera.result.timestampMs,
+						   *m_avatar.skeleton, m_directConfig, m_directPose);
 }
 
 void VisionThread::runImuStage(IterationState& iteration)
@@ -859,40 +1039,78 @@ void VisionThread::runOutputStage(IterationState& iteration)
 	if (iteration.bAnyNewResult)
 		m_lastCameraOutputMs= iteration.outputResult.timestampMs;
 	applyFaceToOutput(iteration.outputResult, steadyNowMs(), iteration.bAnyNewResult);
+	// Once per output frame, before the OSC rate gate, so the stateful
+	// expressions advance exactly once per frame
+	m_faceRunner.evaluate(iteration.outputResult.face, iteration.outputResult.timestampMs);
+
+	// In direct mode the streamer and the window take the solver's pose: a
+	// camera frame solves a fresh one, a face-only frame repeats the last
+	if (iteration.bDirect)
+		solveDirectPose(iteration);
+	const bool bDirectPose= isDirectModeActive();
+	if (!bDirectPose)
+		m_directPose.clear();
 
 	if (m_oscStreamer != nullptr)
-		m_oscStreamer->sendFrame(iteration.outputResult);
+		m_oscStreamer->sendFrame(iteration.outputResult, bDirectPose ? &m_directPose : nullptr);
 
 	// Publish the result (latest-wins)
 	{
 		std::lock_guard<std::mutex> lock(m_fusedMutex);
 		m_fusedResult= iteration.outputResult;
+		m_fusedDirectPose= m_directPose;
+		m_fusedDirectState= bDirectPose ? m_directRetarget.getSolveState() : DirectRetarget::SolveState();
 		m_bFusedFresh= true;
 	}
 	m_lastOutputResult= iteration.outputResult;
 }
 
+void VisionThread::applyMouthToOutput(TrackingFrameResult& output, double nowMs)
+{
+	FaceSources::Viseme& viseme= output.face.viseme;
+	viseme= FaceSources::Viseme();
+	MouthSample mouth;
+	if (m_audioService == nullptr || !m_audioService->getLatestSample(mouth) || nowMs - mouth.timestampMs > k_mouthStaleMs)
+		return;
+	m_lastMouthSequence= mouth.sequence;
+	viseme.present= true;
+	viseme.weights= mouth.frame.weights;
+}
+
 void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead)
 {
-	output.face.present= false;
+	// Both sources side by side: which one drives which shape is the face
+	// profile's choice
+	applyMouthToOutput(output, nowMs);
 
+	FaceSources::Phone& phone= output.face.phone;
+	phone= FaceSources::Phone();
 	FaceSample sample;
 	if (m_faceService == nullptr || !m_faceService->isStreaming(nowMs) || !m_faceService->getLatestSample(sample))
 		return;
-	// The phone lost the face: its values are stale, so the face relaxes and
-	// the camera head stands
-	if (!sample.faceTracked)
-	{
-		m_lastFaceSequence= sample.sequence;
-		return;
-	}
 
 	// A camera frame carrying this sample means no face-only frame repeats it
 	m_lastFaceSequence= sample.sequence;
-	output.face.present= true;
-	static_assert(std::tuple_size<decltype(output.face.blendshapes)>::value == ARKIT_BLENDSHAPE_COUNT,
-				  "the output's face pose follows the ARKit table");
-	output.face.blendshapes= sample.blendshapes;
+	phone.present= true;
+
+	// The face sidecar takes each sample once, on camera and face-only
+	// iterations alike, so it runs at the phone's rate
+	if (m_faceRecorder.isRecording() && sample.sequence != m_lastRecordedFaceSequence)
+	{
+		m_lastRecordedFaceSequence= sample.sequence;
+		RecordedFaceSample recorded;
+		recorded.sequence= sample.sequence;
+		recorded.timestampMs= sample.timestampMs;
+		recorded.bTracked= sample.faceTracked;
+		recorded.blendshapes= sample.blendshapes;
+		m_faceRecorder.enqueue(recorded);
+	}
+	// The phone lost the face: its values are stale, so they read zero and
+	// the camera head stands
+	if (!sample.faceTracked)
+		return;
+	phone.tracked= true;
+	phone.blendshapes= sample.blendshapes;
 
 	if (!sample.hasHead)
 		return;
@@ -916,14 +1134,26 @@ void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, 
 
 bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 {
+	// A new phone sample or a new mouth sample is a frame of its own
 	FaceSample sample;
-	if (m_faceService == nullptr || !m_faceService->getLatestSample(sample) || sample.sequence == m_lastFaceSequence)
+	const bool bNewFace=
+		m_faceService != nullptr && m_faceService->getLatestSample(sample) && sample.sequence != m_lastFaceSequence;
+	MouthSample mouth;
+	const bool bNewMouth=
+		m_audioService != nullptr && m_audioService->getLatestSample(mouth) && mouth.sequence != m_lastMouthSequence;
+	if (!bNewFace && !bNewMouth)
 		return false;
-	m_lastFaceSequence= sample.sequence;
-	// A lost face has nothing new to send, beyond the one frame that relaxes
-	// a face the last output still carried
-	if (!sample.faceTracked && !m_lastOutputResult.face.present)
+	if (bNewFace)
+		m_lastFaceSequence= sample.sequence;
+	if (bNewMouth)
+		m_lastMouthSequence= mouth.sequence;
+	// A sample that arrives after its stream went quiet has nothing to send,
+	// beyond the one frame that relaxes a face the last output still carried
+	const bool bFaceLive= bNewFace && m_faceService->isStreaming(nowMs);
+	const bool bMouthLive= bNewMouth && nowMs - mouth.timestampMs <= k_mouthStaleMs;
+	if (!bFaceLive && !bMouthLive && !m_lastOutputResult.face.isPresent())
 		return false;
+	const double sampleTimestampMs= bNewFace ? sample.timestampMs : mouth.timestampMs;
 
 	// Repeats the last output with the new face. The hands it carries stay
 	// live while the cameras keep up; once the last camera frame is older
@@ -933,9 +1163,9 @@ bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 	// interleaved stream. A camera frame stamped before it then reads as a
 	// timestamp regression, which the gate answers by sending that frame.
 	iteration.outputResult= m_lastOutputResult;
-	iteration.outputResult.timestampMs= sample.timestampMs;
+	iteration.outputResult.timestampMs= sampleTimestampMs;
 	const double holdMs= (double)m_config->osc.holdOnDropoutMs;
-	if (m_lastCameraOutputMs < 0.0 || sample.timestampMs - m_lastCameraOutputMs > holdMs)
+	if (m_lastCameraOutputMs < 0.0 || sampleTimestampMs - m_lastCameraOutputMs > holdMs)
 	{
 		for (HandPose& pose : iteration.outputResult.poses)
 			pose.tracked= false;
@@ -1000,17 +1230,54 @@ void VisionThread::runCalibrationCaptures()
 		}
 	}
 
+	// Neutral capture for the direct retarget: the solver's filtered
+	// measurements, and the phone head's anchor while it streams, so looking
+	// at the screen reads as the identity head on both sources
+	if (m_bNeutralCaptureRequested.exchange(false))
+	{
+		NeutralCapture capture;
+		if (m_directRetarget.captureNeutral(capture.neutral))
+		{
+			{
+				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
+				m_capturedNeutral= capture;
+				m_bNeutralCaptureReady= true;
+			}
+			FaceSample sample;
+			const double nowMs= steadyNowMs();
+			if (m_faceService != nullptr && m_faceService->isStreaming(nowMs) && m_faceService->getLatestSample(sample) &&
+				sample.faceTracked && sample.hasHead)
+			{
+				std::lock_guard<std::mutex> lock(m_faceAnchorMutex);
+				m_capturedFaceAnchor= faceHeadAnchorFromWorld(glm::quat(1.f, 0.f, 0.f, 0.f), sample.headEulerDegrees);
+				m_bFaceAnchorReady= true;
+			}
+		}
+		else
+		{
+			MIKAN_MT_LOG_WARNING("VisionThread") << "Neutral capture skipped: no torso solved yet";
+		}
+	}
+
 	// Rest-pose capture: the zero reference is the RAW multi-view angles of
 	// the fuse that just ran (stereo-quality only - a monocular pose carries
 	// the model's view-dependent bias, which is exactly what a zero reference
-	// must not bake in)
+	// must not bake in). A one-camera rig has no other view: its output
+	// carries that bias for good, so its zero is the fit's own angles, and
+	// the bias cancels at rest.
 	if (m_bRestPoseCaptureRequested.exchange(false))
 	{
+		const bool bSingleCamera= m_cameras.size() == 1;
 		RestPoseCapture fusedCapture;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			fusedCapture.bCaptured[sideIndex]=
 				m_fusion.getLastRawTriangulatedAngles((eHandSide)sideIndex, fusedCapture.angles[sideIndex]);
+			if (!fusedCapture.bCaptured[sideIndex] && bSingleCamera)
+			{
+				fusedCapture.bCaptured[sideIndex]=
+					m_fusion.getLastRawFittedAngles((eHandSide)sideIndex, fusedCapture.angles[sideIndex]);
+			}
 		}
 
 		std::lock_guard<std::mutex> lock(m_restPoseMutex);
@@ -1067,6 +1334,17 @@ void VisionThread::runDiagnosticsStage(IterationState& iteration)
 			RecordedCameraInput input;
 			if (context->consumePendingRecordInput(input))
 				recordFrame.freshCameras.push_back(std::move(input));
+		}
+		// The mouth stage's newest frame, tied to the sidecar's stream when
+		// it is the one the sidecar records
+		MouthSample mouth;
+		if (m_audioService != nullptr && m_audioService->getLatestSample(mouth) &&
+			steadyNowMs() - mouth.timestampMs <= k_mouthStaleMs)
+		{
+			recordFrame.mouth.present= true;
+			recordFrame.mouth.frame= mouth.frame;
+			recordFrame.mouth.audioFrameIndex=
+				m_bRecordingAudio && mouth.captureEpoch == m_recordingAudioEpoch ? mouth.audioFrameIndex : -1;
 		}
 		m_recorder->enqueueFrame(std::move(recordFrame));
 	}

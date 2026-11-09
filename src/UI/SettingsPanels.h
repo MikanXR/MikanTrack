@@ -1,17 +1,23 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <vector>
 
 #include "glm/ext/vector_double3.hpp"
 
+#include "Countdown.h"
+#include "NeutralCaptureControl.h"
 #include "TrackingTypes.h"
 
 class AppConfig;
+class AvatarMouthReadout;
+class FaceProfileBinding;
 class VisionThread;
 class VideoCaptureSystem;
 class VideoPreviewPanel;
 class Scene3dPanel;
+struct AvatarModel;
 struct VisionPreviewFrame;
 
 // Frame-to-frame state for the tracking panel (owned by MainWindow, since the
@@ -54,6 +60,16 @@ struct TrackingPanelState
 	bool bHoldStillHasResult= false;
 	// Mean per-landmark deviation over the window, mm; -1 = too few samples
 	float holdStillDeviationMm[2]= {-1.f, -1.f};
+
+	// Direct retarget neutral capture
+	NeutralCaptureControl directNeutral;
+
+	// The diagnostic dump buttons: the owner runs the dump (it needs the
+	// posed avatar, which the panel does not hold), at once or after the
+	// settle countdown the panel draws
+	bool bDumpRequested= false;
+	bool bDelayedDumpRequested= false;
+	Countdown dumpCountdown;
 };
 
 // Small side panels: tracking/fusion options and OSC output settings.
@@ -66,8 +82,12 @@ void drawTrackingPanel(AppConfig* config, VisionThread* visionThread, VideoCaptu
 					   VideoPreviewPanel* previewPanel, Scene3dPanel* scene3dPanel, TrackingPanelState& panelState,
 					   const std::vector<VisionPreviewFrame>& latestPreviews,
 					   const TrackingFrameResult& fusedResult);
-// fusedResult: the latest fused tracking output (for the live angle readout)
-void drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult);
+// fusedResult: the latest fused tracking output (for the live angle readout
+// and the mouth section, which mouthReadout draws from the loaded avatar and
+// its face profile binding)
+void drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
+				  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
+				  const std::shared_ptr<const FaceProfileBinding>& faceBinding);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel();
 // The language combo alone, shared between the Settings panel and the main

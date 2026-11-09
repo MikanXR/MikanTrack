@@ -1,7 +1,6 @@
 #include "TestCommon.h"
 
 #include "GL/glew.h"
-#include "SDL.h"
 
 #include "glm/ext/matrix_transform.hpp"
 
@@ -14,6 +13,7 @@
 #include "GlFrameBuffer.h"
 #include "GlLineRenderer.h"
 #include "GlSkinnedMeshRenderer.h"
+#include "HeadlessGlContext.h"
 #include "MathGLM.h"
 #include "OrbitCamera.h"
 #include "PathUtils.h"
@@ -58,34 +58,9 @@ static int runRenderAvatarTool(const TestArgs& args)
 		MIKAN_LOG_WARNING("render-avatar") << warning;
 
 	// The same context the app creates, on a window that never shows
-	if (SDL_Init(SDL_INIT_VIDEO) != 0)
-	{
-		MIKAN_LOG_ERROR("render-avatar") << "SDL_Init failed: " << SDL_GetError();
+	HeadlessGlContext gl;
+	if (!gl.create("render-avatar"))
 		return 1;
-	}
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-	SDL_Window* window= SDL_CreateWindow("render-avatar", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 64, 64,
-										 SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-	SDL_GLContext context= window != nullptr ? SDL_GL_CreateContext(window) : nullptr;
-	if (context == nullptr)
-	{
-		MIKAN_LOG_ERROR("render-avatar") << "GL context failed: " << SDL_GetError();
-		SDL_Quit();
-		return 1;
-	}
-	SDL_GL_MakeCurrent(window, context);
-	glewExperimental= GL_TRUE;
-	if (glewInit() != GLEW_OK)
-	{
-		MIKAN_LOG_ERROR("render-avatar") << "glewInit failed";
-		SDL_Quit();
-		return 1;
-	}
-	MIKAN_LOG_INFO("render-avatar") << "OpenGL " << (const char*)glGetString(GL_VERSION) << " on "
-									<< (const char*)glGetString(GL_RENDERER);
 
 	int exitCode= 1;
 	{
@@ -161,10 +136,6 @@ static int runRenderAvatarTool(const TestArgs& args)
 		lineRenderer.shutdown();
 		frameBuffer.dispose();
 	}
-
-	SDL_GL_DeleteContext(context);
-	SDL_DestroyWindow(window);
-	SDL_Quit();
 	return exitCode;
 }
 MIKAN_REGISTER_TEST("--render-avatar", "Render a VRM at rest to a PNG through the scene renderer (hidden window)",

@@ -539,6 +539,84 @@ static int runBodyPoseTest(const TestArgs&)
 			  "no shoulder falls back to the behind-the-wrist prior");
 	}
 
+	// (d2) With no history and two valid points on the bone circle, the
+	// avatar's elbow seed picks the arm when one is configured, and only
+	// without one does the desk prior (the candidate farther from the camera)
+	// decide. The seed here points at the NEARER candidate, the one the desk
+	// prior would reject, so the two rules disagree.
+	{
+		glm::vec3 leftShoulder, rightShoulder;
+		placeSymmetricPair(dims.shoulderWidthMeters, 1.10f, -0.2f, leftShoulder, rightShoulder);
+		const glm::vec3 wristWorld= leftShoulder + glm::vec3(0.05f, 0.35f, -0.10f);
+		const glm::vec3 axis= glm::normalize(wristWorld - leftShoulder);
+		const glm::vec3 planeX= glm::normalize(glm::cross(glm::vec3(0.f, 0.f, 1.f), axis));
+		const glm::vec3 planeY= glm::cross(axis, planeX);
+
+		// The first elbow on a fixed sweep of the circle whose ray admits two
+		// well separated circle points
+		bool bFoundPair= false;
+		glm::vec3 landmarkElbow(0.f);
+		BodyPoseSolver::BoneCircleHit pair;
+		for (int i= 0; i < 21 && !bFoundPair; ++i)
+		{
+			const float angle= 0.3f * (float)i;
+			glm::vec3 elbow(0.f);
+			if (!BodyPoseSolver::solveElbowNearestTo(
+					leftShoulder, wristWorld, dims.upperArmLengthMeters, dims.forearmLengthMeters,
+					leftShoulder + planeX * cosf(angle) + planeY * sinf(angle), elbow))
+				continue;
+			BodyPoseSolver::BoneCircleHit hit;
+			if (BodyPoseSolver::solveElbowOnBoneCircle(
+					leftShoulder, wristWorld, dims.upperArmLengthMeters, dims.forearmLengthMeters,
+					glm::vec3(0.f), glm::normalize(elbow), hit) &&
+				hit.count == 2 && glm::length(hit.candidates[0] - hit.candidates[1]) > 0.10f)
+			{
+				bFoundPair= true;
+				landmarkElbow= elbow;
+				pair= hit;
+			}
+		}
+		check(bFoundPair, "(d2) fixture: an elbow ray admits two well separated circle points");
+		if (bFoundPair)
+		{
+			const bool bFirstFarther= glm::length(pair.candidates[0]) >= glm::length(pair.candidates[1]);
+			const glm::vec3 fartherCandidate= bFirstFarther ? pair.candidates[0] : pair.candidates[1];
+			const glm::vec3 nearerCandidate= bFirstFarther ? pair.candidates[1] : pair.candidates[0];
+
+			auto coldSolve= [&](const BodyDimensions& dimensions) {
+				TestRig rig;
+				rig.setLandmark(ePoseLandmark::LEFT_SHOULDER, leftShoulder);
+				rig.setLandmark(ePoseLandmark::RIGHT_SHOULDER, rightShoulder);
+				rig.setLandmark(ePoseLandmark::LEFT_ELBOW, landmarkElbow);
+				TrackingFrameResult fused;
+				fused.timestampMs= 1000.0;
+				setPoseWithWrist(fused.poses[0], 0, wristWorld, 0.8f);
+				BodyPoseSolver solver;
+				solver.solve(rig.candidates, dimensions, fused);
+				return fused.poses[0].hasForearmPose
+					? fused.poses[0].getElbowPositionWorld(dimensions.forearmLengthMeters)
+					: glm::vec3(0.f);
+			};
+
+			const glm::vec3 unseededElbow= coldSolve(dims);
+
+			BodyDimensions seeded= dims;
+			seeded.bHasElbowSeed[0]= true;
+			seeded.elbowSeedOffsetMeters[0]= nearerCandidate - leftShoulder;
+			const glm::vec3 seededElbow= coldSolve(seeded);
+
+			MIKAN_LOG_INFO("test-bodypose")
+				<< "(d2) unseeded elbow (" << unseededElbow.x << ", " << unseededElbow.y << ", "
+				<< unseededElbow.z << "), seeded elbow (" << seededElbow.x << ", " << seededElbow.y << ", "
+				<< seededElbow.z << "), candidates " << glm::length(fartherCandidate - nearerCandidate) * 1000.f
+				<< " mm apart";
+			check(nearlyEqual(unseededElbow, fartherCandidate, 0.01f),
+				  "with no seed the cold start takes the candidate farther from the camera");
+			check(nearlyEqual(seededElbow, nearerCandidate, 0.01f),
+				  "an elbow seed takes the cold start to the candidate nearest the seed");
+		}
+	}
+
 	// (e) Grazing ray clamps to the sphere and stays continuous through
 	// tangency, rather than switching to a different estimator
 	{

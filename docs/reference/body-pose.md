@@ -1,12 +1,12 @@
 # Body pose
 
-The opt-in per-camera body-pose stage and everything downstream of it: the ONNX models (`src/Vision/PoseDetector.h`, `src/Vision/RtmPoseBodyModel.h`), the per-camera tracker that runs them on a cadence (`src/Vision/BodyPoseTracker.h`), and the post-fusion world solver that turns 2D landmarks into elbow, shoulder, and head estimates (`src/Tracking/BodyPoseSolver.h`). Body pose layers on top of the hand system: see [hand-tracking.md](./hand-tracking.md) for the hand pipeline whose fused wrists anchor the solve, [architecture.md](./architecture.md) for where this sits in the vision-thread frame anatomy, [imu.md](./imu.md) for the IMU forearm overlay that takes precedence over it, [calibration.md](./calibration.md) for the body measurement wizard that supplies its lengths, [wire-protocol.md](./wire-protocol.md) for the OSC messages it feeds, and [conventions.md](./conventions.md) for the coordinate spaces. Experiment history, including the model selection A/Bs, lives in [LEARNINGS.md](../../LEARNINGS.md).
+The opt-in per-camera body-pose stage and everything downstream of it: the ONNX models (`src/Vision/PoseDetector.h`, `src/Vision/RtmPoseModel.h`), the per-camera tracker that runs them on a cadence (`src/Vision/BodyPoseTracker.h`), and the post-fusion world solver that turns 2D landmarks into elbow, shoulder, and head estimates (`src/Tracking/BodyPoseSolver.h`). Body pose layers on top of the hand system: see [hand-tracking.md](./hand-tracking.md) for the hand pipeline whose fused wrists anchor the solve, [architecture.md](./architecture.md) for where this sits in the vision-thread frame anatomy, [imu.md](./imu.md) for the IMU forearm overlay that takes precedence over it, [calibration.md](./calibration.md) for the body measurement wizard that supplies its lengths, [wire-protocol.md](./wire-protocol.md) for the OSC messages it feeds, and [conventions.md](./conventions.md) for the coordinate spaces. Experiment history, including the model selection A/Bs, lives in [LEARNINGS.md](../../LEARNINGS.md).
 
 ---
 
 ## Models
 
-Two ONNX models, loaded from `models/` (`person_detection.onnx` and `rtmpose_body.onnx`, fetched by `InitialSetup_x64.bat`). Load is fail-soft: `BodyPoseTracker::load` returns false when either is missing and the stage becomes a no-op.
+Two ONNX models per camera, loaded from `models/` (fetched by `InitialSetup_x64.bat`): the person detector (`person_detection.onnx`) and one landmark model chosen by the camera's backend setting, `rtmpose_body.onnx` or `rtmw3d_wholebody.onnx`. Load is fail-soft: `BodyPoseTracker::load` returns false when either is missing and the stage becomes a no-op.
 
 ### Person detector
 
@@ -20,17 +20,29 @@ The score output comes first in the ONNX graph, so outputs are mapped by last di
 
 The detector's output box is a face box, not a person box. Only its keypoints are consumed downstream: per `PersonDetection`, keypoint 0 is the hip center, 1 the full-body ROI point, 2 the shoulder center, 3 the upper-body ROI point. The person box for the landmark model is built from keypoints 0 and 1 as a square about the hip center reaching the full-body point, which is the crop convention this detector was built for. Feeding the face box to the landmark model crops the arms away.
 
-### RTMPose body landmarks
+### RTMPose-family landmarks
 
-`RtmPoseBodyModel` (`src/Vision/RtmPoseBodyModel.h`) runs OpenMMLab's RTMPose-m body7 SimCC model (the `rtmpose-m_simcc-body7` MMDeploy end2end export). It is top-down: the caller supplies the person box, and each keypoint is predicted independently inside it with its own score. There is no full-body prior, so a joint outside the frame degrades to a low score instead of being invented. BlazePose landmarking was evaluated and removed as a poor fit: it always emits one coherent full body, so a subject truncated at a desk makes it fabricate the unseen legs, and its self-referential crop cannot recover (see [LEARNINGS.md](../../LEARNINGS.md)).
+`RtmPoseModel` (`src/Vision/RtmPoseModel.h`) runs the two OpenMMLab SimCC landmark models, which share everything but their sizes: the input size, the keypoint count and the presence of a depth axis are read from the model's own tensor shapes at load (the MMDeploy export leaves the keypoint dimension dynamic, so that one is read off the first run's output). Both are top-down: the caller supplies the person box, and each keypoint is predicted independently inside it with its own score. There is no full-body prior, so a joint outside the frame degrades to a low score instead of being invented. BlazePose landmarking was evaluated and removed as a poor fit: it always emits one coherent full body, so a subject truncated at a desk makes it fabricate the unseen legs, and its self-referential crop cannot recover (see [LEARNINGS.md](../../LEARNINGS.md)).
+
+The backend per camera (`eBodyPoseBackend`, `bodyPose.backend` in the camera config, the Model combo beside the camera's checkbox in the Tracking panel):
+
+- `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model and the metric rig's choice, where depth comes from the triangulated wrists
+- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint, the single-camera direct mode's choice, where that depth is all the depth there is
 
 Contract for `rtmpose_body.onnx`:
 
-- input `input`: `[1,3,256,192]` NCHW RGB, normalized `(x - mean) / std` with the ImageNet statistics (`k_mean`, `k_std` in `RtmPoseBodyModel.cpp`), from a 1.25-padded aspect-corrected affine crop of the person box
+- input `input`: `[1,3,256,192]` NCHW RGB, normalized `(x - mean) / std` with the ImageNet statistics (`k_mean`, `k_std` in `RtmPoseModel.cpp`), from a 1.25-padded aspect-corrected affine crop of the person box
 - output `simcc_x`: `[1,17,384]` per-keypoint x class scores (192 * 2)
 - output `simcc_y`: `[1,17,512]` per-keypoint y class scores (256 * 2)
 
-Decode is argmax over each axis divided by the 2.0 SimCC split ratio, mapped back through the inverse crop affine. A keypoint's score is `min(peakX, peakY)`. SimCC peaks are not probabilities; the tracker clamps them to `[0,1]` so downstream visibility gates keep their meaning. The model emits the 17-keypoint COCO order (`eCocoKeypoint`, `COCO_KEYPOINT_COUNT`).
+Contract for `rtmw3d_wholebody.onnx`:
+
+- input `input`: `[1,3,384,288]`, the same crop and normalization
+- output `simcc_x`: `[1,133,576]` (288 * 2)
+- output `simcc_y`: `[1,133,768]` (384 * 2)
+- output `simcc_z`: `[1,133,576]` depth class scores over 288 bins * 2
+
+Decode is argmax over each axis divided by the 2.0 SimCC split ratio; x and y map back through the inverse crop affine, and the depth bin maps to meters as `(bin / 144 - 1) * 2.1744869` (the `SimCC3DLabel` codec's `z_range`), relative to the hip midpoint the model was trained around, positive away from the camera. A keypoint's score is `min(peakX, peakY)`, as in the reference implementation; the depth peak is reported beside it (`RtmPoseResult::depthScores`) rather than folded in, since the depth distribution is broad and its peaks sit well under the planar ones. SimCC peaks are not probabilities; the tracker clamps them to `[0,1]` so downstream visibility gates keep their meaning. Both models emit the 17-keypoint COCO order first (`eCocoKeypoint`, `COCO_KEYPOINT_COUNT`); the whole-body model continues with 6 foot points, the 68 iBUG face landmarks and 21 landmarks per hand in the MediaPipe hand order (`WHOLEBODY_*` in `RtmPoseModel.h`).
 
 ## The tracker
 
@@ -38,7 +50,7 @@ Decode is argmax over each axis divided by the 2.0 SimCC split ratio, mapped bac
 
 ### The canonical landmark space
 
-`BodyPoseObservation` (`src/Vision/BodyPoseTypes.h`) uses the 33-slot BlazePose index space (`ePoseLandmark`, `POSE_LANDMARK_COUNT`) as the canonical layout, so every consumer (solver, overlays, recordings, dumps) is backend-independent. `k_cocoToPoseLandmark` in `BodyPoseTracker.cpp` maps RTMPose's 17 COCO keypoints into it. Slots the backend does not fill are reported through `providedMask`, a 64-bit mask with one bit per landmark, rather than being invented. Landmark positions are undistorted full-frame pixels. `visibility` per landmark carries the clamped model score, and the observation's `confidence` is the mean score over the 17 provided keypoints. `eBodyBoxSource` records where each model frame's person box came from:
+`BodyPoseObservation` (`src/Vision/BodyPoseTypes.h`) uses the 33-slot BlazePose index space (`ePoseLandmark`, `POSE_LANDMARK_COUNT`) as the canonical layout, so every consumer (solver, overlays, recordings, dumps) is backend-independent. `k_cocoToPoseLandmark` in `BodyPoseTracker.cpp` maps the 17 COCO keypoints into it, and `k_wholeBodyExtraSlots` adds the whole-body model's eye corners, mouth corners and the hand knuckles BlazePose names (index and pinky knuckles, the thumb's second knuckle); its remaining face and hand points have no slot and stay with the model result. Slots the backend does not fill are reported through `providedMask`, a 64-bit mask with one bit per landmark, rather than being invented. Landmark positions are undistorted full-frame pixels. With the whole-body backend `hasDepth` is set and each landmark's `z` is its depth relative to the hip midpoint in meters, positive away from the camera; the hips' own distance is not in it. Other backends leave `z` at zero with `hasDepth` false, as do recordings made before the depth axis. `visibility` per landmark carries the clamped model score, and the observation's `confidence` is the mean score over the 17 COCO keypoints whichever backend ran, so the two backends read alike. `eBodyBoxSource` records where each model frame's person box came from:
 
 - `Detector`: the person detector fired this model frame
 - `Tracked`: grown from the previous model frame's confident keypoints
@@ -53,7 +65,7 @@ On a model frame, `acquireBox` prefers the tracked box: the confident-keypoint e
 
 ## The world solver
 
-`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own metric 3D is deliberately not consumed: measured per-frame it is unusable, and the top-down backend produces none. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
+`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own 3D is deliberately not consumed: the body backend produces none, and the whole-body backend's per-keypoint depth is for the single-camera direct mode (`DirectRetarget`, see [avatar.md](./avatar.md)), which reads only its sign, and `--gate-direct` measures it. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
 
 Only a new `modelFrameIndex` triggers a re-solve (`solveFromObservation`). Re-solving a repeated observation against a moved wrist would slide the estimate along a stale ray, so repeated observations hold: the forearm direction is held and the elbow rides the fresh wrist through it, while shoulders and head hold their world positions (they hang off the torso, not the wrist). A model gap longer than `kMaxHoldMs` (500 ms) resets the solver. Estimated depths outside `kMinBodyDepthMeters` (0.15) to `kMaxBodyDepthMeters` (2.0) are rejected: any solve that divides a known separation by an apparent one blows up when the model collapses that pair, and the window keeps a wild value out of the estimates that hang off it.
 
@@ -65,7 +77,7 @@ Shoulders are placed first and independently of the arms, from their own two ray
 
 With a shoulder and a fused wrist known, `solveElbowOnBoneCircle` constructs the circle where the upper-arm sphere about the shoulder intersects the forearm sphere about the wrist. Both bone lengths then hold by construction, and the 2D elbow landmark is demoted from defining the elbow to picking a point on that circle, a far weaker demand on a noisy landmark and one that cannot produce an anatomically impossible arm. The pick minimizes distance to the camera ray around the circle by a 64-point sampled scan plus ternary refinement per minimum (`kCircleSamples`, `kRefineSteps`), which stays deterministic for replay. A wrist modestly out of reach straightens the arm to a single point, keeping the estimate continuous through full extension. A wrist wildly out of reach (`kMaxReachOvershoot`, 1.15 of both bones laid end to end) means the shoulder is wrong, and the solve declines rather than flinging the elbow. Without a shoulder, `intersectRaySphere` falls back to the elbow ray against the forearm sphere about the wrist alone, with a tangency clamp for the same continuity reason.
 
-The circle yields up to two candidates, both anatomically valid, so the choice is only which valid arm. Continuity wins outright when there is a held direction, and it predicts from the raw unfiltered forearm direction, never the smoothed one: a lagging predictor inside a discrete decision keeps endorsing the pose the arm has already left, and once the wrong root wins the filter converges onto it. With no history, the prior is that the elbow trails the wrist relative to the camera. The stored quantity is the forearm direction (wrist to elbow), not the elbow position, so the elbow rides a wrist that updates at full camera rate between model results.
+The circle yields up to two candidates, both anatomically valid, so the choice is only which valid arm. Continuity wins outright when there is a held direction, and it predicts from the raw unfiltered forearm direction, never the smoothed one: a lagging predictor inside a discrete decision keeps endorsing the pose the arm has already left, and once the wrong root wins the filter converges onto it. With no history and a known shoulder, an avatar's elbow hint decides when one is configured: `body.elbowSeedPerUpperArm` holds the loaded rig's `elbowHintOffset` over the avatar's upper-arm length per side, `makeBodyDimensions` scales it by the user's upper arm, and the candidate nearest the shoulder plus that offset wins. The seed is written into the config when the avatar loads, so a recording replays with it. Without a seed, the prior is that the elbow trails the wrist relative to the camera. The stored quantity is the forearm direction (wrist to elbow), not the elbow position, so the elbow rides a wrist that updates at full camera rate between model results.
 
 ### Dead reckoning
 
@@ -96,6 +108,7 @@ The per-camera stage runs inside `CameraContext::process` (`src/App/CameraContex
 The stage is opt-in per camera via `BodyPoseCameraConfig` on `CameraProfile` (`src/App/AppConfig.h`), serialized under the camera's `bodyPose` JSON object:
 
 - `bodyPose.enabled` (default false)
+- `bodyPose.backend` (default `rtmpose`, or `rtmw3d`)
 - `bodyPose.poseFrameDivider` (default 2)
 - `bodyPose.detectorIntervalFrames` (default 20)
 

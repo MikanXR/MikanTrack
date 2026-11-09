@@ -11,7 +11,10 @@
 // Frames are only present when raw frame recording was turned on for that
 // session (opt-in, off by default).
 //
-// usage: --replay-bodypose <recording.jsonl> [camera]
+// usage: --replay-bodypose <recording.jsonl> [camera] [rtmpose|rtmw3d]
+//
+// The backend defaults to the one the recording ran; naming the other
+// re-runs the same frames through it, the model A/B.
 
 namespace
 {
@@ -23,6 +26,12 @@ struct JointStats
 	std::vector<float> steps; // px between consecutive model results
 	glm::vec2 lastPoint{0.f};
 	bool bHaveLast= false;
+	// Whole-body backend only: hip-relative depth, m, and its step between
+	// consecutive model results
+	std::vector<float> depths;
+	std::vector<float> depthSteps;
+	float lastDepth= 0.f;
+	bool bHaveLastDepth= false;
 };
 
 float median(std::vector<float>& values)
@@ -51,7 +60,15 @@ static int runReplayBodyPose(const TestArgs& args)
 	}
 
 	const std::string recordingPath= args[0];
-	const int requestedCamera= args.size() > 1 ? atoi(args[1].c_str()) : -1;
+	int requestedCamera= -1;
+	std::string requestedBackend;
+	for (size_t i= 1; i < args.size(); ++i)
+	{
+		if (args[i] == "rtmpose" || args[i] == "rtmw3d")
+			requestedBackend= args[i];
+		else
+			requestedCamera= atoi(args[i].c_str());
+	}
 
 	TrackingReplay replay;
 	std::string error;
@@ -95,6 +112,9 @@ static int runReplayBodyPose(const TestArgs& args)
 	trackerConfig.frameDivider= 1;
 	trackerConfig.detectorIntervalFrames=
 		replay.getRecordedConfig().camera(cameraIndex).bodyPose.detectorIntervalFrames;
+	trackerConfig.backend= bodyPoseBackendFromString(
+		requestedBackend.empty() ? replay.getRecordedConfig().camera(cameraIndex).bodyPose.backend
+								 : requestedBackend);
 
 	BodyPoseTracker tracker;
 	if (!tracker.load("models", "directml", trackerConfig))
@@ -104,7 +124,8 @@ static int runReplayBodyPose(const TestArgs& args)
 	}
 
 	MIKAN_LOG_INFO("replay-bodypose")
-		<< "ep=" << tracker.activeEp() << ", camera " << cameraIndex << ", frames from " << frameDirectory;
+		<< "backend " << bodyPoseBackendToString(tracker.getBackend()) << ", ep=" << tracker.activeEp()
+		<< ", camera " << cameraIndex << ", frames from " << frameDirectory;
 
 	std::vector<JointStats> joints= {
 		{"shoulderL", ePoseLandmark::LEFT_SHOULDER}, {"shoulderR", ePoseLandmark::RIGHT_SHOULDER},
@@ -161,6 +182,16 @@ static int runReplayBodyPose(const TestArgs& args)
 					joint.steps.push_back(glm::length(point - joint.lastPoint));
 				joint.lastPoint= point;
 				joint.bHaveLast= true;
+
+				if (observation.hasDepth)
+				{
+					const float depth= observation.imagePoints[index].z;
+					joint.depths.push_back(depth);
+					if (joint.bHaveLastDepth)
+						joint.depthSteps.push_back(std::fabs(depth - joint.lastDepth));
+					joint.lastDepth= depth;
+					joint.bHaveLastDepth= true;
+				}
 			}
 		}
 	}
@@ -196,6 +227,13 @@ static int runReplayBodyPose(const TestArgs& args)
 			<< "  " << joint.name << ": score med " << scoreMedian << ", >=0.5 on "
 			<< (100 * aboveGate / (int)joint.scores.size()) << "%, step med " << median(joint.steps)
 			<< " px p90 " << percentile(joint.steps, 0.9f) << " px";
+		if (!joint.depths.empty())
+		{
+			MIKAN_LOG_INFO("replay-bodypose")
+				<< "    hip-relative depth med " << median(joint.depths) << " m, depth step med "
+				<< median(joint.depthSteps) * 100.f << " cm p90 " << percentile(joint.depthSteps, 0.9f) * 100.f
+				<< " cm";
+		}
 	}
 
 	return 0;

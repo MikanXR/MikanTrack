@@ -93,6 +93,28 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   in mm, scale) - the numbers are saved with the config as a baseline. Hand
   scale is measured continuously by stereo triangulation while tracking runs,
   until calibrated hand skeletons supersede it.
+- **Microphone mouth** (Audio panel): with no phone face streaming, the
+  voice drives the avatar's mouth from the microphone through uLipSync's
+  method, scored against your own calibrated vowels at a fraction of a
+  percent of a core. A VRM avatar with the vowel presets gets them straight
+  from the visemes, and one with ARKit shapes gets the jaw and lip shape of
+  each viseme. Pick the device and set the gate just above the room's noise
+  floor (the meter turns green when it opens). Before calibration the jaw
+  opens with the voice's volume alone. Calibrate records the five vowels
+  and the room's silence through six three-second prompts, builds your
+  profile, and sets the gate from the silence. Import loads a profile
+  exported from uLipSync or VTube Studio instead. The panel shows the
+  viseme weights live, and the OSC Output panel shows what they become on
+  the loaded avatar. Under the built-in Auto face profile the phone's face
+  takes the mouth back whenever it streams. A face profile authored in the
+  Avatar panel's Face tab can mix them instead, for example the phone's
+  eyes and brows with the voice's mouth. The Model combo switches between
+  Simple Loudness (the jaw by volume alone), MFCC (uLipSync, the
+  calibrated default above), and Oculus LipSync (Meta's engine; release
+  builds include it, and a source build needs the Oculus Lipsync native
+  SDK unpacked to `deps/OVRLipSyncNative`,
+  [build.md](docs/reference/build.md)). Each model has its own Smoothing
+  slider, and Oculus LipSync also exposes the engine's own smoothing.
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
 - Localized UI (English and Japanese; machine-translated Japanese for now),
   switchable live from the main menu or the Settings panel
@@ -128,7 +150,10 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   per-frame checksums. The Timeline panel scrubs/steps/plays a recording in
   the 3D scene view, marks any divergent frames, and re-simulates the same
   incident with edited fusion parameters ("what-if") to judge a candidate
-  fix against the recorded original. Headless:
+  fix against the recorded original. With the microphone mouth on, the
+  recording also carries the microphone as a wav beside it, and
+  `MikanTrack --replay-audio <file>` re-runs the mouth stage over it against
+  the recorded mouth frames. Headless:
   `MikanTrack --replay-verify <file>` re-verifies a recording;
   `MikanTrack --replay-dump <file> <first> <last>` emits a frame range
   with regenerated fusion diagnostics for offline analysis. Starting a
@@ -140,7 +165,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   different pose model would have done better - that model's input is gone.
   Ticking "Also record raw camera frames" in the Timeline panel additionally
   writes the exact images the models consumed as JPEGs beside the recording,
-  which makes `MikanTrack --replay-bodypose <file> [camera]`
+  which makes `MikanTrack --replay-bodypose <file> [camera] [backend]`
   a real measurement (per-joint scores, 2D jitter, box source, inference
   cost) rather than a live impression. **This is video of your room**, which
   is why it defaults off and is a local choice; it costs roughly 3-6 MB per
@@ -157,7 +182,8 @@ Developer reference lives in [docs/reference/](docs/reference/):
 - [hand-tracking.md](docs/reference/hand-tracking.md) and [body-pose.md](docs/reference/body-pose.md): the tracking pipelines
 - [calibration.md](docs/reference/calibration.md): the wizards and where results persist
 - [imu.md](docs/reference/imu.md): the wrist IMU system
-- [face.md](docs/reference/face.md): the iFacialMocap face stream
+- [face.md](docs/reference/face.md): the iFacialMocap face stream, the face profiles and their expression language
+- [audio.md](docs/reference/audio.md): the microphone mouth stage
 - [avatar.md](docs/reference/avatar.md): the VRM avatar loader, rest skeleton, and MToon renderer
 - [wire-protocol.md](docs/reference/wire-protocol.md): the OSC contract
 - [debugging.md](docs/reference/debugging.md): dumps, record/replay, diagnostics
@@ -192,9 +218,12 @@ holding `project.json` plus that project's `recordings/` and `dumps/`. The app
 starts at a menu (Resume / New Project / Load Project), so several setups (say
 a dual-camera and a triple-camera rig) can coexist and be switched or shared
 without disturbing each other. **New Project** runs a guided setup: pick the
-tracking variant (two overhead cameras, with or without wrist Joy-Cons, or
-overhead pair + front camera), assign camera devices, print and measure the
-calibration patterns, and the calibration wizards below run in the right order.
+tracking variant (two overhead cameras, with or without wrist Joy-Cons,
+overhead pair + front camera, a single front camera that drives a VRM avatar
+directly with no marker, or a single camera over the desk, the single-camera
+variants needing the avatar loaded first), assign camera devices, print and
+measure the calibration patterns, and the calibration wizards below run in the
+right order; the single front camera ends with a neutral-pose capture instead.
 Cancelling the guided setup (after a confirmation) deletes the new project again, and Resume returns to whatever
 project came before it.
 On first run an existing `%APPDATA%/MikanTrack/config.json` is migrated into a
@@ -240,18 +269,23 @@ the head into parent-relative bones.
 | `/VMC/Ext/T` | `f` | seconds since the socket opened |
 | `/VMC/Ext/Root/Pos` | `sfffffff` | `"root"` + identity; the avatar keeps whatever root it has |
 | `/VMC/Ext/Bone/Pos` | `sfffffff` | bone name + local position xyz (m) + rotation xyzw, Unity convention |
-| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, while the phone face stream is live |
+| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, one per face profile target, while the phone face stream is live or the microphone mouth is on |
 | `/VMC/Ext/Blend/Apply` | (none) | after the last blendshape value |
 | `/VMC/Ext/VRM` | `sss` | loaded avatar's local file path, title, SHA-256 of the file (once a second) |
 
 With the face stream on (Tracking panel, Face section), the blendshapes go out
-under the loaded avatar's own expression names, and the phone's head rotation
-drives the `Head` bone. With no avatar loaded they go out as the 52 ARKit names.
+under the names the avatar's face profile targets, and the phone's head rotation
+drives the `Head` bone. The built-in Auto profile sends the loaded avatar's own
+expression names, or the 52 ARKit names with no avatar loaded. The Avatar
+panel's Face tab authors other profiles (see
+[face.md](docs/reference/face.md)).
 
-Bones streamed, using Unity's `HumanBodyBones` names: `Head`, both
-`Shoulder`/`UpperArm`/`LowerArm`/`Hand`, and all 30 finger bones. Everything
-else (spine, neck, legs, eyes, jaw) is left alone, because this rig does not
-measure it and a receiver holds an unstreamed bone at the avatar's rest pose.
+Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,
+`Chest`, `UpperChest`, `Neck`, both `Shoulder`/`UpperArm`/`LowerArm`/`Hand`,
+and all 30 finger bones. The torso and neck bones go out only when the direct
+retarget places them (a lean); the position retarget never does. A bone not
+sent stays at the receiver's rest pose, and legs, eyes and jaw are never
+streamed.
 
 **Identity means the avatar's rest pose.** Streamed rotations are
 parent-relative and measured against a VRM-style rest: a T-pose with the palms

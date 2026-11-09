@@ -204,6 +204,19 @@ public:
 		return true;
 	}
 
+	// The same raw angles from the estimator's fit of the last fuse(),
+	// whatever the view count: a one-camera rig has no triangulated angles,
+	// and its rest zero has to carry the view's own bias so the output
+	// reads zero at rest. Fusing thread only.
+	bool getLastRawFittedAngles(eHandSide side,
+								std::array<FingerAngles, FINGER_COUNT>& outAngles) const
+	{
+		if (!m_bRawFitAnglesValid[(int)side])
+			return false;
+		outAngles= m_rawFitAngles[(int)side];
+		return true;
+	}
+
 	// -- Pure scoring helpers (exposed for the --test-fusion self test) -----
 
 	// Visibility factor in [0.05, 1.05]: how face-on the palm is to the camera
@@ -338,6 +351,10 @@ private:
 	// Raw triangulated angles of the last fuse (rest-pose capture source)
 	std::array<std::array<FingerAngles, FINGER_COUNT>, 2> m_rawTriAngles{};
 	bool m_bRawTriAnglesValid[2]= {false, false};
+	// Raw angles of the last fuse's estimator fit, from any number of views
+	// (the single-camera rest-pose capture source)
+	std::array<std::array<FingerAngles, FINGER_COUNT>, 2> m_rawFitAngles{};
+	bool m_bRawFitAnglesValid[2]= {false, false};
 
 	// Triangulated landmarks of the last fuse (bone-calibration source)
 	std::array<std::array<glm::vec3, HAND_LANDMARK_COUNT>, 2> m_lastTriPoints{};

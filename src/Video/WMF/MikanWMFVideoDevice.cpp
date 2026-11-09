@@ -6,6 +6,9 @@
 #include "WMFVideoFrameProcessor.h"
 
 #include <mfreadwrite.h>
+#include <ks.h>
+#include <ksmedia.h>
+#include <ksproxy.h>
 #include <sstream>
 #include <iomanip>
 
@@ -121,6 +124,25 @@ bool MikanWMFVideoDevice::open()
 			for (int prop_index= 0; prop_index < (int)eVideoSettingType::COUNT; ++prop_index)
 			{
 				getVideoSettingConstraint((eVideoSettingType)prop_index, m_videoPropertyConstraints[prop_index]);
+			}
+
+			// Auto exposure priority off: with it on (the state a Logitech
+			// camera is left in), auto exposure in dim light lengthens the
+			// exposure past the frame interval and the camera delivers half
+			// its rate; off, auto exposure holds the frame rate and raises
+			// the gain instead, as the Windows camera pipeline runs it
+			bool bPriority= false;
+			if (getAutoExposurePriority(bPriority))
+			{
+				const bool bSet= !bPriority || setAutoExposurePriority(false);
+				MIKAN_LOG_INFO("MikanWMFVideoDevice::open")
+					<< m_deviceInfo.deviceFriendlyName << ": auto exposure priority was "
+					<< (bPriority ? "on" : "off") << (bSet ? ", now off" : ", and the driver refused to turn it off");
+			}
+			else
+			{
+				MIKAN_LOG_INFO("MikanWMFVideoDevice::open")
+					<< m_deviceInfo.deviceFriendlyName << ": no auto exposure priority control";
 			}
 		}
 
@@ -695,6 +717,45 @@ bool MikanWMFVideoDevice::setCameraControlProperty(CameraControlProperty propId,
 	}
 
 	return SUCCEEDED(hr);
+}
+
+static bool ksCameraControl(IMFMediaSource* mediaSource, ULONG propertyId, ULONG typeFlag, long& ioValue)
+{
+	IKsControl* pKsControl= NULL;
+	HRESULT hr= mediaSource->QueryInterface(IID_PPV_ARGS(&pKsControl));
+	if (FAILED(hr))
+		return false;
+
+	KSPROPERTY_CAMERACONTROL_S request{};
+	request.Property.Set= PROPSETID_VIDCAP_CAMERACONTROL;
+	request.Property.Id= propertyId;
+	request.Property.Flags= typeFlag;
+	request.Value= ioValue;
+	request.Flags= KSPROPERTY_CAMERACONTROL_FLAGS_MANUAL;
+	ULONG bytesReturned= 0;
+	hr= pKsControl->KsProperty(&request.Property, sizeof(request), &request, sizeof(request), &bytesReturned);
+	pKsControl->Release();
+	if (FAILED(hr))
+		return false;
+
+	ioValue= request.Value;
+	return true;
+}
+
+bool MikanWMFVideoDevice::getAutoExposurePriority(bool& outPriority) const
+{
+	long value= 0;
+	if (!ksCameraControl(m_mediaSource, KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY, KSPROPERTY_TYPE_GET, value))
+		return false;
+
+	outPriority= value != 0;
+	return true;
+}
+
+bool MikanWMFVideoDevice::setAutoExposurePriority(bool bPriority)
+{
+	long value= bPriority ? 1 : 0;
+	return ksCameraControl(m_mediaSource, KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY, KSPROPERTY_TYPE_SET, value);
 }
 
 long MikanWMFVideoDevice::getCameraControlProperty(CameraControlProperty propId, bool* bIsAuto) const

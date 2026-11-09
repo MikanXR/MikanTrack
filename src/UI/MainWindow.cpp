@@ -5,8 +5,12 @@
 #include "imgui.h"
 #include "imgui_internal.h" // dock builder
 
+#include "glm/ext/matrix_transform.hpp"
+
 #include "App.h"
 #include "AppConfig.h"
+#include "AudioPanel.h"
+#include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
 #include "AvatarRig.h"
@@ -40,9 +44,11 @@ MainWindow::MainWindow(App* app)
 	, m_scene3dPanel(std::make_unique<Scene3dPanel>())
 	, m_devicePanel(std::make_unique<DevicePanel>(app, app->getVideoCapture(), app->getConfig()))
 	, m_calibrationPanel(std::make_unique<CalibrationPanel>(app->getConfig()))
-	, m_wizardHost(std::make_unique<WizardHost>(app->getConfig(), app->getVisionThread()))
+	, m_wizardHost(std::make_unique<WizardHost>(app, app->getConfig(), app->getVisionThread()))
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
+	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
+	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -198,6 +204,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.device"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.calibration"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
@@ -263,6 +270,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -280,24 +288,47 @@ void MainWindow::handleHotkeys()
 	struct HotkeyBinding
 	{
 		ImGuiKey key;
+		bool bShift;
 		void (MainWindow::*action)();
 	};
 	static const HotkeyBinding k_hotkeys[]= {
-		{ImGuiKey_F9, &MainWindow::dumpDiagnostics},
-		{ImGuiKey_F10, &MainWindow::toggleRecording},
+		{ImGuiKey_F9, false, &MainWindow::dumpDiagnostics},
+		{ImGuiKey_F9, true, &MainWindow::dumpDiagnosticsDelayed},
+		{ImGuiKey_F10, false, &MainWindow::toggleRecording},
 	};
 
+	const bool bShift= ImGui::GetIO().KeyShift;
 	for (const HotkeyBinding& binding : k_hotkeys)
 	{
-		if (ImGui::IsKeyPressed(binding.key, false))
+		if (binding.bShift == bShift && ImGui::IsKeyPressed(binding.key, false))
 			(this->*binding.action)();
 	}
 }
 
-// Diagnostic dump: state history + camera frames + config
+// Diagnostic dump: state history + camera frames + config, and in direct
+// mode the posed avatar
 void MainWindow::dumpDiagnostics()
 {
-	m_app->getVisionThread()->requestDiagnosticDump(m_app->getConfig()->makeDumpDirectoryPath());
+	m_bDumpPending= true;
+}
+
+void MainWindow::dumpDiagnosticsDelayed()
+{
+	constexpr float kDumpCountdownSeconds= 3.f;
+	if (!m_trackingPanelState.dumpCountdown.isRunning())
+		m_trackingPanelState.dumpCountdown.start(kDumpCountdownSeconds);
+}
+
+void MainWindow::performDiagnosticDump(const std::vector<SceneCameraView>& cameras,
+									   const std::vector<const TrackingFrameResult*>& perCameraResults)
+{
+	// The avatar as the scene sees it from the tracking camera, rendered
+	// here where the GL context is, saved by the vision thread beside the
+	// frame it should match
+	cv::Mat avatarRender;
+	if (m_scene3dPanel->hasCameraMatch())
+		m_scene3dPanel->captureFromCamera(m_latestFused, cameras, perCameraResults, avatarRender);
+	m_app->getVisionThread()->requestDiagnosticDump(m_app->getConfig()->makeDumpDirectoryPath(), avatarRender);
 }
 
 // Toggles the tracking recording (deterministic replay input capture;
@@ -343,7 +374,7 @@ void MainWindow::update(float deltaSeconds)
 			m_videoPreviewPanel->setFrame(cameraIndex, m_latestPreviews[cameraIndex].bgr);
 		}
 	}
-	visionThread->fetchFusedResult(m_latestFused);
+	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState);
 
 	handleHotkeys();
 
@@ -356,12 +387,37 @@ void MainWindow::update(float deltaSeconds)
 	SettingsPanels::drawTrackingPanel(config, visionThread, m_app->getVideoCapture(), m_videoPreviewPanel.get(),
 									  m_scene3dPanel.get(),
 									  m_trackingPanelState, m_latestPreviews, m_latestFused);
-	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused);
+	if (m_trackingPanelState.bDumpRequested)
+	{
+		m_trackingPanelState.bDumpRequested= false;
+		dumpDiagnostics();
+	}
+	if (m_trackingPanelState.bDelayedDumpRequested)
+	{
+		m_trackingPanelState.bDelayedDumpRequested= false;
+		dumpDiagnosticsDelayed();
+	}
+	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused, *m_mouthReadout, m_app->getAvatarModel(),
+								 m_app->getFaceBinding());
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel();
+	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	m_timelinePanel->draw(config, visionThread);
 	if (m_bShowAvatarPanel)
-		m_avatarPanel->draw(&m_bShowAvatarPanel);
+	{
+		// The Face tab reads the face the scene shows
+		const bool bReplayView= m_timelinePanel->isReplayViewActive();
+		m_avatarPanel->draw(&m_bShowAvatarPanel,
+							bReplayView ? m_timelinePanel->getDisplayFused().face : m_latestFused.face);
+	}
+	AudioPanel::DrawResult audioAction;
+	if (m_bShowAudioPanel)
+	{
+		// The weights block reads the face the scene shows
+		const bool bReplayView= m_timelinePanel->isReplayViewActive();
+		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive,
+										bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused, bReplayView);
+	}
 
 	// Launch requests raised by the panels this frame
 	if (m_trackingPanelState.bLaunchMountingWizard)
@@ -379,6 +435,8 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
 	if (calibrationAction.bLaunchExtrinsicsWizard)
 		launchWizard(eWizardKind::Extrinsics);
+	if (audioAction.bLaunchAudioWizard)
+		launchWizard(eWizardKind::AudioCalibration);
 
 	// Guided setup chain: draws its prompt modals on top of the panels, and
 	// launches/watches the wizards updated below
@@ -417,6 +475,9 @@ void MainWindow::update(float deltaSeconds)
 			forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
 				config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
 		}
+		// Direct mode: which of the direct camera's hand slots the solver took
+		m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
+										{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
 		m_videoPreviewPanel->draw(perCameraResults, executionProviders, &forearmOverlays);
 	}
 
@@ -425,9 +486,11 @@ void MainWindow::update(float deltaSeconds)
 	// with the frustums built from the RECORDING's config snapshot.
 	m_scene3dPanel->setForearmLength(config->body.forearmLengthMeters);
 	m_scene3dPanel->setAvatar(m_app->getAvatarModel(), m_app->getAvatarSkeleton(), m_app->getAvatarGeneration());
+	m_scene3dPanel->setFaceBinding(m_app->getFaceBinding());
 	m_scene3dPanel->setShowAvatar(config->avatar.showInScene);
 	SceneGizmos gizmos;
 	updateDisplayAvatar(gizmos);
+	const std::vector<SceneCameraView> sceneCameras= makeSceneCameraViews(*config);
 	if (m_timelinePanel->isReplayViewActive())
 	{
 		m_scene3dPanel->draw(m_timelinePanel->getDisplayFused(), m_timelinePanel->getSceneCameras(),
@@ -435,9 +498,17 @@ void MainWindow::update(float deltaSeconds)
 	}
 	else
 	{
-		m_scene3dPanel->draw(m_latestFused, makeSceneCameraViews(*config), perCameraResults, gizmos);
+		m_scene3dPanel->draw(m_latestFused, sceneCameras, perCameraResults, gizmos);
 	}
 	applyGizmoDrags(gizmos);
+
+	// The dump, once the avatar is posed for this frame
+	const bool bCountdownDone= m_trackingPanelState.dumpCountdown.update(deltaSeconds);
+	if (m_bDumpPending || bCountdownDone)
+	{
+		m_bDumpPending= false;
+		performDiagnosticDump(sceneCameras, perCameraResults);
+	}
 
 	// The active wizard, drawn last, on top
 	m_wizardHost->update(deltaSeconds, m_latestPreviews, m_latestFused, m_videoPreviewPanel.get());
@@ -453,6 +524,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	{
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
+		updateSceneCameraMatch(nullptr, nullptr);
 		return;
 	}
 	const AppConfig* config= m_app->getConfig();
@@ -468,30 +540,61 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	if (feed != m_avatarPoseFeed)
 	{
 		m_avatarRetarget.reset();
+		m_directRetarget.reset();
 		m_avatarPoseFeed= feed;
 	}
 
 	const AvatarRetargetConfig retargetConfig= makeAvatarRetargetConfig(*config, rig);
+	const DirectRetarget::SolveState* directState= nullptr;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
-		TrackingFrameResult frame;
-		BodyDimensions user;
-		if (preview == AvatarPanel::ePreviewPose::Rest)
-			AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
+		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
+		{
+			// Direct mode: the same rest pose the stream falls back to
+			DirectRetarget::makeRestPose(*skeleton, makeDirectRetargetConfig(*config, rig), m_avatarPose);
+		}
 		else
-			AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-		m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+		{
+			TrackingFrameResult frame;
+			BodyDimensions user;
+			if (preview == AvatarPanel::ePreviewPose::Rest)
+				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
+			else
+				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
+			m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
 	else
 	{
 		const AppConfig& lengthsConfig= bReplay ? m_timelinePanel->getRecordedConfig() : *config;
 		const TrackingFrameResult& shownFused= bReplay ? m_timelinePanel->getDisplayFused() : m_latestFused;
-		m_avatarRetarget.solve(shownFused, makeBodyDimensions(lengthsConfig), *skeleton, retargetConfig,
-							   m_avatarPose);
+		// Direct mode: live, the vision thread's pose arrives with the result;
+		// in replay the window's own solver runs the recorded camera's frame
+		// under the recorded config. Either way the position retarget is
+		// skipped, so the scene shows exactly what the stream carries.
+		bool bDirectShown= false;
+		if (bReplay)
+		{
+			bDirectShown= solveReplayDirectPose(lengthsConfig, *skeleton, rig);
+			if (bDirectShown)
+				directState= &m_directRetarget.getSolveState();
+		}
+		else if (m_latestDirectPose.valid)
+		{
+			m_avatarPose= m_latestDirectPose;
+			bDirectShown= true;
+			directState= &m_latestDirectState;
+		}
+		if (!bDirectShown)
+		{
+			m_avatarRetarget.solve(shownFused, makeBodyDimensions(lengthsConfig), *skeleton, retargetConfig,
+								   m_avatarPose);
+		}
 		m_scene3dPanel->setAvatarFace(&shownFused.face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
+	updateSceneCameraMatch(directState, skeleton.get());
 
 	// The elbow hints where the solve put them: off the posed upper-arm
 	// joint, turned with the root
@@ -505,6 +608,74 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		hint.shoulderWorld= posed[(int)upperArm].positionWorld;
 		hint.hintWorld= hint.shoulderWorld + m_avatarPose.rootRotationWorld * rig.sides[sideIndex].elbowHintOffset;
 	}
+}
+
+void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)
+{
+	SceneCameraMatch match;
+	if (directState != nullptr && skeleton != nullptr && directState->torsoValid && directState->camera.width > 0 &&
+		directState->camera.height > 0)
+	{
+		match.valid= true;
+		match.camera= directState->camera;
+		match.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
+		// The chains live in the solve's world, the camera at the origin; the
+		// camera's translation carries them to the avatar's
+		m_scene3dPanel->setDirectSolve(directState,
+									   glm::translate(glm::mat4(1.f), glm::vec3(match.cameraToWorld[3])));
+	}
+	else
+	{
+		m_scene3dPanel->setDirectSolve(nullptr, glm::mat4(1.f));
+		const AppConfig* config= m_app->getConfig();
+		if (config->cameraCount() > 0 && !m_latestPreviews.empty() && m_latestPreviews[0].valid &&
+			!m_latestPreviews[0].bgr.empty())
+		{
+			const CameraProfile& profile= config->camera(0);
+			if (profile.extrinsics.present && profile.intrinsics.present)
+			{
+				const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
+				match.valid= true;
+				match.camera.fx= (float)cameraMatrix.x0;
+				match.camera.fy= (float)cameraMatrix.y1;
+				match.camera.cx= (float)cameraMatrix.z0;
+				match.camera.cy= (float)cameraMatrix.z1;
+				match.camera.width= m_latestPreviews[0].bgr.cols;
+				match.camera.height= m_latestPreviews[0].bgr.rows;
+				match.cameraToWorld= glm::mat4(profile.extrinsics.markerFromCamera);
+			}
+		}
+	}
+	m_scene3dPanel->setCameraMatch(match);
+}
+
+bool MainWindow::solveReplayDirectPose(const AppConfig& recordedConfig, const AvatarSkeleton& skeleton,
+									   const AvatarRigSettings& rig)
+{
+	if (!recordedConfig.direct.enabled)
+		return false;
+	const int cameraIndex= recordedConfig.direct.cameraIndex;
+	const std::vector<const TrackingFrameResult*> perCamera= m_timelinePanel->getPerCameraResults();
+	if (cameraIndex < 0 || cameraIndex >= (int)perCamera.size() || perCamera[cameraIndex] == nullptr ||
+		cameraIndex >= (int)recordedConfig.cameraCount() || !recordedConfig.camera(cameraIndex).intrinsics.present)
+		return false;
+
+	// The recording's undistorted pinhole, the space its landmarks live in
+	const TrackingFrameResult& frame= *perCamera[cameraIndex];
+	const MikanMatrix3d& cameraMatrix=
+		recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
+	DirectCameraModel cameraModel;
+	cameraModel.fx= (float)cameraMatrix.x0;
+	cameraModel.fy= (float)cameraMatrix.y1;
+	cameraModel.cx= (float)cameraMatrix.z0;
+	cameraModel.cy= (float)cameraMatrix.z1;
+	cameraModel.width= frame.frameWidth;
+	cameraModel.height= frame.frameHeight;
+	// No phone head in a replay: the recording carries the camera inputs
+	const TrackingFrameResult::HeadPose noPhoneHead;
+	m_directRetarget.solve(frame, cameraModel, noPhoneHead, frame.timestampMs, skeleton,
+						   makeDirectRetargetConfig(recordedConfig, rig), m_avatarPose);
+	return m_avatarPose.valid;
 }
 
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
