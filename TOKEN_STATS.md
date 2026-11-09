@@ -1,7 +1,7 @@
 # AI Token Usage
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-7.4M_out_%2F_2.3B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~123_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~369_L-blue)
+![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~211_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~633_L-blue)
 (estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
@@ -32,7 +32,7 @@ Anthropic publishes no per-token energy figures, so the estimate chains public r
 **For scale:** the central estimate (~70 kWh) is about two and a half days of average US household electricity, or roughly 140 hours of the RTX 3090 dev machine at full load. The central water estimate (~200 L) is about one bathtub.
 
 <!-- TOKEN_STATS:BEGIN -->
-Last regenerated 2026-09-30 06:06 UTC by `tools/token_stats.py`.
+Last regenerated 2026-11-09 06:03 UTC by `tools/token_stats.py`.
 
 ## Per-session usage
 
@@ -63,23 +63,42 @@ Last regenerated 2026-09-30 06:06 UTC by `tools/token_stats.py`.
 | Project files, guided setup flow, tracking configurations (Aug 17 - Aug 18) | claude-sonnet-5 | 360 | 455,086 | 36,320,823 | 938,224 |
 | Single-camera removal and SystemAnimatorOnline transfer consideration (Aug 18 - Aug 19) | claude-opus-5 | 56 | 77,596 | 8,637,133 | 342,360 |
 | testing.md reference doc (Aug 19) | claude-opus-5 | 38 | 24,631 | 3,748,073 | 111,058 |
-| Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages (Sep 29) | claude-fable-5-1 | 102 | 242,525 | 34,360,308 | 502,477 |
+| Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages (Sep 29) | claude-fable-5-1 | 106 | 243,969 | 36,487,268 | 508,718 |
+| VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream (Oct 1) | claude-fable-5-1 | 127 | 429,960 | 53,922,752 | 2,246,586 |
+| VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream (Oct 1) | claude-opus-5-5 | 78 | 37,545 | 6,989,301 | 539,930 |
+| Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks (Oct 2 - Oct 3) | claude-opus-5-5 | 99 | 116,320 | 21,893,883 | 892,215 |
+| Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks (Oct 2 - Oct 3) | claude-sonnet-5-5 | 5 | 636 | 180,003 | 56,286 |
+| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-fable-5-1 | 797 | 884,628 | 402,530,506 | 6,472,703 |
+| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-opus-5-5 | 2,545 | 543,292 | 451,658,770 | 10,404,194 |
+| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-sonnet-5-5 | 46 | 1,042 | 4,248,740 | 241,602 |
+| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-fable-5-1 | 983 | 1,642,551 | 225,568,659 | 5,849,887 |
+| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-opus-5-5 | 220 | 166,406 | 23,571,623 | 1,340,990 |
+| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-sonnet-5-5 | 62 | 57,337 | 3,966,544 | 402,765 |
+| Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7) | claude-fable-5-1 | 532 | 990,235 | 120,114,216 | 4,232,195 |
+| Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7) | claude-opus-5-5 | 120 | 105,526 | 12,096,777 | 544,508 |
+| Microphone mouth stage, the forked first pass (Nov 6) | claude-fable-5-1 | 137 | 202,174 | 26,671,925 | 805,247 |
+| Face expression proposal (Nov 7) | claude-opus-5-5 | 48 | 34,768 | 5,122,476 | 289,624 |
+| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-fable-5-1 | 96 | 130,285 | 18,177,745 | 858,573 |
+| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-opus-5-5 | 214 | 188,798 | 23,835,496 | 722,459 |
+| Face expression system implementation (Nov 8) | claude-opus-5-5 | 159 | 203,086 | 44,555,615 | 871,072 |
 
 ## Totals per model
 
 | Model | API calls | Input | Cache write | Cache read | Output | Weighted |
 |---|---|---|---|---|---|---|
 | claude-fable-5 | 2,591 | 21,074 | 12,397,951 | 942,019,064 | 3,193,585 | 25,137,668 |
-| claude-fable-5-1 | 102 | 2,754 | 502,477 | 34,360,308 | 242,525 | 1,055,901 |
+| claude-fable-5-1 | 2,778 | 78,784 | 20,973,909 | 883,473,071 | 4,523,802 | 27,452,497 |
 | claude-opus-5 | 3,302 | 45,258 | 15,571,474 | 1,312,417,756 | 3,471,033 | 33,621,308 |
+| claude-opus-5-5 | 3,483 | 6,986 | 15,604,992 | 589,723,941 | 1,395,741 | 17,092,865 |
 | claude-sonnet-5 | 445 | 13,920 | 1,324,975 | 44,892,367 | 527,219 | 1,759,094 |
-| **total** | 6,440 | 83,006 | 29,796,877 | 2,333,689,495 | 7,434,362 | **61,573,972** |
+| claude-sonnet-5-5 | 113 | 226 | 700,653 | 8,395,287 | 59,015 | 402,129 |
+| **total** | 12,712 | 166,248 | 66,573,954 | 3,780,921,486 | 13,170,395 | **105,465,562** |
 
 ## Energy and water estimate
 
 | Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |
 |---|---|---|---|---|
-| low | 0.5 | 31 kWh | 34 L | 92 L |
-| central | 2.0 | 123 kWh | 135 L | 369 L |
-| high | 6.0 | 369 kWh | 406 L | 1,108 L |
+| low | 0.5 | 53 kWh | 58 L | 158 L |
+| central | 2.0 | 211 kWh | 232 L | 633 L |
+| high | 6.0 | 633 kWh | 696 L | 1,898 L |
 <!-- TOKEN_STATS:END -->
