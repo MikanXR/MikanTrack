@@ -54,6 +54,7 @@ The living plan: what is in flight now, what comes next, and the open questions.
 - [ ] Lua-defined inputs for face profiles: scripted values as an input namespace.
 - [ ] Curve-preview widgets in the Face tab: the response of `remap`, `smoothstep`, `pow` and `hysteresis` drawn over their input range.
 - [ ] Human-review the machine-translated Japanese strings for the Face tab (`faceTab`, `avatarPanel.tabFace`, `windows.modalDeleteFaceProfile`, `audioPanel.weightsNone` in `resources/localization/ja.json`).
+- [ ] Human-review the machine-translated Japanese strings for the expression editor (`exprEditor`, `windows.expressionEditor` in `resources/localization/ja.json`).
 
 ## Open questions
 
