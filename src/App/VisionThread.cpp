@@ -277,11 +277,27 @@ void VisionThread::handleRecordingStartOnThread()
 
 	if (m_recorder == nullptr)
 		m_recorder= std::make_unique<TrackingRecorder>();
+	// The face sidecar opens with every recording, so a phone that connects
+	// mid-recording is captured. The recorder deletes the file when the
+	// recording ends with no sample written.
+	if (m_faceService != nullptr)
+	{
+		const std::string facePath= TrackingRecording::makeFaceSidecarPath(filePath);
+		if (m_faceRecorder.start(facePath))
+		{
+			header.face.present= true;
+			header.face.fileName= std::filesystem::path(facePath).filename().string();
+			header.face.startTimestampMs= steadyNowMs();
+			m_lastRecordedFaceSequence= 0;
+		}
+	}
+
 	if (!m_recorder->start(filePath, TrackingRecording::headerToJson(header)))
 	{
 		if (m_bRecordingAudio)
 			m_audioService->stopRecording();
 		m_bRecordingAudio= false;
+		m_faceRecorder.stop();
 		return;
 	}
 
@@ -307,6 +323,7 @@ void VisionThread::finalizeRecordingOnThread(bool bAborted, const std::string& r
 	if (m_bRecordingAudio && m_audioService != nullptr)
 		m_audioService->stopRecording();
 	m_bRecordingAudio= false;
+	m_faceRecorder.stop();
 	std::lock_guard<std::mutex> lock(m_recordingMutex);
 	m_lastRecordingPath= m_recorder->getFilePath();
 }
@@ -1063,6 +1080,18 @@ void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, 
 	{
 		applyMouthToOutput(output, nowMs);
 		return;
+	}
+	// The face sidecar takes each sample once, on camera and face-only
+	// iterations alike, so it runs at the phone's rate
+	if (m_faceRecorder.isRecording() && sample.sequence != m_lastRecordedFaceSequence)
+	{
+		m_lastRecordedFaceSequence= sample.sequence;
+		RecordedFaceSample recorded;
+		recorded.sequence= sample.sequence;
+		recorded.timestampMs= sample.timestampMs;
+		recorded.bTracked= sample.faceTracked;
+		recorded.blendshapes= sample.blendshapes;
+		m_faceRecorder.enqueue(recorded);
 	}
 	// The phone lost the face: its values are stale, so the face relaxes and
 	// the camera head stands

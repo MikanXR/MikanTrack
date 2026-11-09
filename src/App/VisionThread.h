@@ -12,6 +12,7 @@
 #include "CameraContext.h"
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
+#include "FaceRecorder.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
 #include "HandBoneCalibrator.h"
@@ -468,6 +469,9 @@ private:
 	// device reopened) records without an index into it
 	bool m_bRecordingAudio= false;
 	uint32_t m_recordingAudioEpoch= 0;
+	// The face sidecar's writer, and the last phone sample it took
+	FaceRecorder m_faceRecorder;
+	uint64_t m_lastRecordedFaceSequence= 0;
 
 	// Diagnostic dump: history lives on the vision thread; the request path
 	// and completion path are the only cross-thread strings (mutex-guarded)
