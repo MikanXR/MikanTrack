@@ -1,5 +1,7 @@
 #include "OscStreamer.h"
 
+#include <algorithm>
+
 #include "Logger.h"
 #include "TrackingTypes.h"
 
@@ -50,6 +52,7 @@ bool OscStreamer::startup()
 	m_lastVmcPose[0]= HeldPoseState();
 	m_lastVmcPose[1]= HeldPoseState();
 	m_bFaceWasPresent= false;
+	m_sentBlendNames.clear();
 	m_hasSentAvatar= false;
 
 	// The target is logged by setConfig instead: startup runs before the app's
@@ -85,8 +88,14 @@ void OscStreamer::setConfig(const OscStreamerConfig& config)
 
 	if (config.avatarSkeleton != m_config.avatarSkeleton)
 		m_avatarRetarget.reset();
+	// Announce at once to a new target or for a new avatar, rather than at
+	// the next one-second repeat. A face profile edit swaps only the binding
+	// and leaves the repeat alone.
+	const bool bAvatarChanged= config.avatarPath != m_config.avatarPath || config.avatarTitle != m_config.avatarTitle ||
+							   config.avatarSha256 != m_config.avatarSha256;
 	m_config= config;
-	m_hasSentAvatar= false; // re-announce the avatar on config change
+	if (bAvatarChanged || bTargetChanged)
+		m_hasSentAvatar= false;
 
 	if (bTargetChanged)
 	{
@@ -298,28 +307,43 @@ void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const Avat
 
 void OscStreamer::appendVmcBlendMessages(const TrackingFrameResult& frame)
 {
-	const bool bFacePresent= frame.face.present;
+	const bool bFacePresent= frame.face.isPresent();
 	if (!bFacePresent && !m_bFaceWasPresent)
+		return;
+	const FaceProfileBinding* binding= m_config.faceBinding.get();
+	if (binding == nullptr)
+		return;
+	// Values evaluated under another binding name other targets; the next
+	// frame carries this binding's
+	if (bFacePresent && frame.face.outputs.generation != binding->getGeneration())
 		return;
 	m_bFaceWasPresent= bFacePresent;
 
-	if (m_rawFaceMap == nullptr)
-		m_rawFaceMap= AvatarFaceMap::buildRaw();
-	const AvatarFaceMap& faceMap= m_config.faceMap != nullptr ? *m_config.faceMap : *m_rawFaceMap;
-
-	// A stopped stream sends zeros once: a receiver holds the last value of a
+	// A stopped face sends zeros once: a receiver holds the last value of a
 	// blendshape that stops arriving, which would freeze a blink mid-closure
+	const std::vector<std::string>& names= binding->getWireNames();
 	if (bFacePresent)
-		faceMap.evaluate(frame.face.blendshapes, frame.face.visemesPresent ? &frame.face.visemes : nullptr, m_blendValues);
+		binding->combineWire(frame.face.outputs.targetValues, m_blendValues);
 	else
-		m_blendValues.assign(faceMap.getOutputs().size(), 0.f);
+		m_blendValues.assign(names.size(), 0.f);
 
-	for (size_t outputIndex= 0; outputIndex < faceMap.getOutputs().size(); ++outputIndex)
+	for (size_t nameIndex= 0; nameIndex < names.size(); ++nameIndex)
 	{
 		OscMessage& blendMessage= m_bundle.addMessage(k_vmcBlendValueAddress);
-		blendMessage.addString(faceMap.getOutputs()[outputIndex].name.c_str()).addFloat(m_blendValues[outputIndex]);
+		blendMessage.addString(names[nameIndex].c_str()).addFloat(m_blendValues[nameIndex]);
+	}
+	// The names a previous binding sent and this one does not relax too
+	for (const std::string& sentName : m_sentBlendNames)
+	{
+		if (std::find(names.begin(), names.end(), sentName) == names.end())
+		{
+			OscMessage& blendMessage= m_bundle.addMessage(k_vmcBlendValueAddress);
+			blendMessage.addString(sentName.c_str()).addFloat(0.f);
+		}
 	}
 	m_bundle.addMessage(k_vmcBlendApplyAddress);
+	if (m_sentBlendNames != names)
+		m_sentBlendNames= names;
 }
 
 void OscStreamer::appendVmcAvatarMessage(const ClockTimePoint& now)

@@ -63,8 +63,11 @@ public:
 
 	// Newest sample; false before the first datagram
 	bool getLatestSample(FaceSample& outSample) const;
-	// A datagram arrived within the last half second
+	// A datagram arrived within the last k_streamingWindowMs
 	bool isStreaming(double nowMs) const;
+	// A sample counts as live for this long past its datagram (a replayed
+	// sample too)
+	static constexpr double k_streamingWindowMs= 500.0;
 
 	FaceServiceStatus getStatus() const;
 

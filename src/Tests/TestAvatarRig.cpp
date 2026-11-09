@@ -187,6 +187,8 @@ static int runAvatarRigTest(const TestArgs&)
 		saved.sides[1].restPalmNormal= glm::vec3(0.f, -1.f, 0.f);
 		saved.sides[1].restFingerCurlDegrees= 25.f;
 		saved.restBlendMs= 450.f;
+		saved.faceProfiles= {"0f1e2d3c-4b5a-4968-8776-655443322110", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"};
+		saved.activeFaceProfile= saved.faceProfiles[1];
 
 		const std::filesystem::path folder=
 			std::filesystem::temp_directory_path() / PathUtils::utf8ToPath("mikan-test-avatar-rig-\xE3\x82\xA2\xE3\x83\x90\xE3\x82\xBF\xE3\x83\xBC");
@@ -210,6 +212,13 @@ static int runAvatarRigTest(const TestArgs&)
 				a.restPalmNormal == b.restPalmNormal && a.restFingerCurlDegrees == b.restFingerCurlDegrees;
 		}
 		check(bSame, "(a) the sidecar round-trips through a non-ASCII path");
+		check(loaded.faceProfiles == saved.faceProfiles && loaded.activeFaceProfile == saved.activeFaceProfile,
+			  "(a) the sidecar round-trips the face profile ids and the active id");
+		AvatarRigSettings versionOne;
+		std::string versionOneError;
+		check(avatarRigFromJson("{\"version\": 1, \"restBlendMs\": 200}", versionOne, versionOneError) &&
+				  versionOne.faceProfiles.empty() && versionOne.activeFaceProfile.empty() && versionOne.restBlendMs == 200.f,
+			  "(a) a version 1 sidecar loads with no face profiles assigned");
 		check(loaded.boneNodeOverrides[(int)B::LeftEye].has_value() && loaded.boneNodeOverrides[(int)B::LeftEye]->empty() &&
 				  !loaded.boneNodeOverrides[(int)B::RightEye].has_value(),
 			  "(a) an unmapped override stays distinct from no override");

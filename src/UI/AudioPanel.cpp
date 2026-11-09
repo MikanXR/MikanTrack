@@ -75,7 +75,7 @@ AudioPanel::DrawResult AudioPanel::draw(bool* pOpen, bool bWizardActive, const T
 
 void AudioPanel::drawWeights(const TrackingFrameResult& shownFused, bool bReplayView)
 {
-	const bool bVisemes= shownFused.face.present && shownFused.face.visemesPresent;
+	const bool bVisemes= shownFused.face.viseme.present;
 	if (bReplayView)
 		ImGui::TextDisabled("%s", locText("audioPanel.weightsReplay"));
 	else if (!bVisemes)
@@ -83,7 +83,7 @@ void AudioPanel::drawWeights(const TrackingFrameResult& shownFused, bool bReplay
 	else
 		ImGui::TextDisabled("%s", locText("audioPanel.weightsHeader"));
 
-	const VisemeWeights weights= bVisemes ? shownFused.face.visemes : VisemeWeights{};
+	const VisemeWeights weights= bVisemes ? shownFused.face.viseme.weights : VisemeWeights{};
 	drawWeightTable(
 		"visemeWeights", VISEME_COUNT, [](int index, const void*) { return visemeName(index); }, weights.data(), nullptr);
 }
@@ -244,8 +244,9 @@ void AudioPanel::drawStatus()
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), locText("audioPanel.statusBackendNotReadyFmt"),
 						   status.backendReason.c_str());
 
-	// Who owns the mouth: the phone while it streams a tracked face, else
-	// the microphone when its gate is open
+	// Who owns the mouth under the Auto face profile: the phone while it
+	// streams a tracked face, else the microphone when its gate is open. A
+	// custom profile decides for itself.
 	const FaceService* faceService= m_app->getFaceService();
 	FaceSample faceSample;
 	const bool bPhone= faceService != nullptr && m_config->face.enabled && faceService->isStreaming(steadyNowMs()) &&

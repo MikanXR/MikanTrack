@@ -12,6 +12,7 @@
 #include "CameraContext.h"
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
+#include "FaceProfileRunner.h"
 #include "FaceRecorder.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
@@ -22,7 +23,6 @@
 #include "TrackingTypes.h"
 
 class AppConfig;
-class AvatarFaceMap;
 class AvatarSkeleton;
 class AudioService;
 class FaceService;
@@ -96,15 +96,16 @@ public:
 	// config refresh, which would end a recording. Survives a stop/start.
 	void setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skeleton, const AvatarRigSettings& rig);
 
-	// The loaded avatar's identity and face map, for the VMC output's
-	// /VMC/Ext/VRM announcement and blendshape names. Applied like the
-	// skeleton; an empty path clears both.
+	// The loaded avatar's identity and face profile binding, for the VMC
+	// output's /VMC/Ext/VRM announcement and the face evaluation. Applied like
+	// the skeleton; an empty path clears the identity. A null binding keeps
+	// the no-avatar Auto profile.
 	struct AvatarIdentity
 	{
 		std::string path;   // UTF-8
 		std::string title;
 		std::string sha256; // lowercase hex of the file bytes
-		std::shared_ptr<const AvatarFaceMap> faceMap;
+		std::shared_ptr<const FaceProfileBinding> faceBinding;
 	};
 	void setAvatarIdentity(const AvatarIdentity& identity);
 
@@ -309,17 +310,18 @@ private:
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
 	// dominant camera, per-camera confidence, auto hand-scale)
 	void runBodySolveStage(IterationState& iteration);
-	// OSC send and the fused-result publish
+	// The face profile evaluation, the OSC send and the fused-result publish
 	void runOutputStage(IterationState& iteration);
-	// The microphone's mouth onto the output's face when the phone does not
-	// own it: the mouth columns over a neutral face
+	// The microphone's visemes onto the output's viseme source
 	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
-	// The face stream's blendshapes and head onto the output, phone head
-	// winning over the camera head while the stream is live
+	// The face stream's blendshapes onto the output's phone source, and its
+	// head, which wins over the camera head while the stream is live and
+	// tracked. Fills the viseme source beside it.
 	void applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead);
-	// A face sample with no camera frame this iteration still goes out: the
-	// stream runs at the phone's rate, faster than the cameras, and must keep
-	// flowing with the cameras stopped. Returns true when it produced output.
+	// A new face or mouth sample with no camera frame this iteration still
+	// goes out: the sources run at their own rates, faster than the cameras,
+	// and must keep flowing with the cameras stopped. Returns true when it
+	// produced output.
 	bool runFaceOnlyOutput(IterationState& iteration, double nowMs);
 	// Bone calibration window and rest-pose capture
 	void runCalibrationCaptures();
@@ -389,6 +391,8 @@ private:
 	AvatarIdentity m_pendingAvatarIdentity;
 	std::atomic<bool> m_bAvatarIdentityChanged{false};
 	AvatarIdentity m_avatarIdentity;
+	// The face profile over the output frames (vision thread only)
+	FaceProfileRunner m_faceRunner;
 
 	std::thread m_thread;
 	std::atomic_bool m_bRunning{false};

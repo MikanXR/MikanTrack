@@ -17,8 +17,6 @@ static constexpr int k_handshakeBurst= 5;
 // long, so a phone that comes up later, or restarts, finds the service on its
 // own
 static constexpr double k_handshakeIntervalMs= 3000.0;
-// The sample counts as live for this long past its datagram
-static constexpr double k_streamingWindowMs= 500.0;
 static constexpr double k_rateWindowMs= 1000.0;
 
 namespace

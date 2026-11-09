@@ -1,7 +1,10 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "FaceProfileRunner.h"
 
 #include "Scene3dPanel.h" // SceneCameraView
 #include "TrackingReplay.h"
@@ -19,6 +22,10 @@ class TimelinePanel
 {
 public:
 	void draw(AppConfig* config, VisionThread* visionThread);
+
+	// The face profile binding the replayed face is evaluated through, the
+	// live one, so a profile edit can be judged against a recorded take
+	void setFaceBinding(std::shared_ptr<const FaceProfileBinding> binding) { m_faceBinding= std::move(binding); }
 
 	// When active, MainWindow feeds the 3D scene from the replay instead of
 	// the live tracking output
@@ -48,6 +55,12 @@ private:
 	void rebuildDisplayFrame();
 	// The recorded (live) output reconstructed as a displayable result
 	void buildRecordedResult(const RecordedFrame& recorded, TrackingFrameResult& outResult) const;
+	// The face sources of a recorded frame: the mouth from the record, the
+	// phone from the face sidecar's newest sample at or before it
+	FaceSources makeReplayFaceSources(int frameIndex) const;
+	// Evaluates the face profile up to the current frame: frame by frame
+	// while the playhead moves forward, from a reset state after a seek
+	void rebuildDisplayFace();
 
 	TrackingReplay m_replay;
 	bool m_bLoaded= false;
@@ -74,4 +87,12 @@ private:
 	std::vector<bool> m_perCameraCopyValid;
 	int m_builtFrame= -1;
 	int m_builtViewMode= -1;
+
+	// The replay's own face evaluation, apart from the live one
+	std::shared_ptr<const FaceProfileBinding> m_faceBinding;
+	FaceProfileRunner m_faceRunner;
+	FaceSources m_displayFace;
+	int m_faceFrame= -1;
+	// A forward step longer than this many frames counts as a seek
+	static constexpr int k_maxFaceCatchUpFrames= 240;
 };

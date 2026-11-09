@@ -1,6 +1,7 @@
 #include "TestCommon.h"
 
-#include "AvatarFaceMap.h"
+#include "FaceAutoProfile.h"
+#include "FaceProfileBinding.h"
 #include "AvatarSkeleton.h"
 #include "PathUtils.h"
 #include "VrmLoader.h"
@@ -109,13 +110,21 @@ static int runVrmInfoTool(const TestArgs& args)
 								   << "' " << expression.morphBinds.size() << " binds";
 	}
 
-	// What the face stream would put on the wire for this avatar
-	const std::shared_ptr<const AvatarFaceMap> faceMap= AvatarFaceMap::build(model);
-	std::string faceNames;
-	for (const AvatarFaceMap::Output& output : faceMap->getOutputs())
-		faceNames+= (faceNames.empty() ? "" : ", ") + output.name;
-	MIKAN_LOG_INFO("vrm-info") << "face map" << (faceMap->isPerfectSync() ? " (perfect sync)" : "") << ": "
-							   << faceMap->getOutputs().size() << " blendshapes: " << faceNames;
+	// What the Auto face profile would put on the wire for this avatar
+	const std::shared_ptr<const FaceProfileBinding> faceBinding= makeAutoFaceBinding(&model);
+	if (faceBinding != nullptr)
+	{
+		std::string faceNames;
+		for (const std::string& name : faceBinding->getWireNames())
+			faceNames+= (faceNames.empty() ? "" : ", ") + name;
+		MIKAN_LOG_INFO("vrm-info") << "Auto face profile: " << faceBinding->getTargets().size() << " targets, "
+								   << faceBinding->getWireNames().size() << " blendshapes: " << faceNames;
+		for (const FaceProfileOutput& output : faceBinding->getProfile().outputs)
+		{
+			MIKAN_LOG_INFO("vrm-info") << "  " << faceTargetKindName(output.targetKind) << " '" << output.target
+									   << "' = " << output.vrmExpressionFunction;
+		}
+	}
 
 	for (const std::string& warning : result.warnings)
 		MIKAN_LOG_INFO("vrm-info") << "warning: " << warning;

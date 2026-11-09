@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <vector>
 
 #include "FaceTypes.h"
@@ -14,11 +13,7 @@ struct VisemeTerm
 	float weight= 0.f;
 };
 
-// The row of one viseme, the terms it drives
+// The row of one viseme, the terms it drives. The table is input data for
+// the built-in Auto face profile, which spreads the visemes over the ARKit
+// mouth columns as ordinary expressions.
 const std::vector<VisemeTerm>& visemeTableRow(int viseme);
-
-// Writes a set of viseme weights onto a 52-wide ARKit face: each column the
-// table drives is the sum of its terms' weights times their visemes'
-// weights, clamped to one. The columns the table does not drive are left as
-// they were.
-void applyVisemeWeights(const VisemeWeights& weights, std::array<float, ARKIT_BLENDSHAPE_COUNT>& outFace);

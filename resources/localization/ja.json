@@ -173,6 +173,7 @@
 		"mappingHelpText": "点または行をクリックしてボーンを選び、そのボーンになるノードを選択します。オレンジは疑わしい対応付け、赤はノードのない必須ボーンです。トリムは、頭、手、前腕のロールについてリターゲットが想定する基準の向きを回転します。",
 		"modelNameFmt": "%s (%s)",
 		"noModelText": "アバターが読み込まれていません",
+		"nodeColumn": "ノード",
 		"nodeFilterHint": "ノードを絞り込む",
 		"nodeUnmappedItem": "（未対応）",
 		"overriddenTooltipFmt": "上書き中。ファイルではこのボーンは %s に対応しています",
@@ -213,7 +214,7 @@
 	},
 	"audioPanel": {
 		"enableCheckbox": "マイクで口を動かす",
-		"enableTooltip": "スマートフォンの顔が配信されていない間、マイクの音声でアバターの口を動かします。\nスマートフォンの顔が有効な間はそちらが優先されます。",
+		"enableTooltip": "マイクの口形素をアバターの顔に送ります。\n各ソースが何を動かすかは表情プロファイルが決めます。組み込みの自動プロファイルでは、スマートフォンが顔を捉えている間は口をスマートフォンが動かします。",
 		"deviceCombo": "マイク",
 		"deviceDefault": "システム既定",
 		"refreshButton": "更新",
@@ -249,7 +250,7 @@
 		"clearProfileButton": "プロファイルを外す",
 		"weightsHeader": "マイクからの口形素ウェイト",
 		"weightsReplay": "口形素ウェイト: 録画のフレーム",
-		"weightsNone": "口形素ウェイト: マイクが口を動かしていません"
+		"weightsNone": "口形素ウェイト: マイクの新しいサンプルがありません"
 	},
 	"audioWizard": {
 		"intro": "uLipSyncと同じ方法で、母音をあなたの声とマイクに覚えさせます。3秒ずつ6回: 5つの母音を伸ばして発声し、最後に部屋の無音を録ります。それぞれカウントダウンの後に始まります。",
@@ -515,9 +516,11 @@
 		"minConfidence": "最小信頼度",
 		"minConfidenceTooltip": "この融合信頼度を下回ると、手は消失として扱われ、\nドロップアウト保持の後、ジッターに追従する代わりにボーンが\n固定または停止します（消失時に固定）。0 = 常に送信。\n下の実測値を見てしきい値を決めてください。",
 		"mouthSection": "アバターの口の表情",
-		"mouthHeaderFmt": "口が動かす表情 %d 個、%s",
+		"mouthHeaderFmt": "口のターゲット %d 個、%s",
 		"mouthFromVisemes": "マイクの口形素から",
 		"mouthFromArkit": "ARKitの顔から",
+		"mouthFromBoth": "ARKitの顔とマイクの口形素から",
+		"mouthFromNone": "読み取るソースはどれも有効ではありません",
 		"mouthNone": "アバターが読み込まれていません",
 		"mouthNoMouth": "口が動かすものがありません",
 		"notTracked": "未トラッキング",

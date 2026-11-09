@@ -173,6 +173,7 @@
 		"mappingHelpText": "Click a dot or a row to select a bone, then pick the node that plays it. Orange marks a suspect mapping, red a required bone without a node. Trims rotate the rest frame the retarget assumes for the head, the hands and the forearm roll.",
 		"modelNameFmt": "%s (%s)",
 		"noModelText": "No avatar loaded",
+		"nodeColumn": "Node",
 		"nodeFilterHint": "Filter nodes",
 		"nodeUnmappedItem": "(unmapped)",
 		"overriddenTooltipFmt": "Overridden. The file maps this bone to %s",
@@ -213,7 +214,7 @@
 	},
 	"audioPanel": {
 		"enableCheckbox": "Enable microphone mouth",
-		"enableTooltip": "Drive the avatar's mouth from the microphone while no phone face streams.\nThe phone's face wins whenever it is live.",
+		"enableTooltip": "Feed the microphone's visemes to the avatar's face.\nThe face profile decides what each source drives. The built-in Auto profile gives the phone the mouth while it sees a face.",
 		"deviceCombo": "Microphone",
 		"deviceDefault": "System default",
 		"refreshButton": "Refresh",
@@ -249,7 +250,7 @@
 		"clearProfileButton": "Clear profile",
 		"weightsHeader": "Viseme weights from the microphone",
 		"weightsReplay": "Viseme weights: the recording's frame",
-		"weightsNone": "Viseme weights: the microphone does not own the mouth"
+		"weightsNone": "Viseme weights: no fresh microphone sample"
 	},
 	"audioWizard": {
 		"intro": "This teaches the vowels to your voice and microphone, the way uLipSync is calibrated. Six prompts of three seconds each: five held vowels, then the room's silence. Each starts with a countdown.",
@@ -515,9 +516,11 @@
 		"minConfidence": "Min confidence",
 		"minConfidenceTooltip": "Below this fused confidence a hand is treated as lost: after\nthe dropout hold its bones freeze or stop (Freeze on loss)\ninstead of following jitter. 0 = always send.\nWatch the live values below to pick a threshold.",
 		"mouthSection": "Avatar mouth expressions",
-		"mouthHeaderFmt": "%d expressions the mouth drives, %s",
+		"mouthHeaderFmt": "%d mouth targets, %s",
 		"mouthFromVisemes": "from the microphone's visemes",
 		"mouthFromArkit": "from the ARKit face",
+		"mouthFromBoth": "from the ARKit face and the microphone's visemes",
+		"mouthFromNone": "no source they read is live",
 		"mouthNone": "No avatar loaded",
 		"mouthNoMouth": "None the mouth drives",
 		"notTracked": "not tracked",

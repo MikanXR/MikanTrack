@@ -18,7 +18,7 @@
 // and every project that loads it shares them.
 struct AvatarRigSettings
 {
-	static constexpr int kVersion= 1;
+	static constexpr int kVersion= 2;
 
 	// Per humanoid bone: a node NAME replacing the file's mapping (empty =
 	// unmapped), or nothing to keep the file's own. Names rather than indices
@@ -73,6 +73,12 @@ struct AvatarRigSettings
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
 	// snaps
 	float restBlendMs= 300.f;
+
+	// The face profiles assigned to the avatar, by library id, and the one
+	// that drives the face. An empty active id runs the built-in Auto
+	// profile, as does an id the library does not hold.
+	std::vector<std::string> faceProfiles;
+	std::string activeFaceProfile;
 
 	// Whether the mapping (the only part that changes the skeleton) differs
 	bool sameMapping(const AvatarRigSettings& other) const { return boneNodeOverrides == other.boneNodeOverrides; }

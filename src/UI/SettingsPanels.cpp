@@ -1007,7 +1007,8 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 }
 
 void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
-								  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar)
+								  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
+								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.oscOutput")))
 	{
@@ -1057,9 +1058,9 @@ void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread,
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcAvatarBoneLengths"));
 
 	ImGui::Separator();
-	// The avatar's mouth expressions as the stream carries them, after the
-	// face map
-	mouthReadout.draw(avatar, fusedResult.face);
+	// The avatar's mouth targets as the stream carries them, after the face
+	// profile
+	mouthReadout.draw(avatar, faceBinding, fusedResult.face);
 
 	ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
