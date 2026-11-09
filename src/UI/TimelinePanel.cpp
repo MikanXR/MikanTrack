@@ -1,12 +1,11 @@
 #include "TimelinePanel.h"
 
-#include "VisemeTable.h"
-
 #include <algorithm>
 #include <filesystem>
 
 #include "imgui.h"
 
+#include "FaceService.h"
 #include "LocText.h"
 
 #include "AppConfig.h"
@@ -150,6 +149,7 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 			m_bWhatIfSeeded= false;
 			m_whatIfStatus.clear();
 			m_builtFrame= -1;
+			m_faceFrame= -1;
 			setCurrentFrame(0);
 			m_bPlaying= false;
 
@@ -493,7 +493,8 @@ void TimelinePanel::rebuildDisplayFrame()
 {
 	if (!isReplayViewActive())
 		return;
-	if (m_builtFrame == m_currentFrame && m_builtViewMode == m_viewMode)
+	const bool bFaceStale= m_faceFrame != m_currentFrame || m_faceRunner.getBinding() != m_faceBinding;
+	if (m_builtFrame == m_currentFrame && m_builtViewMode == m_viewMode && !bFaceStale)
 		return;
 
 	const TrackingReplay::ReplayFrame& frame= m_replay.getFrame(m_currentFrame);
@@ -514,24 +515,50 @@ void TimelinePanel::rebuildDisplayFrame()
 		break;
 	}
 
-	// The mouth is not replayed (the audio stage runs offline through
-	// --replay-audio), so every view shows the frame's recorded visemes the
-	// way the live merge handed them on: over a neutral face through the
-	// viseme table, and as the visemes themselves
-	m_displayFused.face.visemesPresent= false;
-	if (frame.recorded->mouth.present)
-	{
-		m_displayFused.face.present= true;
-		m_displayFused.face.blendshapes.fill(0.f);
-		applyVisemeWeights(frame.recorded->mouth.frame.weights, m_displayFused.face.blendshapes);
-		m_displayFused.face.visemesPresent= true;
-		m_displayFused.face.visemes= frame.recorded->mouth.frame.weights;
-	}
+	// The face sources are not replayed stages (the audio stage runs offline
+	// through --replay-audio), so every view shows the recorded sources
+	// through the current face profile
+	rebuildDisplayFace();
+	m_displayFused.face= m_displayFace;
 
 	m_perCameraCopies= frame.perCamera;
 	m_perCameraCopyValid.assign(frame.perCameraValid.begin(), frame.perCameraValid.end());
 	m_builtFrame= m_currentFrame;
 	m_builtViewMode= m_viewMode;
+}
+
+FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex) const
+{
+	FaceSources sources;
+	const RecordedFrame& recorded= *m_replay.getFrame(frameIndex).recorded;
+	if (recorded.mouth.present)
+	{
+		sources.viseme.present= true;
+		sources.viseme.weights= recorded.mouth.frame.weights;
+	}
+	// The phone as the live stream saw it at the record
+	FaceSidecar::samplePhone(m_replay.getFaceSamples(), recorded.nowTimestampMs, FaceService::k_streamingWindowMs,
+							 sources.phone);
+	return sources;
+}
+
+void TimelinePanel::rebuildDisplayFace()
+{
+	if (m_faceRunner.getBinding() != m_faceBinding)
+		m_faceRunner.setBinding(m_faceBinding);
+
+	int firstFrame= m_currentFrame;
+	if (m_faceFrame >= 0 && m_currentFrame > m_faceFrame && m_currentFrame - m_faceFrame <= k_maxFaceCatchUpFrames)
+		firstFrame= m_faceFrame + 1;
+	else if (m_currentFrame != m_faceFrame)
+		m_faceRunner.reset();
+
+	for (int frameIndex= firstFrame; frameIndex <= m_currentFrame; ++frameIndex)
+	{
+		m_displayFace= makeReplayFaceSources(frameIndex);
+		m_faceRunner.evaluate(m_displayFace, m_replay.getFrame(frameIndex).recorded->nowTimestampMs);
+	}
+	m_faceFrame= m_currentFrame;
 }
 
 std::vector<SceneCameraView> TimelinePanel::getSceneCameras() const

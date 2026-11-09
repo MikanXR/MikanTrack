@@ -314,6 +314,14 @@ std::string makeAudioSidecarPath(const std::string& recordingFilePath)
 	return stem + ".wav";
 }
 
+std::string makeFaceSidecarPath(const std::string& recordingFilePath)
+{
+	const size_t extension= recordingFilePath.find_last_of('.');
+	const std::string stem=
+		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
+	return stem + ".face.jsonl";
+}
+
 json headerToJson(const RecordingHeader& header)
 {
 	json appConfig= json::parse(header.appConfigJsonText, nullptr, false);
@@ -334,6 +342,8 @@ json headerToJson(const RecordingHeader& header)
 			{"startMs", header.audio.startTimestampMs},
 		};
 	}
+	if (header.face.present)
+		out["face"]= {{"file", header.face.fileName}, {"startMs", header.face.startTimestampMs}};
 	return out;
 }
 
@@ -354,6 +364,15 @@ bool headerFromJson(const json& j, RecordingHeader& outHeader)
 		outHeader.audio.sampleRate= audio.value("sampleRate", 0);
 		outHeader.audio.startSampleIndex= audio.value("startSample", (int64_t)0);
 		outHeader.audio.startTimestampMs= audio.value("startMs", 0.0);
+	}
+	// A header without the block (every recording before the face sidecar)
+	// has no phone face
+	if (j.contains("face") && j["face"].is_object())
+	{
+		const json& face= j["face"];
+		outHeader.face.present= true;
+		outHeader.face.fileName= face.value("file", "");
+		outHeader.face.startTimestampMs= face.value("startMs", 0.0);
 	}
 	return outHeader.formatVersion == k_formatVersion && outHeader.cameraCount > 0;
 }

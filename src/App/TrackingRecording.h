@@ -140,6 +140,19 @@ struct RecordedAudioSidecar
 	double startTimestampMs= 0.0;
 };
 
+// The face sidecar beside the recording: the phone's face samples as the
+// vision thread saw them, one line each at the phone's rate, named after the
+// recording. The header names it for every recording, and the file is deleted
+// when the phone sent no sample, so an absent file means no phone.
+struct RecordedFaceSidecar
+{
+	bool present= false;
+	// The file name alone, resolved beside the recording
+	std::string fileName;
+	// steadyNowMs() when the sidecar began
+	double startTimestampMs= 0.0;
+};
+
 struct RecordingHeader
 {
 	int formatVersion= 0;
@@ -148,6 +161,7 @@ struct RecordingHeader
 	std::string appConfigJsonText;
 	int cameraCount= 0;
 	RecordedAudioSidecar audio;
+	RecordedFaceSidecar face;
 };
 
 struct RecordingFooter
@@ -179,6 +193,9 @@ std::string makeFrameDirectoryPath(const std::string& recordingFilePath);
 // The audio sidecar sits beside the recording under its name:
 // <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.wav
 std::string makeAudioSidecarPath(const std::string& recordingFilePath);
+// The face sidecar likewise:
+// <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.face.jsonl
+std::string makeFaceSidecarPath(const std::string& recordingFilePath);
 
 nlohmann::json headerToJson(const RecordingHeader& header);
 bool headerFromJson(const nlohmann::json& j, RecordingHeader& outHeader);

@@ -2,7 +2,8 @@
 
 #include "GL/glew.h"
 
-#include "AvatarFaceMap.h"
+#include "FaceAutoProfile.h"
+#include "FaceProfileRunner.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "AudioTypes.h"
@@ -74,7 +75,10 @@ static int runRenderMouthTool(const TestArgs& args)
 	std::vector<std::string> rigWarnings;
 	applyRigToModel(rig, *loaded.model, rigWarnings);
 	const AvatarSkeleton skeleton(*loaded.model);
-	const AvatarFaceMorphs faceMorphs(*loaded.model, AvatarFaceMap::build(*loaded.model));
+	// The mouth through the avatar's Auto face profile, as the live stream
+	// drives it with the microphone alone
+	FaceProfileRunner faceRunner;
+	faceRunner.setBinding(makeAutoFaceBinding(loaded.model.get()));
 
 	HeadlessGlContext gl;
 	if (!gl.create("render-mouth"))
@@ -116,9 +120,11 @@ static int runRenderMouthTool(const TestArgs& args)
 				VisemeWeights visemes{};
 				for (int viseme= 0; viseme < VISEME_COUNT && viseme < (int)row.size(); ++viseme)
 					visemes[viseme]= row[(size_t)viseme].get<float>();
-				std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
-				applyVisemeWeights(visemes, face);
-				faceMorphs.evaluate(&face, &visemes, morphWeights);
+				FaceSources face;
+				face.viseme.present= true;
+				face.viseme.weights= visemes;
+				faceRunner.evaluate(face, (double)tile);
+				faceRunner.getBinding()->evaluateMorphs(&face.outputs.targetValues, morphWeights);
 				meshRenderer.setMorphWeights(morphWeights);
 
 				frameBuffer.bindFrameBuffer();

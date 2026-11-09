@@ -16,9 +16,9 @@ struct NamedTerm
 };
 
 // The fixed map from the 15 Oculus visemes to the ARKit mouth columns: the
-// jaw and lip shape of each sound, what a perfect-sync avatar, a morph
-// target named after an ARKit column, and the raw face map read. (A preset
-// avatar reads the viseme weights themselves through the face map.) The
+// jaw and lip shape of each sound, which the Auto face profile gives an
+// ARKit-named expression or morph target while the phone does not see a face.
+// (The Auto profile's vowel presets read their visemes directly.) The
 // vowels open the jaw and shape the lips, the consonants are the lip
 // contact (PP), the lip under the teeth (FF), the tongue between them (TH),
 // and the small openings of the rest. Silence drives nothing. Each vowel
@@ -89,25 +89,4 @@ const std::vector<VisemeTerm>& visemeTableRow(int viseme)
 {
 	static const std::vector<VisemeTerm> empty;
 	return viseme >= 0 && viseme < VISEME_COUNT ? resolvedRows()[viseme] : empty;
-}
-
-void applyVisemeWeights(const VisemeWeights& weights, std::array<float, ARKIT_BLENDSHAPE_COUNT>& outFace)
-{
-	std::array<float, ARKIT_BLENDSHAPE_COUNT> sums{};
-	std::array<bool, ARKIT_BLENDSHAPE_COUNT> touched{};
-	for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
-	{
-		for (const VisemeTerm& term : resolvedRows()[viseme])
-		{
-			if (term.arkitIndex < 0)
-				continue;
-			sums[term.arkitIndex]+= term.weight * weights[viseme];
-			touched[term.arkitIndex]= true;
-		}
-	}
-	for (int arkitIndex= 0; arkitIndex < ARKIT_BLENDSHAPE_COUNT; ++arkitIndex)
-	{
-		if (touched[arkitIndex])
-			outFace[arkitIndex]= std::min(std::max(sums[arkitIndex], 0.f), 1.f);
-	}
 }

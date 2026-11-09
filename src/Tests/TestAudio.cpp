@@ -1,5 +1,8 @@
 #include "TestCommon.h"
 
+#include "FaceAutoProfile.h"
+#include "FaceProfileRunner.h"
+
 #include <limits>
 
 #include "AppConfig.h"
@@ -590,27 +593,48 @@ static int runAudioTest(const TestArgs&)
 				  std::string(visemeName(15)).empty(),
 			  "the viseme names follow the id order");
 
+		// The table reaches the face through the Auto profile's expressions:
+		// with no avatar its outputs are the 52 ARKit names in ARKit order
 		const int jawOpen= arkitBlendshapeFromName("jawOpen");
 		const int mouthPucker= arkitBlendshapeFromName("mouthPucker");
 		const int eyeBlinkLeft= arkitBlendshapeFromName("eyeBlinkLeft");
+		FaceProfileRunner autoRunner;
+		autoRunner.setBinding(makeAutoFaceBinding(nullptr));
+		check(autoRunner.getBinding() != nullptr &&
+				  autoRunner.getBinding()->getProfile().outputs.size() == ARKIT_BLENDSHAPE_COUNT,
+			  "the no-avatar Auto profile compiles to the 52 ARKit names");
+		auto evaluateAuto= [&autoRunner](const VisemeWeights& weights, bool bPhoneTracked, float phoneValue) {
+			FaceSources sources;
+			sources.viseme.present= true;
+			sources.viseme.weights= weights;
+			sources.phone.present= bPhoneTracked;
+			sources.phone.tracked= bPhoneTracked;
+			sources.phone.blendshapes.fill(phoneValue);
+			autoRunner.evaluate(sources, 0.0);
+			return sources.outputs.outputValues;
+		};
+		bool bAutoBuilt= autoRunner.getBinding() != nullptr;
 		VisemeWeights weights{};
 		weights[(int)eViseme::aa]= 1.f;
-		std::array<float, ARKIT_BLENDSHAPE_COUNT> face{};
-		face[mouthPucker]= 0.7f;
-		face[eyeBlinkLeft]= 0.9f;
-		applyVisemeWeights(weights, face);
-		check(std::fabs(face[jawOpen] - 0.85f) < 1e-6f, "a full aa opens the jaw to its row's weight");
-		check(face[mouthPucker] == 0.f, "a column another viseme drives is overwritten, not accumulated");
-		check(face[eyeBlinkLeft] == 0.9f, "a column the table does not drive is left alone");
+		std::vector<float> face= bAutoBuilt ? evaluateAuto(weights, false, 0.7f) : std::vector<float>();
+		bAutoBuilt&= face.size() == ARKIT_BLENDSHAPE_COUNT;
+		check(bAutoBuilt && std::fabs(face[jawOpen] - 0.85f) < 1e-6f, "a full aa opens the jaw to its row's weight");
+		check(bAutoBuilt && face[mouthPucker] == 0.f, "a column the viseme does not drive stays closed");
+		check(bAutoBuilt && face[eyeBlinkLeft] == 0.f,
+			  "a column the table does not drive reads the phone alone, zero while it sees no face");
 		weights.fill(1.f);
-		applyVisemeWeights(weights, face);
-		bool bClamped= true;
+		face= bAutoBuilt ? evaluateAuto(weights, false, 0.f) : face;
+		bool bClamped= bAutoBuilt;
 		for (float weight : face)
 			bClamped&= weight >= 0.f && weight <= 1.f;
 		check(bClamped, "every viseme at once stays within 0..1");
 		weights.fill(0.f);
-		applyVisemeWeights(weights, face);
-		check(face[jawOpen] == 0.f && face[mouthPucker] == 0.f, "no viseme is the neutral mouth");
+		face= bAutoBuilt ? evaluateAuto(weights, false, 0.f) : face;
+		check(bAutoBuilt && face[jawOpen] == 0.f && face[mouthPucker] == 0.f, "no viseme is the neutral mouth");
+		weights[(int)eViseme::aa]= 1.f;
+		face= bAutoBuilt ? evaluateAuto(weights, true, 0.3f) : face;
+		check(bAutoBuilt && std::fabs(face[jawOpen] - 0.3f) < 1e-6f && std::fabs(face[eyeBlinkLeft] - 0.3f) < 1e-6f,
+			  "a phone that sees a face drives every column over the visemes");
 	}
 
 	// (j) The live stage's level and gate

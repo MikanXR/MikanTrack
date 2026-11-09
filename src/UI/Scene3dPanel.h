@@ -10,7 +10,7 @@
 #include "glm/ext/vector_float3.hpp"
 #include "opencv2/core/mat.hpp"
 
-#include "AvatarFaceMap.h"
+#include "FaceProfileBinding.h"
 #include "AvatarRetarget.h"
 #include "DirectRetarget.h"
 #include "TrackingTypes.h"
@@ -117,9 +117,13 @@ public:
 	// world origin
 	void setAvatarPose(const AvatarPose* pose);
 	// The face to show on the avatar (copied); null rests the face. The
-	// avatar's morph targets take it the way a VMC receiver holding the same
-	// file would.
-	void setAvatarFace(const TrackingFrameResult::FacePose* face);
+	// avatar's morph targets take the frame's evaluated profile values
+	// through the binding of the same generation, the way a VMC receiver
+	// holding the same file would. A frame from another generation shows the
+	// rest face.
+	void setAvatarFace(const FaceSources* face);
+	// The loaded avatar's face profile binding
+	void setFaceBinding(std::shared_ptr<const FaceProfileBinding> binding) { m_faceBinding= std::move(binding); }
 
 	bool getShowPerCameraSkeletons() const { return m_bShowPerCameraSkeletons; }
 	void setShowPerCameraSkeletons(bool bShow) { m_bShowPerCameraSkeletons= bShow; }
@@ -190,9 +194,9 @@ private:
 	bool m_bShowAvatar= true;
 	bool m_bHasAvatarPose= false;
 	AvatarPose m_avatarPose;
-	std::unique_ptr<AvatarFaceMorphs> m_faceMorphs;
+	std::shared_ptr<const FaceProfileBinding> m_faceBinding;
 	bool m_bHasAvatarFace= false;
-	TrackingFrameResult::FacePose m_avatarFace;
+	FaceSources m_avatarFace;
 	std::vector<std::vector<float>> m_morphWeights;
 	std::vector<glm::mat4> m_posedGlobals;
 	// The gizmo being dragged (-1 none) and the camera-facing plane it moves

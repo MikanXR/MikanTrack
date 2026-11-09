@@ -59,17 +59,18 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-extrinsics`: Aruco marker pose + table-plane raycast
 - `--test-framerecorder`: raw frame recording: round trip, naming, overflow drops
 - `--test-face`: iFacialMocap receiver: datagram parser, receive filter, loopback socket
+- `--test-faceexpr`: face expressions: precedence, functions, names, variables, smooth, the time rule, hysteresis, state slots across a recompile, input sets, profile JSON, the library
 - `--test-fusion`: multi-camera fusion, clustering, triangulation, holds
 - `--test-handestimator`: angle-space multi-view hand state estimator
 - `--test-handpose`: palm frame, finger angles, FK round-trip, conventions
 - `--test-imudiscovery`: IMU device discovery never blocks the caller
 - `--test-imufilter`: IMU orientation EKF, observability, gating
 - `--test-pnp`: monocular PnP recovers a synthetic hand pose
-- `--test-replay`: record/replay determinism, checksums, what-if
+- `--test-replay`: record/replay determinism, checksums, what-if, the audio and face sidecars
 - `--test-roiquality`: hand ROI image-quality metrics + flicker tracker
 - `--test-scene-view`: camera-matched scene view and overlay projection
 - `--test-seeding`: cross-camera seed redundancy gate
-- `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip
+- `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip, the face profile binding and blend messages
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
 - `--test-direct-retarget`: direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism, the body-wrist gate on hand slots
@@ -101,7 +102,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--replay-verify`: re-runs a recording and verifies every frame checksum
 - `--replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path] [--gain db] [--gate dbfs]`: re-runs the microphone mouth stage over a recording's audio sidecar on the live hop grid (under the recording's model unless `--model` names another) and reports the per-viseme difference against the recorded frames, the A/B for a model, profile, gain, or gate change; the JSON carries the `recorded` and `replayed` series, `model`, and `recordedModel` for `--render-mouth`
 - `--viseme-bench <clip.wav> [out.json] [--model loudness|mfcc|ovrlipsync] [--hop ms] [--window ms] [--lookahead frames] [--profile path] [--cutoff hz] [--beta b]`: runs a mouth model over a wav clip under the live rolling-window policy (defaults: `mfcc`, volume-only without a profile, the live hop, window, and lookahead) and reports the share of frames each viseme dominated, the chunked frames' drift from one whole-clip run, the per-run inference p50 and p95 against the hop, and the viseme weights as JSON (the `offline`, `chunked`, and `filtered` series, with `model`)
-- `--render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]`: renders a contact sheet of the avatar's face under a bench JSON's viseme frames through the scene renderer and the face map from a hidden window, tiles spread evenly over the clip and labelled with the frame index and the dominant viseme
+- `--render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]`: renders a contact sheet of the avatar's face under a bench JSON's viseme frames through the scene renderer and the avatar's Auto face profile from a hidden window, tiles spread evenly over the clip and labelled with the frame index and the dominant viseme
 - `--vrm-info`: prints what the loader reads from a VRM file and the derived skeleton
 - `--test-imupair`: solves the transform between two rigidly coupled IMUs from a dump (categorized as a Tool despite the `--test-` name, since it takes a dump file argument rather than running standalone)
 

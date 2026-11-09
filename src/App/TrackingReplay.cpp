@@ -1,10 +1,13 @@
 #include "TrackingReplay.h"
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 #include "nlohmann/json.hpp"
 
 #include "Logger.h"
+#include "PathUtils.h"
 #include "SpaceTransforms.h"
 
 using json= nlohmann::json;
@@ -13,6 +16,7 @@ bool TrackingReplay::load(const std::string& path, std::string& outError)
 {
 	m_filePath= path;
 	m_recordedFrames.clear();
+	m_faceSamples.clear();
 	m_frames.clear();
 	m_divergentFrames.clear();
 	m_bDidRun= false;
@@ -90,6 +94,22 @@ bool TrackingReplay::load(const std::string& path, std::string& outError)
 	m_frames.resize(m_recordedFrames.size());
 	for (size_t frameIndex= 0; frameIndex < m_recordedFrames.size(); ++frameIndex)
 		m_frames[frameIndex].recorded= &m_recordedFrames[frameIndex];
+
+	// The face sidecar is optional: a missing one replays with no phone face.
+	// The recorder deletes a sidecar the phone never wrote to, so an absent
+	// file is the normal no-phone recording.
+	if (m_header.face.present && !m_header.face.fileName.empty())
+	{
+		const std::filesystem::path faceFilePath=
+			PathUtils::utf8ToPath(path).parent_path() / PathUtils::utf8ToPath(m_header.face.fileName);
+		const std::string facePath= PathUtils::pathToUtf8(faceFilePath);
+		std::error_code existsError;
+		std::string faceError;
+		if (!std::filesystem::exists(faceFilePath, existsError))
+			MIKAN_LOG_INFO("TrackingReplay") << "No face sidecar at " << facePath << " - replaying with no phone face";
+		else if (!FaceSidecar::load(facePath, m_faceSamples, faceError))
+			MIKAN_LOG_WARNING("TrackingReplay") << "Face sidecar not loaded: " << faceError;
+	}
 
 	return true;
 }

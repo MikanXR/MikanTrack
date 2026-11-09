@@ -397,12 +397,19 @@ void MainWindow::update(float deltaSeconds)
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
 	}
-	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused, *m_mouthReadout, m_app->getAvatarModel());
+	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused, *m_mouthReadout, m_app->getAvatarModel(),
+								 m_app->getFaceBinding());
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel();
+	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	m_timelinePanel->draw(config, visionThread);
 	if (m_bShowAvatarPanel)
-		m_avatarPanel->draw(&m_bShowAvatarPanel);
+	{
+		// The Face tab reads the face the scene shows
+		const bool bReplayView= m_timelinePanel->isReplayViewActive();
+		m_avatarPanel->draw(&m_bShowAvatarPanel,
+							bReplayView ? m_timelinePanel->getDisplayFused().face : m_latestFused.face);
+	}
 	AudioPanel::DrawResult audioAction;
 	if (m_bShowAudioPanel)
 	{
@@ -479,6 +486,7 @@ void MainWindow::update(float deltaSeconds)
 	// with the frustums built from the RECORDING's config snapshot.
 	m_scene3dPanel->setForearmLength(config->body.forearmLengthMeters);
 	m_scene3dPanel->setAvatar(m_app->getAvatarModel(), m_app->getAvatarSkeleton(), m_app->getAvatarGeneration());
+	m_scene3dPanel->setFaceBinding(m_app->getFaceBinding());
 	m_scene3dPanel->setShowAvatar(config->avatar.showInScene);
 	SceneGizmos gizmos;
 	updateDisplayAvatar(gizmos);

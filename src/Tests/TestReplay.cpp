@@ -1,10 +1,26 @@
 #include "TestCommon.h"
 
+#include "FaceRecorder.h"
+
 static int runReplayTest(const TestArgs& args)
 {
 	int result= 0;
 	const std::string recordingPath=
 		(std::filesystem::temp_directory_path() / "mikan-test-replay.jsonl").string();
+	const std::string faceSidecarPath= TrackingRecording::makeFaceSidecarPath(recordingPath);
+	// The phone's samples, at their own rate between the frames: odd-valued
+	// floats so a lossy round trip shows, and every fifth one a lost face
+	std::vector<RecordedFaceSample> faceSamples;
+	for (int sampleIndex= 0; sampleIndex < 90; ++sampleIndex)
+	{
+		RecordedFaceSample sample;
+		sample.sequence= 1000 + (uint64_t)sampleIndex;
+		sample.timestampMs= 5.0 + 11.1 * (double)sampleIndex;
+		sample.bTracked= sampleIndex % 5 != 0;
+		for (int column= 0; column < ARKIT_BLENDSHAPE_COUNT; ++column)
+			sample.blendshapes[(size_t)column]= 1.f / (float)(3 + column + sampleIndex) - 0.01f;
+		faceSamples.push_back(sample);
+	}
 
 	// -- Synthetic 2-camera rig ------------------------------------
 	const float fx= 800.f, fy= 800.f, cx= 640.f, cy= 360.f;
@@ -124,6 +140,19 @@ static int runReplayTest(const TestArgs& args)
 		header.audio.sampleRate= AUDIO_SAMPLE_RATE;
 		header.audio.startSampleIndex= 123904;
 		header.audio.startTimestampMs= 987.5;
+		header.face.present= true;
+		header.face.fileName= std::filesystem::path(faceSidecarPath).filename().string();
+		header.face.startTimestampMs= 4.5;
+
+		FaceRecorder faceRecorder;
+		if (!faceRecorder.start(faceSidecarPath))
+		{
+			MIKAN_LOG_ERROR("test-replay") << "Face recorder failed to open " << faceSidecarPath;
+			return 1;
+		}
+		for (const RecordedFaceSample& sample : faceSamples)
+			faceRecorder.enqueue(sample);
+		faceRecorder.stop();
 
 		TrackingRecorder recorder;
 		if (!recorder.start(recordingPath, TrackingRecording::headerToJson(header)))
@@ -489,6 +518,136 @@ static int runReplayTest(const TestArgs& args)
 			"recordings/2026-01-01_12-00-00.wav")
 		{
 			MIKAN_LOG_ERROR("test-replay") << "(e) FAILED: the sidecar is named after the recording";
+			result= 1;
+		}
+	}
+
+	// -- (f) The face sidecar round-trips and samples onto the records --
+	{
+		const RecordedFaceSidecar& face= replay.getHeader().face;
+		if (!face.present || face.fileName != "mikan-test-replay.face.jsonl" || face.startTimestampMs != 4.5)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: the face sidecar header must round-trip";
+			result= 1;
+		}
+		const std::vector<RecordedFaceSample>& loaded= replay.getFaceSamples();
+		int faceMismatches= loaded.size() == faceSamples.size() ? 0 : 1;
+		for (size_t sampleIndex= 0; sampleIndex < loaded.size() && sampleIndex < faceSamples.size(); ++sampleIndex)
+		{
+			const RecordedFaceSample& a= faceSamples[sampleIndex];
+			const RecordedFaceSample& b= loaded[sampleIndex];
+			if (a.sequence != b.sequence || a.timestampMs != b.timestampMs || a.bTracked != b.bTracked ||
+				memcmp(a.blendshapes.data(), b.blendshapes.data(), sizeof(float) * ARKIT_BLENDSHAPE_COUNT) != 0)
+				++faceMismatches;
+		}
+		MIKAN_LOG_INFO("test-replay") << "(f) face samples=" << loaded.size() << " mismatches=" << faceMismatches;
+		if (faceMismatches != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: the face sidecar must round-trip float-exact";
+			result= 1;
+		}
+
+		// By time: each record takes the newest sample at or before it
+		int samplingMismatches= 0;
+		for (int frameIdx= 0; frameIdx < replay.getFrameCount(); ++frameIdx)
+		{
+			const double frameMs= replay.getFrame(frameIdx).recorded->nowTimestampMs;
+			const RecordedFaceSample* found= FaceSidecar::findAtOrBefore(loaded, frameMs);
+			const RecordedFaceSample* expected= nullptr;
+			for (const RecordedFaceSample& sample : faceSamples)
+			{
+				if (sample.timestampMs <= frameMs)
+					expected= &sample;
+			}
+			const bool bSame= (found == nullptr && expected == nullptr) ||
+							  (found != nullptr && expected != nullptr && found->sequence == expected->sequence);
+			samplingMismatches+= bSame ? 0 : 1;
+		}
+		if (samplingMismatches != 0 || FaceSidecar::findAtOrBefore(loaded, 4.9) != nullptr ||
+			FaceSidecar::findAtOrBefore(loaded, 5.0) != &loaded[0] ||
+			FaceSidecar::findAtOrBefore(loaded, 1e9) != &loaded.back())
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: the sidecar must be sampled by time onto the records";
+			result= 1;
+		}
+
+		if (TrackingRecording::makeFaceSidecarPath("recordings/2026-01-01_12-00-00.jsonl") !=
+			"recordings/2026-01-01_12-00-00.face.jsonl")
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: the face sidecar is named after the recording";
+			result= 1;
+		}
+
+		// The recording without its sidecar file loads with no phone face
+		std::error_code removeError;
+		std::filesystem::remove(faceSidecarPath, removeError);
+		TrackingReplay withoutFace;
+		std::string loadError;
+		if (!withoutFace.load(recordingPath, loadError) || !withoutFace.getFaceSamples().empty())
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: a recording whose face sidecar is gone loads with no phone face";
+			result= 1;
+		}
+
+		// A sidecar that received no sample is deleted when it stops
+		{
+			FaceRecorder emptyRecorder;
+			if (!emptyRecorder.start(faceSidecarPath))
+			{
+				MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: the empty face recorder must open its file";
+				result= 1;
+			}
+			emptyRecorder.stop();
+			if (std::filesystem::exists(faceSidecarPath, removeError))
+			{
+				MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: a face sidecar with no sample must be deleted on stop";
+				result= 1;
+			}
+		}
+
+		// The phone source at a timestamp: the newest sample at or before it,
+		// live inside the streaming window
+		const double windowMs= 500.0;
+		bool bTrackedOk= false;
+		bool bUntrackedOk= false;
+		bool bStaleOk= false;
+		bool bBeforeOk= false;
+		if (loaded.size() > 5)
+		{
+			const RecordedFaceSample& trackedSample= loaded[1];
+			const RecordedFaceSample& untrackedSample= loaded[5];
+			FaceSources::Phone phone;
+			FaceSidecar::samplePhone(loaded, trackedSample.timestampMs + 3.0, windowMs, phone);
+			bTrackedOk= trackedSample.bTracked && phone.present && phone.tracked &&
+						phone.blendshapes == trackedSample.blendshapes;
+			FaceSidecar::samplePhone(loaded, untrackedSample.timestampMs + 3.0, windowMs, phone);
+			bUntrackedOk= !untrackedSample.bTracked && phone.present && !phone.tracked &&
+						  phone.blendshapes == std::array<float, ARKIT_BLENDSHAPE_COUNT>{};
+			FaceSidecar::samplePhone(loaded, loaded.back().timestampMs + windowMs, windowMs, phone);
+			bStaleOk= !phone.present && !phone.tracked;
+			FaceSidecar::samplePhone(loaded, loaded.back().timestampMs + windowMs + 100.0, windowMs, phone);
+			bStaleOk&= !phone.present && !phone.tracked;
+			FaceSidecar::samplePhone(loaded, loaded.front().timestampMs - 0.1, windowMs, phone);
+			bBeforeOk= !phone.present && !phone.tracked;
+		}
+		if (!bTrackedOk || !bUntrackedOk || !bStaleOk || !bBeforeOk)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: samplePhone tracked=" << bTrackedOk
+										   << " untracked=" << bUntrackedOk << " stale=" << bStaleOk
+										   << " before=" << bBeforeOk;
+			result= 1;
+		}
+
+		// A version 1 header as a recording from before either sidecar wrote
+		// it: no audio block and no face block
+		const nlohmann::json plainJson= nlohmann::json::parse(
+			R"({"type":"header","formatVersion":1,"appConfig":{},"cameraCount":1})", nullptr, false);
+		RecordingHeader loadedHeader;
+		if (plainJson.is_discarded() || !TrackingRecording::headerFromJson(plainJson, loadedHeader) ||
+			loadedHeader.audio.present || loadedHeader.face.present || loadedHeader.formatVersion != 1 ||
+			loadedHeader.cameraCount != 1)
+		{
+			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: a version 1 header without either block loads with both sidecars absent";
 			result= 1;
 		}
 	}

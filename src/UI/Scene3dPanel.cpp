@@ -94,20 +94,14 @@ Scene3dPanel::Scene3dPanel()
 void Scene3dPanel::setAvatar(std::shared_ptr<const AvatarModel> model, std::shared_ptr<const AvatarSkeleton> skeleton,
 							 uint32_t generation)
 {
-	// The face map follows the model, so it is rebuilt only when that changes
-	if (model != m_avatarModel || generation != m_avatarGeneration)
-	{
-		m_faceMorphs= model != nullptr ? std::make_unique<AvatarFaceMorphs>(*model, AvatarFaceMap::build(*model))
-									   : nullptr;
-	}
 	m_avatarModel= std::move(model);
 	m_avatarSkeleton= std::move(skeleton);
 	m_avatarGeneration= generation;
 }
 
-void Scene3dPanel::setAvatarFace(const TrackingFrameResult::FacePose* face)
+void Scene3dPanel::setAvatarFace(const FaceSources* face)
 {
-	m_bHasAvatarFace= face != nullptr && face->present;
+	m_bHasAvatarFace= face != nullptr && face->isPresent();
 	if (m_bHasAvatarFace)
 		m_avatarFace= *face;
 }
@@ -361,13 +355,27 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 	// One key light from above and in front of the avatar (display space:
 	// +Y up, +X the avatar's facing direction)
 	const glm::vec3 lightDirection= glm::normalize(glm::vec3(0.6f, 1.f, 0.4f));
-	if (m_faceMorphs != nullptr)
+	// The rest face unless the frame's values came from the binding built
+	// for this model
+	bool bBindingFits= m_faceBinding != nullptr &&
+					   m_faceBinding->getMeshMorphCounts().size() == m_avatarModel->meshes.size();
+	for (size_t meshIndex= 0; bBindingFits && meshIndex < m_avatarModel->meshes.size(); ++meshIndex)
 	{
-		const bool bVisemes= m_bHasAvatarFace && m_avatarFace.visemesPresent;
-		m_faceMorphs->evaluate(m_bHasAvatarFace ? &m_avatarFace.blendshapes : nullptr,
-							   bVisemes ? &m_avatarFace.visemes : nullptr, m_morphWeights);
-		m_meshRenderer->setMorphWeights(m_morphWeights);
+		bBindingFits= m_faceBinding->getMeshMorphCounts()[meshIndex] ==
+					  m_avatarModel->meshes[meshIndex].morphTargetNames.size();
 	}
+	if (bBindingFits)
+	{
+		const bool bFace= m_bHasAvatarFace && m_avatarFace.outputs.generation == m_faceBinding->getGeneration();
+		m_faceBinding->evaluateMorphs(bFace ? &m_avatarFace.outputs.targetValues : nullptr, m_morphWeights);
+	}
+	else
+	{
+		m_morphWeights.resize(m_avatarModel->meshes.size());
+		for (size_t meshIndex= 0; meshIndex < m_avatarModel->meshes.size(); ++meshIndex)
+			m_morphWeights[meshIndex].assign(m_avatarModel->meshes[meshIndex].morphTargetNames.size(), 0.f);
+	}
+	m_meshRenderer->setMorphWeights(m_morphWeights);
 	m_meshRenderer->draw(viewProjection, modelMatrix, m_posedGlobals, lightDirection);
 	return true;
 }

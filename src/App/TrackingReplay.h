@@ -8,6 +8,7 @@
 #include "BodyPoseSolver.h"
 #include "HandFusion.h"
 #include "LandmarkTo3D.h"
+#include "FaceRecorder.h"
 #include "TrackingRecording.h"
 #include "TrackingTypes.h"
 
@@ -104,6 +105,9 @@ public:
 	const RecordingFooter& getFooter() const { return m_footer; }
 	bool hasFooter() const { return m_bHasFooter; }
 	const std::string& getFilePath() const { return m_filePath; }
+	// The face sidecar's phone samples in timestamp order; empty for a
+	// recording without one (or whose file is gone)
+	const std::vector<RecordedFaceSample>& getFaceSamples() const { return m_faceSamples; }
 
 	// Replays every frame from frame 0, filling the cache and the checksum
 	// comparison. Optionally captures fusion diagnostics for a frame range
@@ -138,6 +142,7 @@ private:
 	bool m_bHasFooter= false;
 
 	std::vector<RecordedFrame> m_recordedFrames;
+	std::vector<RecordedFaceSample> m_faceSamples;
 	std::vector<ReplayFrame> m_frames;
 	std::vector<int> m_divergentFrames;
 	bool m_bDidRun= false;

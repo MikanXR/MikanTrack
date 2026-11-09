@@ -67,7 +67,7 @@ Draw order follows the spec: OPAQUE and MASK, then BLEND with z-write sorted by 
 
 VRM 0.x materials arrive as the `materialProperties` bag and are migrated the way UniVRM and three-vrm do: `_Color` and `_ShadeColor` from gamma to linear, `_MainTex` and `_ShadeTexture` as texture indices, `_ShadeToony` and `_ShadeShift` through the toony and shift remap, `_CullMode` 0 as double-sided, `_ZWrite` into `transparentWithZWrite`, and the Unity `renderQueue` values of the transparent materials ranked into offsets (z-write off onto -9..0 ending at 0, z-write on onto 0..9 starting at 0).
 
-Morph targets deform on the CPU. A primitive with targets keeps its unmorphed vertices and the vertex range its targets touch. When `setMorphWeights` changes any of its weights, that range is recomposed from the base and re-uploaded with `glBufferSubData`. The 3D scene feeds it the shown frame's face through `AvatarFaceMorphs` (the face map below), so the preview shows the face exactly as a receiver holding the same file applies it.
+Morph targets deform on the CPU. A primitive with targets keeps its unmorphed vertices and the vertex range its targets touch. When `setMorphWeights` changes any of its weights, that range is recomposed from the base and re-uploaded with `glBufferSubData`. The 3D scene feeds it the shown frame's face profile values through the binding of the same generation (the face below), so the preview shows the face exactly as a receiver holding the same file applies it.
 
 Deferred, tracked in `docs/plan.md`: outline, rim, matcap, UV animation, GPU morphing, spring bones.
 
@@ -153,27 +153,21 @@ Wiring: `DirectConfig` under the project's `direct` JSON section holds `enabled`
 
 With a skeleton set, `OscStreamer` streams the retargeted pose through `VmcRetarget::buildPoseFromAvatar` instead of the measured-length chain: each VMC bone's local rotation is its delta measured against the nearest streamed ancestor's delta (the torso bones `Spine`, `Chest`, `UpperChest` and `Neck` are streamed only when the pose placed them, which the direct retarget does for its lean and the position retarget never does, so an arm hangs off the leaned torso or the rest chest accordingly), and its local position is the avatar's own rest offset from its humanoid parent, so a receiver loading the same file keeps the character's proportions. Bones the pose did not place, or the avatar lacks, are left out and rest on the receiving side. A direct pose handed to `sendFrame` is streamed as it is: the streamer skips its own retarget, confidence gate, dropout hold and freeze, since the direct solver holds and rests on its own, and without a skeleton it sends no bones. The root stays identity: the measured-shoulder placement is for the 3D view only, and a whole-body yaw lands in the root rather than the arms, so the streamed arms stay relative to the receiver's own torso. `humanoidBoneForVmc` maps the two Unity-spelled enums by name. Without an avatar the measured-length `VmcRetarget::buildPose` path is unchanged.
 
-The loaded file is announced as `/VMC/Ext/VRM` (path, title, SHA-256) once a second, so a receiver on the same machine can load the very file the bones were retargeted onto and confirm by the hash that it is unchanged. `App::loadAvatar` hands the identity and the face map to the vision thread through `VisionThread::setAvatarIdentity`, adopted between frames like the skeleton.
+The loaded file is announced as `/VMC/Ext/VRM` (path, title, SHA-256) once a second, so a receiver on the same machine can load the very file the bones were retargeted onto and confirm by the hash that it is unchanged. `App::loadAvatar` hands the identity and the face profile binding to the vision thread through `VisionThread::setAvatarIdentity`, adopted between frames like the skeleton.
 
-## The face map (`src/Avatar/AvatarFaceMap.h`)
+## The face
 
-`AvatarFaceMap` turns the output face's 52 ARKit blendshapes (see [face.md](./face.md)) into the blendshape names a VMC receiver matches on, built once per loaded avatar. Each output is a weighted sum of ARKit columns clamped to [0, 1]. A VRM vowel preset also names its viseme: while the frame carries the microphone's viseme weights (`FacePose::visemesPresent`, see [audio.md](./audio.md)), the vowel reads that viseme directly instead of the ARKit columns the viseme table spread it over, since the viseme is the vowel. `evaluate` takes the ARKit face and the visemes (null when the phone's face owns the mouth). Which names an avatar gets:
+The avatar's face is driven by a face profile ([face.md](./face.md)): expressions over the phone and microphone sources, each driving a VRM expression or a morph target. The rig sidecar assigns the avatar its profiles by library id and names the active one. Without one the built-in Auto profile runs, generated from the avatar: its perfect-sync expressions, else its VRM presets plus its ARKit-named morph targets.
 
-- An avatar with expressions named after ARKit blendshapes (perfect sync, compared without case) gets those expressions alone, in its own spelling.
+`FaceProfileBinding` resolves a profile against the avatar: an expression target by its name in the file (exact, then without case, sent in the file's spelling), a morph target by name on every mesh carrying it or on the one mesh the output names. It is also the receiving half the 3D scene's preview runs: an expression drives its morph binds scaled by the bind weight, a morph target drives its morphs directly, and a morph several targets drive takes the largest weight rather than the sum, so a preset and the ARKit shape it was derived from never double up. The scene applies a frame's values only when the binding's morph count per mesh matches the loaded model's, so a binding built against another model never writes into this one. The preview ignores an expression's `isBinary`, which a receiver applies.
 
-- Otherwise each VRM preset the avatar carries gets the ARKit columns that shape it: the sided blinks from each eye, `aa` from the jaw, `ih` from the smile, `ee` from the stretch, `ou` from the pucker, `oh` from the funnel, and the four gaze directions from the eye looks, with the five vowels reading the `aa`, `I`, `E`, `U`, and `O` visemes directly when the frame carries them. The two-eyed blink is driven only when the avatar lacks a sided pair, since both would close the eyes twice. The emotion presets have no ARKit counterpart and stay untouched.
-
-- Also in that second case, the ARKit names the avatar carries as morph targets go out under their own names. A standard receiver ignores them, since it matches expressions only. A receiver that also matches morph targets gets the full face, which is how an avatar whose ARKit shapes are morphs without expressions keeps its detail.
-
-- With no avatar loaded the ARKit names go out verbatim.
-
-`AvatarFaceMorphs` is the receiving half on the same file, what the 3D scene's preview runs: an output naming an expression drives that expression's morph binds scaled by the bind weight, an output naming a morph target drives it directly, and a morph several outputs drive takes the largest weight rather than the sum, so a preset and the ARKit shape it was derived from never double up.
+The Face tab of the Avatar panel edits the active profile and shows each binding's live value.
 
 ## Integration
 
 `AvatarConfig` on `AppConfig` persists only the path and placement under the project's `avatar` JSON section: `modelPath` (absolute, or relative to the project folder, then to the exe folder, so `models/avatars/fem_vroid.vrm` names a shipped sample), `showInScene`, `followShoulders`, `rootPosition` and `rootYawDegrees`. The single-camera direct mode's settings live beside it under `direct` (see the Direct retarget section). Loading is never a side effect of reading the config, since replay reconstructs configs headlessly without a GL context. `App` owns the loaded `AvatarModel` and `AvatarSkeleton` as shared pointers with a generation counter; it loads the configured avatar at the end of `activateProject` on the main thread and clears it on the way back to the main menu. `Scene3dPanel` draws the avatar posed by the display retarget (or at rest when no pose is set) before the line pass, with the tracked skeleton lines drawn depth-disabled over it so they stay visible inside the character.
 
-The Avatar panel (`src/UI/AvatarPanel.h`, View menu) loads and unloads a file above three tabs:
+The Avatar panel (`src/UI/AvatarPanel.h`, View menu) loads and unloads a file above four tabs:
 
 - Model: the meta and counts, the avatar's arm lengths against the user's measured ones (the ratio the hand retarget will scale reach by), the rig and skeleton warnings, the sidecar's name, and the placement controls.
 
@@ -181,13 +175,15 @@ The Avatar panel (`src/UI/AvatarPanel.h`, View menu) loads and unloads a file ab
 
 - Retarget: the preview pose (Live, or the canned Rest and Demo frames from `src/Avatar/AvatarPreviewPoses.h`, which pose the scene's avatar so the rig can be tuned without cameras; in direct mode the Rest preview is the direct retarget's rest pose instead, so the rest controls are tuned by eye; the VMC output always follows live tracking), the rest blend time, the elbow hint and its confidence blend and the rest pose per arm, and the hand tweaks per hand.
 
+- Face: the avatar's face profiles, their variables and their VRM expression bindings with live value bars ([face.md](./face.md)).
+
 Each arm's Show gizmo toggle draws its elbow hint in the 3D scene as a camera-facing ring joined to the shoulder. Pressing within 8 pixels of a ring drags it in the camera-facing plane through its starting point, suppressing the orbit drag for that gesture. The dragged world point goes back into the torso-frame offset against the current pose's root rotation and posed upper-arm joint.
 
 ## Tools
 
 - `--test-vrm`: self test on synthetic in-memory files in both generations
 - `--test-avatar-retarget`: self test of the retarget and the avatar VMC stream on the shared synthetic rig (`src/Tests/SyntheticAvatar.h`)
-- `--test-avatar-rig`: self test of the rig settings: the sidecar round trip, the overrides, and each retarget adjustment
+- `--test-avatar-rig`: self test of the rig settings: the sidecar round trip with the face profile assignment, the overrides, and each retarget adjustment
 - `--test-vrm-samples`: loads the shipped VRoid samples, skipping when absent
-- `--vrm-info <file.vrm>`: prints what the loader read and the derived skeleton for any file
+- `--vrm-info <file.vrm>`: prints what the loader read, the derived skeleton, and the Auto face profile's targets and expressions for any file
 - `--render-avatar <file.vrm> [out.png] [yaw] [pitch] [rest|demo]`: renders the rest pose, or the Demo preview frame put through the retarget (`demo`), through the scene renderer from a hidden window into a PNG, with the model's rig sidecar applied, the way to see what the renderer and the retarget produce without driving the UI

@@ -53,6 +53,8 @@ std::string avatarRigToJson(const AvatarRigSettings& settings)
 	j["boneNodes"]= boneNodes;
 	j["rotationTrimDegrees"]= trims;
 	j["restBlendMs"]= settings.restBlendMs;
+	j["faceProfiles"]= settings.faceProfiles;
+	j["activeFaceProfile"]= settings.activeFaceProfile;
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -113,6 +115,13 @@ bool avatarRigFromJson(const std::string& text, AvatarRigSettings& outSettings, 
 			settings.rotationTrimDegrees[(int)bone]= vec3FromJson(it.value(), glm::vec3(0.f));
 		}
 		settings.restBlendMs= j.value("restBlendMs", settings.restBlendMs);
+		const json& faceProfiles= j.value("faceProfiles", json::array());
+		for (const json& id : faceProfiles)
+		{
+			if (id.is_string())
+				settings.faceProfiles.push_back(id.get<std::string>());
+		}
+		settings.activeFaceProfile= j.value("activeFaceProfile", std::string());
 
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{

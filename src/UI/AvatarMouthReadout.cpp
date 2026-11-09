@@ -3,65 +3,101 @@
 #include "imgui.h"
 
 #include "AudioTypes.h"
-#include "AvatarFaceMap.h"
-#include "AvatarTypes.h"
+#include "FaceExprInputs.h"
+#include "FaceProfileBinding.h"
 #include "LocText.h"
 #include "WeightBars.h"
 
-void AvatarMouthReadout::draw(const std::shared_ptr<const AvatarModel>& model, const TrackingFrameResult::FacePose& face)
+namespace
+{
+bool isMouthInput(int slot)
+{
+	if (slot >= FaceExprInputs::k_visemeBase && slot < FaceExprInputs::k_visemePresent)
+		return true;
+	return slot >= FaceExprInputs::k_phoneBlendshapeBase && slot < FaceExprInputs::k_phonePresent &&
+		   isMouthArkitIndex(slot - FaceExprInputs::k_phoneBlendshapeBase);
+}
+} // namespace
+
+void AvatarMouthReadout::draw(const std::shared_ptr<const AvatarModel>& model,
+							  const std::shared_ptr<const FaceProfileBinding>& binding, const FaceSources& face)
 {
 	if (!ImGui::CollapsingHeader(locLabel("oscPanel.mouthSection")))
 		return;
 
-	if (model == nullptr)
+	if (model == nullptr || binding == nullptr || binding->getProgram() == nullptr)
 	{
 		ImGui::TextDisabled("%s", locText("oscPanel.mouthNone"));
-		m_faceMapModel= nullptr;
-		m_faceMap= nullptr;
+		m_binding= nullptr;
 		return;
 	}
-	if (model != m_faceMapModel)
+	if (binding != m_binding)
 	{
-		m_faceMapModel= model;
-		m_faceMap= AvatarFaceMap::build(*model);
-		m_mouthOutputs.clear();
-		const std::vector<AvatarFaceMap::Output>& outputs= m_faceMap->getOutputs();
-		for (size_t outputIndex= 0; outputIndex < outputs.size(); ++outputIndex)
+		m_binding= binding;
+		m_mouthTargets.clear();
+		m_bReadsPhone= false;
+		m_bReadsVisemes= false;
+		const std::vector<FaceProfileBinding::Target>& targets= binding->getTargets();
+		const std::vector<FaceExprProgram::Expression>& outputs= binding->getProgram()->outputs;
+		for (size_t targetIndex= 0; targetIndex < targets.size(); ++targetIndex)
 		{
-			bool bMouth= outputs[outputIndex].viseme >= 0;
-			for (const AvatarFaceMap::Term& outputTerm : outputs[outputIndex].terms)
-				bMouth|= isMouthArkitIndex(outputTerm.arkitIndex);
-			if (bMouth)
-				m_mouthOutputs.push_back((int)outputIndex);
+			bool bMouth= false;
+			for (int outputIndex : targets[targetIndex].outputs)
+			{
+				for (int slot : outputs[(size_t)outputIndex].inputs)
+					bMouth|= isMouthInput(slot);
+			}
+			if (!bMouth)
+				continue;
+			m_mouthTargets.push_back((int)targetIndex);
+			// Every slot the shown targets read, mouth or not, names a source
+			for (int outputIndex : targets[targetIndex].outputs)
+			{
+				for (int slot : outputs[(size_t)outputIndex].inputs)
+				{
+					if (slot < FaceExprInputs::k_visemeBase)
+						m_bReadsPhone= true;
+					else
+						m_bReadsVisemes= true;
+				}
+			}
 		}
 	}
-	if (m_mouthOutputs.empty())
+	if (m_mouthTargets.empty())
 	{
 		ImGui::TextDisabled("%s", locText("oscPanel.mouthNoMouth"));
 		return;
 	}
 
-	ImGui::TextDisabled(locText("oscPanel.mouthHeaderFmt"), (int)m_mouthOutputs.size(),
-						locText(face.visemesPresent ? "oscPanel.mouthFromVisemes" : "oscPanel.mouthFromArkit"));
-	std::array<float, ARKIT_BLENDSHAPE_COUNT> blendshapes{};
-	if (face.present)
-		blendshapes= face.blendshapes;
-	m_faceMap->evaluate(blendshapes, face.present && face.visemesPresent ? &face.visemes : nullptr, m_outputValues);
+	// The sources the shown targets read that are live this frame
+	const bool bPhone= m_bReadsPhone && face.phone.tracked;
+	const bool bVisemes= m_bReadsVisemes && face.viseme.present;
+	const char* sourceKey= bPhone && bVisemes ? "oscPanel.mouthFromBoth"
+						   : bPhone           ? "oscPanel.mouthFromArkit"
+						   : bVisemes         ? "oscPanel.mouthFromVisemes"
+											  : "oscPanel.mouthFromNone";
+	ImGui::TextDisabled(locText("oscPanel.mouthHeaderFmt"), (int)m_mouthTargets.size(), locText(sourceKey));
 
-	m_values.resize(m_mouthOutputs.size());
-	for (size_t index= 0; index < m_mouthOutputs.size(); ++index)
-		m_values[index]= m_outputValues[(size_t)m_mouthOutputs[index]];
+	// The rest face unless the frame's values came from this binding
+	const bool bValues= face.isPresent() && face.outputs.generation == binding->getGeneration();
+	m_values.resize(m_mouthTargets.size());
+	for (size_t index= 0; index < m_mouthTargets.size(); ++index)
+	{
+		const size_t targetIndex= (size_t)m_mouthTargets[index];
+		m_values[index]= bValues && targetIndex < face.outputs.targetValues.size() ? face.outputs.targetValues[targetIndex]
+																				   : 0.f;
+	}
 	struct Context
 	{
-		const AvatarFaceMap* faceMap;
-		const std::vector<int>* outputs;
+		const FaceProfileBinding* binding;
+		const std::vector<int>* targets;
 	};
-	const Context context{m_faceMap.get(), &m_mouthOutputs};
+	const Context context{binding.get(), &m_mouthTargets};
 	drawWeightTable(
-		"avatarMouth", (int)m_mouthOutputs.size(),
+		"avatarMouth", (int)m_mouthTargets.size(),
 		[](int index, const void* raw) -> const char* {
 			const Context* c= (const Context*)raw;
-			return c->faceMap->getOutputs()[(size_t)(*c->outputs)[(size_t)index]].name.c_str();
+			return c->binding->getTargets()[(size_t)(*c->targets)[(size_t)index]].name.c_str();
 		},
 		m_values.data(), &context);
 }

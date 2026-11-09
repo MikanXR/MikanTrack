@@ -10,6 +10,7 @@
 #include "glm/ext/vector_float3.hpp"
 
 #include "BodyPoseTypes.h"
+#include "FaceSources.h"
 #include "VisemeTypes.h"
 
 // Shared result types passed from the vision/inference thread to the render
@@ -348,21 +349,10 @@ struct TrackingFrameResult
 	};
 	HeadPose head;
 
-	// The phone face stream's blendshapes, in the ARKit table order of
-	// FaceTypes.h (52 entries). Present while the stream is live; only ever
-	// filled on the output result.
-	struct FacePose
-	{
-		bool present= false;
-		std::array<float, 52> blendshapes{};
-		// The microphone's viseme weights while it owns the mouth: the
-		// blendshapes then carry them through the viseme table, and a
-		// preset avatar's face map reads them directly. false while the
-		// phone's face owns the mouth.
-		bool visemesPresent= false;
-		VisemeWeights visemes{};
-	};
-	FacePose face;
+	// The raw face sources side by side (the phone face stream, the
+	// microphone's visemes) and the face profile evaluated over them. Only
+	// ever filled on the output result.
+	FaceSources face;
 
 	// Debug: raw palm detector output + active hand ROI boxes
 	std::vector<DetectionBox> palmDetections;

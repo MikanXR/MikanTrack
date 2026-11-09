@@ -4,9 +4,9 @@
 
 #include "AppConfig.h"
 #include "AudioService.h"
-#include "VisemeTable.h"
 #include "AvatarRetarget.h"
 #include "AvatarSkeleton.h"
+#include "FaceAutoProfile.h"
 #include "FaceHead.h"
 #include "FaceService.h"
 #include "Logger.h"
@@ -74,6 +74,7 @@ VisionThread::VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuServ
 	, m_faceService(faceService)
 	, m_audioService(audioService)
 {
+	m_faceRunner.setBinding(makeAutoFaceBinding(nullptr));
 }
 
 VisionThread::~VisionThread()
@@ -277,11 +278,27 @@ void VisionThread::handleRecordingStartOnThread()
 
 	if (m_recorder == nullptr)
 		m_recorder= std::make_unique<TrackingRecorder>();
+	// The face sidecar opens with every recording, so a phone that connects
+	// mid-recording is captured. The recorder deletes the file when the
+	// recording ends with no sample written.
+	if (m_faceService != nullptr)
+	{
+		const std::string facePath= TrackingRecording::makeFaceSidecarPath(filePath);
+		if (m_faceRecorder.start(facePath))
+		{
+			header.face.present= true;
+			header.face.fileName= std::filesystem::path(facePath).filename().string();
+			header.face.startTimestampMs= steadyNowMs();
+			m_lastRecordedFaceSequence= 0;
+		}
+	}
+
 	if (!m_recorder->start(filePath, TrackingRecording::headerToJson(header)))
 	{
 		if (m_bRecordingAudio)
 			m_audioService->stopRecording();
 		m_bRecordingAudio= false;
+		m_faceRecorder.stop();
 		return;
 	}
 
@@ -307,6 +324,7 @@ void VisionThread::finalizeRecordingOnThread(bool bAborted, const std::string& r
 	if (m_bRecordingAudio && m_audioService != nullptr)
 		m_audioService->stopRecording();
 	m_bRecordingAudio= false;
+	m_faceRecorder.stop();
 	std::lock_guard<std::mutex> lock(m_recordingMutex);
 	m_lastRecordingPath= m_recorder->getFilePath();
 }
@@ -560,7 +578,7 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.avatarPath= m_avatarIdentity.path;
 		oscConfig.avatarTitle= m_avatarIdentity.title;
 		oscConfig.avatarSha256= m_avatarIdentity.sha256;
-		oscConfig.faceMap= m_avatarIdentity.faceMap;
+		oscConfig.faceBinding= m_faceRunner.getBinding();
 		m_oscStreamer->setConfig(oscConfig);
 	}
 }
@@ -714,6 +732,12 @@ void VisionThread::servicePendingRequests()
 				m_avatar= m_pendingAvatar;
 			if (bIdentityChanged)
 				m_avatarIdentity= m_pendingAvatarIdentity;
+		}
+		// The evaluator state carries over to the new binding by call site
+		if (bIdentityChanged)
+		{
+			m_faceRunner.setBinding(m_avatarIdentity.faceBinding != nullptr ? m_avatarIdentity.faceBinding
+																			 : makeAutoFaceBinding(nullptr));
 		}
 		if (bSkeletonChanged)
 		{
@@ -1015,6 +1039,9 @@ void VisionThread::runOutputStage(IterationState& iteration)
 	if (iteration.bAnyNewResult)
 		m_lastCameraOutputMs= iteration.outputResult.timestampMs;
 	applyFaceToOutput(iteration.outputResult, steadyNowMs(), iteration.bAnyNewResult);
+	// Once per output frame, before the OSC rate gate, so the stateful
+	// expressions advance exactly once per frame
+	m_faceRunner.evaluate(iteration.outputResult.face, iteration.outputResult.timestampMs);
 
 	// In direct mode the streamer and the window take the solver's pose: a
 	// camera frame solves a fresh one, a face-only frame repeats the last
@@ -1040,45 +1067,50 @@ void VisionThread::runOutputStage(IterationState& iteration)
 
 void VisionThread::applyMouthToOutput(TrackingFrameResult& output, double nowMs)
 {
+	FaceSources::Viseme& viseme= output.face.viseme;
+	viseme= FaceSources::Viseme();
 	MouthSample mouth;
 	if (m_audioService == nullptr || !m_audioService->getLatestSample(mouth) || nowMs - mouth.timestampMs > k_mouthStaleMs)
 		return;
 	m_lastMouthSequence= mouth.sequence;
-	output.face.present= true;
-	output.face.blendshapes.fill(0.f);
-	applyVisemeWeights(mouth.frame.weights, output.face.blendshapes);
-	output.face.visemesPresent= true;
-	output.face.visemes= mouth.frame.weights;
+	viseme.present= true;
+	viseme.weights= mouth.frame.weights;
 }
 
 void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead)
 {
-	output.face.present= false;
-	output.face.visemesPresent= false;
+	// Both sources side by side: which one drives which shape is the face
+	// profile's choice
+	applyMouthToOutput(output, nowMs);
 
-	// The phone wins while it streams a tracked face; otherwise the
-	// microphone owns the mouth
+	FaceSources::Phone& phone= output.face.phone;
+	phone= FaceSources::Phone();
 	FaceSample sample;
 	if (m_faceService == nullptr || !m_faceService->isStreaming(nowMs) || !m_faceService->getLatestSample(sample))
-	{
-		applyMouthToOutput(output, nowMs);
 		return;
-	}
-	// The phone lost the face: its values are stale, so the face relaxes and
-	// the camera head stands
-	if (!sample.faceTracked)
-	{
-		m_lastFaceSequence= sample.sequence;
-		applyMouthToOutput(output, nowMs);
-		return;
-	}
 
 	// A camera frame carrying this sample means no face-only frame repeats it
 	m_lastFaceSequence= sample.sequence;
-	output.face.present= true;
-	static_assert(std::tuple_size<decltype(output.face.blendshapes)>::value == ARKIT_BLENDSHAPE_COUNT,
-				  "the output's face pose follows the ARKit table");
-	output.face.blendshapes= sample.blendshapes;
+	phone.present= true;
+
+	// The face sidecar takes each sample once, on camera and face-only
+	// iterations alike, so it runs at the phone's rate
+	if (m_faceRecorder.isRecording() && sample.sequence != m_lastRecordedFaceSequence)
+	{
+		m_lastRecordedFaceSequence= sample.sequence;
+		RecordedFaceSample recorded;
+		recorded.sequence= sample.sequence;
+		recorded.timestampMs= sample.timestampMs;
+		recorded.bTracked= sample.faceTracked;
+		recorded.blendshapes= sample.blendshapes;
+		m_faceRecorder.enqueue(recorded);
+	}
+	// The phone lost the face: its values are stale, so they read zero and
+	// the camera head stands
+	if (!sample.faceTracked)
+		return;
+	phone.tracked= true;
+	phone.blendshapes= sample.blendshapes;
 
 	if (!sample.hasHead)
 		return;
@@ -1102,23 +1134,24 @@ void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, 
 
 bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 {
-	// A new phone sample, or a new mouth sample while the phone does not own
-	// the mouth, is a frame of its own
+	// A new phone sample or a new mouth sample is a frame of its own
 	FaceSample sample;
 	const bool bNewFace=
 		m_faceService != nullptr && m_faceService->getLatestSample(sample) && sample.sequence != m_lastFaceSequence;
-	const bool bPhoneOwnsMouth= m_faceService != nullptr && m_faceService->isStreaming(nowMs) &&
-								m_faceService->getLatestSample(sample) && sample.faceTracked;
 	MouthSample mouth;
-	const bool bNewMouth= !bPhoneOwnsMouth && m_audioService != nullptr && m_audioService->getLatestSample(mouth) &&
-						  mouth.sequence != m_lastMouthSequence;
+	const bool bNewMouth=
+		m_audioService != nullptr && m_audioService->getLatestSample(mouth) && mouth.sequence != m_lastMouthSequence;
 	if (!bNewFace && !bNewMouth)
 		return false;
 	if (bNewFace)
 		m_lastFaceSequence= sample.sequence;
-	// A lost face has nothing new to send, beyond the one frame that relaxes
-	// a face the last output still carried
-	if (bNewFace && !bNewMouth && !sample.faceTracked && !m_lastOutputResult.face.present)
+	if (bNewMouth)
+		m_lastMouthSequence= mouth.sequence;
+	// A sample that arrives after its stream went quiet has nothing to send,
+	// beyond the one frame that relaxes a face the last output still carried
+	const bool bFaceLive= bNewFace && m_faceService->isStreaming(nowMs);
+	const bool bMouthLive= bNewMouth && nowMs - mouth.timestampMs <= k_mouthStaleMs;
+	if (!bFaceLive && !bMouthLive && !m_lastOutputResult.face.isPresent())
 		return false;
 	const double sampleTimestampMs= bNewFace ? sample.timestampMs : mouth.timestampMs;
 

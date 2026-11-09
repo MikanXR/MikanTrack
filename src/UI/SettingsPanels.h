@@ -12,6 +12,7 @@
 
 class AppConfig;
 class AvatarMouthReadout;
+class FaceProfileBinding;
 class VisionThread;
 class VideoCaptureSystem;
 class VideoPreviewPanel;
@@ -82,9 +83,11 @@ void drawTrackingPanel(AppConfig* config, VisionThread* visionThread, VideoCaptu
 					   const std::vector<VisionPreviewFrame>& latestPreviews,
 					   const TrackingFrameResult& fusedResult);
 // fusedResult: the latest fused tracking output (for the live angle readout
-// and the mouth section, which mouthReadout draws from the loaded avatar)
+// and the mouth section, which mouthReadout draws from the loaded avatar and
+// its face profile binding)
 void drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
-				  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar);
+				  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
+				  const std::shared_ptr<const FaceProfileBinding>& faceBinding);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel();
 // The language combo alone, shared between the Settings panel and the main

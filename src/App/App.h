@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "AvatarRig.h"
+#include "FaceExprCompiler.h"
+#include "FaceProfile.h"
 
 struct SDL_Window;
 typedef void* SDL_GLContext;
@@ -16,6 +18,8 @@ struct AvatarModel;
 class AvatarSkeleton;
 class GlobalSettings;
 class AudioService;
+class FaceProfileBinding;
+class FaceProfileLibrary;
 class FaceService;
 class ImuService;
 class LocalizationManager;
@@ -96,6 +100,41 @@ public:
 	// folder, else the exe folder
 	std::filesystem::path resolveAvatarPath(const std::string& modelPath) const;
 
+	// -- Face profiles ------------------------------------------------------
+	// The global profile library. The loaded avatar's rig sidecar assigns
+	// profiles from it by id and names the active one.
+	FaceProfileLibrary* getFaceProfileLibrary() { return m_faceProfiles.get(); }
+	// The active profile bound to the loaded avatar, the one the vision thread
+	// evaluates. It runs the built-in Auto profile with no avatar, with no
+	// active id, with an id the library lacks, and for a profile that has
+	// never compiled; after an edit that does not compile it keeps the last
+	// good binding.
+	const std::shared_ptr<const FaceProfileBinding>& getFaceBinding() const { return m_faceBinding; }
+	// The active profile as last edited (Auto's generated text for Auto),
+	// which may not compile, and its compile errors
+	const FaceProfile& getActiveFaceProfile() const { return m_activeFaceProfile; }
+	const std::vector<FaceExprCompileError>& getFaceProfileErrors() const { return m_faceProfileErrors; }
+	bool isActiveFaceProfileAuto() const;
+	// The rig names an active id the library does not hold
+	bool isActiveFaceProfileMissing() const;
+	// Makes an assigned profile active; "" for Auto. Needs an avatar.
+	void setActiveFaceProfile(const std::string& id);
+	void assignFaceProfile(const std::string& id);
+	// Unassigning the active profile returns the avatar to Auto
+	void unassignFaceProfile(const std::string& id);
+	// Applies an edit of the active profile: compiles it, binds it when it
+	// compiles, and saves it to the library after a short settle. Auto is
+	// read-only and ignores edits.
+	void editActiveFaceProfile(const FaceProfile& profile);
+	// A new profile (empty, or a copy of source under a fresh id), saved,
+	// assigned to the avatar and made active; its id, or "" on failure
+	std::string createFaceProfile(const std::string& name);
+	std::string duplicateFaceProfile(const FaceProfile& source, const std::string& name);
+	bool renameFaceProfile(const std::string& id, const std::string& name);
+	// Deletes the profile's file. An avatar that assigned it lists it as
+	// missing and runs Auto while it is active.
+	bool deleteFaceProfile(const std::string& id);
+
 	AppConfig* getConfig() { return m_config.get(); }
 	GlobalSettings* getGlobalSettings() { return m_globalSettings.get(); }
 	LocalizationManager* getLocalization() { return m_localization.get(); }
@@ -148,6 +187,14 @@ private:
 	void applyAvatarElbowSeed();
 	void updateAvatarRigAutoSave(float deltaSeconds);
 	void saveAvatarRigIfDirty();
+	void markAvatarRigDirty();
+	// Rebuilds the active profile's binding from the library and the rig and
+	// hands it to the vision thread
+	void rebuildFaceBinding();
+	// The avatar's identity and the face binding to the vision thread
+	void pushAvatarIdentity();
+	void updateFaceProfileAutoSave(float deltaSeconds);
+	void saveFaceProfileIfDirty();
 	// Mutable here only so the rig's mapping can be reapplied on the main
 	// thread; everything else sees it const (the vision thread never does)
 	std::shared_ptr<AvatarModel> m_avatarModel;
@@ -159,6 +206,13 @@ private:
 	float m_avatarRigSecondsSinceDirty= 0.f;
 	uint32_t m_avatarGeneration= 0;
 	std::string m_avatarLoadError;
+
+	std::unique_ptr<FaceProfileLibrary> m_faceProfiles;
+	std::shared_ptr<const FaceProfileBinding> m_faceBinding;
+	FaceProfile m_activeFaceProfile;
+	std::vector<FaceExprCompileError> m_faceProfileErrors;
+	bool m_bFaceProfileDirty= false;
+	float m_faceProfileSecondsSinceDirty= 0.f;
 
 	SDL_Window* m_sdlWindow= nullptr;
 	SDL_GLContext m_glContext= nullptr;

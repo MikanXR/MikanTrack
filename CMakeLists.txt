@@ -72,6 +72,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
@@ -94,6 +95,7 @@ file(GLOB VISION_SRC       ${ROOT_DIR}/src/Vision/*.h       ${ROOT_DIR}/src/Visi
 file(GLOB TRACKING_SRC     ${ROOT_DIR}/src/Tracking/*.h     ${ROOT_DIR}/src/Tracking/*.cpp)
 file(GLOB OSC_SRC          ${ROOT_DIR}/src/Osc/*.h          ${ROOT_DIR}/src/Osc/*.cpp)
 file(GLOB FACE_SRC         ${ROOT_DIR}/src/Face/*.h         ${ROOT_DIR}/src/Face/*.cpp)
+file(GLOB FACEEXPR_SRC     ${ROOT_DIR}/src/FaceExpr/*.h     ${ROOT_DIR}/src/FaceExpr/*.cpp)
 file(GLOB AUDIO_SRC        ${ROOT_DIR}/src/Audio/*.h        ${ROOT_DIR}/src/Audio/*.cpp)
 file(GLOB AVATAR_SRC       ${ROOT_DIR}/src/Avatar/*.h       ${ROOT_DIR}/src/Avatar/*.cpp)
 file(GLOB RENDER_SRC       ${ROOT_DIR}/src/Render/*.h       ${ROOT_DIR}/src/Render/*.cpp)
@@ -115,6 +117,7 @@ add_executable(MikanTrack WIN32
     ${TRACKING_SRC}
     ${OSC_SRC}
     ${FACE_SRC}
+    ${FACEEXPR_SRC}
     ${AUDIO_SRC}
     ${AVATAR_SRC}
     ${RENDER_SRC}
@@ -128,7 +131,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
     ${APP_SRC} ${UTILITY_SRC} ${MATH_SRC} ${VIDEO_IFACE_SRC} ${VIDEO_SRC}
     ${VIDEO_WMF_SRC} ${IMU_SRC} ${IMU_JOYCON_SRC}
     ${CALIBRATION_SRC} ${VISION_SRC} ${TRACKING_SRC}
-    ${OSC_SRC} ${FACE_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
+    ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
 
@@ -147,6 +150,7 @@ target_include_directories(MikanTrack PRIVATE
     ${ROOT_DIR}/src/Tracking
     ${ROOT_DIR}/src/Osc
     ${ROOT_DIR}/src/Face
+    ${ROOT_DIR}/src/FaceExpr
     ${ROOT_DIR}/src/Audio
     ${ROOT_DIR}/src/Avatar
     ${ROOT_DIR}/src/Render

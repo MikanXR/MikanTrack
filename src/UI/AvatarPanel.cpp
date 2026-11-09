@@ -64,7 +64,7 @@ AvatarPanel::AvatarPanel(App* app, AppConfig* config)
 {
 }
 
-void AvatarPanel::draw(bool* pOpen)
+void AvatarPanel::draw(bool* pOpen, const FaceSources& face)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.avatar"), pOpen))
 	{
@@ -92,6 +92,11 @@ void AvatarPanel::draw(bool* pOpen)
 			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabRetarget")))
 			{
 				drawRetargetTab();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabFace")))
+			{
+				m_faceTab.draw(m_app, face);
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
