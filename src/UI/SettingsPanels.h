@@ -78,18 +78,18 @@ namespace SettingsPanels
 {
 // latestPreviews: newest per-camera results (image-quality and timing readouts);
 // fusedResult: the latest fused tracking output (hold-still jitter test)
-void drawTrackingPanel(AppConfig* config, VisionThread* visionThread, VideoCaptureSystem* videoCapture,
+void drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, VideoCaptureSystem* videoCapture,
 					   VideoPreviewPanel* previewPanel, Scene3dPanel* scene3dPanel, TrackingPanelState& panelState,
 					   const std::vector<VisionPreviewFrame>& latestPreviews,
 					   const TrackingFrameResult& fusedResult);
 // fusedResult: the latest fused tracking output (for the live angle readout
 // and the mouth section, which mouthReadout draws from the loaded avatar and
 // its face profile binding)
-void drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
+void drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
 				  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
 				  const std::shared_ptr<const FaceProfileBinding>& faceBinding);
 // App-level settings dock window (language selection, app-global options)
-void drawAppSettingsPanel();
+void drawAppSettingsPanel(bool* pOpen);
 // The language combo alone, shared between the Settings panel and the main
 // menu. Draws nothing when no LocalizationManager exists.
 void drawLanguageCombo();

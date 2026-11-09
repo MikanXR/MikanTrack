@@ -125,6 +125,15 @@ private:
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
 
+	// Panel visibility, the View menu's toggles and the close box of a panel's
+	// window. Not persisted: every panel is shown again on the next launch.
+	bool m_bShowVideoPreviewPanel= true;
+	bool m_bShowScene3dPanel= true;
+	bool m_bShowDevicePanel= true;
+	bool m_bShowTrackingPanel= true;
+	bool m_bShowCalibrationPanel= true;
+	bool m_bShowOscPanel= true;
+	bool m_bShowTimelinePanel= true;
 	bool m_bShowLogPanel= true;
 	bool m_bShowSettingsPanel= true;
 	bool m_bShowAvatarPanel= true;

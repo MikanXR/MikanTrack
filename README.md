@@ -118,7 +118,10 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
 - Localized UI (English and Japanese; machine-translated Japanese for now),
   switchable live from the main menu or the Settings panel
-- Dear ImGui (docking) UI; per-project config persisted to
+- Dear ImGui (docking) UI: every panel docks, floats, or tears out into its
+  own window (drag its tab outside the main window, drag it back to redock),
+  with the layout remembered in `imgui.ini` beside the exe and the View menu
+  reopening a closed panel; per-project config persisted to
   `%USERPROFILE%/Documents/MikanTrack/<project>/project.json` (the last-project
   pointer lives in `%APPDATA%/MikanTrack/config.json`)
 - **Image quality diagnostics** (Tracking panel): per-camera statistics of

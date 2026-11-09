@@ -19,7 +19,7 @@ class DevicePanel
 public:
 	DevicePanel(App* app, VideoCaptureSystem* videoCapture, AppConfig* config);
 
-	void draw();
+	void draw(bool* pOpen);
 
 	// Re-reads the device list (call on hotplug events)
 	void refreshDeviceList();

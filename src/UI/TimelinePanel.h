@@ -21,7 +21,7 @@ class VisionThread;
 class TimelinePanel
 {
 public:
-	void draw(AppConfig* config, VisionThread* visionThread);
+	void draw(bool* pOpen, AppConfig* config, VisionThread* visionThread);
 
 	// The face profile binding the replayed face is evaluated through, the
 	// live one, so a profile edit can be judged against a recorded take

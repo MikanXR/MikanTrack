@@ -320,9 +320,9 @@ void DevicePanel::drawCameraSection(int cameraIndex)
 	ImGui::PopID();
 }
 
-void DevicePanel::draw()
+void DevicePanel::draw(bool* pOpen)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.device")))
+	if (!ImGui::Begin(locWindowTitle("windows.device"), pOpen))
 	{
 		ImGui::End();
 		return;

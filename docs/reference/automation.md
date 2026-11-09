@@ -38,9 +38,9 @@ Project actions land at the top of the next tick, the same deferral the UI's own
 
 A panel dragged past the main window's edge becomes its own OS window, which ImGui calls a viewport. These windows are addressed by ImGui viewport id.
 
-- `gui viewports` replies `<viewportId> <x>,<y> <width>x<height> <windowIds...>` per viewport, main viewport first. The rect is in desktop pixels when multi-viewports are on, and each window id is the stable part of a panel's ImGui name (the English title after `###`), quoted when it holds a space, so it pastes straight into `gui float`. Without multi-viewports there is one viewport, the main window, listing every panel drawn last frame.
+- `gui viewports` replies `<viewportId> <x>,<y> <width>x<height> <windowIds...>` per viewport, main viewport first. The rect is in desktop pixels when multi-viewports are on, and each window id is the stable part of a panel's ImGui name (the English title after `###`), quoted when it holds a space, so it pastes straight into `gui float`. A panel docked or floating inside the main window is listed under the main viewport, a torn-out one under its own OS window's viewport. The list reads the previous frame, so a `sleep:0.5` after a state change keeps a stale window out of it.
 
-- `gui float <windowId> <x> <y> [<width> <height>]` undocks a panel drawn last frame and moves it to a position, which is how a drive reaches the state a hand drag would produce. With multi-viewports on, a position outside the main window gives the panel its own OS window. The move applies right after the next frame's `NewFrame`, so poll `gui viewports` after it. The ids are the panel titles:
+- `gui float <windowId> <x> <y> [<width> <height>]` undocks a panel drawn last frame and moves it to a position, which is how a drive reaches the state a hand drag would produce. A position outside the main window gives the panel its own OS window. The move applies right after the next frame's `NewFrame`, so poll `gui viewports` after it. Docking back is the drag a hand does, scripted: `input press viewport <id>` on the torn-out title bar, a couple of `input move viewport <id>` steps, then `input move` steps in main-window coordinates onto the target dock node's center, and `input release` there (the main-window form of the drag is under the drive loop below). The ids are the panel titles:
 	- `"Video Preview"`
 	- `"3D Scene"`
 	- `Device`
@@ -77,7 +77,7 @@ One caveat worth knowing when a click seems to vanish: an ImGui window's capture
 ### Screenshots (screenshot)
 
 - `screenshot window [path]` writes the main window's back buffer (the whole UI) at the end of that frame's render, replying the absolute path once the capture lands. Default `mikantrack_window.png` in the working directory, overwritten each capture.
-- `screenshot viewport <viewportId> [path]` writes a torn-out panel's OS window the same way, read between its render and its swap. The id comes from `gui viewports`, and the image is that window's client area, so its pixels are the coordinates `input ... viewport` takes. The main viewport's id captures the main window. A viewport that does not render that frame (closed, hidden, or minimized) answers with an error, which is also the answer for every torn-out viewport until the multi-viewport render pass lands. Default `mikantrack_viewport.png`.
+- `screenshot viewport <viewportId> [path]` writes a torn-out panel's OS window the same way, read between its render and its swap. The id comes from `gui viewports`, and the image is that window's client area, so its pixels are the coordinates `input ... viewport` takes. The main viewport's id captures the main window. A viewport that does not render that frame (closed, hidden, or minimized) answers with an error. Default `mikantrack_viewport.png`.
 
 ### Log access (log)
 
@@ -117,6 +117,16 @@ python tools/automate.py "input click 400 300" "log tail 20 error" "app quit"
 ```
 
 `--test-automation` covers the pieces that need no window: the tokenizer, the reply framing, and a loopback session against a server polled in-process on an ephemeral port. The window-bound namespaces (`gui`, `input`, `screenshot`) are verified by the drive above.
+
+The tear-out round trip, the drive that checks the multi-viewport pass: float a panel outside the main window, capture and click its OS window, close it from its own close box, reopen it from the View menu, and drag it back onto the center dock. The viewport id is the one `gui viewports` reports after the float, and the menu item and dock target positions are read from a `screenshot window`.
+
+```
+python tools/automate.py "app resume" "until:app info:state Project" "sleep:1" "gui float \"3D Scene\" 1800 200 640 480" "sleep:1" "gui viewports"
+python tools/automate.py "screenshot viewport <id> C:/tmp/scene.png" "input move viewport <id> 320 240" "sleep:0.5" "input move viewport <id> 321 240" "input click viewport <id> 321 240"
+python tools/automate.py "input move viewport <id> 622 14" "sleep:0.5" "input move viewport <id> 623 14" "input click viewport <id> 623 14" "sleep:1" "gui viewports"
+python tools/automate.py "input move 167 14" "sleep:0.5" "input move 168 14" "input click 168 14" "sleep:0.5" "screenshot window C:/tmp/menu.png"
+python tools/automate.py "input press viewport <id> 301 14" "input move viewport <id> 320 40" "input move viewport <id> 200 200" "input move 1000 400" "sleep:0.5" "input move 820 380" "sleep:0.5" "input move 800 365" "sleep:0.5" "input release 800 365" "sleep:1" "gui viewports"
+```
 
 A handler that cannot answer straight away (`screenshot` waits for the frame to render) calls `AutomationServer::deferReply`, then answers later through `sendDeferredReply`. Nothing bounds that wait to the current frame, so a handler that defers owns arming its own answer.
 

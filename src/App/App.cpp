@@ -185,6 +185,7 @@ bool App::startup()
 	ImGui::CreateContext();
 	ImGuiIO& io= ImGui::GetIO();
 	io.ConfigFlags|= ImGuiConfigFlags_DockingEnable;
+	io.ConfigFlags|= ImGuiConfigFlags_ViewportsEnable;
 	io.ConfigFlags|= ImGuiConfigFlags_NavEnableKeyboard;
 	ImGui::StyleColorsDark();
 	ImGuiTheme::applyStyle();
@@ -843,10 +844,9 @@ void App::tick(float deltaSeconds)
 
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-	// A pending screenshot reads the back buffer before it presents. No panel
-	// renders outside the main window yet, so a torn-out viewport capture
-	// answers with an error rather than leaving its client waiting.
+	// A pending screenshot reads a back buffer before it presents
 	m_automationServer->servicePendingWindowCapture(drawableWidth, drawableHeight);
+	renderPlatformWindows();
 	m_automationServer->failUnservicedViewportCapture();
 
 	SDL_GL_SwapWindow(m_sdlWindow);
@@ -854,4 +854,44 @@ void App::tick(float deltaSeconds)
 	m_config->updateAutoSave(deltaSeconds);
 	updateAvatarRigAutoSave(deltaSeconds);
 	updateFaceProfileAutoSave(deltaSeconds);
+}
+
+void App::renderPlatformWindows()
+{
+	if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) == 0)
+		return;
+
+	ImGui::UpdatePlatformWindows();
+
+	// RenderPlatformWindowsDefault, walked here so a torn-out window's back
+	// buffer can be read between its render and its swap. Each torn-out window
+	// renders on its own GL context, which the SDL backend creates sharing
+	// objects with the main window's, so the main context is made current again
+	// before the main window's own frame presents.
+	ImGuiPlatformIO& platformIO= ImGui::GetPlatformIO();
+	for (int viewportIndex= 1; viewportIndex < platformIO.Viewports.Size; ++viewportIndex)
+	{
+		ImGuiViewport* viewport= platformIO.Viewports[viewportIndex];
+		if (viewport->Flags & ImGuiViewportFlags_IsMinimized)
+			continue;
+
+		if (platformIO.Platform_RenderWindow)
+			platformIO.Platform_RenderWindow(viewport, nullptr);
+		if (platformIO.Renderer_RenderWindow)
+			platformIO.Renderer_RenderWindow(viewport, nullptr);
+
+		SDL_Window* viewportWindow= SDL_GetWindowFromID((Uint32)(intptr_t)viewport->PlatformHandle);
+		int drawableWidth= 0;
+		int drawableHeight= 0;
+		if (viewportWindow != nullptr)
+			SDL_GL_GetDrawableSize(viewportWindow, &drawableWidth, &drawableHeight);
+		m_automationServer->servicePendingViewportCapture(viewport->ID, drawableWidth, drawableHeight);
+
+		if (platformIO.Platform_SwapBuffers)
+			platformIO.Platform_SwapBuffers(viewport, nullptr);
+		if (platformIO.Renderer_SwapBuffers)
+			platformIO.Renderer_SwapBuffers(viewport, nullptr);
+	}
+
+	SDL_GL_MakeCurrent(m_sdlWindow, m_glContext);
 }
