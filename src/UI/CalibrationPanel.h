@@ -17,7 +17,7 @@ public:
 		int cameraIndex= 0;
 	};
 
-	DrawResult draw(bool bWizardActive);
+	DrawResult draw(bool* pOpen, bool bWizardActive);
 
 private:
 	AppConfig* m_config;

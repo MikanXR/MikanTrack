@@ -132,13 +132,14 @@ bool Scene3dPanel::startRenderers()
 	return m_bLineRendererInitialized;
 }
 
-void Scene3dPanel::draw(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
+						const std::vector<SceneCameraView>& cameras,
 						const std::vector<const TrackingFrameResult*>& perCameraResults, SceneGizmos& gizmos)
 {
 	for (SceneGizmos::ElbowHint& hint : gizmos.elbowHints)
 		hint.bDragging= false;
 
-	if (!ImGui::Begin(locWindowTitle("windows.scene3d")))
+	if (!ImGui::Begin(locWindowTitle("windows.scene3d"), pOpen))
 	{
 		ImGui::End();
 		return;

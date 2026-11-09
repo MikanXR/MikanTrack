@@ -68,13 +68,14 @@ const ImageToScreenMapping& VideoPreviewPanel::getImageToScreenMapping(int camer
 	return m_fallbackMapping;
 }
 
-void VideoPreviewPanel::draw(const std::vector<const TrackingFrameResult*>& results,
+void VideoPreviewPanel::draw(bool* pOpen,
+							 const std::vector<const TrackingFrameResult*>& results,
 							 const std::vector<const char*>& executionProviders,
 							 const std::vector<ForearmOverlay>* forearms)
 {
 	m_lastDrawList= nullptr;
 
-	if (!ImGui::Begin(locWindowTitle("windows.videoPreview")))
+	if (!ImGui::Begin(locWindowTitle("windows.videoPreview"), pOpen))
 	{
 		ImGui::End();
 		return;

@@ -52,7 +52,14 @@
 		"viewAvatarPanel": "アバターパネル",
 		"viewMenu": "表示",
 		"viewSettingsPanel": "設定パネル",
-		"viewAudioPanel": "オーディオパネル"
+		"viewAudioPanel": "オーディオパネル",
+		"viewVideoPreviewPanel": "ビデオプレビューパネル",
+		"viewScene3dPanel": "3Dシーンパネル",
+		"viewDevicePanel": "デバイスパネル",
+		"viewTrackingPanel": "トラッキングパネル",
+		"viewCalibrationPanel": "キャリブレーションパネル",
+		"viewOscPanel": "OSC出力パネル",
+		"viewTimelinePanel": "タイムラインパネル"
 	},
 	"windows": {
 		"avatar": "アバター",

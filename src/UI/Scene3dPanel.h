@@ -99,7 +99,8 @@ public:
 	Scene3dPanel();
 	~Scene3dPanel();
 
-	void draw(const TrackingFrameResult& fusedResult,
+	void draw(bool* pOpen,
+			  const TrackingFrameResult& fusedResult,
 			  const std::vector<SceneCameraView>& cameras,
 			  const std::vector<const TrackingFrameResult*>& perCameraResults,
 			  SceneGizmos& gizmos);

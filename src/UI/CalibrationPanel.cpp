@@ -13,11 +13,11 @@ CalibrationPanel::CalibrationPanel(AppConfig* config)
 {
 }
 
-CalibrationPanel::DrawResult CalibrationPanel::draw(bool bWizardActive)
+CalibrationPanel::DrawResult CalibrationPanel::draw(bool* pOpen, bool bWizardActive)
 {
 	DrawResult result;
 
-	if (!ImGui::Begin(locWindowTitle("windows.calibration")))
+	if (!ImGui::Begin(locWindowTitle("windows.calibration"), pOpen))
 	{
 		ImGui::End();
 		return result;

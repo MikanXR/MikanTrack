@@ -15,9 +15,9 @@ static const ImVec4 k_colorGood(0.4f, 1.f, 0.5f, 1.f);
 static const ImVec4 k_colorWarn(1.f, 0.85f, 0.3f, 1.f);
 static const ImVec4 k_colorBad(1.f, 0.4f, 0.4f, 1.f);
 
-void TimelinePanel::draw(AppConfig* config, VisionThread* visionThread)
+void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThread)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.timeline")))
+	if (!ImGui::Begin(locWindowTitle("windows.timeline"), pOpen))
 	{
 		ImGui::End();
 		return;

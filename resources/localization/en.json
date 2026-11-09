@@ -52,7 +52,14 @@
 		"viewAvatarPanel": "Avatar Panel",
 		"viewMenu": "View",
 		"viewSettingsPanel": "Settings Panel",
-		"viewAudioPanel": "Audio Panel"
+		"viewAudioPanel": "Audio Panel",
+		"viewVideoPreviewPanel": "Video Preview Panel",
+		"viewScene3dPanel": "3D Scene Panel",
+		"viewDevicePanel": "Device Panel",
+		"viewTrackingPanel": "Tracking Panel",
+		"viewCalibrationPanel": "Calibration Panel",
+		"viewOscPanel": "OSC Output Panel",
+		"viewTimelinePanel": "Timeline Panel"
 	},
 	"windows": {
 		"avatar": "Avatar",

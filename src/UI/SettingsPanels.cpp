@@ -352,14 +352,14 @@ static void drawCaptureTimingSection(AppConfig* config, VideoCaptureSystem* vide
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionThread,
+void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
 									   VideoCaptureSystem* videoCapture, VideoPreviewPanel* previewPanel,
 									   Scene3dPanel* scene3dPanel,
 									   TrackingPanelState& panelState,
 									   const std::vector<VisionPreviewFrame>& latestPreviews,
 									   const TrackingFrameResult& fusedResult)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.tracking")))
+	if (!ImGui::Begin(locWindowTitle("windows.tracking"), pOpen))
 	{
 		ImGui::End();
 		return;
@@ -1006,11 +1006,12 @@ void SettingsPanels::drawTrackingPanel(AppConfig* config, VisionThread* visionTh
 	ImGui::End();
 }
 
-void SettingsPanels::drawOscPanel(AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
-								  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
+void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
+								  const TrackingFrameResult& fusedResult, AvatarMouthReadout& mouthReadout,
+								  const std::shared_ptr<const AvatarModel>& avatar,
 								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.oscOutput")))
+	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
 	{
 		ImGui::End();
 		return;
@@ -1201,9 +1202,9 @@ void SettingsPanels::drawLanguageCombo()
 	}
 }
 
-void SettingsPanels::drawAppSettingsPanel()
+void SettingsPanels::drawAppSettingsPanel(bool* pOpen)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.settings")))
+	if (!ImGui::Begin(locWindowTitle("windows.settings"), pOpen))
 	{
 		ImGui::End();
 		return;

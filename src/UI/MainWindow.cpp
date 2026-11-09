@@ -267,10 +267,17 @@ void MainWindow::drawDockspaceAndMenuBar()
 		}
 		if (ImGui::BeginMenu(locLabel("mainWindow.viewMenu")))
 		{
-			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewDevicePanel"), nullptr, &m_bShowDevicePanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewCalibrationPanel"), nullptr, &m_bShowCalibrationPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
+			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -383,10 +390,14 @@ void MainWindow::update(float deltaSeconds)
 	const bool bWizardActive= m_wizardHost->isAnyActive() || m_setupFlow->isActive();
 
 	// Panels
-	m_devicePanel->draw();
-	SettingsPanels::drawTrackingPanel(config, visionThread, m_app->getVideoCapture(), m_videoPreviewPanel.get(),
-									  m_scene3dPanel.get(),
-									  m_trackingPanelState, m_latestPreviews, m_latestFused);
+	if (m_bShowDevicePanel)
+		m_devicePanel->draw(&m_bShowDevicePanel);
+	if (m_bShowTrackingPanel)
+	{
+		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, config, visionThread, m_app->getVideoCapture(),
+										  m_videoPreviewPanel.get(), m_scene3dPanel.get(), m_trackingPanelState,
+										  m_latestPreviews, m_latestFused);
+	}
 	if (m_trackingPanelState.bDumpRequested)
 	{
 		m_trackingPanelState.bDumpRequested= false;
@@ -397,12 +408,16 @@ void MainWindow::update(float deltaSeconds)
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
 	}
-	SettingsPanels::drawOscPanel(config, visionThread, m_latestFused, *m_mouthReadout, m_app->getAvatarModel(),
-								 m_app->getFaceBinding());
+	if (m_bShowOscPanel)
+	{
+		SettingsPanels::drawOscPanel(&m_bShowOscPanel, config, visionThread, m_latestFused, *m_mouthReadout,
+									 m_app->getAvatarModel(), m_app->getFaceBinding());
+	}
 	if (m_bShowSettingsPanel)
-		SettingsPanels::drawAppSettingsPanel();
+		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
 	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
-	m_timelinePanel->draw(config, visionThread);
+	if (m_bShowTimelinePanel)
+		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread);
 	if (m_bShowAvatarPanel)
 	{
 		// The Face tab reads the face the scene shows
@@ -430,7 +445,9 @@ void MainWindow::update(float deltaSeconds)
 	m_trackingPanelState.bLaunchBodyCalibrationWizard= false;
 	m_trackingPanelState.bLaunchHandCalibrationWizard= false;
 
-	const CalibrationPanel::DrawResult calibrationAction= m_calibrationPanel->draw(bWizardActive);
+	CalibrationPanel::DrawResult calibrationAction;
+	if (m_bShowCalibrationPanel)
+		calibrationAction= m_calibrationPanel->draw(&m_bShowCalibrationPanel, bWizardActive);
 	if (calibrationAction.bLaunchIntrinsicsWizard)
 		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
 	if (calibrationAction.bLaunchExtrinsicsWizard)
@@ -444,9 +461,12 @@ void MainWindow::update(float deltaSeconds)
 
 	// Bring the Video Preview tab forward when a camera calibration wizard
 	// starts: the pattern feed is the wizard's whole UI, and the 3D Scene tab
-	// may be the selected one in the shared center dock
+	// may be the selected one in the shared center dock, or the panel closed
 	if (m_wizardHost->consumeCameraWizardStarted())
+	{
+		m_bShowVideoPreviewPanel= true;
 		ImGui::SetWindowFocus(locWindowTitle("windows.videoPreview"));
+	}
 
 	// Pin the preview highlight to the intrinsics wizard's camera while it is
 	// active (the extrinsics wizard uses ALL cameras, so no pinning there)
@@ -463,6 +483,11 @@ void MainWindow::update(float deltaSeconds)
 	}
 
 	// Central: side-by-side previews with per-camera overlays
+	if (!m_bShowVideoPreviewPanel)
+	{
+		m_videoPreviewPanel->clearLastDrawList();
+	}
+	else
 	{
 		std::vector<const char*> executionProviders;
 		std::vector<ForearmOverlay> forearmOverlays;
@@ -478,7 +503,7 @@ void MainWindow::update(float deltaSeconds)
 		// Direct mode: which of the direct camera's hand slots the solver took
 		m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
 										{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
-		m_videoPreviewPanel->draw(perCameraResults, executionProviders, &forearmOverlays);
+		m_videoPreviewPanel->draw(&m_bShowVideoPreviewPanel, perCameraResults, executionProviders, &forearmOverlays);
 	}
 
 	// 3D scene: fused skeleton + all calibrated camera frustums. In replay
@@ -491,14 +516,17 @@ void MainWindow::update(float deltaSeconds)
 	SceneGizmos gizmos;
 	updateDisplayAvatar(gizmos);
 	const std::vector<SceneCameraView> sceneCameras= makeSceneCameraViews(*config);
-	if (m_timelinePanel->isReplayViewActive())
+	if (m_bShowScene3dPanel)
 	{
-		m_scene3dPanel->draw(m_timelinePanel->getDisplayFused(), m_timelinePanel->getSceneCameras(),
-							 m_timelinePanel->getPerCameraResults(), gizmos);
-	}
-	else
-	{
-		m_scene3dPanel->draw(m_latestFused, sceneCameras, perCameraResults, gizmos);
+		if (m_timelinePanel->isReplayViewActive())
+		{
+			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_timelinePanel->getDisplayFused(),
+								 m_timelinePanel->getSceneCameras(), m_timelinePanel->getPerCameraResults(), gizmos);
+		}
+		else
+		{
+			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_latestFused, sceneCameras, perCameraResults, gizmos);
+		}
 	}
 	applyGizmoDrags(gizmos);
 

@@ -162,6 +162,9 @@ protected:
 	bool startup();
 	void shutdown();
 	void tick(float deltaSeconds);
+	// Renders and presents the torn-out panels' OS windows after the main
+	// window's draw data, leaving the main GL context current again
+	void renderPlatformWindows();
 
 private:
 	static App* m_instance;
