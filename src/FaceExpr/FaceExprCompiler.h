@@ -39,13 +39,10 @@ struct FaceExprCompileResult
 // wrong argument counts, a let named twice or after a function, and let
 // cycles are errors.
 //
-// The functions:
-//   min(a, b, ...), max(a, b, ...), clamp(x, lo, hi), abs(x), pow(x, y)
-//   lerp(a, b, t), remap(x, inLo, inHi[, outLo, outHi]) (clamped to the
-//   input range), smoothstep(edge0, edge1, x), select(c, a, b)
-//   smooth(x, tauSeconds), hysteresis(x, on, off): stateful, one slot per
-//   call site, advanced every frame whichever select branch reads them
-// A value counts as true above 0.5; comparisons and logic yield 0 or 1.
+// The functions are the FaceExprFunctions table. The stateful ones (smooth,
+// hysteresis) get one slot per call site, advanced every frame whichever
+// select branch reads them. A value counts as true above 0.5; comparisons
+// and logic yield 0 or 1.
 FaceExprCompileResult compileFaceProfile(const FaceProfile& profile);
 
 // Whether a name is a built-in function (case ignored)

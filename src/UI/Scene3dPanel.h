@@ -11,6 +11,7 @@
 #include "opencv2/core/mat.hpp"
 
 #include "FaceProfileBinding.h"
+#include "AvatarMeshView.h"
 #include "AvatarRetarget.h"
 #include "DirectRetarget.h"
 #include "TrackingTypes.h"
@@ -19,7 +20,6 @@ class AppConfig;
 struct AvatarModel;
 class AvatarSkeleton;
 class GlFrameBuffer;
-class GlSkinnedMeshRenderer;
 class GlLineRenderer;
 class OrbitCamera;
 struct MikanMonoIntrinsics;
@@ -173,9 +173,8 @@ private:
 	std::unique_ptr<GlFrameBuffer> m_captureBuffer;
 	std::unique_ptr<GlLineRenderer> m_lineRenderer;
 	std::unique_ptr<OrbitCamera> m_camera;
-	std::unique_ptr<GlSkinnedMeshRenderer> m_meshRenderer;
 	bool m_bLineRendererInitialized= false;
-	bool m_bMeshRendererInitialized= false;
+	AvatarMeshView m_meshView;
 
 	SceneCameraMatch m_cameraMatch;
 	bool m_bViewFromCamera= false;
@@ -190,8 +189,6 @@ private:
 
 	std::shared_ptr<const AvatarModel> m_avatarModel;
 	std::shared_ptr<const AvatarSkeleton> m_avatarSkeleton;
-	uint32_t m_avatarGeneration= 0;
-	uint32_t m_uploadedAvatarGeneration= 0;
 	bool m_bShowAvatar= true;
 	bool m_bHasAvatarPose= false;
 	AvatarPose m_avatarPose;

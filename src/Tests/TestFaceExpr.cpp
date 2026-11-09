@@ -1,15 +1,19 @@
 #include "TestCommon.h"
 
 #include "FaceExprCompiler.h"
+#include "FaceExprEditorText.h"
 #include "FaceExprEvaluator.h"
+#include "FaceExprFunctions.h"
 #include "FaceExprInputs.h"
 #include "FaceExprParser.h"
 #include "FaceProfile.h"
+#include "FaceProfileBinding.h"
 #include "FaceProfileLibrary.h"
 
 // Tests for the face expression language: the parser, the compiler and its
 // errors, every function, the time rule, the state slots across a recompile,
-// the input sets, and the profile JSON.
+// the input sets, the profile JSON, the function table, the editor's text
+// operations, and the outputs reading a let.
 
 namespace
 {
@@ -526,6 +530,83 @@ static int runFaceExprTest(const TestArgs&)
 		std::filesystem::remove_all(folder, error);
 	}
 
+	// (m) The function table
+	{
+		auto compiles= [](const FaceExprFunctionInfo& function, int argCount) {
+			std::string call= std::string(function.name) + "(";
+			for (int argIndex= 0; argIndex < argCount; ++argIndex)
+				call+= argIndex == 0 ? "0.5" : ", 0.5";
+			call+= ")";
+			return compileFaceProfile(profileOf({call})).program != nullptr;
+		};
+		bool bArity= !faceExprFunctions().empty();
+		bool bPlaceholders= bArity;
+		for (const FaceExprFunctionInfo& function : faceExprFunctions())
+		{
+			bArity= bArity && compiles(function, function.minArgs) && !compiles(function, function.minArgs - 1);
+			if (function.maxArgs != INT_MAX)
+				bArity= bArity && compiles(function, function.maxArgs) && !compiles(function, function.maxArgs + 1);
+			const int placeholderCount= (int)function.placeholders.size();
+			bPlaceholders= bPlaceholders && placeholderCount >= function.minArgs && placeholderCount <= function.maxArgs;
+		}
+		const FaceExprFunctionInfo* remap= findFaceExprFunction("remap");
+		check(bArity && remap != nullptr && !compiles(*remap, 4),
+			  "every table function compiles at its arity bounds and fails past them, remap with four");
+		check(bPlaceholders, "every table function's placeholders fit its arity");
+		const FaceExprFunctionInfo* smooth= findFaceExprFunction("SMOOTH");
+		check(smooth != nullptr && std::string(smooth->name) == "smooth" && smooth->bStateful &&
+				  findFaceExprFunction("foo") == nullptr,
+			  "a function is found without case and an unknown name is not");
+	}
+
+	// (n) The editor's text operations
+	{
+		const FaceExprFunctionInfo* smoothstep= findFaceExprFunction("smoothstep");
+		const FaceExprFunctionInfo* remap= findFaceExprFunction("remap");
+		const FaceExprFunctionInfo* absFunction= findFaceExprFunction("abs");
+		auto selected= [](const FaceExprTextEdit& edit) {
+			return edit.text.substr((size_t)edit.selectionBegin, (size_t)(edit.selectionEnd - edit.selectionBegin));
+		};
+		bool bEmpty= false;
+		bool bWrapped= false;
+		bool bSingle= false;
+		if (smoothstep != nullptr && remap != nullptr && absFunction != nullptr)
+		{
+			const FaceExprTextEdit empty= insertFaceExprFunction("", 0, 0, *smoothstep);
+			bEmpty= empty.text == "smoothstep(edge0, edge1, x)" && selected(empty) == "edge0";
+			const FaceExprTextEdit wrapped= insertFaceExprFunction("phone.jawOpen", 0, 13, *remap);
+			bWrapped= wrapped.text == "remap(phone.jawOpen, inLo, inHi)" && selected(wrapped) == "inLo";
+			const FaceExprTextEdit single= insertFaceExprFunction("1 + x", 4, 5, *absFunction);
+			bSingle= single.text == "1 + abs(x)" && single.selectionBegin == 10 && single.selectionEnd == 10;
+		}
+		check(bEmpty, "a function inserted at a caret fills every placeholder and selects the first");
+		check(bWrapped, "a function wraps the selection and selects the next placeholder");
+		check(bSingle, "a one-argument function wraps the selection with the caret after the paren");
+
+		const FaceExprTextEdit text= insertFaceExprText("a + b", 4, 5, "phone.jawOpen");
+		check(text.text == "a + phone.jawOpen" && text.selectionBegin == 17 && text.selectionEnd == 17,
+			  "inserted text replaces the selection with the caret after it");
+
+		std::vector<FaceExprLineRun> runs;
+		faceExprSpanToLines("a +\nb", FaceExprSpan{2, 5}, runs);
+		check(runs.size() == 2 && runs[0].line == 0 && runs[0].columnBegin == 2 && runs[0].columnEnd == 3 &&
+				  runs[1].line == 1 && runs[1].columnBegin == 0 && runs[1].columnEnd == 1,
+			  "a span across a line break splits into one run per line");
+		faceExprSpanToLines("a +\nb", FaceExprSpan{5, 6}, runs);
+		check(runs.size() == 1 && runs[0].line == 1 && runs[0].columnBegin == 1 && runs[0].columnEnd == 1,
+			  "a span at the text end is one zero-width run on the last line");
+	}
+
+	// (o) The outputs reading a let
+	{
+		const FaceProfile profile= profileOf({"second", "first + 1", "0.5"},
+											 {{"first", "phone.jawOpen"}, {"second", "first * 2"}});
+		std::shared_ptr<const FaceProfileBinding> binding= compileFaceBinding(profile, nullptr);
+		check(binding != nullptr && binding->outputsReadingLet(0) == (std::vector<int>{0, 1}) &&
+				  binding->outputsReadingLet(1) == std::vector<int>{0},
+			  "a let's readers are the outputs naming it directly or through another let");
+	}
+
 	if (failures == 0)
 		MIKAN_LOG_INFO(k_label) << "All face expression tests passed";
 	return failures == 0 ? 0 : 1;
@@ -533,5 +614,6 @@ static int runFaceExprTest(const TestArgs&)
 
 MIKAN_REGISTER_TEST("--test-faceexpr",
 					"face expressions: precedence, functions, names, variables, smooth, the time rule, hysteresis, state "
-					"slots across a recompile, input sets, profile JSON, the library",
+					"slots across a recompile, input sets, profile JSON, the library, the function table, the editor's "
+					"text operations, the outputs reading a let",
 					eTestCategory::SelfTest, runFaceExprTest);

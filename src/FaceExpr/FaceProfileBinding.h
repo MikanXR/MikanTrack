@@ -83,6 +83,12 @@ public:
 	const std::vector<eFaceTargetProblem>& getOutputProblemCodes() const { return m_outputProblemCodes; }
 	const std::vector<std::string>& getWireNames() const { return m_wireNames; }
 	const std::vector<size_t>& getMeshMorphCounts() const { return m_meshMorphCounts; }
+	// Whether the morph weights this binding evaluates fit model: one entry
+	// per mesh, each the size of that mesh's morph targets
+	bool fitsModel(const AvatarModel& model) const;
+	// The profile outputs reading a let, directly or through other lets,
+	// ascending; empty without a program
+	std::vector<int> outputsReadingLet(int letIndex) const;
 
 	// Per target, the max of its outputs' values. outWinners, when given,
 	// gets the output that gave each target its value (-1 for a target whose

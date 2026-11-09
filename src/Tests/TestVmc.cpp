@@ -1299,6 +1299,10 @@ static int runVmcTest(const TestArgs&)
 			check(std::find(userBinding->getWireNames().begin(), userBinding->getWireNames().end(), "Missing") ==
 					  userBinding->getWireNames().end(),
 				  "an unresolved target is not sent");
+			AvatarModel reshaped= morphed;
+			reshaped.meshes[0].morphTargetNames.push_back("extraShape");
+			check(userBinding->fitsModel(morphed) && !userBinding->fitsModel(reshaped),
+				  "a binding fits the model it was built against and not one with another morph count");
 
 			FaceProfileRunner userRunner;
 			userRunner.setBinding(userBinding);
