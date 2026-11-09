@@ -64,12 +64,14 @@ AvatarPanel::AvatarPanel(App* app, AppConfig* config)
 {
 }
 
-void AvatarPanel::draw(bool* pOpen, const FaceSources& face)
+std::optional<FaceExprEditTarget> AvatarPanel::draw(bool* pOpen, const FaceSources& face,
+													const FaceExprEditTarget* activeEdit)
 {
+	std::optional<FaceExprEditTarget> editRequest;
 	if (!ImGui::Begin(locWindowTitle("windows.avatar"), pOpen))
 	{
 		ImGui::End();
-		return;
+		return editRequest;
 	}
 
 	drawLoadControls();
@@ -96,7 +98,7 @@ void AvatarPanel::draw(bool* pOpen, const FaceSources& face)
 			}
 			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabFace")))
 			{
-				m_faceTab.draw(m_app, face);
+				editRequest= m_faceTab.draw(m_app, face, activeEdit);
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
@@ -108,6 +110,7 @@ void AvatarPanel::draw(bool* pOpen, const FaceSources& face)
 	}
 
 	ImGui::End();
+	return editRequest;
 }
 
 void AvatarPanel::drawLoadControls()

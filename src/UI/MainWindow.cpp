@@ -18,6 +18,7 @@
 #include "BodyPoseSolver.h"
 #include "CalibrationPanel.h"
 #include "DevicePanel.h"
+#include "FaceExprEditorWindow.h"
 #include "GlobalSettings.h"
 #include "HandOverlay.h"
 #include "LocText.h"
@@ -47,6 +48,7 @@ MainWindow::MainWindow(App* app)
 	, m_wizardHost(std::make_unique<WizardHost>(app, app->getConfig(), app->getVisionThread()))
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
+	, m_faceExprEditor(std::make_unique<FaceExprEditorWindow>(app))
 	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 {
@@ -60,6 +62,11 @@ MainWindow::MainWindow(App* app)
 }
 
 MainWindow::~MainWindow()= default;
+
+void MainWindow::registerAutomation(AutomationServer* server)
+{
+	m_faceExprEditor->registerAutomation(server);
+}
 
 bool MainWindow::restoreCameraDevice(int cameraIndex)
 {
@@ -418,12 +425,19 @@ void MainWindow::update(float deltaSeconds)
 	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	if (m_bShowTimelinePanel)
 		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread);
-	if (m_bShowAvatarPanel)
 	{
-		// The Face tab reads the face the scene shows
+		// The Face tab and the expression editor read the frame the scene
+		// shows; a row's Edit button opens the editor on it
 		const bool bReplayView= m_timelinePanel->isReplayViewActive();
-		m_avatarPanel->draw(&m_bShowAvatarPanel,
-							bReplayView ? m_timelinePanel->getDisplayFused().face : m_latestFused.face);
+		const TrackingFrameResult& shownFrame= bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused;
+		if (m_bShowAvatarPanel)
+		{
+			const std::optional<FaceExprEditTarget> editRequest=
+				m_avatarPanel->draw(&m_bShowAvatarPanel, shownFrame.face, m_faceExprEditor->getTarget());
+			if (editRequest.has_value())
+				m_faceExprEditor->open(*editRequest);
+		}
+		m_faceExprEditor->update(shownFrame);
 	}
 	AudioPanel::DrawResult audioAction;
 	if (m_bShowAudioPanel)

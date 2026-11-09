@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 
 #include "AvatarFaceTab.h"
@@ -21,8 +22,10 @@ class AvatarPanel
 public:
 	AvatarPanel(App* app, AppConfig* config);
 
-	// face: the frame the scene shows, for the Face tab's live values
-	void draw(bool* pOpen, const FaceSources& face);
+	// face: the frame the scene shows, for the Face tab's live values.
+	// activeEdit: the row the expression editor is on (null: none). Returns
+	// the row whose Edit button the Face tab saw pressed this frame.
+	std::optional<FaceExprEditTarget> draw(bool* pOpen, const FaceSources& face, const FaceExprEditTarget* activeEdit);
 
 	// What the 3D scene's avatar is posed from. Rest and Demo are canned
 	// frames for tuning the rig without cameras; the VMC output always

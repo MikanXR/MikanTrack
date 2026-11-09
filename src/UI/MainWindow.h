@@ -11,10 +11,12 @@
 
 class App;
 class AudioPanel;
+class AutomationServer;
 class AvatarMouthReadout;
 class AvatarPanel;
 class CalibrationPanel;
 class DevicePanel;
+class FaceExprEditorWindow;
 class MainMenuScreen;
 class Scene3dPanel;
 class SetupFlow;
@@ -41,6 +43,10 @@ public:
 	// Re-syncs the device panel's cached device list and per-camera state
 	// with the config and the open devices
 	void refreshDevicePanelState();
+
+	// Registers the command namespaces the window's panels own (the
+	// expression editor's face namespace), once the server exists
+	void registerAutomation(AutomationServer* server);
 
 	// The window's copies of the vision thread's latest output (the thread's
 	// fetch is one-shot, so other readers on the main thread read these)
@@ -81,6 +87,9 @@ private:
 	std::unique_ptr<WizardHost> m_wizardHost;
 	std::unique_ptr<TimelinePanel> m_timelinePanel;
 	std::unique_ptr<AvatarPanel> m_avatarPanel;
+	// The expression editor the Face tab's Edit buttons open, drawn after
+	// the Avatar panel on the same shown frame
+	std::unique_ptr<FaceExprEditorWindow> m_faceExprEditor;
 	std::unique_ptr<AudioPanel> m_audioPanel;
 	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
 	// Guided new-project setup chain; needs the wizards above, so it is

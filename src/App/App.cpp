@@ -220,6 +220,7 @@ bool App::startup()
 	// The command channel registers its namespaces whether or not it listens
 	m_automationServer= std::make_unique<AutomationServer>();
 	m_automationServer->initialize(this);
+	m_mainWindow->registerAutomation(m_automationServer.get());
 	if (m_bAutomationServerRequested && !m_automationServer->startListener(m_automationPort))
 	{
 		// Tolerated: the app runs on, it just cannot be driven externally
