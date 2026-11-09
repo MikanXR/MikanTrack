@@ -28,6 +28,8 @@ class VideoCaptureSystem;
 class VisionThread;
 class MainWindow;
 
+class AutomationServer;
+
 class App
 {
 public:
@@ -151,8 +153,12 @@ public:
 	void applyAudioConfig();
 	VisionThread* getVisionThread() { return m_visionThread.get(); }
 	SDL_Window* getSdlWindow() { return m_sdlWindow; }
+	AutomationServer* getAutomationServer() { return m_automationServer.get(); }
 
 protected:
+	// The app's own flags: --automation-server and --automation-port=<n>. The
+	// self-test flags are consumed in main.cpp before exec is reached.
+	void parseCommandLine(int argc, char** argv);
 	bool startup();
 	void shutdown();
 	void tick(float deltaSeconds);
@@ -176,6 +182,11 @@ private:
 	std::unique_ptr<AudioService> m_audioService;
 	std::unique_ptr<VisionThread> m_visionThread;
 	std::unique_ptr<MainWindow> m_mainWindow;
+	// The loopback command channel, created at startup and listening only when
+	// the command line asked for it
+	std::unique_ptr<AutomationServer> m_automationServer;
+	bool m_bAutomationServerRequested= false;
+	uint16_t m_automationPort= 0;
 
 	// Loads the configured avatar, if any, for the active project
 	void loadConfiguredAvatar();

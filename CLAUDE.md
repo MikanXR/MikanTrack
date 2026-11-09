@@ -34,6 +34,7 @@ Read these for context, and keep them current as part of doing work:
 - **[wire-protocol.md](./docs/reference/wire-protocol.md)**: the OSC contract (the VMC stream), delivery rules, and known consumers. Read it before touching anything client-facing.
 - **[debugging.md](./docs/reference/debugging.md)**: logging, the test registry, the diagnostic dump, record/replay, and the diagnostic rules of thumb. Keep it current as diagnostic facilities evolve.
 - **[testing.md](./docs/reference/testing.md)**: how to run every test, what each one verifies, the batch command, the coverage gaps, and the known flake. Keep it current as tests are added or their assertions change.
+- **[automation.md](./docs/reference/automation.md)**: the automation server (the loopback TCP text command channel in `MikanTrack.exe`): the flags, the protocol, the command namespaces, the `tools/automate.py` client, and the drive and verify loop. The preferred way to test features that need the running app. Keep it current as command namespaces are added.
 
 ## Working agreements
 

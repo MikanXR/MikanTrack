@@ -24,6 +24,11 @@ linked, so this app builds standalone.
 | `src/Render/OrbitCamera.*` | orbit-camera math ported from `src/Editor/Renderer/MikanCamera.*` |
 | `src/Render/Colors.h` | `src/Editor/Renderer/` |
 | `src/Osc/UdpSocket.*` | adapted from `src/Libraries/MikanDMX/Private/UdpMulticastSocket.*` |
+| `src/Automation/AutomationProtocol.*` | `src/Editor/Server/` (verbatim) |
+| `src/Automation/AutomationSocket.*` | `src/Editor/Interprocess/` (loopback only, POSIX branch dropped, owns its Winsock startup) |
+| `src/Automation/AutomationServer.*` | registry, dispatch, and the `gui`, `input`, `screenshot`, and `log` namespaces adapted from `src/Editor/Server/AutomationServer.*`; the editor's other namespaces dropped, input injected through SDL directly |
+| `src/UI/GuiViewports.*` | the viewport listing and float request ported from `src/Libraries/MikanGUI/Private/MkGuiContext.cpp` |
+| `tools/automate.py` | `tools/automate.py` (verbatim, default port and launch flag changed) |
 | `tools/7zip/7za.exe` | 7-Zip standalone console (see `tools/7zip/License.txt`) |
 
 ## Third-party libraries

@@ -34,6 +34,17 @@ Or open `build\MikanTrack.sln` in Visual Studio 2022 and build there. There is o
 
 ---
 
+## Automation server
+
+```
+cd build/Release && ./MikanTrack.exe --automation-server
+python tools/automate.py "app info" "screenshot window"
+```
+
+`--automation-server` opens the loopback command channel for that launch (off by default), and `--automation-port=<n>` picks a port other than 21140 and implies it. The client script sends each argument as one command and prints the replies. The namespaces and the drive loop are in [automation.md](./automation.md).
+
+---
+
 ## Run the app and its self-tests
 
 The app exe doubles as the test runner: every self-test, hardware check, and headless tool is a flag handled before `App::exec` ever starts, and `MikanTrack.exe` must be run with its own directory as the working directory (see [build.md](./build.md)).
@@ -50,6 +61,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--selftest`: OSC writer packet round-trip
 - `--test-angleprior`: finger-angle prior fitting (mean, correlations, floors)
 - `--test-audio`: audio stage: the mouth columns and the viseme frame, window policy, wav reader, filter, the MFCC chain against a uLipSync reference, the profile JSON round trip, the viseme table, the backend, the loudness backend and the model names, the level gate, the audio config round trip, the wav writer, the sidecar recorder, the pacer, the replay alignment and the shared chain with a backend that runs while gated, the calibration frames and the gate suggestion, and the Oculus LipSync backend in a build carrying its SDK (skipped when `OVRLipSync.dll` is absent)
+- `--test-automation`: automation server: the command tokenizer and reply framing, and a loopback session on an ephemeral port
 - `--test-bodycalib`: body dimension calibration recovers known landmark separations
 - `--test-bodypose`: body-pose solver: rays + known lengths, root choice, hold, gates
 - `--test-bonecalib`: hand bone calibration from triangulated landmarks

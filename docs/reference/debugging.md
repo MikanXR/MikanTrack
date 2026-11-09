@@ -169,6 +169,12 @@ Division of labor with the image-quality table: `HandRoiQuality` A/Bs what a sin
 
 ---
 
+## Automation server
+
+For a question about the running app rather than a replayed stage, drive it instead of reasoning from impressions: launch `MikanTrack.exe --automation-server` and use `tools/automate.py` to open a project, inject input, read the log tail, and capture the window. The channel, its namespaces, and the drive loop are in [automation.md](./automation.md).
+
+---
+
 ## UDP/OSC
 
 OSC and VMC output go over UDP (`src/Osc/OscStreamer.*`, `src/Osc/UdpSocket.*`). The wire-level traps worth knowing before debugging a receiver, port exclusivity and receive-buffer sizing among them, are documented in [wire-protocol.md](./wire-protocol.md).
