@@ -404,7 +404,12 @@ void MainWindow::update(float deltaSeconds)
 	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	m_timelinePanel->draw(config, visionThread);
 	if (m_bShowAvatarPanel)
-		m_avatarPanel->draw(&m_bShowAvatarPanel);
+	{
+		// The Face tab reads the face the scene shows
+		const bool bReplayView= m_timelinePanel->isReplayViewActive();
+		m_avatarPanel->draw(&m_bShowAvatarPanel,
+							bReplayView ? m_timelinePanel->getDisplayFused().face : m_latestFused.face);
+	}
 	AudioPanel::DrawResult audioAction;
 	if (m_bShowAudioPanel)
 	{

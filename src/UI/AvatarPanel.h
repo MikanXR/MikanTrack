@@ -3,6 +3,7 @@
 #include <array>
 #include <string>
 
+#include "AvatarFaceTab.h"
 #include "AvatarMapFigure.h"
 
 class App;
@@ -11,15 +12,17 @@ class AppConfig;
 // The avatar panel: which VRM is loaded and what the loader read from it
 // (Model), the humanoid map with its per-bone overrides and rotation trims
 // (Mapping), and the elbow hints and hand tweaks plus a preview pose to tune
-// them against (Retarget). Loading goes through App (the model is
-// main-thread, GL-adjacent state); placement edits go to the persisted
-// AvatarConfig and rig edits to App::setAvatarRig.
+// them against (Retarget), and the face profiles (Face, see AvatarFaceTab).
+// Loading goes through App (the model is main-thread, GL-adjacent state);
+// placement edits go to the persisted AvatarConfig and rig edits to
+// App::setAvatarRig.
 class AvatarPanel
 {
 public:
 	AvatarPanel(App* app, AppConfig* config);
 
-	void draw(bool* pOpen);
+	// face: the frame the scene shows, for the Face tab's live values
+	void draw(bool* pOpen, const FaceSources& face);
 
 	// What the 3D scene's avatar is posed from. Rest and Demo are canned
 	// frames for tuning the rig without cameras; the VMC output always
@@ -53,6 +56,8 @@ private:
 	eHumanoidBone m_selectedBone= eHumanoidBone::Count;
 	bool m_bScrollToSelected= false;
 	char m_nodeFilter[64]= {};
+
+	AvatarFaceTab m_faceTab;
 
 	ePreviewPose m_previewPose= ePreviewPose::Live;
 	bool m_bShowElbowGizmo[2]= {false, false};
