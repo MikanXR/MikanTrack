@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Face expression editor mockup</title>
+<style>
+:root{
+	--bg:#1f2126; --child:#24262b; --frame:#33384a; --frame-h:#47525f; --border:#4c5569;
+	--text:#e6edf3; --dim:#99a6b3; --btn:#485a7c; --btn-h:#5c73a6; --accent:#80a6e6;
+	--header:#5c6b8c; --error:#ff6666; --warn:#ffcc66; --ok:#7fd48a; --bar:#5a86c7;
+	--mono: Consolas, "Cascadia Mono", "JetBrains Mono", monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#15171b;color:var(--text);font:13px/1.35 "Segoe UI",system-ui,sans-serif;min-width:1240px}
+h1{font-size:14px;font-weight:600;margin:0}
+.note{color:var(--dim);font-size:12px}
+.page{padding:14px;display:flex;flex-direction:column;gap:14px}
+
+/* ImGui-like window chrome */
+.win{background:var(--bg);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 18px rgba(0,0,0,.5)}
+.win>.title{background:#3a4660;padding:5px 10px;font-weight:600;display:flex;align-items:center;gap:10px;border-radius:4px 4px 0 0}
+.win>.title .spacer{flex:1}
+.win>.title .x{width:16px;height:16px;border-radius:3px;background:#6b7b9c;display:inline-grid;place-items:center;font-size:11px;color:#fff}
+.win>.body{padding:10px}
+
+button,.btn{background:var(--btn);color:var(--text);border:1px solid rgba(0,0,0,.25);border-radius:3px;padding:4px 10px;font:inherit;cursor:pointer}
+button:hover{background:var(--btn-h)} button:disabled{opacity:.45;cursor:default}
+button.small{padding:2px 8px;font-size:12px}
+input[type=text],select{background:var(--frame);color:var(--text);border:1px solid rgba(0,0,0,.3);border-radius:3px;padding:4px 6px;font:inherit}
+input[type=text]:focus,select:focus,textarea:focus{outline:1px solid var(--accent)}
+label.chk{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.sep{height:1px;background:#3a4252;margin:8px 0}
+.sephdr{display:flex;align-items:center;gap:8px;color:var(--dim);font-size:12px;margin:8px 0 4px}
+.sephdr:before,.sephdr:after{content:"";flex:1;height:1px;background:#3a4252}
+
+.bar{position:relative;height:18px;background:var(--frame);border-radius:3px;overflow:hidden;min-width:70px}
+.bar>i{position:absolute;left:0;top:0;bottom:0;background:var(--bar);width:0}
+.bar>b{position:absolute;inset:0;display:grid;place-items:center;font-weight:400;font-size:11px;font-family:var(--mono)}
+
+/* stand-in face tab */
+.tab .tables{display:grid;grid-template-columns:1fr 1.3fr;gap:12px}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;color:var(--dim);font-weight:500;padding:3px 6px;border-bottom:1px solid #3a4252;font-size:12px}
+td{padding:3px 6px;vertical-align:middle}
+tr.row:nth-child(even) td{background:rgba(255,255,255,.025)}
+tr.row.active td{background:rgba(128,166,230,.16)}
+tr.row.active td:first-child{box-shadow:inset 3px 0 var(--accent)}
+td.fn{font-family:var(--mono);font-size:12px;color:#cfd8e3;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.val{width:90px} td.edit{width:52px;text-align:right}
+.tab .footer{display:flex;gap:8px;margin-top:6px}
+
+/* editor */
+.hdr{display:grid;grid-template-columns:auto minmax(180px,260px) minmax(200px,340px) 1fr auto;gap:10px;align-items:center}
+.badge{font-size:11px;padding:2px 7px;border-radius:3px;background:#3f4b66;color:#d7e1f2;letter-spacing:.3px}
+.hdr .bar{height:22px}
+.warn{color:var(--warn);font-size:12px;white-space:nowrap}
+
+.cols{display:grid;grid-template-columns:270px 1fr 300px;gap:10px;margin-top:10px;min-height:520px}
+.col{background:var(--child);border:1px solid rgba(76,85,105,.4);border-radius:3px;padding:8px;display:flex;flex-direction:column;min-height:0}
+.col h3{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+.col h3 .spacer{flex:1}
+
+/* inputs list */
+#filter{width:100%;margin-bottom:6px}
+.inputs{overflow:auto;flex:1;max-height:620px;font-size:11px}
+.grp>summary{cursor:pointer;color:#c7d2e0;padding:3px 2px;list-style:none;display:flex;gap:6px;align-items:center;user-select:none}
+.grp>summary:before{content:"▸";font-size:10px;color:var(--dim)} .grp[open]>summary:before{content:"▾"}
+.grp>summary .cnt{color:var(--dim);font-size:11px}
+.in{display:grid;grid-template-columns:minmax(0,1fr) 40px;gap:6px;padding:1px 4px 1px 16px;cursor:pointer;border-radius:2px;font-family:var(--mono)}
+.in:hover{background:rgba(128,166,230,.12)}
+.in.ref{background:rgba(127,212,138,.14);color:#dff5e3}
+.in.ref .v{color:#9fe3a8}
+.in .v{text-align:right;color:var(--dim)}
+.in .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.in .v.on{color:var(--text)}
+.in.zero .v{opacity:.55}
+.in.self{opacity:.4;cursor:default}
+
+/* formula */
+.formula{position:relative;font-family:var(--mono);font-size:14px;line-height:1.45}
+.formula .back,.formula textarea{padding:7px 8px;border:1px solid rgba(0,0,0,.3);border-radius:3px;white-space:pre-wrap;word-wrap:break-word;font:inherit;width:100%;margin:0}
+.formula .back{position:absolute;inset:0;color:transparent;background:var(--frame);pointer-events:none;overflow:hidden}
+.formula .back u{text-decoration:underline wavy var(--error);text-decoration-skip-ink:none;text-underline-offset:3px;color:transparent}
+.formula textarea{position:relative;background:transparent;color:var(--text);resize:none;overflow:hidden;display:block;min-height:40px}
+.formula textarea::selection{background:rgba(128,166,230,.45)}
+.errmsg{color:var(--error);font-size:12px;min-height:16px;margin:4px 2px 0}
+.errmsg.ok{color:var(--ok)}
+.fbar{display:flex;align-items:center;gap:8px;margin-top:4px}
+.fbar .spacer{flex:1}
+
+/* graph */
+.graphwrap{margin-top:8px;flex:1;display:flex;flex-direction:column;min-height:200px}
+canvas#graph{width:100%;flex:1;min-height:180px;background:#111317;border:1px solid rgba(76,85,105,.5);border-radius:3px;display:block}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:12px;background:#2b3040;border:1px solid #3a4252;cursor:pointer;font-family:var(--mono);font-size:11px;user-select:none}
+.chip i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.chip.off{opacity:.4}
+.chip .v{color:var(--dim);min-width:38px;text-align:right}
+.chip.result{border-color:var(--accent)}
+
+/* palette */
+.palette{margin-top:8px}
+.prow{display:flex;flex-wrap:wrap;gap:4px;margin:3px 0}
+.prow .lbl{width:78px;color:var(--dim);font-size:11px;align-self:center;text-transform:uppercase;letter-spacing:.4px}
+.prow button{font-family:var(--mono);font-size:12px;padding:3px 9px;background:#3b4358}
+.prow button:hover{background:#4f5b78}
+.prow button.st{background:#4a4260} .prow button.st:hover{background:#5f5578}
+.prow button.op{min-width:34px}
+
+/* preview */
+.preview{display:flex;flex-direction:column}
+.stage{flex:1;background:radial-gradient(ellipse at 50% 35%,#3c4152 0%,#1a1c22 75%);border:1px solid rgba(76,85,105,.5);border-radius:3px;position:relative;overflow:hidden;cursor:grab;min-height:330px}
+.stage:active{cursor:grabbing}
+.stage svg{position:absolute;inset:0;width:100%;height:100%}
+.stage .hint{position:absolute;left:8px;bottom:6px;font-size:11px;color:var(--dim);pointer-events:none}
+.pfoot{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px}
+.pfoot .spacer{flex:1}
+.ptable{margin-top:8px;font-size:11px;font-family:var(--mono);color:var(--dim);display:grid;grid-template-columns:1fr auto;gap:1px 10px;max-height:120px;overflow:auto}
+.ptable b{color:var(--text);font-weight:400}
+
+/* sim strip */
+.sim{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.sim .lbl{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="win tab">
+	<div class="title">Avatar panel › Face tab <span class="note">(stand-in: only the rows and their Edit buttons matter here)</span><span class="spacer"></span><span class="x">×</span></div>
+	<div class="body">
+		<div class="tables">
+			<div>
+				<div class="sephdr">Variables</div>
+				<table id="tabVars"><thead><tr><th>Name</th><th>Function</th><th>Value</th><th></th></tr></thead><tbody></tbody></table>
+			</div>
+			<div>
+				<div class="sephdr">VRM Expression Bindings</div>
+				<table id="tabOuts"><thead><tr><th>Target</th><th>Function</th><th>Value</th><th></th></tr></thead><tbody></tbody></table>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="win" id="editor">
+	<div class="title">Expression Editor<span class="note" id="titleNote"></span><span class="spacer"></span><span class="note">floats, docks, or tears out like any panel</span><span class="x">×</span></div>
+	<div class="body">
+		<div class="hdr">
+			<span class="badge" id="kindBadge">Binding</span>
+			<span id="targetSlot"></span>
+			<div class="bar" id="valueBar"><i></i><b>0.000</b></div>
+			<span class="warn" id="warnText"></span>
+			<button id="revertBtn" class="small" disabled title="Back to the text the editor opened with">Revert</button>
+		</div>
+
+		<div class="cols">
+			<div class="col">
+				<h3>Inputs <span class="spacer"></span><span class="note" id="inputCount"></span></h3>
+				<input type="text" id="filter" placeholder="filter…">
+				<div class="inputs" id="inputs"></div>
+			</div>
+
+			<div class="col">
+				<h3>Function</h3>
+				<div class="formula">
+					<div class="back" id="back"></div>
+					<textarea id="expr" rows="2" spellcheck="false"></textarea>
+				</div>
+				<div class="errmsg" id="errmsg"></div>
+
+				<div class="graphwrap">
+					<h3>Last 6 seconds <span class="spacer"></span><span class="note">result and what it reads</span></h3>
+					<canvas id="graph"></canvas>
+					<div class="legend" id="legend"></div>
+				</div>
+
+				<div class="palette">
+					<div class="prow" id="rowFn"><span class="lbl">Functions</span></div>
+					<div class="prow" id="rowOp"><span class="lbl">Operators</span></div>
+					<div class="prow" id="rowPn"><span class="lbl">Punctuation</span></div>
+				</div>
+			</div>
+
+			<div class="col preview">
+				<h3>Preview <span class="spacer"></span><label class="chk"><input type="checkbox" id="solo" checked> Solo</label></h3>
+				<div class="stage" id="stage">
+					<svg viewBox="-150 -150 300 300" id="face">
+						<g id="faceRoot">
+							<ellipse id="head" cx="0" cy="0" rx="100" ry="118" fill="#f3dcc9" stroke="#b78b74" stroke-width="2"/>
+							<path id="hair" d="M-104,-20 C-110,-120 110,-120 104,-20 C70,-70 30,-80 10,-95 C-20,-70 -60,-60 -104,-20 Z" fill="#5b3a2e"/>
+							<g id="features">
+								<g id="brows">
+									<path id="browL" d="M-70,-60 Q-48,-70 -26,-60" stroke="#4a2c22" stroke-width="5" fill="none" stroke-linecap="round"/>
+									<path id="browR" d="M26,-60 Q48,-70 70,-60" stroke="#4a2c22" stroke-width="5" fill="none" stroke-linecap="round"/>
+								</g>
+								<g id="eyeL">
+									<ellipse cx="-46" cy="-28" rx="22" ry="16" fill="#fff" stroke="#6b4a3f" stroke-width="1.5"/>
+									<circle id="pupilL" cx="-46" cy="-28" r="9" fill="#5a6fb0"/>
+									<circle id="pupilLc" cx="-46" cy="-28" r="4" fill="#1b1d2a"/>
+									<rect id="lidL" x="-70" y="-46" width="48" height="0" fill="#f3dcc9"/>
+									<path id="lashL" d="M-68,-44 Q-46,-52 -24,-44" stroke="#4a2c22" stroke-width="3" fill="none"/>
+								</g>
+								<g id="eyeR">
+									<ellipse cx="46" cy="-28" rx="22" ry="16" fill="#fff" stroke="#6b4a3f" stroke-width="1.5"/>
+									<circle id="pupilR" cx="46" cy="-28" r="9" fill="#5a6fb0"/>
+									<circle id="pupilRc" cx="46" cy="-28" r="4" fill="#1b1d2a"/>
+									<rect id="lidR" x="22" y="-46" width="48" height="0" fill="#f3dcc9"/>
+									<path id="lashR" d="M24,-44 Q46,-52 68,-44" stroke="#4a2c22" stroke-width="3" fill="none"/>
+								</g>
+								<ellipse id="cheekL" cx="-62" cy="12" rx="16" ry="9" fill="#f0a6a0" opacity="0.25"/>
+								<ellipse id="cheekR" cx="62" cy="12" rx="16" ry="9" fill="#f0a6a0" opacity="0.25"/>
+								<path id="nose" d="M-4,10 Q0,18 4,10" stroke="#c08a74" stroke-width="2" fill="none"/>
+								<path id="mouth" d="M-30,50 Q0,56 30,50 Q0,56 -30,50 Z" fill="#8c2f3a" stroke="#6b2430" stroke-width="2" stroke-linejoin="round"/>
+							</g>
+						</g>
+					</svg>
+					<div class="hint">drag to orbit · wheel to zoom</div>
+				</div>
+				<div class="pfoot">
+					<span class="note" id="soloNote">rest face + this target</span>
+					<span class="spacer"></span>
+					<button class="small" id="resetView">Reset view</button>
+				</div>
+				<div class="ptable" id="ptable"></div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="win">
+	<div class="title">Simulation <span class="note">(mockup only, stands in for the phone and the microphone)</span></div>
+	<div class="body sim">
+		<label class="chk"><input type="checkbox" id="simPhone" checked> phone streaming</label>
+		<label class="chk"><input type="checkbox" id="simTracked" checked> face tracked</label>
+		<label class="chk"><input type="checkbox" id="simMic" checked> microphone</label>
+		<label class="chk"><input type="checkbox" id="simSpeak" checked> speaking</label>
+		<span class="lbl">The phone source reads zero unless tracked, the visemes zero unless the microphone is present. Toggle them to watch a <code>select(phone.tracked, …)</code> switch.</span>
+	</div>
+</div>
+
+</div>
+
+<script>
+'use strict';
+// ---------------------------------------------------------------- inputs table
+const ARKIT = ['eyeBlinkLeft','eyeLookDownLeft','eyeLookInLeft','eyeLookOutLeft','eyeLookUpLeft','eyeSquintLeft','eyeWideLeft','eyeBlinkRight','eyeLookDownRight','eyeLookInRight','eyeLookOutRight','eyeLookUpRight','eyeSquintRight','eyeWideRight','jawForward','jawLeft','jawRight','jawOpen','mouthClose','mouthFunnel','mouthPucker','mouthLeft','mouthRight','mouthSmileLeft','mouthSmileRight','mouthFrownLeft','mouthFrownRight','mouthDimpleLeft','mouthDimpleRight','mouthStretchLeft','mouthStretchRight','mouthRollLower','mouthRollUpper','mouthShrugLower','mouthShrugUpper','mouthPressLeft','mouthPressRight','mouthLowerDownLeft','mouthLowerDownRight','mouthUpperUpLeft','mouthUpperUpRight','browDownLeft','browDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight','cheekPuff','cheekSquintLeft','cheekSquintRight','noseSneerLeft','noseSneerRight','tongueOut'];
+const VISEMES = ['aa','E','I','O','U','PP','SS','TH','DD','FF','kk','nn','RR','CH','sil'];
+
+// The slot table, in the order FaceExprInputs lays it out
+const INPUTS = [];
+ARKIT.forEach(n => INPUTS.push({name:'phone.'+n, group:'phone'}));
+INPUTS.push({name:'phone.present', group:'phone flags'}, {name:'phone.tracked', group:'phone flags'});
+VISEMES.forEach(n => INPUTS.push({name:'viseme.'+n, group:'viseme'}));
+INPUTS.push({name:'viseme.present', group:'viseme flags'});
+const inputSlot = new Map();   // lower-case spelling -> slot index
+INPUTS.forEach((inp, i) => {
+	inputSlot.set(inp.name.toLowerCase(), i);
+	// The phone's suffix spelling: eyeBlink_L for eyeBlinkLeft
+	const m = inp.name.match(/^phone\.(.*)(Left|Right)$/);
+	if (m) inputSlot.set(('phone.'+m[1]+(m[2]==='Left'?'_L':'_R')).toLowerCase(), i);
+});
+const inputValues = new Float32Array(INPUTS.length);
+
+// ---------------------------------------------------------------- functions
+const FUNCTIONS = [
+	{name:'min', ph:['a','b'], min:2, max:Infinity, sig:'min(a, b, ...)', note:'The smallest argument. Two or more.'},
+	{name:'max', ph:['a','b'], min:2, max:Infinity, sig:'max(a, b, ...)', note:'The largest argument. Two or more.'},
+	{name:'clamp', ph:['x','lo','hi'], min:3, max:3, sig:'clamp(x, lo, hi)', note:'x limited to lo..hi.'},
+	{name:'abs', ph:['x'], min:1, max:1, sig:'abs(x)', note:'Absolute value.'},
+	{name:'pow', ph:['x','y'], min:2, max:2, sig:'pow(x, y)', note:'x to the power y.'},
+	{name:'lerp', ph:['a','b','t'], min:3, max:3, sig:'lerp(a, b, t)', note:'a at t = 0, b at t = 1.'},
+	{name:'remap', ph:['x','inLo','inHi'], min:3, max:5, sig:'remap(x, inLo, inHi[, outLo, outHi])', note:'x from inLo..inHi onto 0..1, clamped to the input range. Five arguments give the output range.'},
+	{name:'smoothstep', ph:['edge0','edge1','x'], min:3, max:3, sig:'smoothstep(edge0, edge1, x)', note:'0 below edge0, 1 above edge1, an S curve between.'},
+	{name:'select', ph:['c','a','b'], min:3, max:3, sig:'select(c, a, b)', note:'a while c is above 0.5, otherwise b.'},
+	{name:'smooth', ph:['x','tauSeconds'], min:2, max:2, stateful:true, sig:'smooth(x, tauSeconds)', note:'Exponential smoothing with time constant tau. Stateful: advances once per frame.'},
+	{name:'hysteresis', ph:['x','on','off'], min:3, max:3, stateful:true, sig:'hysteresis(x, on, off)', note:'1 once x reaches on, 0 once it falls to off. Stateful.'},
+];
+const functionByName = new Map(FUNCTIONS.map(f => [f.name, f]));
+const OPERATORS = ['||','&&','==','!=','<','<=','>','>=','+','-','*','/','!'];
+const PUNCT = ['(',')',','];
+
+// ---------------------------------------------------------------- language
+function tokenize(src) {
+	const toks = [];
+	let i = 0;
+	while (i < src.length) {
+		const c = src[i];
+		if (/\s/.test(c)) { i++; continue; }
+		if (/[0-9.]/.test(c)) {
+			let j = i; while (j < src.length && /[0-9.]/.test(src[j])) j++;
+			const text = src.slice(i, j);
+			if (text === '.' || (text.match(/\./g)||[]).length > 1) throw err('UnexpectedCharacter', [i, j], [text]);
+			toks.push({t:'num', v:parseFloat(text), b:i, e:j, text}); i = j; continue;
+		}
+		if (/[A-Za-z_]/.test(c)) {
+			let j = i; while (j < src.length && /[A-Za-z0-9_.]/.test(src[j])) j++;
+			toks.push({t:'id', text:src.slice(i, j), b:i, e:j}); i = j; continue;
+		}
+		const two = src.slice(i, i+2);
+		if (['||','&&','==','!=','<=','>='].includes(two)) { toks.push({t:'op', text:two, b:i, e:i+2}); i += 2; continue; }
+		if ('<>+-*/!'.includes(c)) { toks.push({t:'op', text:c, b:i, e:i+1}); i++; continue; }
+		if (c === '(') { toks.push({t:'(', text:c, b:i, e:i+1}); i++; continue; }
+		if (c === ')') { toks.push({t:')', text:c, b:i, e:i+1}); i++; continue; }
+		if (c === ',') { toks.push({t:',', text:c, b:i, e:i+1}); i++; continue; }
+		throw err('UnexpectedCharacter', [i, i+1], [c]);
+	}
+	toks.push({t:'end', text:'', b:src.length, e:src.length});
+	return toks;
+}
+function err(code, span, args) { return {code, span, args: args||[]}; }
+
+const BINARY_BP = {'||':1,'&&':2,'==':3,'!=':3,'<':4,'<=':4,'>':4,'>=':4,'+':5,'-':5,'*':6,'/':6};
+
+// Parses src into an AST; names are resolved by the caller. Function call
+// sites get an ordinal (the state slot key's third part).
+function parse(src) {
+	const toks = tokenize(src);
+	let p = 0, site = 0;
+	const peek = () => toks[p];
+	const next = () => toks[p++];
+	function primary() {
+		const tk = next();
+		if (tk.t === 'num') return {k:'num', v:tk.v, b:tk.b, e:tk.e};
+		if (tk.t === 'op' && (tk.text === '-' || tk.text === '!')) {
+			const a = expr(7);
+			return {k:'un', op:tk.text, a, b:tk.b, e:a.e};
+		}
+		if (tk.t === '(') {
+			const a = expr(0);
+			const close = next();
+			if (close.t !== ')') throw err('ExpectedCloseParen', [close.b, Math.max(close.e, close.b+1)], [close.text]);
+			return {...a, b:tk.b, e:close.e};
+		}
+		if (tk.t === 'id') {
+			if (peek().t === '(') {
+				next();
+				const fn = functionByName.get(tk.text.toLowerCase());
+				if (!fn) throw err('UnknownFunction', [tk.b, tk.e], [tk.text]);
+				const args = [];
+				if (peek().t !== ')') {
+					for (;;) {
+						args.push(expr(0));
+						const sep = next();
+						if (sep.t === ')') break;
+						if (sep.t !== ',') throw err('ExpectedCommaOrParen', [sep.b, Math.max(sep.e, sep.b+1)], [sep.text]);
+					}
+				} else next();
+				const close = toks[p-1];
+				const bad = args.length < fn.min || args.length > fn.max || (fn.name === 'remap' && args.length === 4);
+				if (bad) throw err('ArgumentCount', [tk.b, close.e], [fn.name, String(fn.min), fn.max === Infinity ? '' : String(fn.max), String(args.length)]);
+				return {k:'call', fn, args, site: fn.stateful ? site++ : -1, b:tk.b, e:close.e};
+			}
+			return {k:'name', name:tk.text, b:tk.b, e:tk.e};
+		}
+		if (tk.t === 'end') throw err('ExpressionEndsEarly', [tk.b, tk.b+1]);
+		throw err('UnexpectedToken', [tk.b, tk.e], [tk.text]);
+	}
+	function expr(minBp) {
+		let left = primary();
+		for (;;) {
+			const tk = peek();
+			if (tk.t !== 'op' || !(tk.text in BINARY_BP)) break;
+			const bp = BINARY_BP[tk.text];
+			if (bp <= minBp) break;
+			next();
+			const right = expr(bp);
+			left = {k:'bin', op:tk.text, a:left, c:right, b:left.b, e:right.e};
+		}
+		return left;
+	}
+	const root = expr(0);
+	const tail = next();
+	if (tail.t !== 'end') throw err('UnexpectedToken', [tail.b, tail.e], [tail.text]);
+	return root;
+}
+
+// Resolves names against the input table and the profile's variables.
+// Returns {inputs:Set<slot>, vars:Set<name lower>}.
+function resolve(ast, varNames, selfName) {
+	const refs = {inputs:new Set(), vars:new Set()};
+	(function walk(n) {
+		if (n.k === 'name') {
+			const lower = n.name.toLowerCase();
+			if (lower.includes('.')) {
+				const slot = inputSlot.get(lower);
+				if (slot === undefined) throw err('UnknownInput', [n.b, n.e], [n.name]);
+				n.slot = slot; refs.inputs.add(slot);
+			} else {
+				if (!varNames.has(lower)) throw err('UnknownName', [n.b, n.e], [n.name]);
+				if (lower === selfName) throw err('Cycle', [n.b, n.e], [n.name]);
+				n.varName = lower; refs.vars.add(lower);
+			}
+		} else if (n.k === 'un') walk(n.a);
+		else if (n.k === 'bin') { walk(n.a); walk(n.c); }
+		else if (n.k === 'call') n.args.forEach(walk);
+	})(ast);
+	return refs;
+}
+
+const truthy = v => v > 0.5;
+const bool = b => b ? 1 : 0;
+function evaluate(n, ctx) {
+	let r;
+	switch (n.k) {
+	case 'num': return n.v;
+	case 'name': return n.slot !== undefined ? inputValues[n.slot] : ctx.variable(n.varName);
+	case 'un': { const a = evaluate(n.a, ctx); r = n.op === '-' ? -a : bool(!truthy(a)); break; }
+	case 'bin': {
+		const a = evaluate(n.a, ctx), b = evaluate(n.c, ctx);
+		switch (n.op) {
+		case '+': r = a + b; break; case '-': r = a - b; break; case '*': r = a * b; break;
+		case '/': r = b !== 0 ? a / b : 0; break;
+		case '<': r = bool(a < b); break; case '<=': r = bool(a <= b); break;
+		case '>': r = bool(a > b); break; case '>=': r = bool(a >= b); break;
+		case '==': r = bool(a === b); break; case '!=': r = bool(a !== b); break;
+		case '&&': r = bool(truthy(a) && truthy(b)); break; case '||': r = bool(truthy(a) || truthy(b)); break;
+		}
+		break;
+	}
+	case 'call': {
+		const a = n.args.map(x => evaluate(x, ctx));
+		switch (n.fn.name) {
+		case 'min': r = Math.min(...a); break;
+		case 'max': r = Math.max(...a); break;
+		case 'clamp': r = Math.max(a[1], Math.min(a[0], a[2])); break;
+		case 'abs': r = Math.abs(a[0]); break;
+		case 'pow': r = Math.pow(a[0], a[1]); break;
+		case 'lerp': r = a[0] + (a[1] - a[0]) * a[2]; break;
+		case 'remap': {
+			const outLo = a.length === 5 ? a[3] : 0, outHi = a.length === 5 ? a[4] : 1;
+			let t; if (a[2] === a[1]) t = a[0] >= a[2] ? 1 : 0; else t = Math.min(1, Math.max(0, (a[0]-a[1])/(a[2]-a[1])));
+			r = outLo + (outHi - outLo) * t; break;
+		}
+		case 'smoothstep': {
+			let t; if (a[1] === a[0]) t = a[2] >= a[1] ? 1 : 0; else t = Math.min(1, Math.max(0, (a[2]-a[0])/(a[1]-a[0])));
+			r = t*t*(3-2*t); break;
+		}
+		case 'select': r = truthy(a[0]) ? a[1] : a[2]; break;
+		case 'smooth': {
+			const slot = ctx.slot(n.site);
+			if (!slot.init || a[1] <= 0) { slot.v = a[0]; slot.init = true; }
+			else slot.v += (1 - Math.exp(-ctx.dt / a[1])) * (a[0] - slot.v);
+			r = slot.v; break;
+		}
+		case 'hysteresis': {
+			const slot = ctx.slot(n.site);
+			let latched = slot.init && slot.v > 0.5;
+			if (!latched && a[0] >= a[1]) latched = true;
+			else if (latched && a[0] <= a[2]) latched = false;
+			slot.v = bool(latched); slot.init = true; r = slot.v; break;
+		}
+		}
+		break;
+	}
+	}
+	return Number.isFinite(r) ? r : 0;
+}
+
+function errorText(e) {
+	const a = e.args;
+	switch (e.code) {
+	case 'UnexpectedCharacter': return `unexpected character '${a[0]}'`;
+	case 'UnexpectedToken': return `unexpected '${a[0]}'`;
+	case 'ExpressionEndsEarly': return 'expression ends early';
+	case 'ExpectedCloseParen': return "expected ')'";
+	case 'ExpectedCommaOrParen': return "expected ',' or ')'";
+	case 'UnknownInput': return `'${a[0]}' is not an input`;
+	case 'UnknownName': return `'${a[0]}' is not a variable`;
+	case 'UnknownFunction': return `'${a[0]}' is not a function`;
+	case 'ArgumentCount':
+		if (a[2] === '') return `'${a[0]}' takes at least ${a[1]} arguments, ${a[3]} given`;
+		if (a[1] === a[2]) return `'${a[0]}' takes ${a[1]} arguments, ${a[3]} given`;
+		return `'${a[0]}' takes ${a[1]} or ${a[2]} arguments, ${a[3]} given`;
+	case 'Cycle': return `variable '${a[0]}' depends on itself`;
+	case 'InvalidVariableName': return `'${a[0]}' is not a valid variable name`;
+	case 'VariableIsFunctionName': return `'${a[0]}' is a function's name`;
+	case 'VariableDefinedTwice': return `variable '${a[0]}' is defined twice`;
+	}
+	return e.code;
+}
+
+// ---------------------------------------------------------------- the profile
+const AVATAR_EXPRESSIONS = ['happy (preset)','angry (preset)','sad (preset)','relaxed (preset)','surprised (preset)','aa (preset)','ih (preset)','ou (preset)','ee (preset)','oh (preset)','blink (preset)','blinkLeft (preset)','blinkRight (preset)','lookUp (preset)','lookDown (preset)','lookLeft (preset)','lookRight (preset)','neutral (preset)'];
+const AVATAR_MORPHS = ['browInnerUp','browDownLeft','browDownRight','cheekPuff','tongueOut','Fcl_MTH_Fun','Fcl_MTH_Joy'];
+const EXPR_NAME = s => s.replace(/ \(preset\)$/, '');
+
+const profile = {
+	lets: [
+		{name:'mouthOpen', expr:'select(phone.tracked, phone.jawOpen, viseme.aa)'},
+		{name:'talking', expr:'hysteresis(smooth(1 - viseme.sil, 0.1), 0.3, 0.1)'},
+	],
+	outputs: [
+		{kind:'expression', target:'blinkLeft', expr:'smoothstep(0.2, 0.8, phone.eyeBlinkLeft)'},
+		{kind:'expression', target:'blinkRight', expr:'smoothstep(0.2, 0.8, phone.eyeBlinkRight)'},
+		{kind:'expression', target:'aa', expr:'remap(mouthOpen, 0.1, 0.7)'},
+		{kind:'expression', target:'oh', expr:'select(phone.tracked, phone.mouthFunnel, viseme.O)'},
+		{kind:'expression', target:'happy', expr:'smooth(max(phone.mouthSmileLeft, phone.mouthSmileRight), 0.15)'},
+		{kind:'expression', target:'Surprised', expr:'phone.eyeWideLeft > 0.6 && phone.jawOpen > 0.3'},
+		{kind:'morph', target:'browInnerUp', expr:'phone.browInnerUp'},
+	],
+};
+// The compiled profile: per row its AST, refs and error
+let compiled = {lets:[], outputs:[]};
+function compileProfile() {
+	const varNames = new Set(profile.lets.map(l => l.name.toLowerCase()));
+	const compileRow = (text, selfName) => {
+		try {
+			const ast = parse(text);
+			const refs = resolve(ast, varNames, selfName);
+			return {ast, refs, error:null};
+		} catch (e) {
+			if (e && e.code) return {ast:null, refs:{inputs:new Set(), vars:new Set()}, error:e};
+			throw e;
+		}
+	};
+	compiled.lets = profile.lets.map(l => compileRow(l.expr, l.name.toLowerCase()));
+	compiled.outputs = profile.outputs.map(o => compileRow(o.expr, null));
+}
+function variableNameError(name, index) {
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return err('InvalidVariableName', null, [name]);
+	if (functionByName.has(name.toLowerCase())) return err('VariableIsFunctionName', null, [name]);
+	if (profile.lets.some((l, i) => i !== index && l.name.toLowerCase() === name.toLowerCase())) return err('VariableDefinedTwice', null, [name]);
+	return null;
+}
+
+// State slots keyed by owner | text | ordinal, as the real evaluator keys them
+const stateSlots = new Map();
+const letValues = [], outputValues = [];
+function evaluateProfile(dt) {
+	const memo = new Map(), visiting = new Set();
+	const variable = lower => {
+		if (memo.has(lower)) return memo.get(lower);
+		if (visiting.has(lower)) return 0;
+		visiting.add(lower);
+		const idx = profile.lets.findIndex(l => l.name.toLowerCase() === lower);
+		const c = compiled.lets[idx];
+		const v = c && c.ast ? evaluate(c.ast, makeCtx('let:'+profile.lets[idx].name, profile.lets[idx].expr)) : 0;
+		memo.set(lower, v); visiting.delete(lower);
+		return v;
+	};
+	function makeCtx(owner, text) {
+		return {dt, variable, slot(site) {
+			const key = owner + '|' + text + '|' + site;
+			let s = stateSlots.get(key); if (!s) { s = {init:false, v:0}; stateSlots.set(key, s); }
+			return s;
+		}};
+	}
+	profile.lets.forEach((l, i) => letValues[i] = variable(l.name.toLowerCase()));
+	profile.outputs.forEach((o, i) => {
+		const c = compiled.outputs[i];
+		outputValues[i] = c.ast ? evaluate(c.ast, makeCtx('out:'+i, o.expr)) : 0;
+	});
+}
+
+// ---------------------------------------------------------------- simulation
+const sim = {phone:true, tracked:true, mic:true, speak:true};
+function hash(s) { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) | 0; return (h >>> 0) / 4294967295; }
+const blinkPulse = t => { const ph = t % 3.3; return ph < 0.16 ? Math.sin(ph/0.16*Math.PI) : 0; };
+function simulate(t) {
+	inputValues.fill(0);
+	const set = (name, v) => inputValues[inputSlot.get(name.toLowerCase())] = Math.min(1, Math.max(0, v));
+	set('phone.present', sim.phone ? 1 : 0);
+	const tracked = sim.phone && sim.tracked;
+	set('phone.tracked', tracked ? 1 : 0);
+	if (tracked) {
+		ARKIT.forEach(n => set('phone.'+n, 0.04 + 0.04*Math.sin(t*(0.5+hash(n)) + hash(n)*6)));
+		const blink = blinkPulse(t);
+		set('phone.eyeBlinkLeft', blink); set('phone.eyeBlinkRight', blink*0.95);
+		const smile = 0.4 + 0.4*Math.sin(t*0.6);
+		set('phone.mouthSmileLeft', smile); set('phone.mouthSmileRight', smile*0.9 + 0.05);
+		set('phone.eyeSquintLeft', smile*0.3); set('phone.eyeSquintRight', smile*0.3);
+		set('phone.browInnerUp', 0.3 + 0.3*Math.sin(t*0.4 + 1));
+		set('phone.eyeWideLeft', 0.3 + 0.45*Math.sin(t*0.27)); set('phone.eyeWideRight', 0.3 + 0.45*Math.sin(t*0.27));
+		if (sim.speak) {
+			set('phone.jawOpen', 0.35 + 0.3*Math.sin(t*7) + 0.12*Math.sin(t*13.7));
+			set('phone.mouthFunnel', 0.3 + 0.3*Math.sin(t*3.1 + 2));
+			set('phone.mouthPucker', 0.2 + 0.2*Math.sin(t*2.3));
+		} else {
+			set('phone.jawOpen', 0.02); set('phone.mouthClose', 0.1);
+		}
+	}
+	set('viseme.present', sim.mic ? 1 : 0);
+	if (sim.mic) {
+		if (sim.speak) {
+			const vowels = ['aa','E','I','O','U'];
+			const cycle = t*2.2, idx = Math.floor(cycle) % vowels.length, frac = cycle - Math.floor(cycle);
+			const w = Math.sin(frac*Math.PI);
+			set('viseme.'+vowels[idx], w*0.9);
+			set('viseme.'+vowels[(idx+1)%vowels.length], Math.max(0, frac-0.6)*0.8);
+			set('viseme.PP', Math.max(0, Math.sin(t*5.3))*0.3*(1-w));
+			set('viseme.sil', 1 - w*0.9);
+		} else set('viseme.sil', 1);
+	}
+}
+
+// ---------------------------------------------------------------- editor state
+const editor = {kind:'output', index:2, openedText:'', refs:{inputs:new Set(), vars:new Set()}};
+const $ = id => document.getElementById(id);
+const exprEl = $('expr'), backEl = $('back');
+
+function currentRow() { return editor.kind === 'output' ? profile.outputs[editor.index] : profile.lets[editor.index]; }
+function currentCompiled() { return editor.kind === 'output' ? compiled.outputs[editor.index] : compiled.lets[editor.index]; }
+function currentValue() { return editor.kind === 'output' ? outputValues[editor.index] : letValues[editor.index]; }
+
+function openEditor(kind, index) {
+	editor.kind = kind; editor.index = index;
+	const row = currentRow();
+	editor.openedText = row.expr;
+	exprEl.value = row.expr;
+	$('kindBadge').textContent = kind === 'output' ? 'Binding' : 'Variable';
+	$('titleNote').textContent = kind === 'output' ? ' · ' + row.target : ' · ' + row.name;
+	renderHeaderTarget();
+	onExprChanged(false);
+	resetSeries();
+	renderTab();
+	autoGrow();
+}
+
+function renderHeaderTarget() {
+	const slot = $('targetSlot'); slot.innerHTML = '';
+	const row = currentRow();
+	if (editor.kind === 'output') {
+		const sel = document.createElement('select');
+		sel.title = 'The VRM expression or morph target this binding drives (the same picker as the tab row)';
+		const addGroup = (label, items, kind) => {
+			const g = document.createElement('optgroup'); g.label = label;
+			items.forEach(it => { const o = document.createElement('option'); o.value = kind + ':' + EXPR_NAME(it); o.textContent = it; g.appendChild(o); });
+			sel.appendChild(g);
+		};
+		addGroup('Expressions', AVATAR_EXPRESSIONS, 'expression');
+		addGroup('Morph targets', AVATAR_MORPHS, 'morph');
+		const have = [...sel.options].some(o => o.value === row.kind + ':' + row.target);
+		if (!have) { const o = document.createElement('option'); o.value = row.kind + ':' + row.target; o.textContent = row.target + ' (not in avatar)'; sel.appendChild(o); }
+		sel.value = row.kind + ':' + row.target;
+		sel.onchange = () => { const [k, t] = sel.value.split(':'); row.kind = k; row.target = t; $('titleNote').textContent = ' · ' + t; renderHeaderTarget(); renderTab(); };
+		slot.appendChild(sel);
+	} else {
+		const inp = document.createElement('input'); inp.type = 'text'; inp.value = row.name; inp.style.width = '100%';
+		inp.title = 'The variable name, as in the tab row';
+		inp.oninput = () => {
+			row.name = inp.value;
+			const e = variableNameError(row.name, editor.index);
+			inp.style.textDecoration = e ? 'underline wavy var(--error)' : '';
+			$('warnText').textContent = e ? errorText(e) : '';
+			$('warnText').style.color = e ? 'var(--error)' : '';
+			$('titleNote').textContent = ' · ' + row.name;
+			compileProfile(); renderInputs(); renderTab();
+		};
+		slot.appendChild(inp);
+	}
+	updateWarn();
+}
+function updateWarn() {
+	if (editor.kind !== 'output') return;
+	const row = currentRow();
+	const known = row.kind === 'expression' ? AVATAR_EXPRESSIONS.map(EXPR_NAME) : AVATAR_MORPHS;
+	const resolved = known.some(n => n.toLowerCase() === row.target.toLowerCase());
+	$('warnText').style.color = '';
+	$('warnText').textContent = resolved ? '' : `(!) the avatar has no ${row.kind === 'expression' ? 'expression' : 'morph target'} named '${row.target}'`;
+}
+
+function onExprChanged(fromUser) {
+	const row = currentRow();
+	if (fromUser) row.expr = exprEl.value;
+	compileProfile();
+	const c = currentCompiled();
+	editor.refs = c.refs;
+	// The error underline: the span marked in the backdrop
+	const text = row.expr;
+	if (c.error) {
+		const [b, e0] = c.error.span; const e = Math.min(Math.max(e0, b+1), text.length + 1);
+		const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+		backEl.innerHTML = esc(text.slice(0, b)) + '<u>' + esc(text.slice(b, e) || ' ') + '</u>' + esc(text.slice(e)) + '\n';
+		$('errmsg').textContent = errorText(c.error); $('errmsg').className = 'errmsg';
+	} else {
+		backEl.textContent = text + '\n';
+		$('errmsg').textContent = 'compiles · last good binding runs while an edit does not'; $('errmsg').className = 'errmsg ok';
+	}
+	$('revertBtn').disabled = row.expr === editor.openedText;
+	renderInputs();
+	rebuildSeries();
+	renderTab();
+}
+exprEl.addEventListener('input', () => { autoGrow(); onExprChanged(true); });
+function autoGrow() { exprEl.style.height = 'auto'; exprEl.style.height = Math.max(40, exprEl.scrollHeight) + 'px'; }
+$('revertBtn').onclick = () => { exprEl.value = editor.openedText; autoGrow(); onExprChanged(true); };
+
+// Insertion at the caret, with a placeholder selection for functions
+function insertText(text, selectFrom, selectTo) {
+	const s = exprEl.selectionStart, e = exprEl.selectionEnd;
+	exprEl.setRangeText(text, s, e, 'end');
+	if (selectFrom !== undefined) exprEl.setSelectionRange(s + selectFrom, s + selectTo);
+	exprEl.focus(); autoGrow(); onExprChanged(true);
+}
+function insertFunction(fn) {
+	const s = exprEl.selectionStart, e = exprEl.selectionEnd;
+	const selected = exprEl.value.slice(s, e);
+	const args = fn.ph.slice();
+	let selIdx = 0;
+	if (selected.trim()) { args[0] = selected; selIdx = args.length > 1 ? 1 : -1; }
+	const text = fn.name + '(' + args.join(', ') + ')';
+	if (selIdx >= 0) {
+		const from = fn.name.length + 1 + args.slice(0, selIdx).reduce((n, a) => n + a.length + 2, 0);
+		insertText(text, from, from + args[selIdx].length);
+	} else insertText(text, text.length, text.length);
+}
+
+// ---------------------------------------------------------------- palette
+FUNCTIONS.forEach(fn => {
+	const b = document.createElement('button'); b.textContent = fn.sig.replace(/\(.*/, '()'); if (fn.stateful) b.className = 'st';
+	b.title = fn.sig + '\n' + fn.note; b.onclick = () => insertFunction(fn); $('rowFn').appendChild(b);
+});
+OPERATORS.forEach(op => {
+	const b = document.createElement('button'); b.className = 'op'; b.textContent = op;
+	b.title = {'||':'or','&&':'and','==':'equal','!=':'not equal','!':'not (true above 0.5)'}[op] || '';
+	b.onclick = () => insertText(op === '!' ? '!' : ' ' + op + ' '); $('rowOp').appendChild(b);
+});
+PUNCT.forEach(ch => { const b = document.createElement('button'); b.className = 'op'; b.textContent = ch; b.onclick = () => insertText(ch === ',' ? ', ' : ch); $('rowPn').appendChild(b); });
+
+// ---------------------------------------------------------------- inputs list
+let inputRows = [];   // {el, valueEl, get(), name}
+function renderInputs() {
+	const list = $('inputs'); list.innerHTML = ''; inputRows = [];
+	const filter = $('filter').value.trim().toLowerCase();
+	const groups = [
+		{label:'phone', items: INPUTS.map((inp, i) => ({...inp, slot:i})).filter(x => x.group === 'phone flags' || x.group === 'phone')},
+		{label:'viseme', items: INPUTS.map((inp, i) => ({...inp, slot:i})).filter(x => x.group === 'viseme flags' || x.group === 'viseme')},
+		{label:'variables', items: profile.lets.map((l, i) => ({name:l.name, letIndex:i}))},
+	];
+	let shown = 0;
+	groups.forEach(g => {
+		const items = g.items.filter(it => it.name.toLowerCase().includes(filter));
+		if (!items.length) return;
+		const d = document.createElement('details'); d.className = 'grp'; d.open = true;
+		const s = document.createElement('summary'); s.innerHTML = `${g.label} <span class="cnt">${items.length}</span>`; d.appendChild(s);
+		items.forEach(it => {
+			const row = document.createElement('div'); row.className = 'in';
+			const isSelf = it.letIndex !== undefined && editor.kind === 'let' && it.letIndex === editor.index;
+			const referenced = it.slot !== undefined ? editor.refs.inputs.has(it.slot) : editor.refs.vars.has(it.name.toLowerCase());
+			if (referenced) row.classList.add('ref');
+			if (isSelf) { row.classList.add('self'); row.title = 'the variable being edited'; }
+			row.innerHTML = `<span class="n">${it.name}</span><span class="v">0.00</span>`;
+			if (!isSelf) row.onclick = () => insertText(it.name);
+			d.appendChild(row);
+			inputRows.push({el:row, valueEl:row.lastElementChild, get: it.slot !== undefined ? () => inputValues[it.slot] : () => letValues[it.letIndex] || 0});
+			shown++;
+		});
+		list.appendChild(d);
+	});
+	$('inputCount').textContent = `${shown} of ${INPUTS.length + profile.lets.length}`;
+}
+$('filter').addEventListener('input', renderInputs);
+function updateInputValues() {
+	for (const r of inputRows) {
+		const v = r.get();
+		r.valueEl.textContent = v.toFixed(2);
+		r.el.classList.toggle('zero', Math.abs(v) < 0.005);
+	}
+}
+
+// ---------------------------------------------------------------- graph
+const WINDOW_S = 6, SAMPLE_HZ = 60, N = WINDOW_S * SAMPLE_HZ;
+const COLORS = ['#f2a93b','#62c6f2','#8fe388','#e980c8','#c9b1ff','#f27f62','#7fd3c0','#f2e35b'];
+let series = [];  // {label, color, get, data:Float32Array, on, dashed}
+function rebuildSeries() {
+	const old = new Map(series.map(s => [s.label, s]));
+	const next = [];
+	const add = (label, get, color, dashed) => {
+		const prev = old.get(label);
+		next.push({label, get, color, dashed, on: prev ? prev.on : true, data: prev ? prev.data : new Float32Array(N).fill(NaN)});
+	};
+	add('result', () => currentValue(), '#ffffff', false);
+	let ci = 0;
+	[...editor.refs.vars].forEach(v => { const i = profile.lets.findIndex(l => l.name.toLowerCase() === v); add(profile.lets[i].name, () => letValues[i], COLORS[ci++ % COLORS.length], true); });
+	[...editor.refs.inputs].sort((a,b)=>a-b).forEach(slot => add(INPUTS[slot].name, () => inputValues[slot], COLORS[ci++ % COLORS.length], false));
+	series = next;
+	renderLegend();
+}
+function resetSeries() { series.forEach(s => s.data.fill(NaN)); }
+function renderLegend() {
+	const lg = $('legend'); lg.innerHTML = '';
+	series.forEach(s => {
+		const c = document.createElement('span'); c.className = 'chip' + (s.label === 'result' ? ' result' : '') + (s.on ? '' : ' off');
+		c.innerHTML = `<i style="background:${s.color}${s.dashed ? ';height:0;border-top:3px dashed '+s.color : ''}"></i>${s.label}<span class="v"></span>`;
+		c.onclick = () => { s.on = !s.on; c.classList.toggle('off', !s.on); };
+		s.chipValue = c.lastElementChild; lg.appendChild(c);
+	});
+}
+let sampleAcc = 0;
+function pushSamples(dt) {
+	sampleAcc += dt;
+	const step = 1 / SAMPLE_HZ;
+	while (sampleAcc >= step) {
+		sampleAcc -= step;
+		for (const s of series) { s.data.copyWithin(0, 1); s.data[N-1] = s.get(); }
+	}
+	for (const s of series) if (s.chipValue) s.chipValue.textContent = (s.data[N-1] || 0).toFixed(2);
+}
+const canvas = $('graph'), g2 = canvas.getContext('2d');
+function drawGraph() {
+	const w = canvas.clientWidth, h = canvas.clientHeight, dpr = devicePixelRatio || 1;
+	if (canvas.width !== w*dpr || canvas.height !== h*dpr) { canvas.width = w*dpr; canvas.height = h*dpr; }
+	g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+	g2.clearRect(0, 0, w, h);
+	// Fixed 0..1, expanding to fit a result above it
+	let yMax = 1, yMin = 0;
+	for (const s of series) if (s.on) for (let i = 0; i < N; i++) { const v = s.data[i]; if (v === v) { if (v > yMax) yMax = v; if (v < yMin) yMin = v; } }
+	yMax = Math.ceil(yMax*4)/4; yMin = Math.floor(yMin*4)/4;
+	const padL = 34, padR = 8, padT = 8, padB = 18;
+	const X = i => padL + (i/(N-1)) * (w - padL - padR);
+	const Y = v => padT + (1 - (v - yMin)/(yMax - yMin)) * (h - padT - padB);
+	g2.strokeStyle = '#2a2f3a'; g2.fillStyle = '#7d8795'; g2.font = '10px Consolas, monospace'; g2.textAlign = 'right'; g2.lineWidth = 1;
+	for (let v = yMin; v <= yMax + 1e-6; v += 0.25) { g2.beginPath(); g2.moveTo(padL, Y(v)+.5); g2.lineTo(w-padR, Y(v)+.5); g2.stroke(); g2.fillText(v.toFixed(2), padL-4, Y(v)+3); }
+	g2.textAlign = 'center';
+	for (let s = 0; s <= WINDOW_S; s++) { const x = X(N-1 - s*SAMPLE_HZ); g2.beginPath(); g2.moveTo(x+.5, padT); g2.lineTo(x+.5, h-padB); g2.stroke(); g2.fillText(s === 0 ? 'now' : '-' + s + 's', x, h-5); }
+	g2.strokeStyle = '#5a6577'; g2.beginPath(); g2.moveTo(padL, Y(0.5)+.5); g2.lineTo(w-padR, Y(0.5)+.5); g2.setLineDash([2,4]); g2.stroke(); g2.setLineDash([]);
+	const plot = s => {
+		g2.strokeStyle = s.color; g2.lineWidth = s.label === 'result' ? 2.5 : 1.4; g2.setLineDash(s.dashed ? [5,4] : []);
+		g2.beginPath(); let pen = false;
+		for (let i = 0; i < N; i++) { const v = s.data[i]; if (v !== v) { pen = false; continue; } const x = X(i), y = Y(v); if (!pen) { g2.moveTo(x, y); pen = true; } else g2.lineTo(x, y); }
+		g2.stroke();
+	};
+	series.filter(s => s.on && s.label !== 'result').forEach(plot);
+	const r = series.find(s => s.label === 'result'); if (r && r.on) plot(r);
+	g2.setLineDash([]);
+}
+
+// ---------------------------------------------------------------- face preview
+const view = {yaw:0, pitch:0, zoom:1};
+const stage = $('stage');
+let drag = null;
+stage.addEventListener('pointerdown', e => { drag = {x:e.clientX, y:e.clientY, yaw:view.yaw, pitch:view.pitch}; stage.setPointerCapture(e.pointerId); });
+stage.addEventListener('pointermove', e => { if (!drag) return; view.yaw = Math.max(-45, Math.min(45, drag.yaw + (e.clientX - drag.x)*0.4)); view.pitch = Math.max(-30, Math.min(30, drag.pitch + (e.clientY - drag.y)*0.4)); });
+stage.addEventListener('pointerup', () => drag = null);
+stage.addEventListener('wheel', e => { e.preventDefault(); view.zoom = Math.max(0.6, Math.min(2.2, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); }, {passive:false});
+$('resetView').onclick = () => { view.yaw = 0; view.pitch = 0; view.zoom = 1; };
+$('solo').onchange = () => $('soloNote').textContent = $('solo').checked ? 'rest face + this target' : 'the whole profile, as the scene shows it';
+
+// Target values for the preview: Solo takes only the edited row's target
+function previewTargets() {
+	const t = {};
+	const add = (name, v) => { const k = name.toLowerCase(); t[k] = Math.max(t[k] || 0, Math.min(1, Math.max(0, v))); };
+	if ($('solo').checked) {
+		if (editor.kind === 'output') add(currentRow().target, currentValue());
+		else profile.outputs.forEach((o, i) => { if (compiled.outputs[i].refs.vars.has(currentRow().name.toLowerCase())) add(o.target, outputValues[i]); });
+	} else profile.outputs.forEach((o, i) => add(o.target, outputValues[i]));
+	return t;
+}
+function drawFace(t) {
+	const v = n => t[n.toLowerCase()] || 0;
+	const blink = v('blink'), bl = Math.max(blink, v('blinkLeft')) + v('happy')*0.35 + v('relaxed')*0.5, br = Math.max(blink, v('blinkRight')) + v('happy')*0.35 + v('relaxed')*0.5;
+	$('lidL').setAttribute('height', 34*Math.min(1, bl)); $('lidR').setAttribute('height', 34*Math.min(1, br));
+	const gx = (v('lookRight') - v('lookLeft'))*9, gy = (v('lookDown') - v('lookUp'))*7;
+	['pupilL','pupilLc'].forEach(id => { $(id).setAttribute('cx', -46+gx); $(id).setAttribute('cy', -28+gy); });
+	['pupilR','pupilRc'].forEach(id => { $(id).setAttribute('cx', 46+gx); $(id).setAttribute('cy', -28+gy); });
+	const browUp = v('browinnerup')*16 + v('sad')*8 + v('surprised')*14, browDown = (v('browdownleft') + v('browdownright'))*0.5*10 + v('angry')*12;
+	const innerY = -60 - browUp + browDown, outerY = -60 - v('surprised')*8 + v('sad')*6;
+	$('browL').setAttribute('d', `M-70,${outerY} Q-48,${innerY-10 + v('angry')*4} -26,${innerY}`);
+	$('browR').setAttribute('d', `M26,${innerY} Q48,${innerY-10 + v('angry')*4} 70,${outerY}`);
+	const open = v('aa')*34 + v('oh')*22 + v('ou')*14 + v('ee')*12 + v('ih')*8 + v('surprised')*20;
+	const round = v('oh') + v('ou')*0.9;
+	const wide = 30 + v('ih')*14 + v('ee')*10 + v('happy')*10 + v('Fcl_MTH_Fun')*8 - round*14 - v('ou')*4;
+	const smile = (v('happy') + v('relaxed')*0.6 + v('Fcl_MTH_Joy') + v('Fcl_MTH_Fun')*0.7 - v('sad')*0.9 - v('angry')*0.4)*14;
+	const cy = 50, top = cy - open*0.35 - Math.max(0, -smile)*0.3, bottom = cy + open*0.65 + 2;
+	$('mouth').setAttribute('d', `M${-wide},${cy - smile*0.8} Q0,${top} ${wide},${cy - smile*0.8} Q0,${bottom + Math.max(0, smile)*0.4} ${-wide},${cy - smile*0.8} Z`);
+	$('cheekL').setAttribute('opacity', 0.2 + v('happy')*0.5); $('cheekR').setAttribute('opacity', 0.2 + v('happy')*0.5);
+	const puff = 1 + v('cheekPuff')*0.4; $('cheekL').setAttribute('rx', 16*puff); $('cheekR').setAttribute('rx', 16*puff);
+	// The orbit as a cheap parallax: features slide and squash with yaw and pitch
+	const yawR = view.yaw*Math.PI/180, pitchR = view.pitch*Math.PI/180;
+	$('features').setAttribute('transform', `translate(${Math.sin(yawR)*40} ${Math.sin(pitchR)*30}) scale(${Math.cos(yawR)*0.85+0.15} ${Math.cos(pitchR)*0.9+0.1})`);
+	$('head').setAttribute('rx', 100*(Math.cos(yawR)*0.15+0.85)); $('hair').setAttribute('transform', `translate(${Math.sin(yawR)*-18} ${Math.sin(pitchR)*10}) scale(${Math.cos(yawR)*0.15+0.85} 1)`);
+	$('faceRoot').setAttribute('transform', `scale(${view.zoom})`);
+	// The target table under the preview
+	const keys = Object.keys(t).filter(k => t[k] > 0.001).sort((a, b) => t[b] - t[a]).slice(0, 8);
+	$('ptable').innerHTML = keys.length ? keys.map(k => `<span>${k}</span><b>${t[k].toFixed(2)}</b>`).join('') : '<span>nothing driven</span><b></b>';
+}
+
+// ---------------------------------------------------------------- the stand-in tab
+function renderTab() {
+	const fill = (tbody, rows, kind) => {
+		tbody.innerHTML = '';
+		rows.forEach((r, i) => {
+			const tr = document.createElement('tr'); tr.className = 'row' + (editor.kind === kind && editor.index === i ? ' active' : '');
+			const c = kind === 'output' ? compiled.outputs[i] : compiled.lets[i];
+			const label = kind === 'output' ? r.target + (r.kind === 'morph' ? ' [morph]' : '') : r.name;
+			tr.innerHTML = `<td>${label}</td><td class="fn" title="${r.expr.replace(/"/g,'&quot;')}" style="${c.error ? 'text-decoration:underline wavy var(--error)' : ''}">${r.expr}</td><td class="val"><div class="bar"><i></i><b></b></div></td><td class="edit"><button class="small">Edit</button></td>`;
+			tr.querySelector('button').onclick = () => openEditor(kind, i);
+			tbody.appendChild(tr);
+			r._bar = tr.querySelector('.bar');
+		});
+	};
+	fill($('tabVars').querySelector('tbody'), profile.lets, 'let');
+	fill($('tabOuts').querySelector('tbody'), profile.outputs, 'output');
+}
+function updateTabValues() {
+	profile.lets.forEach((l, i) => setBar(l._bar, letValues[i], true));
+	profile.outputs.forEach((o, i) => setBar(o._bar, outputValues[i], false));
+}
+function setBar(bar, v, raw) {
+	if (!bar) return;
+	const c = Math.min(1, Math.max(0, v || 0));
+	bar.firstElementChild.style.width = (c*100).toFixed(1) + '%';
+	bar.lastElementChild.textContent = (v || 0).toFixed(3);
+}
+
+// ---------------------------------------------------------------- frame loop
+let last = performance.now()/1000, t0 = last, uiAcc = 0;
+compileProfile();
+renderTab();
+openEditor('output', 2);
+['simPhone','simTracked','simMic','simSpeak'].forEach(id => $(id).onchange = () => { sim.phone = $('simPhone').checked; sim.tracked = $('simTracked').checked; sim.mic = $('simMic').checked; sim.speak = $('simSpeak').checked; });
+function frame(nowMs) {
+	const now = nowMs/1000, dt = Math.min(1, Math.max(0, now - last)); last = now;
+	simulate(now - t0);
+	evaluateProfile(dt);
+	pushSamples(dt);
+	drawGraph();
+	drawFace(previewTargets());
+	setBar($('valueBar'), currentValue(), editor.kind === 'let');
+	uiAcc += dt;
+	if (uiAcc > 1/20) { uiAcc = 0; updateInputValues(); updateTabValues(); }
+	requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

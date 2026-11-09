@@ -90,6 +90,19 @@ One caveat worth knowing when a click seems to vanish: an ImGui window's capture
 - error
 - fatal
 
+### Face profiles and the expression editor (face)
+
+Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the owning subsystem. Every value reads the frame the scene shows, under the Face tab's live rule (a value is `none` until a frame of the current binding's generation arrives).
+
+- `face profile`: the active profile's name, id, whether it is Auto, its variable and binding counts, and its compile error count
+- `face rows`: one line per variable (`let <i> <name> = <expr> -> <value>`) and per binding (`out <i> <target> = <expr> -> <value>`), with ` error: <message>` appended to a row that does not compile
+- `face edit let|out <index>`: opens the editor on that row, the Edit button's path. Refused under Auto and for a row the profile lacks.
+- `face expr [<text...>]`: without text, the editor's text; with text, replaces it (the raw rest of the line, like `input text`), applied to the profile at once and to the field on its next draw
+- `face value`: the row (`row let|out <i> <label>`), its value or `none`, its error message if any, and `reads` followed by the names it reads directly
+- `face solo on|off`, `face revert`, `face close`
+
+The commands after `edit` need the editor open and answer an error otherwise.
+
 ## Client helper
 
 `tools/automate.py` is the checked-in client: it connects (retrying a refused port until `--wait` seconds, default 20), sends each argument as one command, prints each framed reply, and exits nonzero on a connection failure or timeout. `--port` overrides the default 21140, `--delay` sets the pause between commands (default 0.1 s), and `--timeout` bounds each reply and `until` poll (default 60 s).
@@ -126,6 +139,14 @@ python tools/automate.py "screenshot viewport <id> C:/tmp/scene.png" "input move
 python tools/automate.py "input move viewport <id> 622 14" "sleep:0.5" "input move viewport <id> 623 14" "input click viewport <id> 623 14" "sleep:1" "gui viewports"
 python tools/automate.py "input move 167 14" "sleep:0.5" "input move 168 14" "input click 168 14" "sleep:0.5" "screenshot window C:/tmp/menu.png"
 python tools/automate.py "input press viewport <id> 301 14" "input move viewport <id> 320 40" "input move viewport <id> 200 200" "input move 1000 400" "sleep:0.5" "input move 820 380" "sleep:0.5" "input move 800 365" "sleep:0.5" "input release 800 365" "sleep:1" "gui viewports"
+```
+
+The expression editor round trip, with an avatar loaded and a profile other than Auto active: open a binding in the editor, replace its function, read the value and the inputs it reads back, break it and read the error while `face rows` shows the row's error and the value still running, then revert. The screenshot after the float shows the editor torn out.
+
+```
+python tools/automate.py "face rows" "face edit out 2" "sleep:1" "face value" "screenshot window C:/tmp/editor.png"
+python tools/automate.py "face expr smoothstep(0.2, 0.8, phone.eyeBlinkLeft)" "sleep:0.7" "face value" "face expr smoothstep(0.2, 0.8, phone.foo)" "sleep:0.7" "face value" "face rows" "face revert"
+python tools/automate.py "gui float \"Expression Editor\" 1700 150 1180 720" "sleep:1" "gui viewports" "screenshot viewport <id> C:/tmp/editor_torn.png" "face solo off" "face close"
 ```
 
 A handler that cannot answer straight away (`screenshot` waits for the frame to render) calls `AutomationServer::deferReply`, then answers later through `sendDeferredReply`. Nothing bounds that wait to the current frame, so a handler that defers owns arming its own answer.
