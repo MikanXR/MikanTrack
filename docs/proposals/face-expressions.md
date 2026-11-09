@@ -1,6 +1,6 @@
 # Proposal: face expression profiles
 
-Design decided, not yet built. This document is the record of the design: the decisions, the pieces in order, and what verifies each one.
+Built on the `face-expression` branch. The live check is still owed (plan.md). This document is the record of the design: the decisions, the pieces in order, and what verifies each one. The reference is [face.md](../reference/face.md).
 
 ## Goal
 
@@ -11,7 +11,7 @@ The goal is a user-authored mapping, in the spirit of VBridger:
 - An output targets a VRM expression or a morph target directly.
 - Expressions can use stateful functions (smoothing, hysteresis).
 - Expressions live in named profiles, stored in a global library and assigned per avatar.
-- The UI shows how each input reaches each final morph weight.
+- The UI shows each binding's live value.
 
 The collapsed ARKit array and the viseme-to-ARKit detour go away. Recordings gain the raw phone face so an edited profile can be re-run on a replayed take.
 
@@ -20,8 +20,9 @@ Settled decisions:
 - A source's values are zero unless it is tracked: `phone.*` blendshapes read zero while the stream is quiet or the phone reports the face lost, and `viseme.*` weights read zero past the stale window. An expression without a guard therefore relaxes instead of freezing on the last raw values.
 - Stateful functions are in v1.
 - Profiles carry a stable id and a display name, are kept in a global library, and are assigned per avatar by id. One avatar can have several profiles, and one profile can serve several avatars.
-- Outputs can target expressions or morphs directly. Several outputs on one target combine with max, before the wire and before the morph binds, and the UI shows which output won.
+- Outputs can target expressions or morphs directly. Several outputs on one target combine with max, before the wire and before the morph binds.
 - The raw phone face is recorded as a sidecar stream beside the recording, at the phone's own rate, like the audio sidecar. The frame stream keeps its invariant that one record is one fusion iteration.
+- The tab holds the variables and the VRM Expression Bindings with live value bars. An inspector and a per-morph weight view were built and removed, since the per-binding value is what a VRM author reasons about.
 
 ## Design
 
@@ -47,12 +48,12 @@ Presence for the wire and the preview is the union: the face is present while ei
 
 The parser is hand-written: a Pratt parser that compiles to a flat register IR. No dependency is added. Owning the IR gives the UI each output's input list, and leaves room for a graph editor later that bakes to the same IR.
 
-**Identifiers**, all compared without case, including `let` names:
+**Identifiers**, all compared without case, including variable names:
 - `phone.<arkitName>`: through `arkitBlendshapeFromName` (`src/Face/`)
 - `phone.present`, `phone.tracked`
 - `viseme.<name>`: through `visemeName` (`src/Audio/VisemeTypes.h`)
 - `viseme.present`
-- The names of the profile's `let` values
+- The names of the profile's variables
 - Unknown names are compile errors. The namespace table is the single extension point for `webcam.*`.
 
 **Operators:**
@@ -74,21 +75,23 @@ The parser is hand-written: a Pratt parser that compiles to a flat register IR. 
 
 **Time.** The evaluator takes the frame's own timestamp. Face-only frames carry their sample's timestamp, so interleaved camera and face frames can arrive a few milliseconds out of order. The dt a stateful function sees is the clamp of the timestamp step to zero and a cap of one second. The state is reinitialized only on an explicit reset (a seek, a program swap) or a backwards jump of more than the cap, never on the small regressions of the interleave.
 
-**State slots across edits.** A slot is keyed by the output or `let` it belongs to and the call-site ordinal inside that expression. Recompiling after an edit carries over the slots whose key still exists, so editing one output does not restart the smoothing of every other.
+**State slots across edits.** A slot is keyed by the output or variable it belongs to and the call-site ordinal inside that expression. Recompiling after an edit carries over the slots whose key still exists, so editing one output does not restart the smoothing of every other.
 
-**Profile-level `let`:** named intermediates, evaluated once in dependency order. Cycles are compile errors.
+**Profile variables:** named intermediates. A variable's name is a plain identifier with no dot, not a function's name, and unique without case. Variables are evaluated once per frame in dependency order, before the outputs. Cycles are compile errors.
 
 **Pieces:**
-- `FaceExprProgram`: an immutable compiled program. It holds instructions, constants, input-slot bindings, the state slot table with its keys, and the input set of each output and each `let`.
+- `FaceExprProgram`: an immutable compiled program. It holds instructions, constants, input-slot bindings, the state slot table with its keys, and the input set of each output and each variable.
 - `FaceExprCompiler`:
-	- Turns text into a program, or into errors carrying the output index and character span.
+	- Turns text into a program, or into errors carrying the variable or output, an error code with its arguments, and where the error points: the variable's name field for a variable-name error, otherwise the character span in the expression. A cycle error's span is the reference that closes the cycle.
+	- The Face tab formats the code and its arguments as localized text (en and ja), for example "variable 'x' is defined twice", "'x' is not a valid variable name", "variable 'x' has an error".
 	- It is all-or-nothing per profile. The last good program stays live while an edit is invalid.
 - `FaceExprEvaluator`: `evaluate(const FaceSources&, double timeSeconds, FaceExprState&, float* outValues)`, applying the time rule above.
 
 ### 3. Profiles, the library and assignment
 
 **`FaceProfile`:**
-- `{version, id, name, lets[{name, expr}], outputs[{targetKind: expression|morph, target, mesh?, expr}]}`
+- `{version, id, name, variables[{name, expr}], outputs[{targetKind: expression|morph, target, mesh?, vrmExpressionFunction}]}`
+- A file that carries the variables under the key `lets` loads the same, as does a binding that carries its function under the key `expr`.
 - `id` is a UUID string minted when the profile is created or duplicated and never changed. `name` is the display name and is free to change.
 - `mesh` is optional. When it is missing, a morph target means every mesh's morph with that name, which matches today's behavior.
 - JSON goes through nlohmann, in the `j.value(key, default)` style of `AppConfig.cpp`.
@@ -123,7 +126,7 @@ The parser is hand-written: a Pratt parser that compiles to a flat register IR. 
 	- a generation counter, so a frame's `outputs` can be matched to the binding that produced them
 - An output's value is clamped to 0..1. Outputs sharing a target combine with max into one target value. An expression target expands to its `morphBinds` times the bind weight. A morph target becomes a direct bind at weight 1.
 - Morph weights combine with max across targets, as `AvatarFaceMorphs::evaluate` does today.
-- The binding is immutable once built. Which output won a target and which target won a morph are per-frame facts, computed by whoever evaluates (the main thread's morph view recomputes them from the frame's `outputs`), never stored on the binding.
+- The binding is immutable once built. Which output won a target and which target won a morph are per-frame facts, computed by whoever evaluates (`combineTargets` and `evaluateMorphs` report them on request), never stored on the binding.
 - The preview ignores `isBinary` on an expression, as `AvatarFaceMorphs` does today. A receiver applies it.
 
 **Live evaluation** happens once per output frame on the vision thread, in `runOutputStage`, before the OSC rate gate. The stateful slots therefore advance exactly once per frame. Results go into `frame.face.outputs` with the binding's generation.
@@ -135,12 +138,12 @@ The parser is hand-written: a Pratt parser that compiles to a flat register IR. 
 - It is handed over through the existing `VisionThread::setAvatarIdentity`/`servicePendingRequests` slot (`VisionThread.cpp:678-726`) and the `OscStreamerConfig` copy.
 - The evaluator state carries over by slot key (section 2) and resets for the slots whose key is new.
 
-**Timeline replay:** `TimelinePanel` keeps its own evaluator and state. The state resets on seek, and replay rebuilds `FaceSources` for each record: the mouth from the record's `mouth` block, the phone from the face sidecar's newest sample at or before the record's timestamp, present while that sample is younger than the streaming window. That replaces the fake face built from visemes at `TimelinePanel.cpp:517-529`.
+**Timeline replay:** `TimelinePanel` keeps its own evaluator and state. The state resets on seek, and replay rebuilds `FaceSources` for each record: the mouth from the record's `mouth` block, the phone through one shared function, `FaceSidecar::samplePhone`: the face sidecar's newest sample at or before the record's timestamp, present while that sample is younger than the streaming window, with the blendshapes zero unless that sample was tracked. That replaces the fake face built from visemes at `TimelinePanel.cpp:517-529`.
 
 ### 5. The face sidecar (`src/App/TrackingRecording.*`)
 
-- A recording with the phone stream live gains `<stem>.face.jsonl` beside it, named after the recording the way the audio sidecar is. One line per phone sample as the vision thread saw it: `{seq, t, tracked, w[52]}`, with `t` on the recording's clock. A sample is written when its sequence changes, on camera iterations and face-only iterations alike, so the sidecar runs at the phone's rate without putting face-only records in the frame stream.
-- The header gains a `face` block `{file, startTimestampMs}` beside `audio`. The format version stays at 1, as the audio sidecar left it: a header without the block loads as no face sidecar, so v1 files replay with no phone face.
+- Every recording opens `<stem>.face.jsonl` beside it when it starts, named after the recording the way the audio sidecar is, so a phone that connects mid-recording is captured. A sidecar that received no sample is deleted when the recording stops. One line per phone sample as the vision thread saw it: `{seq, t, tracked, w[52]}`, with `t` on the recording's clock. A sample is written when its sequence changes, on camera iterations and face-only iterations alike, so the sidecar runs at the phone's rate without putting face-only records in the frame stream.
+- The header gains a `face` block `{file, startMs}` beside `audio`, the file name and the start time. The format version stays at 1, as the audio sidecar left it: a header without the block loads as no face sidecar, so v1 files replay with no phone face, and a recording whose sidecar file is absent replays the same way.
 - The sidecar is written by its own writer thread, like `AudioRecorder`, and finalized with the recording.
 - The per-record `mouth` block is unchanged.
 
@@ -153,21 +156,17 @@ The tab sits in the existing tab bar (`src/UI/AvatarPanel.cpp:82-92`). It holds:
 	- assign/unassign from the library
 	- new, duplicate, rename
 	- Auto shown read-only
-- **Lets and outputs table**, one row per output:
-	- the target picker (the avatar's expressions and morphs, grouped by mesh)
-	- the expression `InputText`, with an inline red error and the span marked under it
+- **Variables table**, one row per variable:
+	- the name, with a variable-name error underlined on it
+	- the function `InputText`, any other compile error underlined at its span and spelled out beneath the row
+	- the live value
+- **VRM Expression Bindings table**, one row per binding:
+	- the target picker: the avatar's expressions, then each morph name once (that morph on every mesh carrying it), and for a morph name several meshes carry, one "name (mesh)" entry per mesh that narrows the binding to that mesh, while picking an expression clears the mesh
+	- the function `InputText`, a compile error underlined at its span and spelled out beneath the row
 	- a live value bar
-	- an unresolved-target warning
-- **Inspector for the selected output:**
-	- each input it reads, with live values, taken from the program's input set
-	- the `let` chain it depends on
-	- the target it shares with other outputs, and whether it won this frame
-	- the morphs it drives, with bind weights
-- **Morph view:**
-	- per mesh, each morph's final weight
-	- every output contributing to it, with the max winner highlighted
-	- This is the "how every input maps to the final weight" view.
-- Weight bars reuse `drawWeightTable` (`src/UI/WeightBars.cpp`).
+	- an unresolved-target warning with its reason
+- The value bars are live only for a frame of the current binding's generation. Otherwise they draw empty.
+- Every assigned profile, a missing id included, has its own unassign control.
 - `AvatarMouthReadout` becomes a filtered view of the same data, or is removed in favor of the tab.
 - Strings go through `locLabel` with `en.json` and `ja.json` entries (`--loc-test`).
 
@@ -206,19 +205,19 @@ The tab sits in the existing tab bar (`src/UI/AvatarPanel.cpp:82-92`). It holds:
 **Docs:**
 - `docs/reference/face.md`: sources, profiles, the language reference, the sidecar
 - `audio.md`: visemes no longer feed ARKit
-- `avatar.md`: binding and morph view
+- `avatar.md`: the binding and the scene preview
 - `wire-protocol.md`: the blend names now come from the profile, one message per target
 - `debugging.md` or `testing.md`: the new test and the sidecar
 - `docs/plan.md`: remove the two Later items this subsumes (face samples in tracking recordings, the VBridger-style expression editor), add the deferred items (the graph editor, the `webcam.*` source, Lua-defined inputs, curve-preview widgets), and add the machine-translated Japanese review item for the Face tab's strings
 
 ## Implementation order
 
-1. [ ] `FaceExpr` core (parser, IR, evaluator, the time rule, keyed state slots), plus `--test-faceexpr`
-2. [ ] `FaceSources` split in the vision thread, the binding, the Auto generator, OSC and Scene3d switched over, `AvatarFaceMap` removed
-3. [ ] Profile library, the rig sidecar assignment by id, hot-swap
-4. [ ] The face sidecar and timeline replay through the evaluator
-5. [ ] Face tab UI (profile bar, outputs, inspector, morph view)
-6. [ ] Docs pass
+1. [x] `FaceExpr` core (parser, IR, evaluator, the time rule, keyed state slots), plus `--test-faceexpr`
+2. [x] `FaceSources` split in the vision thread, the binding, the Auto generator, OSC and Scene3d switched over, `AvatarFaceMap` removed
+3. [x] Profile library, the rig sidecar assignment by id, hot-swap
+4. [x] The face sidecar and timeline replay through the evaluator
+5. [x] Face tab UI (profile bar, variables, VRM Expression Bindings)
+6. [x] Docs pass
 
 ## Verification
 
@@ -226,7 +225,7 @@ The tab sits in the existing tab bar (`src/UI/AvatarPanel.cpp:82-92`). It holds:
 - precedence and associativity
 - every function
 - identifier matching without case in every namespace
-- `let` ordering, plus cycle and unknown-identifier errors with spans
+- variable ordering, plus cycle and unknown-identifier errors with spans
 - `smooth` converging at the given tau under varying dt
 - the time rule: a small backwards step advances nothing, a jump past the cap reinitializes, an explicit reset reinitializes
 - `hysteresis` latching
@@ -257,7 +256,7 @@ The tab sits in the existing tab bar (`src/UI/AvatarPanel.cpp:82-92`). It holds:
 - Run `build/RelWithDebInfo/MikanTrack.exe` with Seed-san.vrm.
 - Microphone only: the Auto profile drives the vowels.
 - Phone streaming: the phone drives the face.
-- Both at once, with an output of `select(phone.tracked, phone.jawOpen, viseme.aa)` edited to `max(phone.jawOpen, viseme.aa)`: the phone's eyes and brows hold while the voice opens the mouth.
-- Edit an output, for example `smooth(viseme.aa, 0.05)`, and watch the value bar, the morph view and the VMC values. Confirm the values in VNyan, or with `send-vmc`/`ue_automate` reading the curves on the UE side.
+- Both at once, with a binding function of `select(phone.tracked, phone.jawOpen, viseme.aa)` edited to `max(phone.jawOpen, viseme.aa)`: the phone's eyes and brows hold while the voice opens the mouth.
+- Edit a binding's function, for example to `smooth(viseme.aa, 0.05)`, and watch the value bar and the VMC values. Confirm the values in VNyan, or with `send-vmc`/`ue_automate` reading the curves on the UE side.
 - Rename a profile and confirm the avatar keeps it. Delete one that is assigned and confirm the tab lists it as missing and the avatar runs Auto.
 - Record a phone take, edit the profile, and replay it in the timeline.

@@ -105,11 +105,14 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   profile, and sets the gate from the silence. Import loads a profile
   exported from uLipSync or VTube Studio instead. The panel shows the
   viseme weights live, and the OSC Output panel shows what they become on
-  the loaded avatar. The phone's face takes the mouth back whenever it
-  streams. The Model combo switches between Simple Loudness (the jaw by
-  volume alone), MFCC (uLipSync, the calibrated default above), and Oculus
-  LipSync (Meta's engine; release builds include it, and a source build
-  needs the Oculus Lipsync native SDK unpacked to `deps/OVRLipSyncNative`,
+  the loaded avatar. Under the built-in Auto face profile the phone's face
+  takes the mouth back whenever it streams. A face profile authored in the
+  Avatar panel's Face tab can mix them instead, for example the phone's
+  eyes and brows with the voice's mouth. The Model combo switches between
+  Simple Loudness (the jaw by volume alone), MFCC (uLipSync, the
+  calibrated default above), and Oculus LipSync (Meta's engine; release
+  builds include it, and a source build needs the Oculus Lipsync native
+  SDK unpacked to `deps/OVRLipSyncNative`,
   [build.md](docs/reference/build.md)). Each model has its own Smoothing
   slider, and Oculus LipSync also exposes the engine's own smoothing.
 - VMC protocol output (OSC 1.0 over UDP unicast, rate-limited)
@@ -179,7 +182,7 @@ Developer reference lives in [docs/reference/](docs/reference/):
 - [hand-tracking.md](docs/reference/hand-tracking.md) and [body-pose.md](docs/reference/body-pose.md): the tracking pipelines
 - [calibration.md](docs/reference/calibration.md): the wizards and where results persist
 - [imu.md](docs/reference/imu.md): the wrist IMU system
-- [face.md](docs/reference/face.md): the iFacialMocap face stream
+- [face.md](docs/reference/face.md): the iFacialMocap face stream, the face profiles and their expression language
 - [audio.md](docs/reference/audio.md): the microphone mouth stage
 - [avatar.md](docs/reference/avatar.md): the VRM avatar loader, rest skeleton, and MToon renderer
 - [wire-protocol.md](docs/reference/wire-protocol.md): the OSC contract
@@ -266,13 +269,16 @@ the head into parent-relative bones.
 | `/VMC/Ext/T` | `f` | seconds since the socket opened |
 | `/VMC/Ext/Root/Pos` | `sfffffff` | `"root"` + identity; the avatar keeps whatever root it has |
 | `/VMC/Ext/Bone/Pos` | `sfffffff` | bone name + local position xyz (m) + rotation xyzw, Unity convention |
-| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, while the phone face stream is live or the microphone mouth is on |
+| `/VMC/Ext/Blend/Val` | `sf` | blendshape name + value 0..1, one per face profile target, while the phone face stream is live or the microphone mouth is on |
 | `/VMC/Ext/Blend/Apply` | (none) | after the last blendshape value |
 | `/VMC/Ext/VRM` | `sss` | loaded avatar's local file path, title, SHA-256 of the file (once a second) |
 
 With the face stream on (Tracking panel, Face section), the blendshapes go out
-under the loaded avatar's own expression names, and the phone's head rotation
-drives the `Head` bone. With no avatar loaded they go out as the 52 ARKit names.
+under the names the avatar's face profile targets, and the phone's head rotation
+drives the `Head` bone. The built-in Auto profile sends the loaded avatar's own
+expression names, or the 52 ARKit names with no avatar loaded. The Avatar
+panel's Face tab authors other profiles (see
+[face.md](docs/reference/face.md)).
 
 Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,
 `Chest`, `UpperChest`, `Neck`, both `Shoulder`/`UpperArm`/`LowerArm`/`Hand`,
