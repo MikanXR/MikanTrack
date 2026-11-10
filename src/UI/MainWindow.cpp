@@ -41,6 +41,7 @@
 #include "SetupFlow.h"
 #include "StageContent.h"
 #include "StageInspector.h"
+#include "StageView.h"
 #include "SteadyClock.h"
 #include "TimelinePanel.h"
 #include "TrackingRecording.h"
@@ -67,6 +68,7 @@ MainWindow::MainWindow(App* app)
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 	, m_pipelinePanel(std::make_unique<PipelinePanel>())
 	, m_stageInspector(std::make_unique<StageInspector>())
+	, m_stageView(std::make_unique<StageView>(m_videoPreviewPanel.get(), m_scene3dPanel.get()))
 	, m_stageContent(std::make_unique<StageContent>(app, m_devicePanel.get(), m_calibrationPanel.get(),
 												   m_audioPanel.get(), m_avatarPanel.get(), m_faceTab.get(),
 												   m_mouthReadout.get()))
@@ -87,7 +89,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 	m_faceExprEditor->registerAutomation(server);
 	server->registerCommandNamespace(
 		"pipeline",
-		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none"},
+		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
+		 "pipeline view [follow|cameras|scene]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -240,8 +243,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 		const ImGuiID bottomId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.22f, nullptr, &centerId);
 
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.pipeline"), topId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.videoPreview"), centerId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.scene3d"), centerId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageView"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
@@ -259,10 +261,10 @@ void MainWindow::drawDockspaceAndMenuBar()
 
 	// A dock node fronts the tab of the window that holds the focus, and
 	// only one window holds it per frame, so the default layout fronts its
-	// tabs one frame apart once the windows exist, ending on the preview
+	// tabs one frame apart once the windows exist, ending on the Stage View
 	if (m_dockFrontTabsCountdown > 0)
 	{
-		static const char* k_frontTabs[]= {"windows.videoPreview", "windows.stageInspector", "windows.tracking",
+		static const char* k_frontTabs[]= {"windows.stageView", "windows.stageInspector", "windows.tracking",
 										   "windows.timeline"};
 		--m_dockFrontTabsCountdown;
 		if (m_dockFrontTabsCountdown < IM_ARRAYSIZE(k_frontTabs))
@@ -329,8 +331,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 		{
 			ImGui::MenuItem(locLabel("mainWindow.viewPipelinePanel"), nullptr, &m_bShowPipelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewInspectorPanel"), nullptr, &m_bShowInspectorPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewStageViewPanel"), nullptr, &m_bShowStageViewPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
@@ -341,7 +342,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			if (ImGui::MenuItem(locLabel("mainWindow.resetLayout")))
 			{
 				m_bResetDockLayout= true;
-				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowTrackingPanel= true;
+				m_bShowStageViewPanel= m_bShowTrackingPanel= true;
 				m_bShowTimelinePanel= m_bShowLogPanel= m_bShowSettingsPanel= true;
 				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
 			}
@@ -528,13 +529,13 @@ void MainWindow::update(float deltaSeconds)
 	// launches/watches the wizards updated below
 	m_setupFlow->update();
 
-	// Bring the Video Preview tab forward when a camera calibration wizard
-	// starts: the pattern feed is the wizard's whole UI, and the 3D Scene tab
-	// may be the selected one in the shared center dock, or the panel closed
+	// Show and front the Stage View when a camera calibration wizard starts:
+	// the pattern feed is the wizard's whole UI, and the view may be closed or
+	// behind another tab of its dock node
 	if (m_wizardHost->consumeCameraWizardStarted())
 	{
-		m_bShowVideoPreviewPanel= true;
-		ImGui::SetWindowFocus(locWindowTitle("windows.videoPreview"));
+		m_bShowStageViewPanel= true;
+		ImGui::SetWindowFocus(locWindowTitle("windows.stageView"));
 	}
 
 	// Pin the preview highlight to the intrinsics wizard's camera while it is
@@ -543,33 +544,25 @@ void MainWindow::update(float deltaSeconds)
 	if (intrinsicsCamera >= 0)
 		m_videoPreviewPanel->setActiveCamera(intrinsicsCamera);
 
-	// Central: side-by-side previews with per-camera overlays
-	if (!m_bShowVideoPreviewPanel)
+	// The camera view's per-camera inputs, from the live output
+	std::vector<const char*> executionProviders;
+	std::vector<ForearmOverlay> forearmOverlays;
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
 	{
-		m_videoPreviewPanel->clearLastDrawList();
+		executionProviders.push_back(visionThread->getActiveExecutionProvider(cameraIndex));
+		// The fused (world-space) forearm projected back into this camera:
+		// the UI is what holds both the fused result and every camera's
+		// calibration
+		forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
+			config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
 	}
-	else
-	{
-		std::vector<const char*> executionProviders;
-		std::vector<ForearmOverlay> forearmOverlays;
-		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
-		{
-			executionProviders.push_back(visionThread->getActiveExecutionProvider(cameraIndex));
-			// The fused (world-space) forearm projected back into this camera:
-			// the UI is what holds both the fused result and every camera's
-			// calibration
-			forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
-				config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
-		}
-		// Direct mode: which of the direct camera's hand slots the solver took
-		m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
-										{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
-		m_videoPreviewPanel->draw(&m_bShowVideoPreviewPanel, perCameraResults, executionProviders, &forearmOverlays);
-	}
+	// Direct mode: which of the direct camera's hand slots the solver took
+	m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
+									{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
 
-	// 3D scene: fused skeleton + all calibrated camera frustums. In replay
-	// view the whole feed comes from the timeline's scrub position instead,
-	// with the frustums built from the RECORDING's config snapshot.
+	// The 3D scene's inputs. In replay view the whole feed comes from the
+	// timeline's scrub position instead, with the frustums built from the
+	// RECORDING's config snapshot.
 	m_scene3dPanel->setForearmLength(config->body.forearmLengthMeters);
 	m_scene3dPanel->setAvatar(m_app->getAvatarModel(), m_app->getAvatarSkeleton(), m_app->getAvatarGeneration());
 	m_scene3dPanel->setFaceBinding(m_app->getFaceBinding());
@@ -577,12 +570,29 @@ void MainWindow::update(float deltaSeconds)
 	SceneGizmos gizmos;
 	updateDisplayAvatar(gizmos);
 	const std::vector<SceneCameraView> sceneCameras= makeSceneCameraViews(*config);
-	if (m_bShowScene3dPanel)
+
+	// The Stage View, on the strip's selection as the strip last drew it, once
+	// the avatar is posed for the shown frame: the camera view or the scene
+	m_stageView->update(m_pipelinePanel->getSelected(), m_pipelineInputs.bDirect, m_pipelineInputs.directCameraIndex,
+						m_wizardHost->isCameraWizardActive());
+	if (!m_bShowStageViewPanel)
 	{
+		m_videoPreviewPanel->clearLastDrawList();
+	}
+	else
+	{
+		const std::vector<SceneCameraView> replayCameras=
+			m_shown.bReplay ? m_timelinePanel->getSceneCameras() : std::vector<SceneCameraView>();
+		StageView::Frame stageFrame;
+		stageFrame.cameraResults= &perCameraResults;
+		stageFrame.executionProviders= &executionProviders;
+		stageFrame.forearms= &forearmOverlays;
+		stageFrame.fused= m_shown.fused;
 		// The frustums come from the config the shown frame was made under
-		m_scene3dPanel->draw(&m_bShowScene3dPanel, *m_shown.fused,
-							 m_shown.bReplay ? m_timelinePanel->getSceneCameras() : sceneCameras, m_shown.perCamera,
-							 gizmos);
+		stageFrame.sceneCameras= m_shown.bReplay ? &replayCameras : &sceneCameras;
+		stageFrame.scenePerCamera= &m_shown.perCamera;
+		stageFrame.gizmos= &gizmos;
+		m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
 	}
 	applyGizmoDrags(gizmos);
 
@@ -1292,6 +1302,21 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	{
 		const PipelineStageId& selected= m_pipelinePanel->getSelected();
 		outLines.push_back(selected.isValid() ? describe(selected) : std::string("none"));
+		return true;
+	}
+	if (verb == "view")
+	{
+		if (args.size() >= 2)
+		{
+			eStageViewMode mode;
+			if (!StageView::parseMode(args[1], mode))
+			{
+				outError= "unknown view mode: " + args[1];
+				return false;
+			}
+			m_stageView->setMode(mode);
+		}
+		outLines.push_back(m_stageView->describe());
 		return true;
 	}
 	if (verb == "status" || verb == "select")

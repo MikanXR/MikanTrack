@@ -41,8 +41,7 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 - `gui viewports` replies `<viewportId> <x>,<y> <width>x<height> <windowIds...>` per viewport, main viewport first. The rect is in desktop pixels when multi-viewports are on, and each window id is the stable part of a panel's ImGui name (the English title after `###`), quoted when it holds a space, so it pastes straight into `gui float`. A panel docked or floating inside the main window is listed under the main viewport, a torn-out one under its own OS window's viewport. The list reads the previous frame, so a `sleep:0.5` after a state change keeps a stale window out of it.
 
 - `gui float <windowId> <x> <y> [<width> <height>]` undocks a panel drawn last frame and moves it to a position, which is how a drive reaches the state a hand drag would produce. A position outside the main window gives the panel its own OS window. The move applies right after the next frame's `NewFrame`, so poll `gui viewports` after it. Docking back is the drag a hand does, scripted: `input press viewport <id>` on the torn-out title bar, a couple of `input move viewport <id>` steps, then `input move` steps in main-window coordinates onto the target dock node's center, and `input release` there (the main-window form of the drag is under the drive loop below). The ids are the panel titles:
-	- `"Video Preview"`
-	- `"3D Scene"`
+	- `"Stage View"`
 	- `Tracking`
 	- `Settings`
 	- `Log`
@@ -66,7 +65,7 @@ The target is the main window, with positions in its client pixels. `input <verb
 - `input key <keyName> [modifiers...]` presses and releases a key, and `input keydown` / `input keyup` are its halves, so a drive can hold a modifier across a mouse press, move, and release (`input keydown ctrl ctrl`, then `input keyup ctrl`; the modifier key names are `ctrl`, `shift`, `alt`). Names are `return`/`enter`, `tab`, `escape`, `backspace`, `delete`, `space`, the arrows, `home`, `end`, `pageup`, `pagedown`, `insert`, `f1` to `f12`, or a single printable character. Modifiers are `shift`, `ctrl`, `alt`, `gui`.
 - `input text <text...>` commits text the way typing does, taking the raw untokenized rest of the line
 
-Two things a warp cannot fake. A warped move often reports a zero relative delta, so anything driven by relative motion rather than by cursor position is unreliable under synthetic input. The 3D Scene's orbit reads ImGui's per-frame mouse delta, which is computed from successive cursor positions, so a `press`, a `move`, and a `release` across frames do orbit it. A `input key` press and release land in the same frame, so held-key behavior never accumulates.
+Two things a warp cannot fake. A warped move often reports a zero relative delta, so anything driven by relative motion rather than by cursor position is unreliable under synthetic input. The Stage View's scene orbit reads ImGui's per-frame mouse delta, which is computed from successive cursor positions, so a `press`, a `move`, and a `release` across frames do orbit it. A `input key` press and release land in the same frame, so held-key behavior never accumulates.
 
 After a drive works in one OS window (the main window or a torn-out panel), a click into another that follows a single `input move` is lost. Move twice in the new window (`input move`, `sleep:0.5`, `input move` a pixel over, `sleep:0.5`) before the first click there.
 
@@ -109,6 +108,8 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
 - `pipeline selected`: the selected stage's line, or `none`
 - `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
+- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, then `mode follow|cameras|scene`, then `wizard` while a camera calibration wizard forces the cameras
+- `pipeline view follow|cameras|scene`: sets the Stage View's mode and answers the same line
 
 ## Client helper
 
@@ -117,7 +118,7 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 ```
 python tools/automate.py "app info"
 python tools/automate.py "app resume" "until:app info:state Project" "screenshot window"
-python tools/automate.py "gui viewports" "gui float \"3D Scene\" 2000 100"
+python tools/automate.py "gui viewports" "gui float \"Stage View\" 2000 100"
 ```
 
 Three arguments run client-side instead of being sent:
@@ -141,7 +142,7 @@ python tools/automate.py "input click 400 300" "log tail 20 error" "app quit"
 The tear-out round trip, the drive that checks the multi-viewport pass: float a panel outside the main window, capture and click its OS window, close it from its own close box, reopen it from the View menu, and drag it back onto the center dock. The viewport id is the one `gui viewports` reports after the float, and the menu item and dock target positions are read from a `screenshot window`.
 
 ```
-python tools/automate.py "app resume" "until:app info:state Project" "sleep:1" "gui float \"3D Scene\" 1800 200 640 480" "sleep:1" "gui viewports"
+python tools/automate.py "app resume" "until:app info:state Project" "sleep:1" "gui float \"Stage View\" 1800 200 640 480" "sleep:1" "gui viewports"
 python tools/automate.py "screenshot viewport <id> C:/tmp/scene.png" "input move viewport <id> 320 240" "sleep:0.5" "input move viewport <id> 321 240" "input click viewport <id> 321 240"
 python tools/automate.py "input move viewport <id> 622 14" "sleep:0.5" "input move viewport <id> 623 14" "input click viewport <id> 623 14" "sleep:1" "gui viewports"
 python tools/automate.py "input move 167 14" "sleep:0.5" "input move 168 14" "input click 168 14" "sleep:0.5" "screenshot window C:/tmp/menu.png"

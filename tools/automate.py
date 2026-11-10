@@ -9,7 +9,7 @@ The server is off by default. Launch the app with --automation-server (or
 
     python tools/automate.py "app info"
     python tools/automate.py "app resume" "until:app info:state Project" "screenshot window"
-    python tools/automate.py "gui viewports" "gui float \\"3D Scene\\" 2000 100"
+    python tools/automate.py "gui viewports" "gui float \\"Stage View\\" 2000 100"
 
 Client-side arguments (not sent to the server):
     ready                        wait until the server answers "app info"

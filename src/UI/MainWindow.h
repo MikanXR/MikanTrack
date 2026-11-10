@@ -25,6 +25,7 @@ class PipelinePanel;
 class Scene3dPanel;
 class SetupFlow;
 class StageContent;
+class StageView;
 class StageInspector;
 class TimelinePanel;
 class VideoPreviewPanel;
@@ -105,6 +106,9 @@ private:
 	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
 	std::unique_ptr<PipelinePanel> m_pipelinePanel;
 	std::unique_ptr<StageInspector> m_stageInspector;
+	// The central view over the preview and scene panels, following the
+	// strip's selection
+	std::unique_ptr<StageView> m_stageView;
 	// The stage sections the Inspector hosts, drawn from the device,
 	// calibration, audio and avatar panels, the tracking and OSC sections and
 	// the face profile editor
@@ -204,8 +208,7 @@ private:
 
 	// Panel visibility, the View menu's toggles and the close box of a panel's
 	// window. Not persisted: every panel is shown again on the next launch.
-	bool m_bShowVideoPreviewPanel= true;
-	bool m_bShowScene3dPanel= true;
+	bool m_bShowStageViewPanel= true;
 	bool m_bShowTrackingPanel= true;
 	bool m_bShowTimelinePanel= true;
 	bool m_bShowLogPanel= true;

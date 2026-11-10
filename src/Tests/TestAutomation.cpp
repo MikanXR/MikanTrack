@@ -148,8 +148,8 @@ void testTokenizer()
 	std::vector<std::string> tokens;
 	std::string error;
 
-	check(AutomationProtocol::tokenizeCommandLine("gui  float\t\"3D Scene\" 10 20", tokens, error) && tokens.size() == 5
-			  && tokens[0] == "gui" && tokens[1] == "float" && tokens[2] == "3D Scene" && tokens[3] == "10"
+	check(AutomationProtocol::tokenizeCommandLine("gui  float\t\"Stage View\" 10 20", tokens, error) && tokens.size() == 5
+			  && tokens[0] == "gui" && tokens[1] == "float" && tokens[2] == "Stage View" && tokens[3] == "10"
 			  && tokens[4] == "20",
 		  "tokenizer splits on runs of spaces and tabs and groups a quoted span");
 

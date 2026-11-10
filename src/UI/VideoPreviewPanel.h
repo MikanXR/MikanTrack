@@ -10,10 +10,11 @@
 
 class GlTexture;
 
-// Central video preview: all cameras rendered side by side, each letterboxed
-// in its own pane with its own tracking overlay and image->screen mapping.
-// The "active" camera (used by the calibration wizards) gets a highlight
-// border; wizards pin it via setActiveCamera().
+// The camera view: the cameras side by side, each letterboxed in its own
+// pane with its own tracking overlay and image->screen mapping, or one
+// camera filling the region. The "active" camera (used by the calibration
+// wizards) gets a highlight border; wizards pin it via setActiveCamera(). It
+// owns no window: a host draws the body.
 class VideoPreviewPanel
 {
 public:
@@ -26,25 +27,26 @@ public:
 	// Uploads a new BGR frame for one camera
 	void setFrame(int cameraIndex, const cv::Mat& bgr);
 
-	// Draws the panel. results/executionProviders/dominantSides are indexed
-	// by camera; dominantSides marks which sides this camera won in the last
-	// fusion (for the "FUSED L/R" badge), pass nullptr to skip.
-	// forearms (optional, indexed by camera) draws the wrist-IMU forearm
-	// projected into each camera's image; pass nullptr to skip
-	void draw(bool* pOpen,
-			  const std::vector<const TrackingFrameResult*>& results,
-			  const std::vector<const char*>& executionProviders,
-			  const std::vector<ForearmOverlay>* forearms= nullptr);
+	// Draws the cameras into the current window's remaining content region.
+	// results and executionProviders are indexed by camera. forearms
+	// (optional, indexed by camera) draws the wrist-IMU forearm projected
+	// into each camera's image; pass nullptr to skip. cameraFilter -1 draws
+	// every camera, a camera's index draws that camera alone; an index the
+	// panel has no camera for draws every camera.
+	void drawBody(const std::vector<const TrackingFrameResult*>& results,
+				  const std::vector<const char*>& executionProviders,
+				  const std::vector<ForearmOverlay>* forearms,
+				  int cameraFilter);
 
-	// Called in place of draw on a frame the panel is hidden, so the wizard
-	// overlays see no draw list rather than last frame's
+	// Called on a frame the body is not drawn, so the wizard overlays see no
+	// draw list rather than last frame's
 	void clearLastDrawList() { m_lastDrawList= nullptr; }
 
 	// Per-camera mapping from full-frame image pixels to screen pixels for the
-	// most recently drawn frame (valid after draw)
+	// most recent drawBody, valid for the cameras it drew
 	const ImageToScreenMapping& getImageToScreenMapping(int cameraIndex) const;
 
-	// Draw list for wizard overlays (nullptr when the panel isn't visible)
+	// Draw list for wizard overlays (nullptr on a frame the body is not drawn)
 	ImDrawList* getLastDrawList() const { return m_lastDrawList; }
 
 	// Live GL texture of one camera's latest frame (0 until a frame arrived),

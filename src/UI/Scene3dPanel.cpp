@@ -130,42 +130,42 @@ bool Scene3dPanel::startRenderers()
 	return m_bLineRendererInitialized;
 }
 
-void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
-						const std::vector<SceneCameraView>& cameras,
-						const std::vector<const TrackingFrameResult*>& perCameraResults, SceneGizmos& gizmos)
+bool Scene3dPanel::renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height,
+								  const glm::ivec4& viewport, const glm::mat4& viewProjection,
+								  const SceneLayers& layers, const TrackingFrameResult& fusedResult,
+								  const std::vector<SceneCameraView>& cameras,
+								  const std::vector<const TrackingFrameResult*>& perCameraResults,
+								  const SceneGizmos& gizmos)
+{
+	if (width == 0 || height == 0 || !startRenderers())
+		return false;
+	if (!target.getIsValid() ? !target.init(width, height) : !target.resize(width, height))
+		return false;
+
+	target.bindFrameBuffer();
+	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glViewport(viewport.x, viewport.y, viewport.z, viewport.w);
+	renderScene(fusedResult, cameras, perCameraResults, gizmos, viewProjection, layers);
+	target.unbindFrameBuffer();
+	return true;
+}
+
+void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+							const std::vector<const TrackingFrameResult*>& perCameraResults, SceneGizmos& gizmos,
+							const SceneLayers& layers)
 {
 	for (SceneGizmos::ElbowHint& hint : gizmos.elbowHints)
 		hint.bDragging= false;
-
-	if (!ImGui::Begin(locWindowTitle("windows.scene3d"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
 
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const uint16_t fbWidth= (uint16_t)std::max(64.f, panelSize.x);
 	const uint16_t fbHeight= (uint16_t)std::max(64.f, panelSize.y);
 
-	if (!m_bRenderInitialized)
-	{
-		m_bRenderInitialized= m_frameBuffer->init(fbWidth, fbHeight) && startRenderers();
-		if (!m_bRenderInitialized)
-		{
-			ImGui::TextDisabled("%s", locText("scene3dPanel.rendererInitFailedText"));
-			ImGui::End();
-			return;
-		}
-	}
-	m_frameBuffer->resize(fbWidth, fbHeight);
-
 	// The orbit view fills the panel; the camera view letterboxes the
 	// frame's aspect inside it
 	const bool bCameraView= m_bViewFromCamera && m_cameraMatch.valid && m_cameraMatch.camera.width > 0 &&
 		m_cameraMatch.camera.height > 0;
-	m_frameBuffer->bindFrameBuffer();
-	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	if (bCameraView)
 	{
 		const float frameAspect= (float)m_cameraMatch.camera.width / (float)m_cameraMatch.camera.height;
@@ -180,7 +180,6 @@ void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
 		m_viewport[1]= (fbHeight - viewHeight) / 2;
 		m_viewport[2]= viewWidth;
 		m_viewport[3]= viewHeight;
-		glViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]);
 		glm::mat4 view, projection;
 		makeCameraMatchedView(m_cameraMatch.camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
 		m_viewProjection= projection * view;
@@ -194,8 +193,13 @@ void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
 		m_camera->setPerspectiveProjection(50.f, (float)fbWidth / (float)fbHeight, 0.01f, 100.f);
 		m_viewProjection= m_camera->getViewProjection();
 	}
-	renderScene(fusedResult, cameras, perCameraResults, gizmos, m_viewProjection);
-	m_frameBuffer->unbindFrameBuffer();
+	if (!renderToTarget(*m_frameBuffer, fbWidth, fbHeight,
+						glm::ivec4(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]), m_viewProjection,
+						layers, fusedResult, cameras, perCameraResults, gizmos))
+	{
+		ImGui::TextDisabled("%s", locText("scene3dPanel.rendererInitFailedText"));
+		return;
+	}
 
 	// FBO textures are bottom-up; flip V
 	ImGui::Image(
@@ -206,7 +210,7 @@ void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
 	// The gizmos and the orbit belong to the orbit view: the camera view is
 	// a fixed viewpoint
 	bool bGizmoOwnsMouse= false;
-	if (bCameraView)
+	if (bCameraView || !layers.bGizmos)
 		m_draggedElbowHint= -1;
 	else
 		bGizmoOwnsMouse= updateGizmoDrag(gizmos, glm::vec2(imageMin.x, imageMin.y),
@@ -230,8 +234,6 @@ void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
 		if (io.MouseWheel != 0.f)
 			m_camera->adjustOrbitRadius(-io.MouseWheel * 0.15f);
 	}
-
-	ImGui::End();
 }
 
 void Scene3dPanel::drawSkeleton(const TrackingFrameResult& result, float brightness, const glm::vec3* colorOverride)
@@ -316,7 +318,7 @@ void Scene3dPanel::drawSkeleton(const TrackingFrameResult& result, float brightn
 	}
 }
 
-bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
+bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection, bool bShow)
 {
 	if (m_avatarModel == nullptr || m_avatarSkeleton == nullptr)
 	{
@@ -324,7 +326,7 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 		m_meshView.clear();
 		return false;
 	}
-	if (!m_bShowAvatar)
+	if (!bShow)
 		return false;
 
 	// The pose carries the root placement, so the model matrix is only the
@@ -402,19 +404,23 @@ bool Scene3dPanel::captureFromCamera(const TrackingFrameResult& fusedResult,
 		return false;
 	const uint16_t width= (uint16_t)camera.width;
 	const uint16_t height= (uint16_t)camera.height;
-	if (!m_captureBuffer->getIsValid() ? !m_captureBuffer->init(width, height) : !m_captureBuffer->resize(width, height))
-		return false;
 
 	glm::mat4 view, projection;
 	makeCameraMatchedView(camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
 
-	m_captureBuffer->bindFrameBuffer();
-	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	// What the scene drew before it had layers: everything but the gizmos,
+	// the avatar and the per-camera skeletons as their settings say
+	SceneLayers layers;
+	layers.bAvatar= m_bShowAvatar;
+	layers.bPerCameraSkeletons= m_bShowPerCameraSkeletons;
+	layers.bGizmos= false;
 	const SceneGizmos noGizmos;
-	renderScene(fusedResult, cameras, perCameraResults, noGizmos, projection * view);
+	if (!renderToTarget(*m_captureBuffer, width, height, glm::ivec4(0, 0, width, height), projection * view, layers,
+						fusedResult, cameras, perCameraResults, noGizmos))
+		return false;
 
 	// Read back and flip: GL rows run bottom-up
+	m_captureBuffer->bindFrameBuffer();
 	cv::Mat rgba(height, width, CV_8UC4);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data);
@@ -507,19 +513,23 @@ void Scene3dPanel::drawGizmos(const SceneGizmos& gizmos)
 
 void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 							   const std::vector<const TrackingFrameResult*>& perCameraResults,
-							   const SceneGizmos& gizmos, const glm::mat4& viewProjection)
+							   const SceneGizmos& gizmos, const glm::mat4& viewProjection,
+							   const SceneLayers& layers)
 {
 	glEnable(GL_DEPTH_TEST);
 
-	// Marker plane grid (world XY plane -> display XZ plane, which is what drawGrid expects)
-	drawGrid(*m_lineRenderer, glm::mat4(1.f), 2.f, 2.f, 20, 20, Colors::DarkGray);
+	if (layers.bGrid)
+	{
+		// Marker plane grid (world XY plane -> display XZ plane, which is what drawGrid expects)
+		drawGrid(*m_lineRenderer, glm::mat4(1.f), 2.f, 2.f, 20, 20, Colors::DarkGray);
 
-	// Marker axes at the world origin
-	drawTransformedAxes(*m_lineRenderer, k_displayFromWorld, 0.1f);
+		// Marker axes at the world origin
+		drawTransformedAxes(*m_lineRenderer, k_displayFromWorld, 0.1f);
+	}
 
 	// One frustum per calibrated camera (cameraToWorld maps CV-convention
 	// camera space to world; the frustum helper draws in GL convention)
-	for (size_t cameraIndex= 0; cameraIndex < cameras.size(); ++cameraIndex)
+	for (size_t cameraIndex= 0; layers.bCameraFrustums && cameraIndex < cameras.size(); ++cameraIndex)
 	{
 		const SceneCameraView& view= cameras[cameraIndex];
 		if (!view.bHasExtrinsics || view.intrinsics == nullptr)
@@ -536,7 +546,7 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 	}
 
 	// Dimmed per-camera skeletons (world-space agreement check across cameras)
-	if (m_bShowPerCameraSkeletons)
+	if (layers.bPerCameraSkeletons)
 	{
 		for (size_t cameraIndex= 0; cameraIndex < perCameraResults.size(); ++cameraIndex)
 		{
@@ -549,13 +559,16 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 	}
 
 	// Fused skeleton, full brightness
-	drawSkeleton(fusedResult, 1.f, nullptr);
-	drawDirectSolve();
-	drawGizmos(gizmos);
+	if (layers.bFusedSkeleton)
+		drawSkeleton(fusedResult, 1.f, nullptr);
+	if (layers.bDirectSolve)
+		drawDirectSolve();
+	if (layers.bGizmos)
+		drawGizmos(gizmos);
 
 	// The avatar mesh first, then the lines over it with depth off when it is
 	// shown, so the tracked skeleton stays visible inside the character
-	const bool bAvatarDrawn= drawAvatar(viewProjection);
+	const bool bAvatarDrawn= drawAvatar(viewProjection, layers.bAvatar);
 	m_lineRenderer->render3d(viewProjection, bAvatarDrawn);
 }
 

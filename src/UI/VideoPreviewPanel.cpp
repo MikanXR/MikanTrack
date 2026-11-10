@@ -68,20 +68,14 @@ const ImageToScreenMapping& VideoPreviewPanel::getImageToScreenMapping(int camer
 	return m_fallbackMapping;
 }
 
-void VideoPreviewPanel::draw(bool* pOpen,
-							 const std::vector<const TrackingFrameResult*>& results,
-							 const std::vector<const char*>& executionProviders,
-							 const std::vector<ForearmOverlay>* forearms)
+void VideoPreviewPanel::drawBody(const std::vector<const TrackingFrameResult*>& results,
+								 const std::vector<const char*>& executionProviders,
+								 const std::vector<ForearmOverlay>* forearms,
+								 int cameraFilter)
 {
-	m_lastDrawList= nullptr;
-
-	if (!ImGui::Begin(locWindowTitle("windows.videoPreview"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-
-	const int paneCount= (int)m_panes.size();
+	const bool bOneCamera= cameraFilter >= 0 && cameraFilter < (int)m_panes.size();
+	const int firstCamera= bOneCamera ? cameraFilter : 0;
+	const int paneCount= bOneCamera ? 1 : (int)m_panes.size();
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const float paneSpacing= 4.f;
 	const float paneWidth= (panelSize.x - paneSpacing * (float)(paneCount - 1)) / (float)paneCount;
@@ -90,10 +84,11 @@ void VideoPreviewPanel::draw(bool* pOpen,
 	m_lastDrawList= ImGui::GetWindowDrawList();
 	const ImVec2 panelOrigin= ImGui::GetCursorScreenPos();
 
-	for (int cameraIndex= 0; cameraIndex < paneCount; ++cameraIndex)
+	for (int paneIndex= 0; paneIndex < paneCount; ++paneIndex)
 	{
+		const int cameraIndex= firstCamera + paneIndex;
 		CameraPane& pane= *m_panes[cameraIndex];
-		const ImVec2 paneOrigin(panelOrigin.x + (paneWidth + paneSpacing) * (float)cameraIndex, panelOrigin.y);
+		const ImVec2 paneOrigin(panelOrigin.x + (paneWidth + paneSpacing) * (float)paneIndex, panelOrigin.y);
 
 		// Pane background + active highlight
 		m_lastDrawList->AddRectFilled(
@@ -185,6 +180,4 @@ void VideoPreviewPanel::draw(bool* pOpen,
 			m_lastDrawList->AddText(hudPos, bGpu ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 220, 100, 255), hud.c_str());
 		}
 	}
-
-	ImGui::End();
 }

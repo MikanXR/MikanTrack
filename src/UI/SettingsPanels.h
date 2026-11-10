@@ -212,8 +212,8 @@ void commitOscConfigChange(const OscSectionContext& context);
 // pieces are the Phone stage's; and the direct pieces, with the hand
 // calibration block, Measure My Body, the body proportions and the
 // hold-still test again, are the Direct solver stages'. The Tracking panel
-// itself draws only the direct mode switch while direct mode is off, the
-// Overlay section and the dump buttons.
+// itself draws only the direct mode switch while direct mode is off and the
+// dump buttons.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -290,17 +290,13 @@ void drawDirectHoldRestReadout(const TrackingSectionContext& context);
 // The hand calibration state, the wizard button (the direct mode note in a
 // direct project) and Clear, under its heading
 void drawHandCalibrationSection(const TrackingSectionContext& context);
-// The 3D view from camera toggle under the Overlay heading
-void drawOverlaySection(const TrackingSectionContext& context);
 // The view toggles, no headers. Hand: the preview's skeleton overlay,
 // detection boxes and, in direct mode, every hand slot. Body: the preview's
 // body landmarks. Per-camera skeletons: the 3D scene's unfused skeletons,
-// drawn only with more than one camera. View from camera: the 3D scene's
-// camera view.
+// drawn only with more than one camera.
 void drawHandOverlayControls(const TrackingSectionContext& context);
 void drawBodyOverlayControls(const TrackingSectionContext& context);
 void drawPerCameraSkeletonsControl(const TrackingSectionContext& context);
-void drawViewFromCameraControl(const TrackingSectionContext& context);
 void drawInferenceSection(const TrackingSectionContext& context);
 // Draws nothing without a camera
 void drawCaptureTimingSection(const TrackingSectionContext& context);

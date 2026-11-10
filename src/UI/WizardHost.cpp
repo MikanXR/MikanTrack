@@ -78,10 +78,15 @@ int WizardHost::getIntrinsicsCameraIndex() const
 	return m_intrinsicsWizard->isActive() ? m_intrinsicsWizard->getCameraIndex() : -1;
 }
 
-bool WizardHost::consumeCameraWizardStarted()
+bool WizardHost::isCameraWizardActive() const
 {
 	const eWizardKind active= getActiveKind();
-	const bool bCameraWizardActive= active == eWizardKind::Intrinsics || active == eWizardKind::Extrinsics;
+	return active == eWizardKind::Intrinsics || active == eWizardKind::Extrinsics;
+}
+
+bool WizardHost::consumeCameraWizardStarted()
+{
+	const bool bCameraWizardActive= isCameraWizardActive();
 	const bool bStarted= bCameraWizardActive && !m_bCameraWizardWasActive;
 	m_bCameraWizardWasActive= bCameraWizardActive;
 	return bStarted;

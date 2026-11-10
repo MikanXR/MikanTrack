@@ -1612,13 +1612,6 @@ void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& co
 		commitTrackingConfigChange(context);
 }
 
-void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context)
-{
-	ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
-
-	drawViewFromCameraControl(context);
-}
-
 void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& context)
 {
 	VideoPreviewPanel* previewPanel= context.previewPanel;
@@ -1661,18 +1654,6 @@ void SettingsPanels::drawPerCameraSkeletonsControl(const TrackingSectionContext&
 			scene3dPanel->setShowPerCameraSkeletons(bShowPerCamera);
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.showPerCameraSkeletonsTooltip"));
 	}
-}
-
-void SettingsPanels::drawViewFromCameraControl(const TrackingSectionContext& context)
-{
-	Scene3dPanel* scene3dPanel= context.scene3dPanel;
-
-	ImGui::BeginDisabled(!scene3dPanel->hasCameraMatch());
-	bool bViewFromCamera= scene3dPanel->getViewFromCamera();
-	if (ImGui::Checkbox(locLabel("trackingPanel.viewFromCamera"), &bViewFromCamera))
-		scene3dPanel->setViewFromCamera(bViewFromCamera);
-	ImGui::EndDisabled();
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
 }
 
 void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context)
@@ -1748,7 +1729,6 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	// is off
 	if (!context.config->direct.enabled)
 		drawDirectEnableSection(context);
-	drawOverlaySection(context);
 	drawDiagnosticsSection(context);
 
 	ImGui::End();

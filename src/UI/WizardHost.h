@@ -50,9 +50,12 @@ public:
 	// active (the extrinsics wizard uses every camera at once)
 	int getIntrinsicsCameraIndex() const;
 
-	// True once on the frame a camera calibration wizard (intrinsics or
-	// extrinsics) becomes active. The pattern feed is that wizard's whole
-	// UI, so the caller fronts the video preview.
+	// Whether a camera calibration wizard (intrinsics or extrinsics) is
+	// active. The pattern feed is that wizard's whole UI, so the Stage View
+	// shows every camera while it runs.
+	bool isCameraWizardActive() const;
+	// True once on the frame a camera calibration wizard becomes active, so
+	// the caller can show and front the Stage View
 	bool consumeCameraWizardStarted();
 
 	// Runs the active wizard on top of the panels and exits it when it wants

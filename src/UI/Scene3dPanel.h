@@ -8,6 +8,7 @@
 #include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/vector_float2.hpp"
 #include "glm/ext/vector_float3.hpp"
+#include "glm/ext/vector_int4.hpp"
 #include "opencv2/core/mat.hpp"
 
 #include "FaceProfileBinding.h"
@@ -57,6 +58,20 @@ struct SceneGizmos
 	std::array<ElbowHint, 2> elbowHints{};
 };
 
+// What one render of the scene draws. The grid takes the marker axes with
+// it. A layer that is on still draws only what the frame holds: the avatar
+// needs a loaded model, the direct chains a direct solve, a gizmo its enable.
+struct SceneLayers
+{
+	bool bGrid= true;
+	bool bCameraFrustums= true;
+	bool bFusedSkeleton= true;
+	bool bPerCameraSkeletons= true;
+	bool bAvatar= true;
+	bool bDirectSolve= true;
+	bool bGizmos= true;
+};
+
 // World is Z-up (marker plane = XY); the renderer and orbit camera are Y-up.
 // The one world-to-display conversion: world +Z becomes display +Y, so
 // (x, y, z) -> (x, z, -y). Shared with the headless avatar render tool.
@@ -85,10 +100,11 @@ void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cam
 bool projectCameraMatched(const glm::mat4& viewProjection, const glm::vec3& world, int width, int height,
 						  glm::vec2& outPixel);
 
-// Alternate 3D view: renders the marker-plane grid, marker axes, one frustum
-// per calibrated camera, the FUSED hand/arm skeletons (full brightness) and
-// optionally each camera's unfused skeleton (dimmed, in that camera's color)
-// into an FBO shown as an ImGui image.
+// The 3D scene: renders the marker-plane grid, marker axes, one frustum per
+// calibrated camera, the FUSED hand/arm skeletons (full brightness), each
+// camera's unfused skeleton (dimmed, in that camera's color), the avatar,
+// the direct solve's chains and the gizmos, each as its layer says, into an
+// FBO shown as an ImGui image. It owns no window: a host draws the body.
 //
 // World convention (from calibration): right-handed, meters, origin at the
 // marker center, +Z out of the table. For display this is rotated into the
@@ -99,11 +115,24 @@ public:
 	Scene3dPanel();
 	~Scene3dPanel();
 
-	void draw(bool* pOpen,
-			  const TrackingFrameResult& fusedResult,
-			  const std::vector<SceneCameraView>& cameras,
-			  const std::vector<const TrackingFrameResult*>& perCameraResults,
-			  SceneGizmos& gizmos);
+	// Draws the scene into the current window's remaining content region,
+	// with the orbit camera or, while the camera view is on, the matched
+	// camera, and runs the orbit and the gizmo drags on the image. The
+	// gizmos are picked only while their layer is on.
+	void drawBody(const TrackingFrameResult& fusedResult,
+				  const std::vector<SceneCameraView>& cameras,
+				  const std::vector<const TrackingFrameResult*>& perCameraResults,
+				  SceneGizmos& gizmos,
+				  const SceneLayers& layers);
+
+	// Renders the scene into target, sized width by height (created or
+	// resized as needed), cleared whole and drawn inside viewport (x, y,
+	// width, height from the bottom left) with the view-projection given.
+	// Leaves target unbound. False without a GL context or a valid size.
+	bool renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height, const glm::ivec4& viewport,
+						const glm::mat4& viewProjection, const SceneLayers& layers,
+						const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+						const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos);
 
 	// Forearm length used to place the elbow estimate (meters); the
 	// direction is measured by the wrist IMU, only the length is assumed
@@ -113,6 +142,9 @@ public:
 	// when the model changed and its GPU copy must be rebuilt.
 	void setAvatar(std::shared_ptr<const AvatarModel> model, std::shared_ptr<const AvatarSkeleton> skeleton,
 				   uint32_t generation);
+	// The user's show-in-scene setting. A host's avatar layer follows it, and
+	// the capture draws the avatar only while it is on.
+	bool getShowAvatar() const { return m_bShowAvatar; }
 	void setShowAvatar(bool bShow) { m_bShowAvatar= bShow; }
 	// The retargeted pose to draw (copied); null draws the rest pose at the
 	// world origin
@@ -126,6 +158,8 @@ public:
 	// The loaded avatar's face profile binding
 	void setFaceBinding(std::shared_ptr<const FaceProfileBinding> binding) { m_faceBinding= std::move(binding); }
 
+	// The Fusion stage's per-camera skeletons toggle. A host's per-camera
+	// layer follows it, and the capture draws them only while it is on.
 	bool getShowPerCameraSkeletons() const { return m_bShowPerCameraSkeletons; }
 	void setShowPerCameraSkeletons(bool bShow) { m_bShowPerCameraSkeletons= bShow; }
 
@@ -145,17 +179,18 @@ public:
 
 	// Renders the scene from the matched camera at the frame's size into a
 	// BGR image, the way the dump's annotated frame is laid out, so the two
-	// compare pixel for pixel. False without a match or a GL context. Needs
-	// a current GL context, not an ImGui frame.
+	// compare pixel for pixel. Every layer but the gizmos, the avatar and the
+	// per-camera skeletons as their settings say. False without a match or a
+	// GL context. Needs a current GL context, not an ImGui frame.
 	bool captureFromCamera(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 						   const std::vector<const TrackingFrameResult*>& perCameraResults, cv::Mat& outBgr);
 
 private:
-	// Draws the scene into the bound framebuffer's current viewport with the
-	// view and projection given
+	// Draws the layers that are on into the bound framebuffer's current
+	// viewport with the view and projection given
 	void renderScene(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 					 const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos,
-					 const glm::mat4& viewProjection);
+					 const glm::mat4& viewProjection, const SceneLayers& layers);
 	bool startRenderers();
 	void drawGizmos(const SceneGizmos& gizmos);
 	void drawDirectSolve();
@@ -166,8 +201,9 @@ private:
 	bool projectToImage(const glm::vec3& world, const glm::vec2& imageMin, const glm::vec2& imageSize,
 						glm::vec2& outPixel) const;
 	void drawSkeleton(const TrackingFrameResult& result, float brightness, const glm::vec3* colorOverride);
-	// Draws the avatar when one is shown; returns whether anything was drawn
-	bool drawAvatar(const glm::mat4& viewProjection);
+	// Draws the avatar when one is loaded and bShow is on; returns whether
+	// anything was drawn. An unloaded avatar drops its GPU copy either way.
+	bool drawAvatar(const glm::mat4& viewProjection, bool bShow);
 
 	std::unique_ptr<GlFrameBuffer> m_frameBuffer;
 	std::unique_ptr<GlFrameBuffer> m_captureBuffer;
@@ -202,7 +238,6 @@ private:
 	int m_draggedElbowHint= -1;
 	glm::vec3 m_dragPlanePoint{0.f};
 	glm::vec3 m_dragPlaneNormal{0.f};
-	bool m_bRenderInitialized= false;
 	bool m_bShowPerCameraSkeletons= false;
 	float m_forearmLengthMeters= 0.25f;
 };
