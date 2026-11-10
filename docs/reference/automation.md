@@ -45,7 +45,6 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 	- `"3D Scene"`
 	- `Tracking`
 	- `Settings`
-	- `Audio`
 	- `"OSC Output"`
 	- `Avatar`
 	- `Log`
@@ -93,7 +92,7 @@ One caveat worth knowing when a click seems to vanish: an ImGui window's capture
 
 ### Face profiles and the expression editor (face)
 
-Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the owning subsystem. Every value reads the frame the scene shows, under the Face tab's live rule (a value is `none` until a frame of the current binding's generation arrives).
+Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the owning subsystem. Every value reads the frame the scene shows, under the Profile stage's live rule (a value is `none` until a frame of the current binding's generation arrives).
 
 - `face profile`: the active profile's name, id, whether it is Auto, its variable and binding counts, and its compile error count
 - `face rows`: one line per variable (`let <i> <name> = <expr> -> <value>`) and per binding (`out <i> <target> = <expr> -> <value>`), with ` error: <message>` appended to a row that does not compile

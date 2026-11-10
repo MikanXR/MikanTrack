@@ -2,23 +2,37 @@
 
 #include "imgui.h"
 
+#include "App.h"
 #include "AppConfig.h"
+#include "AvatarFaceTab.h"
+#include "AvatarMouthReadout.h"
 #include "DevicePanel.h"
 
-StageContent::StageContent(DevicePanel* devicePanel, CalibrationPanel* calibrationPanel)
-	: m_devicePanel(devicePanel)
+StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel* calibrationPanel,
+						   AudioPanel* audioPanel, AvatarFaceTab* faceTab, AvatarMouthReadout* mouthReadout)
+	: m_app(app)
+	, m_devicePanel(devicePanel)
 	, m_calibrationPanel(calibrationPanel)
+	, m_audioPanel(audioPanel)
+	, m_faceTab(faceTab)
+	, m_mouthReadout(mouthReadout)
 {
 }
 
 void StageContent::beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, const ImuReadout& imu,
-							  bool bWizardActive)
+							  const FaceReadout& face, const MicrophoneReadout& microphone,
+							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
 {
 	m_tracking= tracking;
 	m_tracking.fusion= &fusion;
 	m_tracking.imu= &imu;
+	m_tracking.face= &face;
+	m_microphone= &microphone;
+	m_activeEdit= activeEdit;
 	m_bWizardActive= bWizardActive;
 	m_calibrationAction= CalibrationPanel::DrawResult();
+	m_audioAction= AudioPanel::DrawResult();
+	m_faceEditRequest.reset();
 }
 
 bool StageContent::isCameraInRange(const PipelineStageId& stage) const
@@ -62,7 +76,17 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		return section != eStageSection::Settings || m_tracking.config->cameraCount() > 1;
 	case ePipelineStage::Imu:
 	case ePipelineStage::BodySolver:
+	case ePipelineStage::Microphone:
 		return true;
+	case ePipelineStage::Phone:
+		// The stream status shows only while the shown frame's stream is
+		// enabled, or to say the take did not record it
+		return section == eStageSection::Settings ||
+			   (section == eStageSection::Diagnostics &&
+				(!m_tracking.face->bAvailable || m_tracking.face->bEnabled));
+	case ePipelineStage::Profile:
+		// The profiles belong to the loaded avatar
+		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
 	default:
 		return false;
 	}
@@ -168,6 +192,56 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			// The readout is the section's only content
 			SettingsPanels::drawBodySolveReadout(m_tracking, false);
+		}
+		break;
+	case ePipelineStage::Phone:
+		if (section == eStageSection::Settings)
+		{
+			SettingsPanels::drawFaceStreamControls(m_tracking);
+			SettingsPanels::drawFaceHeadAlignControls(m_tracking);
+		}
+		else
+		{
+			SettingsPanels::drawFaceStreamStatus(m_tracking);
+		}
+		break;
+	case ePipelineStage::Microphone:
+		if (section == eStageSection::Inputs)
+		{
+			m_audioPanel->drawDeviceControls();
+			m_audioPanel->drawProfileControls(m_bWizardActive, m_audioAction);
+		}
+		else if (section == eStageSection::Settings)
+		{
+			m_audioPanel->drawSettingsControls();
+		}
+		else
+		{
+			// The weights read the shown fused result and draw in a replay
+			// without recorded stage state too
+			m_audioPanel->drawLevelMeter(*m_microphone);
+			m_audioPanel->drawStatus(*m_microphone);
+			ImGui::Separator();
+			m_audioPanel->drawWeights(*m_tracking.fusion->fused, m_tracking.fusion->bReplay);
+		}
+		break;
+	case ePipelineStage::Profile:
+		if (section == eStageSection::Inputs)
+		{
+			m_faceTab->drawProfileBar(m_app);
+		}
+		else if (section == eStageSection::Settings)
+		{
+			const std::optional<FaceExprEditTarget> editRequest=
+				m_faceTab->drawRows(m_app, m_tracking.fusion->fused->face, m_activeEdit);
+			if (editRequest.has_value())
+				m_faceEditRequest= editRequest;
+		}
+		else
+		{
+			// The avatar's mouth targets as the stream carries them on the
+			// shown frame, the section's only content
+			m_mouthReadout->draw(m_app->getAvatarModel(), m_app->getFaceBinding(), m_tracking.fusion->fused->face);
 		}
 		break;
 	default:

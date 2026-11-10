@@ -150,9 +150,9 @@ The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and ev
 - `std::string phoneAddress` (default `255.255.255.255`)
 - `glm::quat headAnchor` with `headAnchorPresent`, written as `headAnchor` `[x, y, z, w]` only once captured
 
-The Tracking panel's Face section, after Wrist IMU, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
+The Phone stage in the Inspector, under Face and mouth, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
 
-The Avatar panel's Face tab (`AvatarFaceTab`) edits the profiles:
+The Profile stage (`AvatarFaceTab`) edits the profiles:
 
 - The profile bar: the assigned profiles with a missing id shown as such, the active picker, assignment from the library, new, duplicate, rename and delete. Every assigned profile, a missing id included, has its own unassign control. Auto shows read-only with "Duplicate to edit".
 
@@ -186,7 +186,7 @@ The Expression Editor window (`FaceExprEditorWindow`) edits one row of the activ
 
 - The `face` automation namespace drives all of this without the mouse ([automation.md](./automation.md)).
 
-The OSC panel's mouth section is a filtered view of the same values: the mouth targets of the active binding, the targets whose outputs read a mouth input. Its header counts them, and its source line says what they read this frame: the phone, the visemes, or both.
+The Profile stage's Diagnostics is a filtered view of the same values: the mouth targets of the active binding, the targets whose outputs read a mouth input. Its header counts them, and its source line says what they read this frame: the phone, the visemes, or both.
 
 ## Test
 

@@ -14,6 +14,7 @@
 #include "AudioPanel.h"
 #include "AudioService.h"
 #include "AutomationServer.h"
+#include "AvatarFaceTab.h"
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
@@ -40,6 +41,7 @@
 #include "SetupFlow.h"
 #include "StageContent.h"
 #include "StageInspector.h"
+#include "SteadyClock.h"
 #include "TimelinePanel.h"
 #include "TrackingRecording.h"
 #include "VideoModeUtils.h"
@@ -60,11 +62,13 @@ MainWindow::MainWindow(App* app)
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
 	, m_faceExprEditor(std::make_unique<FaceExprEditorWindow>(app))
+	, m_faceTab(std::make_unique<AvatarFaceTab>())
 	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 	, m_pipelinePanel(std::make_unique<PipelinePanel>())
 	, m_stageInspector(std::make_unique<StageInspector>())
-	, m_stageContent(std::make_unique<StageContent>(m_devicePanel.get(), m_calibrationPanel.get()))
+	, m_stageContent(std::make_unique<StageContent>(app, m_devicePanel.get(), m_calibrationPanel.get(),
+												   m_audioPanel.get(), m_faceTab.get(), m_mouthReadout.get()))
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -239,7 +243,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.scene3d"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
@@ -326,7 +329,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewPerformancePanel"), nullptr, &m_bShowPerformancePanel);
@@ -337,7 +339,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 				m_bResetDockLayout= true;
 				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowTrackingPanel= true;
 				m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
-				m_bShowSettingsPanel= m_bShowAvatarPanel= m_bShowAudioPanel= true;
+				m_bShowSettingsPanel= m_bShowAvatarPanel= true;
 				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
 			}
 			ImGui::EndMenu();
@@ -481,7 +483,8 @@ void MainWindow::update(float deltaSeconds)
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
 	// The stage sections the Inspector draws read this frame's context
-	m_stageContent->beginFrame(trackingContext, m_fusionReadout, m_imuReadout, bWizardActive);
+	m_stageContent->beginFrame(trackingContext, m_fusionReadout, m_imuReadout, m_faceReadout, m_microphoneReadout,
+							   m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -496,8 +499,7 @@ void MainWindow::update(float deltaSeconds)
 	}
 	if (m_bShowOscPanel)
 	{
-		SettingsPanels::drawOscPanel(&m_bShowOscPanel, config, visionThread, m_latestFused, *m_mouthReadout,
-									 m_app->getAvatarModel(), m_app->getFaceBinding());
+		SettingsPanels::drawOscPanel(&m_bShowOscPanel, config, visionThread, m_latestFused);
 	}
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
@@ -507,28 +509,11 @@ void MainWindow::update(float deltaSeconds)
 		// A scrub or a view switch in the panel changes the shown frame
 		updateShownFrame(perCameraResults);
 	}
-	{
-		// The Face tab and the expression editor read the frame the scene
-		// shows; a row's Edit button opens the editor on it
-		const TrackingFrameResult& shownFrame= *m_shown.fused;
-		if (m_bShowAvatarPanel)
-		{
-			const std::optional<FaceExprEditTarget> editRequest=
-				m_avatarPanel->draw(&m_bShowAvatarPanel, shownFrame.face, m_faceExprEditor->getTarget());
-			if (editRequest.has_value())
-				m_faceExprEditor->open(*editRequest);
-		}
-		// After the panel, so an unload in it lands before the scene reads
-		// the preview pose
-		m_avatarPanel->update();
-		m_faceExprEditor->update(shownFrame);
-	}
-	AudioPanel::DrawResult audioAction;
-	if (m_bShowAudioPanel)
-	{
-		// The weights block reads the face the scene shows
-		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive, *m_shown.fused, m_shown.bReplay);
-	}
+	if (m_bShowAvatarPanel)
+		m_avatarPanel->draw(&m_bShowAvatarPanel);
+	// After the panel, so an unload in it lands before the scene reads the
+	// preview pose
+	m_avatarPanel->update();
 
 	// Launch requests raised by the panels this frame
 	if (m_trackingPanelState.bLaunchMountingWizard)
@@ -540,9 +525,6 @@ void MainWindow::update(float deltaSeconds)
 	m_trackingPanelState.bLaunchMountingWizard= false;
 	m_trackingPanelState.bLaunchBodyCalibrationWizard= false;
 	m_trackingPanelState.bLaunchHandCalibrationWizard= false;
-
-	if (audioAction.bLaunchAudioWizard)
-		launchWizard(eWizardKind::AudioCalibration);
 
 	// Guided setup chain: draws its prompt modals on top of the panels, and
 	// launches/watches the wizards updated below
@@ -624,6 +606,14 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
 	if (calibrationAction.bLaunchExtrinsicsWizard)
 		launchWizard(eWizardKind::Extrinsics);
+	if (m_stageContent->getAudioAction().bLaunchAudioWizard)
+		launchWizard(eWizardKind::AudioCalibration);
+	// A face profile row's Edit button opens the expression editor on the
+	// row. The editor runs every frame, after the Inspector so the open lands
+	// this frame, and reads the frame the scene shows.
+	if (m_stageContent->getFaceEditRequest().has_value())
+		m_faceExprEditor->open(*m_stageContent->getFaceEditRequest());
+	m_faceExprEditor->update(*m_shown.fused);
 	if (m_bShowPerformancePanel)
 		PerformancePanel::draw(&m_bShowPerformancePanel, *visionThread);
 
@@ -659,6 +649,7 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 	}
 	updateFusionReadout();
 	updateImuReadout();
+	updateFaceReadouts();
 }
 
 void MainWindow::updateFusionReadout()
@@ -745,6 +736,82 @@ void MainWindow::updateImuReadout()
 			readout.sides[sideIndex]= visionThread->getImuSideStatus((eHandSide)sideIndex);
 	}
 	m_imuReadout= readout;
+}
+
+void MainWindow::updateFaceReadouts()
+{
+	FaceReadout face;
+	MicrophoneReadout microphone;
+	face.bReplay= m_shown.bReplay;
+	microphone.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		// A recording carries the phone stream's and the microphone's state,
+		// but not the parser's counts, the head, the device name or the
+		// backend's texts
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			face.bAvailable= true;
+			face.bEnabled= recorded->face.enabled;
+			face.bBound= recorded->face.bound;
+			face.bStreaming= recorded->face.streaming;
+			face.datagramsPerSecond= recorded->face.datagramsPerSecond;
+
+			microphone.bAvailable= true;
+			microphone.bEnabled= recorded->audio.enabled;
+			microphone.bDeviceOpen= recorded->audio.deviceOpen;
+			microphone.bBackendReady= recorded->audio.backendReady;
+			microphone.bGateOpen= recorded->audio.gateOpen;
+			microphone.levelDbfs= recorded->audio.levelDbfs;
+			microphone.bPhoneOwnsMouth=
+				recorded->face.enabled && recorded->face.streaming && recorded->face.faceTracked;
+		}
+	}
+	else
+	{
+		const AppConfig* config= m_app->getConfig();
+		face.bAvailable= true;
+		// The stream's switch as the config holds it
+		face.bEnabled= config->face.enabled;
+		if (const FaceService* faceService= m_app->getFaceService())
+		{
+			const FaceServiceStatus status= faceService->getStatus();
+			face.bBound= status.bound;
+			face.bStreaming= status.streaming;
+			face.datagramsPerSecond= status.datagramsPerSecond;
+			face.bSampleValid= status.latest.valid;
+			face.unknownNameCount= status.unknownNameCount;
+			face.parseFailures= status.parseFailures;
+			face.lastUnknownName= status.lastUnknownName;
+			face.bHasHead= status.latest.hasHead;
+			face.headEulerDegrees= status.latest.headEulerDegrees;
+
+			FaceSample sample;
+			microphone.bPhoneOwnsMouth= config->face.enabled && faceService->isStreaming(steadyNowMs()) &&
+										 faceService->getLatestSample(sample) && sample.faceTracked;
+		}
+
+		microphone.bAvailable= true;
+		AudioService* audioService= m_app->getAudioService();
+		microphone.bEnabled= audioService != nullptr && config->audio.enabled;
+		if (audioService != nullptr)
+		{
+			const AudioServiceStatus status= audioService->getStatus();
+			microphone.bDeviceOpen= status.deviceOpen;
+			microphone.bBackendReady= status.backendReady;
+			microphone.bGateOpen= status.gateOpen;
+			microphone.levelDbfs= status.levelDbfs;
+			microphone.deviceName= status.deviceName;
+			microphone.deviceSampleRate= status.deviceSampleRate;
+			microphone.backendInfo= status.backendInfo;
+			microphone.backendReason= status.backendReason;
+			microphone.inferMsEma= status.inferMsEma;
+			microphone.droppedBlocks= status.droppedBlocks;
+		}
+	}
+	m_faceReadout= face;
+	m_microphoneReadout= microphone;
 }
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)

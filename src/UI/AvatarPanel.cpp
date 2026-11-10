@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 
 #include "imgui.h"
 
@@ -64,20 +65,17 @@ AvatarPanel::AvatarPanel(App* app, AppConfig* config)
 {
 }
 
-std::optional<FaceExprEditTarget> AvatarPanel::draw(bool* pOpen, const FaceSources& face,
-													const FaceExprEditTarget* activeEdit)
+void AvatarPanel::draw(bool* pOpen)
 {
-	std::optional<FaceExprEditTarget> editRequest;
 	if (!ImGui::Begin(locWindowTitle("windows.avatar"), pOpen))
 	{
 		ImGui::End();
-		return editRequest;
+		return;
 	}
 
-	editRequest= drawBody(face, activeEdit);
+	drawBody();
 
 	ImGui::End();
-	return editRequest;
 }
 
 void AvatarPanel::update()
@@ -86,16 +84,8 @@ void AvatarPanel::update()
 		m_previewPose= ePreviewPose::Live;
 }
 
-std::optional<FaceExprEditTarget> AvatarPanel::drawFaceTab(const FaceSources& face,
-														   const FaceExprEditTarget* activeEdit)
+void AvatarPanel::drawBody()
 {
-	return m_faceTab.draw(m_app, face, activeEdit);
-}
-
-std::optional<FaceExprEditTarget> AvatarPanel::drawBody(const FaceSources& face, const FaceExprEditTarget* activeEdit)
-{
-	std::optional<FaceExprEditTarget> editRequest;
-
 	drawLoadControls();
 
 	if (m_app->getAvatarModel() != nullptr)
@@ -118,16 +108,9 @@ std::optional<FaceExprEditTarget> AvatarPanel::drawBody(const FaceSources& face,
 				drawRetargetTab();
 				ImGui::EndTabItem();
 			}
-			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabFace")))
-			{
-				editRequest= drawFaceTab(face, activeEdit);
-				ImGui::EndTabItem();
-			}
 			ImGui::EndTabBar();
 		}
 	}
-
-	return editRequest;
 }
 
 void AvatarPanel::drawLoadControls()

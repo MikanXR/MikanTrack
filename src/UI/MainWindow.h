@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "AudioPanel.h" // MicrophoneReadout
 #include "AvatarRetarget.h"
 #include "PipelineModel.h"
 #include "DirectRetarget.h"
@@ -12,8 +13,8 @@
 #include "VisionThread.h"    // VisionPreviewFrame
 
 class App;
-class AudioPanel;
 class AutomationServer;
+class AvatarFaceTab;
 class AvatarMouthReadout;
 class AvatarPanel;
 class CalibrationPanel;
@@ -92,15 +93,19 @@ private:
 	std::unique_ptr<WizardHost> m_wizardHost;
 	std::unique_ptr<TimelinePanel> m_timelinePanel;
 	std::unique_ptr<AvatarPanel> m_avatarPanel;
-	// The expression editor the Face tab's Edit buttons open, drawn after
-	// the Avatar panel on the same shown frame
+	// The expression editor the Profile stage's Edit buttons open, updated
+	// after the Inspector on the same shown frame
 	std::unique_ptr<FaceExprEditorWindow> m_faceExprEditor;
+	// The Profile stage's face profile editor and mouth readout, and the
+	// Microphone stage's sections, which the Inspector hosts
+	std::unique_ptr<AvatarFaceTab> m_faceTab;
 	std::unique_ptr<AudioPanel> m_audioPanel;
 	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
 	std::unique_ptr<PipelinePanel> m_pipelinePanel;
 	std::unique_ptr<StageInspector> m_stageInspector;
-	// The stage sections the Inspector hosts, drawn from the device and
-	// calibration panels and the tracking sections
+	// The stage sections the Inspector hosts, drawn from the device,
+	// calibration and audio panels, the tracking sections and the face
+	// profile editor
 	std::unique_ptr<StageContent> m_stageContent;
 	// Guided new-project setup chain; needs the wizards above, so it is
 	// constructed last (in the constructor body)
@@ -141,9 +146,15 @@ private:
 	// What the wrist IMUs reported for the shown frame, refilled with it. The
 	// IMU stage's sections read it in place.
 	ImuReadout m_imuReadout;
+	// What the phone stream and the microphone reported for the shown frame,
+	// refilled with it. The Phone and Microphone stages' sections read them
+	// in place.
+	FaceReadout m_faceReadout;
+	MicrophoneReadout m_microphoneReadout;
 	void updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera);
 	void updateFusionReadout();
 	void updateImuReadout();
+	void updateFaceReadouts();
 	// The direct solve behind the shown avatar pose, null when the shown
 	// frame is not a direct-mode frame
 	const DirectRetarget::SolveState* m_shownDirectState= nullptr;
@@ -192,7 +203,6 @@ private:
 	bool m_bShowLogPanel= true;
 	bool m_bShowSettingsPanel= true;
 	bool m_bShowAvatarPanel= true;
-	bool m_bShowAudioPanel= true;
 	bool m_bShowPipelinePanel= true;
 	bool m_bShowInspectorPanel= true;
 	bool m_bShowPerformancePanel= true;

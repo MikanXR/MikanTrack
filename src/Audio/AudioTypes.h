@@ -13,7 +13,7 @@ constexpr int AUDIO_SAMPLE_RATE= 16000;
 // The rate the backend emits mouth frames at
 constexpr int MOUTH_FRAME_RATE= 30;
 
-// The mouth model the Audio panel selects: the level alone, uLipSync's MFCC
+// The mouth model the Microphone stage selects: the level alone, uLipSync's MFCC
 // scoring against a calibrated profile, or the Oculus LipSync engine
 enum class eMouthModel : int
 {

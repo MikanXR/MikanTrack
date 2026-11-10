@@ -1,7 +1,8 @@
 #pragma once
 
 #include <array>
-#include <memory>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 #include "glm/ext/vector_double3.hpp"
@@ -12,13 +13,10 @@
 #include "TrackingTypes.h"
 
 class AppConfig;
-class AvatarMouthReadout;
-class FaceProfileBinding;
 class VisionThread;
 class VideoCaptureSystem;
 class VideoPreviewPanel;
 class Scene3dPanel;
-struct AvatarModel;
 struct FusionDiagnostics;
 struct VisionPreviewFrame;
 
@@ -108,11 +106,33 @@ struct ImuReadout
 	ImuSideStatus sides[2];
 };
 
+// What the phone's face stream reported for the shown frame. A recording
+// carries the switch, the bind, streaming and the rate; the rest is live only
+// and unset in a replay.
+struct FaceReadout
+{
+	bool bAvailable= false; // false: a replayed frame from a take that recorded no stage state
+	bool bReplay= false;
+	bool bEnabled= false;
+	bool bBound= false;
+	bool bStreaming= false;
+	float datagramsPerSecond= 0.f;
+	// Live only: a sample has arrived (quiet rather than waiting), the
+	// parser's counts, and the newest sample's head rotation
+	bool bSampleValid= false;
+	uint64_t unknownNameCount= 0;
+	uint64_t parseFailures= 0;
+	std::string lastUnknownName;
+	bool bHasHead= false;
+	glm::vec3 headEulerDegrees{0.f};
+};
+
 // What the Tracking panel's sections read and write. latestPreviews: the
 // newest per-camera results (image-quality and timing readouts); fusedResult:
 // the latest live fused tracking output (hold-still jitter test); fusion: the
 // shown frame's fusion readouts (the Fusion stage's diagnostics); imu: the
-// shown frame's wrist IMU status (the IMU stage's device table).
+// shown frame's wrist IMU status (the IMU stage's device table); face: the
+// shown frame's phone stream status (the Phone stage's diagnostics).
 struct TrackingSectionContext
 {
 	AppConfig* config= nullptr;
@@ -125,19 +145,16 @@ struct TrackingSectionContext
 	const TrackingFrameResult* fusedResult= nullptr;
 	const FusionReadout* fusion= nullptr;
 	const ImuReadout* imu= nullptr;
+	const FaceReadout* face= nullptr;
 };
 
 // What the OSC panel's sections read and write. fusedResult: the latest
-// fused tracking output (the live angle readout and the mouth section, which
-// mouthReadout draws from the loaded avatar and its face profile binding).
+// fused tracking output (the live angle readout).
 struct OscSectionContext
 {
 	AppConfig* config= nullptr;
 	VisionThread* visionThread= nullptr;
 	const TrackingFrameResult* fusedResult= nullptr;
-	AvatarMouthReadout* mouthReadout= nullptr;
-	std::shared_ptr<const AvatarModel> avatar;
-	std::shared_ptr<const FaceProfileBinding> faceBinding;
 };
 
 // Small side panels: tracking/fusion options and OSC output settings.
@@ -161,10 +178,11 @@ void commitOscConfigChange(const OscSectionContext& context);
 // The Tracking panel's sections, in the panel's order. Flip handedness,
 // image quality, inference and capture timing are the Capture stage's, and
 // fusion, hand scale, the fused hands, the fusion detail, the per-camera
-// skeletons toggle and the hold-still test are the Fusion stage's; none of
-// them is in the panel. The wrist IMU pieces are the IMU stage's and the body
-// pieces the Body solver stage's, and the panel draws them only in a direct
-// project, which has neither stage.
+// skeletons toggle and the hold-still test are the Fusion stage's, and the
+// face stream pieces are the Phone stage's; none of them is in the panel.
+// The wrist IMU pieces are the IMU stage's and the body pieces the Body
+// solver stage's, and the panel draws them only in a direct project, which
+// has neither stage.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -188,7 +206,14 @@ void drawMountingCalibrationControl(const TrackingSectionContext& context);
 // Each hand's wrist bend and forearm and wrist rotations in the shown fused
 // result (context.fusion->fused)
 void drawWristReadoutSection(const TrackingSectionContext& context, bool bWithHeader= true);
-void drawFaceSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The phone face stream pieces, the Phone stage's, no headers. The stream
+// controls (enable, port, phone address) and the head alignment edit the
+// live config; the alignment draws only while the stream is enabled. The
+// status reads context.face and draws only while the shown frame's stream is
+// enabled.
+void drawFaceStreamControls(const TrackingSectionContext& context);
+void drawFaceHeadAlignControls(const TrackingSectionContext& context);
+void drawFaceStreamStatus(const TrackingSectionContext& context);
 // The body pieces composed in one section: Measure My Body and the body
 // proportions. The per-camera enables are drawBodyPoseCameraControls. The
 // Body solver stage hosts the pieces, and the panel draws the section only in
@@ -230,17 +255,12 @@ void drawHoldStillSection(const TrackingSectionContext& context, bool bWithHeade
 // The OSC panel's sections, in the panel's order
 void drawOscConnectionSection(const OscSectionContext& context);
 void drawOscVmcSection(const OscSectionContext& context, bool bWithHeader= true);
-void drawOscMouthSection(const OscSectionContext& context, bool bWithHeader= true);
 void drawOscSolverSection(const OscSectionContext& context, bool bWithHeader= true);
 
 // Draws the sections only; updateTrackingState runs the panel's state
 void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);
-// fusedResult: the latest fused tracking output (for the live angle readout
-// and the mouth section, which mouthReadout draws from the loaded avatar and
-// its face profile binding)
-void drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult,
-				  AvatarMouthReadout& mouthReadout, const std::shared_ptr<const AvatarModel>& avatar,
-				  const std::shared_ptr<const FaceProfileBinding>& faceBinding);
+// fusedResult: the latest fused tracking output (for the live angle readout)
+void drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel(bool* pOpen);
 // The language combo alone, shared between the Settings panel and the main

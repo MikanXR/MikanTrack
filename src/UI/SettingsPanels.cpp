@@ -10,7 +10,6 @@
 
 #include "App.h"
 #include "AppConfig.h"
-#include "AvatarMouthReadout.h"
 #include "FaceService.h"
 #include "HandFusion.h"
 #include "HandPoseModel.h"
@@ -584,7 +583,7 @@ void SettingsPanels::updateTrackingState(const TrackingSectionContext& context, 
 	updateImageQualityEma(context, deltaSeconds);
 
 	// The phone head's straight ahead, captured by the vision thread at the
-	// Face section's request
+	// head alignment's request
 	glm::quat capturedAnchor;
 	if (visionThread->fetchFaceAnchorCapture(capturedAnchor))
 	{
@@ -1003,12 +1002,8 @@ void SettingsPanels::drawWristReadoutSection(const TrackingSectionContext& conte
 	}
 }
 
-void SettingsPanels::drawFaceSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawFaceStreamControls(const TrackingSectionContext& context)
 {
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.faceSection"));
-
-	bool bChanged= false;
 	FaceConfig& face= context.config->face;
 	bool bFaceChanged= false;
 	bFaceChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableFace"), &face.enabled);
@@ -1031,56 +1026,81 @@ void SettingsPanels::drawFaceSection(const TrackingSectionContext& context, bool
 
 	if (bFaceChanged)
 	{
-		bChanged= true;
 		App::getInstance()->applyFaceConfig();
+		commitTrackingConfigChange(context);
 	}
+}
 
-	if (face.enabled)
+void SettingsPanels::drawFaceHeadAlignControls(const TrackingSectionContext& context)
+{
+	FaceConfig& face= context.config->face;
+	if (!face.enabled)
+		return;
+
+	// The phone's head turns about the world axes once its straight ahead is
+	// known; the camera head supplies it (the landed capture is written into
+	// the config by updateTrackingState). Capturing needs the live stream.
+	const FaceService* faceService= App::getInstance()->getFaceService();
+	const bool bStreaming= faceService->getStatus().streaming;
+	bool bChanged= false;
+	ImGui::BeginDisabled(!bStreaming);
+	if (ImGui::Button(locLabel("trackingPanel.faceAlignHead")))
+		context.visionThread->requestFaceAnchorCapture();
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.faceAlignHeadTooltip"));
+	ImGui::EndDisabled();
+	if (face.headAnchorPresent)
 	{
-		const FaceService* faceService= App::getInstance()->getFaceService();
-		const FaceServiceStatus status= faceService->getStatus();
-		if (!status.bound)
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("trackingPanel.faceNotBound"));
-		else if (status.streaming)
-			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), locText("trackingPanel.faceStreamingFmt"),
-							   status.datagramsPerSecond);
-		else if (status.latest.valid)
-			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.faceQuiet"));
-		else
-			ImGui::TextDisabled("%s", locText("trackingPanel.faceWaiting"));
-
-		ImGui::TextDisabled(locText("trackingPanel.faceCountsFmt"), (unsigned long long)status.unknownNameCount,
-							(unsigned long long)status.parseFailures);
-		if (!status.lastUnknownName.empty())
-			ImGui::TextDisabled(locText("trackingPanel.faceLastUnknownFmt"), status.lastUnknownName.c_str());
-		if (status.latest.hasHead)
-			ImGui::TextDisabled(locText("trackingPanel.faceHeadFmt"), status.latest.headEulerDegrees.x,
-								status.latest.headEulerDegrees.y, status.latest.headEulerDegrees.z);
-
-		// The phone's head turns about the world axes once its straight
-		// ahead is known; the camera head supplies it (the landed capture is
-		// written into the config by updateTrackingState)
-		ImGui::BeginDisabled(!status.streaming);
-		if (ImGui::Button(locLabel("trackingPanel.faceAlignHead")))
-			context.visionThread->requestFaceAnchorCapture();
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.faceAlignHeadTooltip"));
-		ImGui::EndDisabled();
-		if (face.headAnchorPresent)
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("trackingPanel.faceResetHeadAlign")))
 		{
-			ImGui::SameLine();
-			if (ImGui::Button(locLabel("trackingPanel.faceResetHeadAlign")))
-			{
-				face.headAnchorPresent= false;
-				face.headAnchor= glm::quat(1.f, 0.f, 0.f, 0.f);
-				bChanged= true;
-			}
+			face.headAnchorPresent= false;
+			face.headAnchor= glm::quat(1.f, 0.f, 0.f, 0.f);
+			bChanged= true;
 		}
-		ImGui::TextDisabled("%s", locText(face.headAnchorPresent ? "trackingPanel.faceHeadAligned"
-																 : "trackingPanel.faceHeadNotAligned"));
 	}
+	ImGui::TextDisabled("%s", locText(face.headAnchorPresent ? "trackingPanel.faceHeadAligned"
+															 : "trackingPanel.faceHeadNotAligned"));
 
 	if (bChanged)
 		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawFaceStreamStatus(const TrackingSectionContext& context)
+{
+	const FaceReadout& face= *context.face;
+	if (!face.bAvailable)
+	{
+		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
+		return;
+	}
+	if (!face.bEnabled)
+		return;
+
+	if (!face.bBound)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("trackingPanel.faceNotBound"));
+	else if (face.bStreaming)
+		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), locText("trackingPanel.faceStreamingFmt"),
+						   face.datagramsPerSecond);
+	else if (!face.bReplay)
+	{
+		// A recording does not say whether a sample had arrived, so a replay
+		// tells neither quiet nor waiting
+		if (face.bSampleValid)
+			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.faceQuiet"));
+		else
+			ImGui::TextDisabled("%s", locText("trackingPanel.faceWaiting"));
+	}
+
+	// The parser's counts and the head rotation are live only
+	if (face.bReplay)
+		return;
+	ImGui::TextDisabled(locText("trackingPanel.faceCountsFmt"), (unsigned long long)face.unknownNameCount,
+						(unsigned long long)face.parseFailures);
+	if (!face.lastUnknownName.empty())
+		ImGui::TextDisabled(locText("trackingPanel.faceLastUnknownFmt"), face.lastUnknownName.c_str());
+	if (face.bHasHead)
+		ImGui::TextDisabled(locText("trackingPanel.faceHeadFmt"), face.headEulerDegrees.x, face.headEulerDegrees.y,
+							face.headEulerDegrees.z);
 }
 
 void SettingsPanels::drawBodyPoseIntro()
@@ -1518,7 +1538,6 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 
 	if (bDirect)
 		drawWristImuSection(context);
-	drawFaceSection(context);
 	if (bDirect)
 		drawBodyPoseSection(context);
 	drawDirectSection(context);
@@ -1593,15 +1612,6 @@ void SettingsPanels::drawOscVmcSection(const OscSectionContext& context, bool bW
 		commitOscConfigChange(context);
 }
 
-void SettingsPanels::drawOscMouthSection(const OscSectionContext& context, bool bWithHeader)
-{
-	if (bWithHeader)
-		ImGui::Separator();
-	// The avatar's mouth targets as the stream carries them, after the face
-	// profile
-	context.mouthReadout->draw(context.avatar, context.faceBinding, context.fusedResult->face);
-}
-
 void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool bWithHeader)
 {
 	const OscConfig& osc= context.config->osc;
@@ -1672,9 +1682,7 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 }
 
 void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
-								  const TrackingFrameResult& fusedResult, AvatarMouthReadout& mouthReadout,
-								  const std::shared_ptr<const AvatarModel>& avatar,
-								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
+								  const TrackingFrameResult& fusedResult)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
 	{
@@ -1686,13 +1694,9 @@ void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* 
 	context.config= config;
 	context.visionThread= visionThread;
 	context.fusedResult= &fusedResult;
-	context.mouthReadout= &mouthReadout;
-	context.avatar= avatar;
-	context.faceBinding= faceBinding;
 
 	drawOscConnectionSection(context);
 	drawOscVmcSection(context);
-	drawOscMouthSection(context);
 	drawOscSolverSection(context);
 
 	ImGui::End();

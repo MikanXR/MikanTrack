@@ -35,6 +35,46 @@ void drawRow(const char* labelKey, const char* value)
 	ImGui::TableNextColumn();
 	ImGui::TextWrapped("%s", value);
 }
+
+// A stage as a row that selects it: its state dot, its name (a camera's
+// sub-stage with its camera, so two cameras' rows differ) and value, and its
+// reason on hover. Returns true when clicked.
+bool drawStageRow(const PipelineStatusInputs& inputs, const PipelineStageId& stage)
+{
+	const StageStatus status= PipelineModel::computeStatus(inputs, stage);
+	std::string label= PipelineText::stageName(stage);
+	if (stage.cameraIndex >= 0 && stage.stage != ePipelineStage::Camera)
+	{
+		PipelineStageId camera;
+		camera.stage= ePipelineStage::Camera;
+		camera.cameraIndex= stage.cameraIndex;
+		label= PipelineText::stageName(camera) + " / " + label;
+	}
+	label+= "   " + PipelineText::format(status.value);
+
+	ImGui::PushID(PipelineModel::toString(stage).c_str());
+	const ImVec2 rowStart= ImGui::GetCursorScreenPos();
+	const float indent= kDotRadius * 2.f + 8.f;
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+	const bool bClicked= ImGui::Selectable(label.c_str());
+	PipelineText::drawStateDot(ImGui::GetWindowDrawList(),
+							   ImVec2(rowStart.x + kDotRadius + 2.f, rowStart.y + ImGui::GetTextLineHeight() * 0.5f),
+							   kDotRadius, status.state);
+	if (ImGui::IsItemHovered())
+	{
+		const std::string reason= PipelineText::format(status.reason);
+		if (!reason.empty())
+		{
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.f);
+			ImGui::TextUnformatted(reason.c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+	}
+	ImGui::PopID();
+	return bClicked;
+}
 } // namespace
 
 PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& inputs, const PipelineStageId& selected,
@@ -47,16 +87,17 @@ PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& in
 		return request;
 	}
 	if (selected.isValid())
-		drawStage(inputs, selected, content);
+		request= drawStage(inputs, selected, content);
 	else
 		request= drawProject(inputs);
 	ImGui::End();
 	return request;
 }
 
-void StageInspector::drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
-							   IStageContent* content)
+PipelineStageId StageInspector::drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
+										  IStageContent* content)
 {
+	PipelineStageId request;
 	const StageStatus status= PipelineModel::computeStatus(inputs, stage);
 	const PipelineStageId topLevel= PipelineModel::getTopLevel(stage);
 
@@ -124,14 +165,42 @@ void StageInspector::drawStage(const PipelineStatusInputs& inputs, const Pipelin
 		}
 	}
 
-	if (!bAnySection)
+	if (bAnySection)
+		return request;
+
+	// A top-level stage with no section of its own but a sub-stage with one
+	// holds its controls under its sub-stages, and lists them one row each
+	std::vector<PipelineStageId> subStages;
+	if (topLevel == stage)
 	{
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextDisabled("%s", locText("stageInspector.settingsElsewhere"));
-		ImGui::PopTextWrapPos();
+		for (const std::vector<PipelineStageId>& lane : PipelineModel::getSubStageLanes(stage, inputs.cameraCount))
+			subStages.insert(subStages.end(), lane.begin(), lane.end());
 	}
+	bool bSubStageSection= false;
+	if (content != nullptr)
+	{
+		for (const PipelineStageId& subStage : subStages)
+		{
+			for (const SectionInfo& section : k_sections)
+				bSubStageSection|= content->hasSection(subStage, section.section);
+		}
+	}
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::PushTextWrapPos(0.f);
+	ImGui::TextDisabled(
+		"%s", locText(bSubStageSection ? "stageInspector.settingsInSubStages" : "stageInspector.settingsElsewhere"));
+	ImGui::PopTextWrapPos();
+	if (bSubStageSection)
+	{
+		for (const PipelineStageId& subStage : subStages)
+		{
+			if (drawStageRow(inputs, subStage))
+				request= subStage;
+		}
+	}
+	return request;
 }
 
 PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)
@@ -166,39 +235,8 @@ PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)
 		if (status.state != eStageState::Degraded && status.state != eStageState::NotConfigured)
 			continue;
 		++listed;
-		// A camera's sub-stage reads with its camera, so two cameras' rows differ
-		std::string label= PipelineText::stageName(stage);
-		if (stage.cameraIndex >= 0 && stage.stage != ePipelineStage::Camera)
-		{
-			PipelineStageId camera;
-			camera.stage= ePipelineStage::Camera;
-			camera.cameraIndex= stage.cameraIndex;
-			label= PipelineText::stageName(camera) + " / " + label;
-		}
-		label+= "   " + PipelineText::format(status.value);
-
-		ImGui::PushID(PipelineModel::toString(stage).c_str());
-		const ImVec2 rowStart= ImGui::GetCursorScreenPos();
-		const float indent= kDotRadius * 2.f + 8.f;
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
-		if (ImGui::Selectable(label.c_str()))
+		if (drawStageRow(inputs, stage))
 			request= stage;
-		PipelineText::drawStateDot(ImGui::GetWindowDrawList(),
-								   ImVec2(rowStart.x + kDotRadius + 2.f, rowStart.y + ImGui::GetTextLineHeight() * 0.5f),
-								   kDotRadius, status.state);
-		if (ImGui::IsItemHovered())
-		{
-			const std::string reason= PipelineText::format(status.reason);
-			if (!reason.empty())
-			{
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.f);
-				ImGui::TextUnformatted(reason.c_str());
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
-			}
-		}
-		ImGui::PopID();
 	}
 	if (listed == 0)
 		ImGui::TextDisabled("%s", locText("stageInspector.allRunning"));

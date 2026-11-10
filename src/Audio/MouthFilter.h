@@ -16,7 +16,7 @@ struct MouthFilterConfig
 
 // A one-euro filter per viseme over the emitted 30 fps frames: it smooths
 // the frames across runs and eases the mouth shut when the gate closes
-// instead of snapping it. The Audio panel's Smoothing slider sets the
+// instead of snapping it. The Microphone stage's Smoothing slider sets the
 // minimum cutoff per model through its settling time.
 class MouthFilter
 {

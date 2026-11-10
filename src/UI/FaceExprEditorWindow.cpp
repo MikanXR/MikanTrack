@@ -387,7 +387,7 @@ void FaceExprEditorWindow::drawHeader(const FaceProfile& profile, const Frame& f
 
 	// The row picker: every row of the profile, the variables and then the
 	// bindings. Picking one is the Edit button on that row. The row's name
-	// and target are edited in the Face tab.
+	// and target are edited in the Profile stage.
 	ImGui::TableNextColumn();
 	ImGui::SetNextItemWidth(-FLT_MIN);
 	if (ImGui::BeginCombo("##row", rowLabel(profile).c_str(), ImGuiComboFlags_HeightLargest))

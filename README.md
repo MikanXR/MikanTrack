@@ -93,7 +93,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   in mm, scale) - the numbers are saved with the config as a baseline. Hand
   scale is measured continuously by stereo triangulation while tracking runs,
   until calibrated hand skeletons supersede it.
-- **Microphone mouth** (Audio panel): with no phone face streaming, the
+- **Microphone mouth** (Microphone stage): with no phone face streaming, the
   voice drives the avatar's mouth from the microphone through uLipSync's
   method, scored against your own calibrated vowels at a fraction of a
   percent of a core. A VRM avatar with the vowel presets gets them straight
@@ -103,11 +103,11 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   opens with the voice's volume alone. Calibrate records the five vowels
   and the room's silence through six three-second prompts, builds your
   profile, and sets the gate from the silence. Import loads a profile
-  exported from uLipSync or VTube Studio instead. The panel shows the
-  viseme weights live, and the OSC Output panel shows what they become on
+  exported from uLipSync or VTube Studio instead. The stage shows the
+  viseme weights live, and the Profile stage shows what they become on
   the loaded avatar. Under the built-in Auto face profile the phone's face
   takes the mouth back whenever it streams. A face profile authored in the
-  Avatar panel's Face tab can mix them instead, for example the phone's
+  Profile stage can mix them instead, for example the phone's
   eyes and brows with the voice's mouth. The Model combo switches between
   Simple Loudness (the jaw by volume alone), MFCC (uLipSync, the
   calibrated default above), and Oculus LipSync (Meta's engine; release
@@ -276,11 +276,11 @@ the head into parent-relative bones.
 | `/VMC/Ext/Blend/Apply` | (none) | after the last blendshape value |
 | `/VMC/Ext/VRM` | `sss` | loaded avatar's local file path, title, SHA-256 of the file (once a second) |
 
-With the face stream on (Tracking panel, Face section), the blendshapes go out
+With the face stream on (Phone stage, under Face and mouth), the blendshapes go out
 under the names the avatar's face profile targets, and the phone's head rotation
 drives the `Head` bone. The built-in Auto profile sends the loaded avatar's own
-expression names, or the 52 ARKit names with no avatar loaded. The Avatar
-panel's Face tab authors other profiles (see
+expression names, or the 52 ARKit names with no avatar loaded. The
+Profile stage authors other profiles (see
 [face.md](docs/reference/face.md)).
 
 Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,

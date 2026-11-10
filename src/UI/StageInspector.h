@@ -25,14 +25,16 @@ public:
 class StageInspector
 {
 public:
-	// Returns the stage a click on a needs-attention row asks to select, an
-	// invalid id otherwise. content: the selected stage's sections, null for
-	// none.
+	// Returns the stage a click on a needs-attention row or a sub-stage row
+	// asks to select, an invalid id otherwise. content: the selected stage's
+	// sections, null for none.
 	PipelineStageId draw(bool* pOpen, const PipelineStatusInputs& inputs, const PipelineStageId& selected,
 						 IStageContent* content);
 
 private:
-	void drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage, IStageContent* content);
+	// A stage with no section of its own whose sub-stages have some lists
+	// them as rows; returns the one clicked
+	PipelineStageId drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage, IStageContent* content);
 	PipelineStageId drawProject(const PipelineStatusInputs& inputs);
 };
 

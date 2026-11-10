@@ -10,7 +10,7 @@
 class App;
 class FaceProfileBinding;
 
-// The Face tab's row widgets and the text it shares with the expression
+// The face profile editor's row widgets and the text it shares with the expression
 // editor, so an error and a target read the same wherever an expression is
 // edited.
 namespace FaceTabWidgets
