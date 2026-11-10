@@ -108,6 +108,7 @@ file(GLOB FACEEXPR_SRC     ${ROOT_DIR}/src/FaceExpr/*.h     ${ROOT_DIR}/src/Face
 file(GLOB AUDIO_SRC        ${ROOT_DIR}/src/Audio/*.h        ${ROOT_DIR}/src/Audio/*.cpp)
 file(GLOB AVATAR_SRC       ${ROOT_DIR}/src/Avatar/*.h       ${ROOT_DIR}/src/Avatar/*.cpp)
 file(GLOB RENDER_SRC       ${ROOT_DIR}/src/Render/*.h       ${ROOT_DIR}/src/Render/*.cpp)
+file(GLOB PIPELINE_SRC     ${ROOT_DIR}/src/Pipeline/*.h     ${ROOT_DIR}/src/Pipeline/*.cpp)
 file(GLOB UI_SRC           ${ROOT_DIR}/src/UI/*.h           ${ROOT_DIR}/src/UI/*.cpp)
 file(GLOB TESTS_SRC        ${ROOT_DIR}/src/Tests/*.h        ${ROOT_DIR}/src/Tests/*.cpp)
 
@@ -131,6 +132,7 @@ add_executable(MikanTrack WIN32
     ${AUDIO_SRC}
     ${AVATAR_SRC}
     ${RENDER_SRC}
+    ${PIPELINE_SRC}
     ${UI_SRC}
     ${TESTS_SRC}
     ${IMGUI_SOURCES}
@@ -142,7 +144,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
     ${APP_SRC} ${AUTOMATION_SRC} ${UTILITY_SRC} ${MATH_SRC} ${VIDEO_IFACE_SRC} ${VIDEO_SRC}
     ${VIDEO_WMF_SRC} ${IMU_SRC} ${IMU_JOYCON_SRC}
     ${CALIBRATION_SRC} ${VISION_SRC} ${TRACKING_SRC}
-    ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
+    ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${PIPELINE_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
 source_group("thirdparty\\implot" FILES ${IMPLOT_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
@@ -167,6 +169,7 @@ target_include_directories(MikanTrack PRIVATE
     ${ROOT_DIR}/src/Audio
     ${ROOT_DIR}/src/Avatar
     ${ROOT_DIR}/src/Render
+    ${ROOT_DIR}/src/Pipeline
     ${ROOT_DIR}/src/UI
     ${ROOT_DIR}/src/Tests
     ${SDL2_INCLUDE_DIR}

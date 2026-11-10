@@ -15,6 +15,22 @@ static const ImVec4 k_colorGood(0.4f, 1.f, 0.5f, 1.f);
 static const ImVec4 k_colorWarn(1.f, 0.85f, 0.3f, 1.f);
 static const ImVec4 k_colorBad(1.f, 0.4f, 0.4f, 1.f);
 
+void TimelinePanel::update(float deltaSeconds)
+{
+	// Playback advances the playhead against recorded time
+	if (m_bPlaying && m_bLoaded && m_replay.didRun())
+	{
+		const int frameCount= m_replay.getFrameCount();
+		m_playheadMs+= (double)(deltaSeconds * 1000.f) * m_playSpeed;
+		while (m_currentFrame + 1 < frameCount &&
+			   m_replay.getFrame(m_currentFrame + 1).recorded->nowTimestampMs <= m_playheadMs)
+			++m_currentFrame;
+		if (m_currentFrame >= frameCount - 1)
+			m_bPlaying= false;
+	}
+	rebuildDisplayFrame();
+}
+
 void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThread)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.timeline"), pOpen))
@@ -197,17 +213,6 @@ void TimelinePanel::drawTransportSection()
 {
 	const int frameCount= m_replay.getFrameCount();
 	const double firstMs= m_replay.getFrame(0).recorded->nowTimestampMs;
-
-	// Playback advances the playhead against recorded time
-	if (m_bPlaying)
-	{
-		m_playheadMs+= (double)(ImGui::GetIO().DeltaTime * 1000.f) * m_playSpeed;
-		while (m_currentFrame + 1 < frameCount &&
-			   m_replay.getFrame(m_currentFrame + 1).recorded->nowTimestampMs <= m_playheadMs)
-			++m_currentFrame;
-		if (m_currentFrame >= frameCount - 1)
-			m_bPlaying= false;
-	}
 
 	// Frame slider with divergence tick marks overlaid on the track
 	int sliderFrame= m_currentFrame;

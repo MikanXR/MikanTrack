@@ -1,9 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "AvatarRetarget.h"
+#include "PipelineModel.h"
 #include "DirectRetarget.h"
 #include "Scene3dPanel.h" // SceneGizmos
 #include "SettingsPanels.h" // TrackingPanelState
@@ -18,8 +20,10 @@ class CalibrationPanel;
 class DevicePanel;
 class FaceExprEditorWindow;
 class MainMenuScreen;
+class PipelinePanel;
 class Scene3dPanel;
 class SetupFlow;
+class StageInspector;
 class TimelinePanel;
 class VideoPreviewPanel;
 class WizardHost;
@@ -92,6 +96,8 @@ private:
 	std::unique_ptr<FaceExprEditorWindow> m_faceExprEditor;
 	std::unique_ptr<AudioPanel> m_audioPanel;
 	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
+	std::unique_ptr<PipelinePanel> m_pipelinePanel;
+	std::unique_ptr<StageInspector> m_stageInspector;
 	// Guided new-project setup chain; needs the wizards above, so it is
 	// constructed last (in the constructor body)
 	std::unique_ptr<SetupFlow> m_setupFlow;
@@ -106,6 +112,34 @@ private:
 	DirectRetarget::SolveState m_latestDirectState;
 	// An immediate dump requested this frame, taken after the avatar update
 	bool m_bDumpPending= false;
+
+	// The frame every view and readout shows this UI frame: the Timeline's
+	// replayed frame while its replay view is on, the live output otherwise.
+	// Computed once per update, after the Timeline has advanced. The wizards,
+	// the camera overlays, the dump and the hold-still test read the live
+	// members above, never this.
+	struct ShownFrame
+	{
+		bool bReplay= false;
+		const TrackingFrameResult* fused= nullptr;
+		// One entry per camera, null where a camera has no result
+		std::vector<const TrackingFrameResult*> perCamera;
+		// The config the frame was produced under: the recording's snapshot
+		// in replay, the project's live
+		const AppConfig* config= nullptr;
+	};
+	ShownFrame m_shown;
+	void updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera);
+	// The direct solve behind the shown avatar pose, null when the shown
+	// frame is not a direct-mode frame
+	const DirectRetarget::SolveState* m_shownDirectState= nullptr;
+
+	// What the pipeline's status rules read, gathered once per update after
+	// the avatar is posed for the shown frame
+	PipelineStatusInputs m_pipelineInputs;
+	void gatherPipelineInputs();
+	bool handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+								  std::string& outError);
 
 	TrackingPanelState m_trackingPanelState;
 
@@ -147,5 +181,13 @@ private:
 	bool m_bShowSettingsPanel= true;
 	bool m_bShowAvatarPanel= true;
 	bool m_bShowAudioPanel= true;
+	bool m_bShowPipelinePanel= true;
+	bool m_bShowInspectorPanel= true;
+	bool m_bShowPerformancePanel= true;
 	bool m_bDockLayoutInitialized= false;
+	// View > Reset Layout: rebuild the default dock layout on the next frame
+	bool m_bResetDockLayout= false;
+	// Frames until the freshly built layout's front tabs are chosen, once
+	// every docked window has been submitted
+	int m_dockFrontTabsCountdown= 0;
 };

@@ -268,6 +268,36 @@ public:
 	float getLastHitchMs() const { return m_lastHitchMs; }
 	eVisionPhase getLastHitchPhase() const { return (eVisionPhase)m_lastHitchPhase.load(); }
 
+	// Per-camera readouts are fixed size so they need no locking; cameras
+	// beyond this are simply not reported.
+	static constexpr int k_maxReportedCameras= 8;
+
+	// What the last loop iteration did, for the pipeline status display.
+	// Fixed size, copied under one mutex.
+	struct Telemetry
+	{
+		enum class ePath : int
+		{
+			Idle= 0,
+			FaceOnly,
+			Fused,
+			Passthrough,
+			Direct
+		};
+		bool bValid= false; // false until the first iteration publishes
+		ePath path= ePath::Idle;
+		double timestampMs= 0.0;                     // the output frame's timestamp, 0 on an idle iteration
+		float phaseMs[(int)eVisionPhase::Count]= {}; // the iteration's time per phase
+		float totalMs= 0.f;
+		uint64_t iteration= 0;     // counts published iterations
+		bool bOscRunning= false;   // the streamer exists and its socket is open
+		float oscSendRateHz= 0.f;  // OscStreamer::getMessagesPerSecond
+		int oscLastPacketCount= 0; // datagrams in the last frame sent
+		int oscLastFrameBytes= 0;  // bytes in the last frame sent, all datagrams
+		bool bBodyModelLoaded[k_maxReportedCameras]= {}; // per camera: body tracker allocated and loaded
+	};
+	Telemetry getTelemetry() const;
+
 private:
 	// Scratch for one loop iteration, threaded through the stages below
 	struct IterationState
@@ -307,6 +337,8 @@ private:
 	void solveDirectPose(IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
+	// Copies the IMU service's per-side status into the UI snapshot
+	void publishImuStatus();
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
 	// dominant camera, per-camera confidence, auto hand-scale)
 	void runBodySolveStage(IterationState& iteration);
@@ -405,9 +437,7 @@ private:
 	std::atomic<float> m_autoScaleFactor{1.f};
 
 	// Per (camera, side) confidence from the last fusion, published for the
-	// UI readout. Fixed size so it needs no locking; cameras beyond this are
-	// simply not reported.
-	static constexpr int k_maxReportedCameras= 8;
+	// UI readout, k_maxReportedCameras cameras
 	std::atomic<float> m_observationConfidence[k_maxReportedCameras * 2];
 
 	// A mouth sample older than this is a stage that stopped, not a mouth
@@ -451,6 +481,16 @@ private:
 	// Logs and publishes a loop iteration that overran the hitch threshold,
 	// attributing it to the phase that consumed the most time
 	void reportHitchIfSlow(double totalMs, const double* phaseMs);
+
+	// Publishes the iteration's telemetry snapshot (display only: nothing on
+	// the vision thread reads it back)
+	void publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs);
+	mutable std::mutex m_telemetryMutex;
+	Telemetry m_telemetry;
+	// When the last camera-frame iteration published (vision thread only),
+	// and how long its path stands in for the idle iterations after it
+	double m_lastCameraTelemetryMs= -1.0e9;
+	static constexpr double k_cameraTelemetryHoldMs= 500.0;
 
 	// Consumes a pending recording start request on the vision thread (state
 	// reset + header snapshot + recorder start)

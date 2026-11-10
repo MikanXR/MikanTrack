@@ -21,6 +21,10 @@ class VisionThread;
 class TimelinePanel
 {
 public:
+	// Advances playback and rebuilds the shown frame. Runs every UI frame
+	// whether or not the panel is drawn, so a Timeline that is hidden or
+	// tabbed behind another panel keeps the replay moving.
+	void update(float deltaSeconds);
 	void draw(bool* pOpen, AppConfig* config, VisionThread* visionThread);
 
 	// The face profile binding the replayed face is evaluated through, the

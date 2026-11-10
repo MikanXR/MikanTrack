@@ -48,6 +48,8 @@ bool OscStreamer::startup()
 	m_statsWindowStart= std::chrono::steady_clock::now();
 	m_startTime= m_statsWindowStart;
 	m_messagesPerSecond.store(0.f, std::memory_order_relaxed);
+	m_lastPacketCount.store(0, std::memory_order_relaxed);
+	m_lastFrameBytes.store(0, std::memory_order_relaxed);
 	// A reconnecting client must not inherit a frozen pose from the last one
 	m_lastVmcPose[0]= HeldPoseState();
 	m_lastVmcPose[1]= HeldPoseState();
@@ -71,6 +73,8 @@ void OscStreamer::shutdown()
 		m_socket.close();
 		m_isRunning= false;
 		m_messagesPerSecond.store(0.f, std::memory_order_relaxed);
+		m_lastPacketCount.store(0, std::memory_order_relaxed);
+		m_lastFrameBytes.store(0, std::memory_order_relaxed);
 	}
 }
 
@@ -129,13 +133,17 @@ void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* 
 	// One frame can be several datagrams. The stats count FRAMES, so the rate
 	// readout does not depend on how the frame was split.
 	bool bSentAny= false;
+	int frameBytes= 0;
 	for (const std::vector<uint8_t>& packet : m_scratchPackets)
 	{
 		bSentAny|= m_socket.sendTo(m_config.targetIp, m_config.port,
 								   packet.data(), static_cast<int>(packet.size()));
+		frameBytes+= static_cast<int>(packet.size());
 	}
 	if (bSentAny)
 		m_sentInWindow++;
+	m_lastPacketCount.store(static_cast<int>(m_scratchPackets.size()), std::memory_order_relaxed);
+	m_lastFrameBytes.store(frameBytes, std::memory_order_relaxed);
 
 	updateSendStats(now);
 }

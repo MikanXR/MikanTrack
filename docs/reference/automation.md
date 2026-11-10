@@ -52,6 +52,9 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 	- `Avatar`
 	- `Log`
 	- `Timeline`
+	- `Pipeline`
+	- `Inspector`
+	- `Performance`
 
 ### Synthetic input (input)
 
@@ -102,6 +105,15 @@ Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the 
 - `face solo on|off`, `face revert`, `face close`
 
 The commands after `edit` need the editor open and answer an error otherwise.
+
+### Pipeline panel (pipeline)
+
+The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `output.vmc`, `face.mic`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
+
+- `pipeline stages`: a first line `shape multi|direct cameras <n> shown live|replay`, then every stage of the project in pipeline order
+- `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
+- `pipeline selected`: the selected stage's line, or `none`
+- `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
 
 ## Client helper
 

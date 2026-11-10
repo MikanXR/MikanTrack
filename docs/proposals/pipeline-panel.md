@@ -2,7 +2,7 @@
 
 A proposal to replace most of the app's settings panels with a Pipeline strip, a stage inspector and a central view that follows the selected stage. The interactive mockup is [pipeline-panel-mockup.html](./pipeline-panel-mockup.html), a self-contained file that opens by double-click. This document records the decisions the mockup is built on and the checklist that maps every control in today's panels to its new home.
 
-Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 is in. No application code has changed yet.
+Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 and M1 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control.
 
 ---
 
@@ -30,6 +30,10 @@ The Tracking panel holds twelve sections from different pipeline stages in one s
 - Two levels. The top row holds the coarse stages and never reflows. Selecting a stage that has sub-stages fills a second row beneath it.
 
 - Each box shows a status dot and one key number. The four states are running, degraded, inactive and not configured. Hover text gives the stage's description and the reason for a dot that is not green.
+
+- A box's width is fixed by its name and a value slot per box style, so a changing number never resizes it. A value that does not fit ends in an ellipsis and reads in full in the hover text and the Inspector.
+
+- Nobody to track is not a fault. With the hands out of view a stage runs and its value says so ("no hands", "arms: 0"). The mockup marked those stages degraded, which would leave the strip amber whenever the user sits back.
 
 - One data item is selectable: the Source pose, drawn as a pill between the solvers and Retarget. Every other hand-off is a plain arrow.
 

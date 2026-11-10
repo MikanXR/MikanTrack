@@ -1,15 +1,19 @@
 #include "MainWindow.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "imgui.h"
 #include "imgui_internal.h" // dock builder
 
 #include "glm/ext/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 #include "App.h"
 #include "AppConfig.h"
 #include "AudioPanel.h"
+#include "AudioService.h"
+#include "AutomationServer.h"
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
@@ -19,6 +23,8 @@
 #include "CalibrationPanel.h"
 #include "DevicePanel.h"
 #include "FaceExprEditorWindow.h"
+#include "FaceProfileBinding.h"
+#include "FaceService.h"
 #include "GlobalSettings.h"
 #include "HandOverlay.h"
 #include "LocText.h"
@@ -26,10 +32,13 @@
 #include "Logger.h"
 #include "MainMenuScreen.h"
 #include "PathUtils.h"
+#include "PipelinePanel.h"
+#include "PipelineText.h"
 #include "ProjectManager.h"
 #include "Scene3dPanel.h"
 #include "SettingsPanels.h"
 #include "SetupFlow.h"
+#include "StageInspector.h"
 #include "TimelinePanel.h"
 #include "VideoModeUtils.h"
 #include "VideoCaptureSystem.h"
@@ -51,6 +60,8 @@ MainWindow::MainWindow(App* app)
 	, m_faceExprEditor(std::make_unique<FaceExprEditorWindow>(app))
 	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
+	, m_pipelinePanel(std::make_unique<PipelinePanel>())
+	, m_stageInspector(std::make_unique<StageInspector>())
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -66,6 +77,12 @@ MainWindow::~MainWindow()= default;
 void MainWindow::registerAutomation(AutomationServer* server)
 {
 	m_faceExprEditor->registerAutomation(server);
+	server->registerCommandNamespace(
+		"pipeline",
+		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handlePipelineAutomation(args, outLines, outError);
+		});
 }
 
 bool MainWindow::restoreCameraDevice(int cameraIndex)
@@ -192,36 +209,62 @@ void MainWindow::drawDockspaceAndMenuBar()
 	ImGui::Begin("MikanTrackDockHost", nullptr, hostFlags);
 	ImGui::PopStyleVar();
 
-	const ImGuiID dockspaceId= ImGui::GetID("MikanTrackDockspace");
+	// The id names the layout's generation: an imgui.ini saved by a build
+	// whose default layout had no Pipeline strip holds no node under this id,
+	// so that install gets the new default once
+	const ImGuiID dockspaceId= ImGui::GetID("MikanTrackDockspace2");
 
-	// Default layout on first run
-	if (!m_bDockLayoutInitialized && ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+	// Default layout on first run, and again on View > Reset Layout
+	if (m_bResetDockLayout || (!m_bDockLayoutInitialized && ImGui::DockBuilderGetNode(dockspaceId) == nullptr))
 	{
+		m_bResetDockLayout= false;
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
 
 		ImGuiID centerId= dockspaceId;
+		// The Pipeline strip across the top: two rows of stages and three
+		// camera lanes
+		const float stripRatio= std::clamp(250.f / std::max(viewport->WorkSize.y, 1.f), 0.15f, 0.4f);
+		const ImGuiID topId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, stripRatio, nullptr, &centerId);
 		const ImGuiID leftId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
 		const ImGuiID rightId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.25f, nullptr, &centerId);
 		const ImGuiID bottomId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.22f, nullptr, &centerId);
 
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.pipeline"), topId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.videoPreview"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.scene3d"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.device"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.calibration"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.timeline"), bottomId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.performance"), bottomId);
 		ImGui::DockBuilderFinish(dockspaceId);
+		// A node builds its tab bar a frame or two after its windows dock,
+		// then the front tabs are chosen one per frame
+		m_dockFrontTabsCountdown= 4 + 4;
 	}
 	m_bDockLayoutInitialized= true;
 
 	ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+
+	// A dock node fronts the tab of the window that holds the focus, and
+	// only one window holds it per frame, so the default layout fronts its
+	// tabs one frame apart once the windows exist, ending on the preview
+	if (m_dockFrontTabsCountdown > 0)
+	{
+		static const char* k_frontTabs[]= {"windows.videoPreview", "windows.stageInspector", "windows.tracking",
+										   "windows.timeline"};
+		--m_dockFrontTabsCountdown;
+		if (m_dockFrontTabsCountdown < IM_ARRAYSIZE(k_frontTabs))
+			ImGui::SetWindowFocus(locWindowTitle(k_frontTabs[m_dockFrontTabsCountdown]));
+	}
 
 	if (ImGui::BeginMenuBar())
 	{
@@ -274,6 +317,8 @@ void MainWindow::drawDockspaceAndMenuBar()
 		}
 		if (ImGui::BeginMenu(locLabel("mainWindow.viewMenu")))
 		{
+			ImGui::MenuItem(locLabel("mainWindow.viewPipelinePanel"), nullptr, &m_bShowPipelinePanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewInspectorPanel"), nullptr, &m_bShowInspectorPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewDevicePanel"), nullptr, &m_bShowDevicePanel);
@@ -285,6 +330,17 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewPerformancePanel"), nullptr, &m_bShowPerformancePanel);
+			ImGui::Separator();
+			// Every panel shown again in the default arrangement
+			if (ImGui::MenuItem(locLabel("mainWindow.resetLayout")))
+			{
+				m_bResetDockLayout= true;
+				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowDevicePanel= m_bShowTrackingPanel= true;
+				m_bShowCalibrationPanel= m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
+				m_bShowSettingsPanel= m_bShowAvatarPanel= m_bShowAudioPanel= true;
+				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
+			}
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -390,6 +446,20 @@ void MainWindow::update(float deltaSeconds)
 	}
 	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState);
 
+	// Newest per-camera results, for the preview overlays and the 3D scene
+	std::vector<const TrackingFrameResult*> perCameraResults;
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		perCameraResults.push_back(
+			m_latestPreviews[cameraIndex].valid ? &m_latestPreviews[cameraIndex].result : nullptr);
+	}
+
+	// The Timeline advances before anything reads the shown frame, whether
+	// or not its panel is drawn this frame
+	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
+	m_timelinePanel->update(deltaSeconds);
+	updateShownFrame(perCameraResults);
+
 	handleHotkeys();
 
 	drawDockspaceAndMenuBar();
@@ -422,14 +492,16 @@ void MainWindow::update(float deltaSeconds)
 	}
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
-	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	if (m_bShowTimelinePanel)
+	{
 		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread);
+		// A scrub or a view switch in the panel changes the shown frame
+		updateShownFrame(perCameraResults);
+	}
 	{
 		// The Face tab and the expression editor read the frame the scene
 		// shows; a row's Edit button opens the editor on it
-		const bool bReplayView= m_timelinePanel->isReplayViewActive();
-		const TrackingFrameResult& shownFrame= bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused;
+		const TrackingFrameResult& shownFrame= *m_shown.fused;
 		if (m_bShowAvatarPanel)
 		{
 			const std::optional<FaceExprEditTarget> editRequest=
@@ -443,9 +515,7 @@ void MainWindow::update(float deltaSeconds)
 	if (m_bShowAudioPanel)
 	{
 		// The weights block reads the face the scene shows
-		const bool bReplayView= m_timelinePanel->isReplayViewActive();
-		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive,
-										bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused, bReplayView);
+		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive, *m_shown.fused, m_shown.bReplay);
 	}
 
 	// Launch requests raised by the panels this frame
@@ -488,14 +558,6 @@ void MainWindow::update(float deltaSeconds)
 	if (intrinsicsCamera >= 0)
 		m_videoPreviewPanel->setActiveCamera(intrinsicsCamera);
 
-	// Newest per-camera results, for the preview overlays and the 3D scene
-	std::vector<const TrackingFrameResult*> perCameraResults;
-	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
-	{
-		perCameraResults.push_back(
-			m_latestPreviews[cameraIndex].valid ? &m_latestPreviews[cameraIndex].result : nullptr);
-	}
-
 	// Central: side-by-side previews with per-camera overlays
 	if (!m_bShowVideoPreviewPanel)
 	{
@@ -532,17 +594,27 @@ void MainWindow::update(float deltaSeconds)
 	const std::vector<SceneCameraView> sceneCameras= makeSceneCameraViews(*config);
 	if (m_bShowScene3dPanel)
 	{
-		if (m_timelinePanel->isReplayViewActive())
-		{
-			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_timelinePanel->getDisplayFused(),
-								 m_timelinePanel->getSceneCameras(), m_timelinePanel->getPerCameraResults(), gizmos);
-		}
-		else
-		{
-			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_latestFused, sceneCameras, perCameraResults, gizmos);
-		}
+		// The frustums come from the config the shown frame was made under
+		m_scene3dPanel->draw(&m_bShowScene3dPanel, *m_shown.fused,
+							 m_shown.bReplay ? m_timelinePanel->getSceneCameras() : sceneCameras, m_shown.perCamera,
+							 gizmos);
 	}
 	applyGizmoDrags(gizmos);
+
+	// The pipeline, once the avatar is posed for the shown frame: the strip,
+	// the inspector on the strip's selection, and the frame loop's timings
+	gatherPipelineInputs();
+	if (m_bShowPipelinePanel)
+		m_pipelinePanel->draw(&m_bShowPipelinePanel, m_pipelineInputs);
+	if (m_bShowInspectorPanel)
+	{
+		const PipelineStageId requested=
+			m_stageInspector->draw(&m_bShowInspectorPanel, m_pipelineInputs, m_pipelinePanel->getSelected());
+		if (requested.isValid())
+			m_pipelinePanel->setSelected(requested);
+	}
+	if (m_bShowPerformancePanel)
+		PerformancePanel::draw(&m_bShowPerformancePanel, *visionThread);
 
 	// The dump, once the avatar is posed for this frame
 	const bool bCountdownDone= m_trackingPanelState.dumpCountdown.update(deltaSeconds);
@@ -559,8 +631,26 @@ void MainWindow::update(float deltaSeconds)
 		LogPanel::getInstance().draw(&m_bShowLogPanel);
 }
 
+void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera)
+{
+	m_shown.bReplay= m_timelinePanel->isReplayViewActive();
+	if (m_shown.bReplay)
+	{
+		m_shown.fused= &m_timelinePanel->getDisplayFused();
+		m_shown.perCamera= m_timelinePanel->getPerCameraResults();
+		m_shown.config= &m_timelinePanel->getRecordedConfig();
+	}
+	else
+	{
+		m_shown.fused= &m_latestFused;
+		m_shown.perCamera= livePerCamera;
+		m_shown.config= m_app->getConfig();
+	}
+}
+
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
+	m_shownDirectState= nullptr;
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
@@ -577,7 +667,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	// project's). Switching feeds resets the root follow so the filter never
 	// bridges two timelines.
 	const AvatarPanel::ePreviewPose preview= m_avatarPanel->getPreviewPose();
-	const bool bReplay= m_timelinePanel->isReplayViewActive();
+	const bool bReplay= m_shown.bReplay;
 	const int feed= preview != AvatarPanel::ePreviewPose::Live ? 1 + (int)preview : (bReplay ? 1 : 0);
 	if (feed != m_avatarPoseFeed)
 	{
@@ -609,8 +699,8 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	}
 	else
 	{
-		const AppConfig& lengthsConfig= bReplay ? m_timelinePanel->getRecordedConfig() : *config;
-		const TrackingFrameResult& shownFused= bReplay ? m_timelinePanel->getDisplayFused() : m_latestFused;
+		const AppConfig& lengthsConfig= *m_shown.config;
+		const TrackingFrameResult& shownFused= *m_shown.fused;
 		// Direct mode: live, the vision thread's pose arrives with the result;
 		// in replay the window's own solver runs the recorded camera's frame
 		// under the recorded config. Either way the position retarget is
@@ -636,6 +726,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		m_scene3dPanel->setAvatarFace(&shownFused.face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
+	m_shownDirectState= directState;
 	updateSceneCameraMatch(directState, skeleton.get());
 
 	// The elbow hints where the solve put them: off the posed upper-arm
@@ -733,4 +824,228 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 			glm::inverse(m_avatarPose.rootRotationWorld) * (hint.draggedHintWorld - hint.shoulderWorld);
 		m_app->setAvatarRig(rig);
 	}
+}
+
+// -- Pipeline ---------------------------------------------------------------
+
+void MainWindow::gatherPipelineInputs()
+{
+	const AppConfig* config= m_app->getConfig();
+	VisionThread* visionThread= m_app->getVisionThread();
+	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
+	const VisionThread::Telemetry telemetry= visionThread->getTelemetry();
+	const TrackingFrameResult& fused= *m_shown.fused;
+
+	PipelineStatusInputs in;
+	in.bDirect= config->direct.enabled;
+	in.cameraCount= (int)config->cameraCount();
+	in.directCameraIndex= config->direct.cameraIndex;
+	in.bReplay= m_shown.bReplay;
+
+	// Cameras: the device and the calibration are the project's; what a
+	// camera saw is the shown frame's
+	for (int cameraIndex= 0; cameraIndex < std::min(in.cameraCount, PipelineStatusInputs::k_maxCameras); ++cameraIndex)
+	{
+		PipelineStatusInputs::Camera& camera= in.cameras[cameraIndex];
+		const CameraProfile& profile= config->camera(cameraIndex);
+		camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
+		camera.bStreaming= videoCapture->isStreaming(cameraIndex);
+		camera.bHandPipelineReady= std::string(visionThread->getActiveExecutionProvider(cameraIndex)) != "none";
+		camera.bTrackingPaused= !visionThread->isTrackingEnabled(cameraIndex);
+		camera.bIntrinsics= profile.intrinsics.present;
+		camera.bExtrinsics= profile.extrinsics.present;
+		camera.bBodyEnabled= profile.bodyPose.enabled;
+		camera.bBodyModelLoaded=
+			cameraIndex < VisionThread::k_maxReportedCameras && telemetry.bBodyModelLoaded[cameraIndex];
+		const TrackingFrameResult* result=
+			cameraIndex < (int)m_shown.perCamera.size() ? m_shown.perCamera[cameraIndex] : nullptr;
+		if (result != nullptr)
+		{
+			camera.captureFps= result->captureFps;
+			camera.handsTracked= (result->hands[0].tracked ? 1 : 0) + (result->hands[1].tracked ? 1 : 0);
+			camera.bBodyValid= result->body.valid;
+			camera.bodyConfidence= result->body.confidence;
+			camera.bBodyHasDepth= result->body.hasDepth;
+		}
+	}
+
+	// What the vision thread's last iteration did. A replayed frame's own
+	// path is not recorded, so it reads from whether the frame has a world.
+	using ePath= PipelineStatusInputs::ePath;
+	if (m_shown.bReplay)
+	{
+		const bool bWorld= fused.poses[0].hasWorldPose || fused.poses[1].hasWorldPose;
+		in.path= m_shown.config->direct.enabled ? ePath::Direct : (bWorld ? ePath::Fused : ePath::Unknown);
+	}
+	else if (telemetry.bValid)
+	{
+		switch (telemetry.path)
+		{
+		case VisionThread::Telemetry::ePath::Idle:
+			in.path= ePath::Idle;
+			break;
+		case VisionThread::Telemetry::ePath::FaceOnly:
+			in.path= ePath::FaceOnly;
+			break;
+		case VisionThread::Telemetry::ePath::Fused:
+			in.path= ePath::Fused;
+			break;
+		case VisionThread::Telemetry::ePath::Passthrough:
+			in.path= ePath::Passthrough;
+			break;
+		case VisionThread::Telemetry::ePath::Direct:
+			in.path= ePath::Direct;
+			break;
+		}
+	}
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused.poses[sideIndex];
+		PipelineStatusInputs::Hand& hand= in.hands[sideIndex];
+		hand.bTracked= pose.tracked;
+		hand.bWorldPose= pose.hasWorldPose;
+		hand.confidence= pose.confidence;
+		hand.dominantCamera= visionThread->getDominantCamera((eHandSide)sideIndex);
+		hand.bForearmPose= pose.hasForearmPose;
+		hand.forearmConfidence= pose.forearmConfidence;
+		hand.bShoulder= pose.hasShoulder;
+
+		const ImuSideStatus imuStatus= visionThread->getImuSideStatus((eHandSide)sideIndex);
+		PipelineStatusInputs::Imu& imu= in.imu[sideIndex];
+		imu.bConnected= imuStatus.deviceConnected;
+		imu.bStreaming= imuStatus.streaming;
+		imu.bCalibrated= imuStatus.calibrated;
+		imu.bOrientationValid= imuStatus.orientationValid;
+		imu.sampleRateHz= imuStatus.sampleRateHz;
+	}
+	in.bHeadValid= fused.head.valid;
+	in.bImuEnabled= config->imu.enabled;
+
+	// The direct solve behind the shown pose
+	if (in.bDirect && in.directCameraIndex >= 0 && in.directCameraIndex < in.cameraCount)
+		in.bDirectIntrinsics= config->camera(in.directCameraIndex).intrinsics.present;
+	in.bDirectNeutral= config->direct.neutralPresent;
+	if (m_shownDirectState != nullptr)
+	{
+		const DirectRetarget::SolveState& state= *m_shownDirectState;
+		in.bDirectTorso= state.torsoValid;
+		in.bDirectHeadMeasured= state.headMeasured;
+		in.directShoulderDepthMeters= glm::length(state.shoulderMidpoint);
+		in.directLeanDegrees= glm::degrees(glm::angle(glm::normalize(state.spineDelta)));
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+			PipelineStatusInputs::DirectArm& out= in.directArms[sideIndex];
+			out.bChain= arm.chain.valid;
+			out.bHandSeen= arm.bHandSeen;
+			out.bElbowSeen= arm.bElbowSeen;
+			out.bHandMeasured= arm.bHandMeasured;
+			out.bResting= arm.bResting;
+			out.restBlend= arm.restBlend;
+			out.elbowMissPx= arm.chosenElbowPx;
+		}
+	}
+
+	in.bAvatarLoaded= m_app->getAvatarSkeleton() != nullptr;
+	if (in.bAvatarLoaded)
+	{
+		in.bArmPlaced[0]= m_avatarPose.bones[(int)eHumanoidBone::LeftUpperArm].present;
+		in.bArmPlaced[1]= m_avatarPose.bones[(int)eHumanoidBone::RightUpperArm].present;
+	}
+
+	in.bOscEnabled= config->osc.enabled;
+	in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;
+	in.oscSendRateHz= telemetry.oscSendRateHz;
+	in.oscMinConfidence= config->osc.minConfidence;
+	in.oscPort= config->osc.port;
+
+	in.bFaceEnabled= config->face.enabled;
+	if (FaceService* faceService= m_app->getFaceService())
+	{
+		const FaceServiceStatus faceStatus= faceService->getStatus();
+		in.bFaceBound= faceStatus.bound;
+		in.bFaceStreaming= faceStatus.streaming;
+		in.bFaceTracked= faceStatus.latest.valid && faceStatus.latest.faceTracked;
+		in.faceDatagramsPerSecond= faceStatus.datagramsPerSecond;
+	}
+	in.bAudioEnabled= config->audio.enabled;
+	if (AudioService* audioService= m_app->getAudioService())
+	{
+		const AudioServiceStatus audioStatus= audioService->getStatus();
+		in.bAudioDeviceOpen= audioStatus.deviceOpen;
+		in.bAudioBackendReady= audioStatus.backendReady;
+		in.bAudioGateOpen= audioStatus.gateOpen;
+		in.audioLevelDbfs= audioStatus.levelDbfs;
+	}
+	in.bProfileAuto= m_app->isActiveFaceProfileAuto();
+	if (const std::shared_ptr<const FaceProfileBinding>& binding= m_app->getFaceBinding())
+	{
+		in.profileTargetCount= (int)binding->getWireNames().size();
+		for (const eFaceTargetProblem problem : binding->getOutputProblemCodes())
+			in.profileProblemCount+= problem != eFaceTargetProblem::None ? 1 : 0;
+	}
+
+	m_pipelineInputs= in;
+}
+
+bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+										  std::string& outError)
+{
+	if (args.empty())
+	{
+		outError= "missing verb";
+		return false;
+	}
+	const std::string& verb= args[0];
+	const PipelineStatusInputs& inputs= m_pipelineInputs;
+	// One stage as "<id> <state> | <value> | <reason>", the texts as shown
+	auto describe= [&](const PipelineStageId& stage) {
+		const StageStatus status= PipelineModel::computeStatus(inputs, stage);
+		static const char* k_states[]= {"running", "degraded", "inactive", "not-configured"};
+		return PipelineModel::toString(stage) + " " + k_states[(int)status.state] + " | " +
+			PipelineText::format(status.value) + " | " + PipelineText::format(status.reason);
+	};
+
+	if (verb == "stages")
+	{
+		outLines.push_back(std::string("shape ") + (inputs.bDirect ? "direct" : "multi") + " cameras " +
+						   std::to_string(inputs.cameraCount) + " shown " + (inputs.bReplay ? "replay" : "live"));
+		for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount))
+			outLines.push_back(describe(stage));
+		return true;
+	}
+	if (verb == "selected")
+	{
+		const PipelineStageId& selected= m_pipelinePanel->getSelected();
+		outLines.push_back(selected.isValid() ? describe(selected) : std::string("none"));
+		return true;
+	}
+	if (verb == "status" || verb == "select")
+	{
+		if (args.size() < 2)
+		{
+			outError= "missing stage";
+			return false;
+		}
+		if (verb == "select" && args[1] == "none")
+		{
+			m_pipelinePanel->setSelected(PipelineStageId());
+			outLines.push_back("none");
+			return true;
+		}
+		PipelineStageId stage;
+		const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount);
+		if (!PipelineModel::fromString(args[1], stage) || std::find(all.begin(), all.end(), stage) == all.end())
+		{
+			outError= "no such stage in this project: " + args[1];
+			return false;
+		}
+		if (verb == "select")
+			m_pipelinePanel->setSelected(stage);
+		outLines.push_back(describe(stage));
+		return true;
+	}
+	outError= "unknown verb: " + verb;
+	return false;
 }

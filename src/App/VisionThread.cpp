@@ -66,6 +66,58 @@ void VisionThread::reportHitchIfSlow(double totalMs, const double* phaseMs)
 		<< (int)phaseMs[(int)eVisionPhase::Diagnostics] << "]";
 }
 
+void VisionThread::publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs)
+{
+	// Gathered outside the lock: the streamer and the cameras publish their
+	// own atomics, and the vision thread owns both lists
+	Telemetry snapshot;
+	snapshot.bValid= true;
+	snapshot.path= path;
+	snapshot.timestampMs= timestampMs;
+	for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
+		snapshot.phaseMs[phaseIndex]= (float)phaseMs[phaseIndex];
+	snapshot.totalMs= (float)totalMs;
+	if (m_oscStreamer != nullptr)
+	{
+		snapshot.bOscRunning= m_oscStreamer->isRunning();
+		snapshot.oscSendRateHz= m_oscStreamer->getMessagesPerSecond();
+		snapshot.oscLastPacketCount= m_oscStreamer->getLastPacketCount();
+		snapshot.oscLastFrameBytes= m_oscStreamer->getLastFrameBytes();
+	}
+	const int reportedCameras= std::min((int)m_cameras.size(), k_maxReportedCameras);
+	for (int cameraIndex= 0; cameraIndex < reportedCameras; ++cameraIndex)
+		snapshot.bBodyModelLoaded[cameraIndex]= m_cameras[cameraIndex]->isBodyModelLoaded();
+
+	// The loop spins many times between camera frames, and a reader samples
+	// whichever iteration came last: an idle or face-only iteration shortly
+	// after a camera frame keeps that frame's path and timings, so the
+	// snapshot says what the pipeline is doing rather than what the last
+	// two milliseconds did. Past the window the cameras have stopped.
+	const bool bCameraPath= path == Telemetry::ePath::Fused || path == Telemetry::ePath::Passthrough ||
+		path == Telemetry::ePath::Direct;
+	const double nowMs= steadyNowMs();
+	if (bCameraPath)
+		m_lastCameraTelemetryMs= nowMs;
+
+	std::lock_guard<std::mutex> lock(m_telemetryMutex);
+	snapshot.iteration= m_telemetry.iteration + 1;
+	if (!bCameraPath && m_telemetry.bValid && nowMs - m_lastCameraTelemetryMs < k_cameraTelemetryHoldMs)
+	{
+		snapshot.path= m_telemetry.path;
+		snapshot.timestampMs= m_telemetry.timestampMs;
+		snapshot.totalMs= m_telemetry.totalMs;
+		for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
+			snapshot.phaseMs[phaseIndex]= m_telemetry.phaseMs[phaseIndex];
+	}
+	m_telemetry= snapshot;
+}
+
+VisionThread::Telemetry VisionThread::getTelemetry() const
+{
+	std::lock_guard<std::mutex> lock(m_telemetryMutex);
+	return m_telemetry;
+}
+
 VisionThread::VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
 						   AudioService* audioService, AppConfig* config)
 	: m_videoCapture(videoCapture)
@@ -625,7 +677,8 @@ void VisionThread::threadLoop()
 
 		if (!iteration.bAnyNewResult)
 		{
-			if (runFaceOnlyOutput(iteration, steadyNowMs()))
+			const bool bFaceOnly= runFaceOnlyOutput(iteration, steadyNowMs());
+			if (bFaceOnly)
 				lapPhase(eVisionPhase::Osc);
 
 			// Still service dump requests while idle (cameras may be stopped)
@@ -635,7 +688,13 @@ void VisionThread::threadLoop()
 
 			// The idle sleep below is not a hitch, but a slow config refresh or
 			// dump write on this path still starves the cameras
-			reportHitchIfSlow(steadyNowMs() - iterationStartMs, phaseMs);
+			const double idleTotalMs= steadyNowMs() - iterationStartMs;
+			reportHitchIfSlow(idleTotalMs, phaseMs);
+
+			if (bFaceOnly)
+				publishTelemetry(Telemetry::ePath::FaceOnly, iteration.outputResult.timestampMs, idleTotalMs, phaseMs);
+			else
+				publishTelemetry(Telemetry::ePath::Idle, 0.0, idleTotalMs, phaseMs);
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 			continue;
@@ -661,6 +720,15 @@ void VisionThread::threadLoop()
 				runBodySolveStage(iteration);
 				lapPhase(eVisionPhase::Fusion);
 			}
+			else
+			{
+				// No world palm to anchor or fill from, but the service still
+				// drains its samples and adopts discovered devices, so the
+				// status the UI reads keeps describing the wrists
+				m_imuService->update();
+				publishImuStatus();
+				lapPhase(eVisionPhase::Imu);
+			}
 		}
 
 		runOutputStage(iteration);
@@ -670,7 +738,13 @@ void VisionThread::threadLoop()
 		runDiagnosticsStage(iteration);
 		lapPhase(eVisionPhase::Diagnostics);
 
-		reportHitchIfSlow(steadyNowMs() - iterationStartMs, phaseMs);
+		const double totalMs= steadyNowMs() - iterationStartMs;
+		reportHitchIfSlow(totalMs, phaseMs);
+
+		const Telemetry::ePath path= iteration.bDirect ? Telemetry::ePath::Direct
+								   : iteration.bAnyWorldCandidate ? Telemetry::ePath::Fused
+																  : Telemetry::ePath::Passthrough;
+		publishTelemetry(path, iteration.outputResult.timestampMs, totalMs, phaseMs);
 	}
 
 	// Finalize an in-flight recording before the contexts are torn down
@@ -978,11 +1052,14 @@ void VisionThread::runImuStage(IterationState& iteration)
 		m_bImuMountingReady= true;
 	}
 
-	{
-		std::lock_guard<std::mutex> lock(m_imuMutex);
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			m_imuStatus[sideIndex]= m_imuService->getSideStatus((eHandSide)sideIndex);
-	}
+	publishImuStatus();
+}
+
+void VisionThread::publishImuStatus()
+{
+	std::lock_guard<std::mutex> lock(m_imuMutex);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		m_imuStatus[sideIndex]= m_imuService->getSideStatus((eHandSide)sideIndex);
 }
 
 void VisionThread::runBodySolveStage(IterationState& iteration)

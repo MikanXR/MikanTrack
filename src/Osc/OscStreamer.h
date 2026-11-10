@@ -148,6 +148,10 @@ public:
 	/// Frames sent per second (updated once a second). Safe to poll from the
 	/// UI thread.
 	float getMessagesPerSecond() const { return m_messagesPerSecond.load(std::memory_order_relaxed); }
+	/// Datagrams and total bytes of the last frame sendFrame put on the wire.
+	/// Safe to poll from any thread.
+	int getLastPacketCount() const { return m_lastPacketCount.load(std::memory_order_relaxed); }
+	int getLastFrameBytes() const { return m_lastFrameBytes.load(std::memory_order_relaxed); }
 
 	// -- Dropout hold logic (pure; public for the self test) -----
 	struct HeldPoseState
@@ -219,4 +223,6 @@ private:
 	ClockTimePoint m_statsWindowStart;
 	int m_sentInWindow= 0;
 	std::atomic<float> m_messagesPerSecond{0.f};
+	std::atomic<int> m_lastPacketCount{0};
+	std::atomic<int> m_lastFrameBytes{0};
 };

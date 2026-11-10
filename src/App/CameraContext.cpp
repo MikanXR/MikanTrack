@@ -145,6 +145,7 @@ void CameraContext::configure(const AppConfig& config)
 	{
 		m_bodyPoseTracker= nullptr;
 	}
+	m_bBodyModelLoaded= m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded();
 
 	// Invalidate the last result so stale calibration state can't leak
 	// through a config change
