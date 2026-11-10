@@ -13,6 +13,7 @@
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
 #include "FaceProfileRunner.h"
+#include "RetargetStage.h"
 #include "FaceRecorder.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
@@ -68,13 +69,13 @@ public:
 	// Returns false if nothing new arrived since the last call.
 	bool fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFrame);
 
-	// Copies the newest fused (world-space, smoothed) tracking result, and
-	// in direct mode the avatar pose the direct retarget solved for it (an
-	// invalid pose otherwise), and the fusion diagnostics behind it (empty
-	// for a passthrough or direct frame). Returns false if nothing new
-	// arrived since the last call.
-	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr,
-						  DirectRetarget::SolveState* outDirectState= nullptr,
+	// Copies the newest fused (world-space, smoothed) tracking result, what
+	// the retarget stage made of it (the posed avatar the stream carries,
+	// invalid with no avatar loaded; the source pose after the loss stage;
+	// in direct mode the direct solve state), and the fusion diagnostics
+	// behind it (empty for a passthrough or direct frame). Returns false if
+	// nothing new arrived since the last call.
+	bool fetchFusedResult(TrackingFrameResult& outResult, RetargetResult* outRetarget= nullptr,
 						  FusionDiagnostics* outFusionDiagnostics= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
@@ -357,9 +358,11 @@ private:
 	// fusion, IMU and body-solve stages
 	bool isDirectModeActive() const;
 	void runDirectStage(IterationState& iteration);
-	// The direct retarget over the direct camera's result, after the face
-	// stage so the phone head reaches it; an invalid pose without a skeleton
-	void solveDirectPose(IterationState& iteration);
+	// The retarget stage's direct pipeline over the direct camera's result,
+	// after the face stage so the phone head reaches it. False when it cannot
+	// run (no skeleton, no intrinsics), when the frame takes the position
+	// pipeline instead.
+	bool solveDirectRetarget(const IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
 	// The mounting wizard's motion recording and bias calibration requests,
@@ -374,7 +377,8 @@ private:
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
 	// dominant camera, per-camera confidence, auto hand-scale)
 	void runBodySolveStage(IterationState& iteration);
-	// The face profile evaluation, the OSC send and the fused-result publish
+	// The face profile evaluation, the retarget stage, the OSC send and the
+	// fused-result publish
 	void runOutputStage(IterationState& iteration);
 	// The microphone's visemes onto the output's viseme source
 	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
@@ -393,8 +397,8 @@ private:
 	void runDiagnosticsStage(IterationState& iteration);
 
 	void refreshConfigOnThread();
-	// (Re)creates the OSC streamer and pushes the current config, body
-	// dimensions and avatar skeleton into it
+	// (Re)creates the OSC streamer and pushes the current config and avatar
+	// skeleton into it, and the retarget stage's config beside it
 	void applyOscConfigOnThread();
 	// Services a pending requestDiagnosticDump on the vision thread. path and
 	// phaseMs describe the iteration that writes the dump, for the telemetry
@@ -480,18 +484,20 @@ private:
 	// Fused result handoff (mutex-guarded, latest-wins)
 	std::mutex m_fusedMutex;
 	TrackingFrameResult m_fusedResult;
-	AvatarPose m_fusedDirectPose;
-	DirectRetarget::SolveState m_fusedDirectState;
+	RetargetResult m_fusedRetarget;
 	// A display copy of the fuse behind m_fusedResult; a face-only frame,
 	// which repeats the last output, keeps the last one
 	FusionDiagnostics m_fusedDiagnostics;
 	bool m_bFusedFresh= false;
 
-	// Direct retarget (single camera, no world calibration): the solver and
-	// its pose for the frame, and the neutral capture handoff
-	DirectRetarget m_directRetarget;
-	DirectRetargetConfig m_directConfig;
-	AvatarPose m_directPose;
+	// The retarget stage, run on every output frame ahead of the send-rate
+	// gate, and its result for the last one. In direct mode a camera frame
+	// the direct pipeline solved leaves m_bDirectRetarget set, and a
+	// face-only frame repeats that result.
+	RetargetStage m_retargetStage;
+	RetargetResult m_retarget;
+	bool m_bDirectRetarget= false;
+	// The direct retarget's neutral capture handoff
 	std::atomic_bool m_bNeutralCaptureRequested{false};
 	std::mutex m_neutralCaptureMutex;
 	NeutralCapture m_capturedNeutral;

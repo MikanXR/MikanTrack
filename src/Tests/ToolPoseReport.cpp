@@ -11,6 +11,7 @@
 #include "BodyPoseTypes.h"
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
+#include "DirectStageSolver.h"
 #include "FrameRecorder.h"
 #include "HeadlessGlContext.h"
 #include "PathUtils.h"
@@ -164,7 +165,7 @@ int runPoseReportTool(const TestArgs& args)
 	// The frame held still: the same frame solved at the recorded interval
 	// until the filters have settled on it
 	const double intervalMs= cameraFrame.captureFps > 1.f ? 1000.0 / (double)cameraFrame.captureFps : 33.3;
-	DirectRetarget solver;
+	DirectStageSolver solver;
 	AvatarPose pose;
 	const TrackingFrameResult::HeadPose noPhoneHead;
 	for (int iteration= 0; iteration < kIterations; ++iteration)

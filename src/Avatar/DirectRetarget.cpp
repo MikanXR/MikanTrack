@@ -142,12 +142,6 @@ double earnedHoldMs(double sightingStartMs, double solvedTimestampMs, double fra
 	return std::min(std::max(solvedTimestampMs - sightingStartMs, 0.0) + frameMs, kMaxHoldMs);
 }
 
-float smoothstep(float t)
-{
-	t= std::clamp(t, 0.f, 1.f);
-	return t * t * (3.f - 2.f * t);
-}
-
 // A rotation from a forward and a left that may not be exactly
 // perpendicular: forward survives, up is rebuilt from it and left, left from
 // the two
@@ -268,62 +262,11 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 					 skeleton.getBone(handBone).restPositionWorld, placement.fingers, sideConfig, outPose);
 }
 
-// The rest placement from the rig: the chain's directions from the rest
-// offsets, under the lean; the palm facing the rest normal, through the
-// same hand math as a measured palm (a normal along the forearm leaves the
-// wrist straight); the four fingers curled, the thumb at the avatar's rest
-DirectRetarget::ArmPlacement restPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
-										   const AvatarRetargetConfig::Side& sideConfig)
-{
-	const eHandSide side= (eHandSide)sideIndex;
-	DirectRetarget::ArmPlacement rest;
-	rest.upperDirection= safeNormalize(spineDelta * sideConfig.restElbowOffset);
-	rest.forearmDirection= safeNormalize(spineDelta * (sideConfig.restWristOffset - sideConfig.restElbowOffset));
-	const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, rest.upperDirection, rest.forearmDirection);
-	const glm::vec3 palmZ=
-		safeNormalize(projectPerpendicular(spineDelta * sideConfig.restPalmNormal, swing.forearmDirection));
-	if (glm::dot(palmZ, palmZ) > 0.f)
-	{
-		const glm::quat palm= palmFrame(swing.forearmDirection, palmZ);
-		handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, rest.twist,
-					 rest.wristRotation);
-	}
-	for (int finger= (int)eFinger::Index; finger < FINGER_COUNT; ++finger)
-	{
-		rest.fingers[finger].proximal= sideConfig.restFingerCurlRadians;
-		rest.fingers[finger].intermediate= sideConfig.restFingerCurlRadians;
-		rest.fingers[finger].distal= 0.5f * sideConfig.restFingerCurlRadians;
-	}
-	return rest;
-}
-
 // A unit direction between two, falling to the target where they cancel
 glm::vec3 mixDirection(const glm::vec3& from, const glm::vec3& to, float t)
 {
 	const glm::vec3 mixed= safeNormalize(glm::mix(from, to, t));
 	return glm::dot(mixed, mixed) > 0.f ? mixed : to;
-}
-
-// The placement part way from one to another: the directions and the
-// finger angles linearly, the twist by the shorter way round, the wrist
-// along the arc
-DirectRetarget::ArmPlacement blendPlacement(const DirectRetarget::ArmPlacement& from,
-											const DirectRetarget::ArmPlacement& to, float t)
-{
-	DirectRetarget::ArmPlacement out;
-	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
-	out.forearmDirection= mixDirection(from.forearmDirection, to.forearmDirection, t);
-	out.twist= from.twist + wrapAngle(to.twist - from.twist) * t;
-	out.wristRotation= glm::slerp(from.wristRotation, to.wristRotation, t);
-	for (int finger= 0; finger < FINGER_COUNT; ++finger)
-	{
-		out.fingers[finger].lateral= glm::mix(from.fingers[finger].lateral, to.fingers[finger].lateral, t);
-		out.fingers[finger].proximal= glm::mix(from.fingers[finger].proximal, to.fingers[finger].proximal, t);
-		out.fingers[finger].intermediate=
-			glm::mix(from.fingers[finger].intermediate, to.fingers[finger].intermediate, t);
-		out.fingers[finger].distal= glm::mix(from.fingers[finger].distal, to.fingers[finger].distal, t);
-	}
-	return out;
 }
 
 // The elbow for a wrist, both bone lengths held by construction: on the bone
@@ -379,10 +322,54 @@ void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::
 	}
 }
 
+DirectRetarget::ArmPlacement DirectRetarget::makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex,
+															   const glm::quat& spineDelta,
+															   const AvatarRetargetConfig::Side& sideConfig)
+{
+	// A normal along the forearm leaves the wrist straight
+	const eHandSide side= (eHandSide)sideIndex;
+	ArmPlacement rest;
+	rest.upperDirection= safeNormalize(spineDelta * sideConfig.restElbowOffset);
+	rest.forearmDirection= safeNormalize(spineDelta * (sideConfig.restWristOffset - sideConfig.restElbowOffset));
+	const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, rest.upperDirection, rest.forearmDirection);
+	const glm::vec3 palmZ=
+		safeNormalize(projectPerpendicular(spineDelta * sideConfig.restPalmNormal, swing.forearmDirection));
+	if (glm::dot(palmZ, palmZ) > 0.f)
+	{
+		const glm::quat palm= palmFrame(swing.forearmDirection, palmZ);
+		handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, rest.twist,
+					 rest.wristRotation);
+	}
+	for (int finger= (int)eFinger::Index; finger < FINGER_COUNT; ++finger)
+	{
+		rest.fingers[finger].proximal= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].intermediate= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].distal= 0.5f * sideConfig.restFingerCurlRadians;
+	}
+	return rest;
+}
+
+DirectRetarget::ArmPlacement DirectRetarget::blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t)
+{
+	ArmPlacement out;
+	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
+	out.forearmDirection= mixDirection(from.forearmDirection, to.forearmDirection, t);
+	out.twist= from.twist + wrapAngle(to.twist - from.twist) * t;
+	out.wristRotation= glm::slerp(from.wristRotation, to.wristRotation, t);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		out.fingers[finger].lateral= glm::mix(from.fingers[finger].lateral, to.fingers[finger].lateral, t);
+		out.fingers[finger].proximal= glm::mix(from.fingers[finger].proximal, to.fingers[finger].proximal, t);
+		out.fingers[finger].intermediate=
+			glm::mix(from.fingers[finger].intermediate, to.fingers[finger].intermediate, t);
+		out.fingers[finger].distal= glm::mix(from.fingers[finger].distal, to.fingers[finger].distal, t);
+	}
+	return out;
+}
+
 void DirectRetarget::reset()
 {
 	resetMeasure();
-	resetPlace();
 	m_resetEpoch++;
 }
 
@@ -396,12 +383,6 @@ void DirectRetarget::resetMeasure()
 	for (ArmState& arm : m_arms)
 		arm= ArmState();
 	m_bFiltersConfigured= false;
-}
-
-void DirectRetarget::resetPlace()
-{
-	for (PlaceArmState& arm : m_placeArms)
-		arm= PlaceArmState();
 }
 
 void DirectRetarget::configureFilters()
@@ -432,15 +413,6 @@ DirectRetarget::PnpScale DirectRetarget::getPnpScale(int sideIndex) const
 	out.scale= m_arms[sideIndex].pnpScale;
 	out.sampleCount= m_arms[sideIndex].pnpScaleSampleCount;
 	return out;
-}
-
-void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
-						   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
-						   const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose)
-{
-	SourcePose source;
-	measure(camera, cameraModel, phoneHead, timestampMs, skeleton, config, source);
-	place(source, skeleton, config, outPose);
 }
 
 void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
@@ -916,7 +888,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
 		if (!bChainUsable)
 		{
-			// Nothing places the arm: the source says so, and the placement
+			// Nothing places the arm: the source says so, and the loss stage
 			// decides what a lost arm does
 			arm.chain.valid= false;
 			arm.wristPixelFilter.reset();
@@ -1082,18 +1054,9 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 {
 	using eGroupState= SourcePose::eGroupState;
 
-	// The ease belongs to one epoch of the source clock
-	if (source.clock.resetEpoch != m_placeEpoch)
-	{
-		resetPlace();
-		m_placeEpoch= source.clock.resetEpoch;
-	}
-	const double timestampMs= source.clock.timestampMs;
-	const double frameMs= source.clock.frameIntervalMs;
-
 	outPose.clear();
 	outPose.valid= true;
-	outPose.timestampMs= timestampMs;
+	outPose.timestampMs= source.clock.timestampMs;
 	// The root is fixed: the camera is the world and the user faces it
 	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
 
@@ -1103,10 +1066,10 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
 	placeBone(outPose, skeleton, B::Neck, spineDelta);
 
-	// The head within its limit, under the rig's trim
+	// The head within its limit, under the rig's trim; at rest, the identity
 	{
 		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
-		if (source.head.state != eGroupState::Lost)
+		if (source.head.state != eGroupState::Lost && source.head.state != eGroupState::Resting)
 			headDelta= limitRotationAngle(source.head.orientation, kHeadLimitRadians);
 		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
 		placeBone(outPose, skeleton, B::Head, headDelta);
@@ -1115,36 +1078,10 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		PlaceArmState& arm= m_placeArms[sideIndex];
-		const AvatarRetargetConfig::Side& sideConfig= config.sides[sideIndex];
 		const SourcePose::Arm& sourceArm= source.arms[sideIndex];
 		const SourcePose::Hand& sourceHand= source.hands[sideIndex];
-		SolveState::Arm& armState= m_state.arms[sideIndex];
-
 		if (sourceArm.state == eGroupState::Lost)
-		{
-			// The ease into the rig's rest pose, from what the bones took
-			// last frame, timed from that frame so the first frame without
-			// a chain already moves; an arm nothing has placed in this epoch
-			// is at rest at once
-			if (arm.easeStartMs < 0.0)
-			{
-				arm.easeStartMs= timestampMs - frameMs;
-				arm.easeFrom= arm.lastPlacement;
-			}
-			const ArmPlacement rest= restPlacement(skeleton, sideIndex, spineDelta, sideConfig);
-			float blend= 1.f;
-			if (arm.bPlaced && config.restBlendMs > 0.f)
-				blend= smoothstep((float)((timestampMs - arm.easeStartMs) / config.restBlendMs));
-			const ArmPlacement placement= blend < 1.f ? blendPlacement(arm.easeFrom, rest, blend) : rest;
-			arm.lastPlacement= placement;
-			arm.bPlaced= true;
-			armState.bResting= true;
-			armState.restBlend= blend;
-			placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
 			continue;
-		}
-		arm.easeStartMs= -1.0;
 
 		// Upper arm and forearm: swings from rest onto the chain's
 		// directions; the forearm's roll and the hand as the source measured
@@ -1155,9 +1092,7 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 		placement.twist= sourceArm.twist;
 		placement.wristRotation= sourceHand.wristRotation;
 		placement.fingers= sourceHand.fingers;
-		arm.lastPlacement= placement;
-		arm.bPlaced= true;
-		placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
+		placeArm(skeleton, sideIndex, spineDelta, placement, config.sides[sideIndex], outPose);
 	}
 }
 
@@ -1169,8 +1104,9 @@ void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRe
 	const glm::quat identity(1.f, 0.f, 0.f, 0.f);
 	placeBone(outPose, skeleton, B::Hips, identity);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		placeArm(skeleton, sideIndex, identity, restPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]),
-				 config.sides[sideIndex], outPose);
+		placeArm(skeleton, sideIndex, identity,
+				 makeRestPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]), config.sides[sideIndex],
+				 outPose);
 }
 
 glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,

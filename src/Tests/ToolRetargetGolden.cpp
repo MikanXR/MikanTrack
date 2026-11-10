@@ -9,8 +9,10 @@
 // The retarget golden comparison over a recording: the live retarget path
 // beside its frozen copy on every replayed frame, bit for bit. A direct-mode
 // recording drives the direct retarget from its camera's replayed result. Any
-// other recording drives the stream's gate, hold, freeze and position
-// retarget from the replayed fused output. Both run on the shared synthetic
+// other recording drives the retarget stage (the gate, hold, freeze and
+// position retarget the frozen stream ran itself) from the replayed fused
+// output, bit for bit where every frame is sent and within the decimated
+// tolerance on the sent frames alone. Both run on the shared synthetic
 // rig with default rig settings, so the comparison pins no avatar file and no
 // sidecar: it asks whether the two code paths agree, not what the avatar did.
 
@@ -20,11 +22,11 @@ using namespace RetargetGolden;
 
 const char* kTag= "retarget-golden";
 
-void report(const Tally& tally, const char* what)
+void report(const Tally& tally, const char* what, const char* agreement= "identical")
 {
 	if (tally.mismatches == 0)
 	{
-		MIKAN_LOG_INFO(kTag) << "PASS " << what << ": " << tally.frames << " frames identical";
+		MIKAN_LOG_INFO(kTag) << "PASS " << what << ": " << tally.frames << " frames " << agreement;
 	}
 	else
 	{
@@ -33,11 +35,11 @@ void report(const Tally& tally, const char* what)
 	}
 }
 
-OscStreamerConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& rig,
+StreamConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& rig,
 								   const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
 	const BodyDimensions bodyDimensions= makeBodyDimensions(config);
-	OscStreamerConfig oscConfig;
+	StreamConfig oscConfig;
 	oscConfig.maxRateHz= 0.f;
 	oscConfig.minConfidence= config.osc.minConfidence;
 	oscConfig.holdOnDropoutMs= config.osc.holdOnDropoutMs;
@@ -104,7 +106,7 @@ int runDirect(const TrackingReplay& replay, const AppConfig& config, const Avata
 int runPosition(const TrackingReplay& replay, const AppConfig& config, const AvatarRigSettings& rig,
 				const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	const OscStreamerConfig streamConfig= makeStreamConfig(config, rig, skeleton);
+	const StreamConfig streamConfig= makeStreamConfig(config, rig, skeleton);
 
 	// Every frame encoded, the avatar path and the measured-length path, and
 	// the retarget alone on the unresolved frame for the root
@@ -112,13 +114,21 @@ int runPosition(const TrackingReplay& replay, const AppConfig& config, const Ava
 	avatarStream.setConfig(streamConfig);
 	StreamPair lengthStream;
 	{
-		OscStreamerConfig lengthConfig= streamConfig;
+		StreamConfig lengthConfig= streamConfig;
 		lengthConfig.avatarSkeleton= nullptr;
 		lengthStream.setConfig(lengthConfig);
 	}
-	// Only the frames the recorded send rate would have passed
+	// Only the frames the recorded send rate would have passed. The live
+	// retarget stage runs on every frame and the frozen streamer resolved only
+	// the sent ones, so this stream differs by design and is compared within
+	// the decimated tolerance. A sent frame with an arm held or frozen is
+	// compared for its structure alone: its hold carries the last measured
+	// frame, which on the live side may be one the frozen streamer never
+	// resolved, and a recorded hand can change a long way between two frames.
 	StreamPair gatedStream;
 	gatedStream.setConfig(streamConfig);
+	gatedStream.tolerance= kDecimatedTolerance;
+	gatedStream.bCarryOverStructureOnly= true;
 	RateGate gate;
 	const float maxRateHz= (float)config.osc.maxRateHz;
 	PositionPair position;
@@ -135,12 +145,15 @@ int runPosition(const TrackingReplay& replay, const AppConfig& config, const Ava
 		trackedFrames+= (frame.poses[0].tracked || frame.poses[1].tracked) ? 1 : 0;
 
 		avatarTally.frames++;
+		avatarStream.retarget(frame);
 		avatarTally.note(avatarStream.encode(frame, why), frameIndex, "stream", why);
 		lengthTally.frames++;
+		lengthStream.retarget(frame);
 		lengthTally.note(lengthStream.encode(frame, why), frameIndex, "stream", why);
 		retargetTally.frames++;
 		const bool bSame= position.solve(frame, streamConfig.bodyDimensions, *skeleton, streamConfig.avatarRetarget, why);
 		retargetTally.note(bSame, frameIndex, "retarget", why);
+		gatedStream.retarget(frame);
 		if (gate.pass(frame.timestampMs, maxRateHz))
 		{
 			gatedTally.frames++;
@@ -152,7 +165,14 @@ int runPosition(const TrackingReplay& replay, const AppConfig& config, const Ava
 	report(retargetTally, "position retarget");
 	report(avatarTally, "stream with an avatar, every frame");
 	report(lengthTally, "stream without an avatar, every frame");
-	report(gatedTally, "stream with an avatar, sent frames only");
+	MIKAN_LOG_INFO(kTag) << "sent frames only: " << gatedStream.inexactFrames << " of " << gatedTally.frames
+						 << " not bit-identical, largest difference " << gatedStream.maxPoseDifference
+						 << " in the pose and " << gatedStream.maxStreamDifference << " in the stream against a tolerance of "
+						 << kDecimatedTolerance << "; " << gatedStream.carryOverFrames
+						 << " frames with an arm held or frozen compared for their structure, largest difference "
+						 << gatedStream.maxCarryOverDifference;
+	report(gatedTally, "stream with an avatar, sent frames only",
+		   "within tolerance, or alike in structure where an arm is carried over");
 	const bool bAllSame= retargetTally.mismatches == 0 && avatarTally.mismatches == 0 && lengthTally.mismatches == 0 &&
 		gatedTally.mismatches == 0;
 	return bAllSame && avatarTally.frames > 0 ? 0 : 1;

@@ -5,6 +5,7 @@
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
 #include "DirectRetarget.h"
+#include "DirectStageSolver.h"
 #include "FrameRecorder.h"
 #include "KalidokitStyleRetarget.h"
 #include "SyntheticAvatar.h"
@@ -337,7 +338,7 @@ struct RetargetComparison
 	AvatarRetargetConfig referenceConfig;
 	DirectRetargetConfig directConfig;
 	AvatarRetarget reference;
-	DirectRetarget direct;
+	DirectStageSolver direct;
 	KalidokitStyleRetarget baseline;
 	// Marker world to the direct world: through the camera, then the direct
 	// conversion at the recording's tilt

@@ -85,7 +85,9 @@ struct DirectRetargetConfig
 	// the rest pose is where a lost arm goes)
 	std::array<AvatarRetargetConfig::Side, 2> sides{};
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
-	// snaps
+	// snaps. The rig's, carried with the direct pipeline's settings for the
+	// loss stage's arm policy (makeDirectLossPolicy): the solver does not
+	// read it.
 	float restBlendMs= 300.f;
 };
 
@@ -108,8 +110,8 @@ public:
 	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 
-	// Forgets every filter, hold and ease, and starts a new epoch on the
-	// source pose clock
+	// Forgets every filter and hold, and starts a new epoch on the source
+	// pose clock
 	void reset();
 
 	// The measurement half: one camera's frame into the source pose, in the
@@ -126,17 +128,13 @@ public:
 				 const DirectRetargetConfig& config, SourcePose& outSource);
 
 	// The placement half: a direct source pose into the avatar's bones. The
-	// head and the wrist take their joint limits and the rig's trims here. A
-	// lost arm eases into the rig's rest pose from what its bones took last
-	// frame, and its ease restarts when the source's epoch changes. Writes
-	// the solve state's head delta and each arm's rest state.
+	// head and the wrist take their joint limits and the rig's trims here.
+	// Every arm the source carries is placed from its placement, a resting
+	// one (the loss stage's ease into the rig's rest pose) like a measured
+	// one; a lost arm is left out. A resting head is the identity. Writes the
+	// solve state's head delta. Holds no state across frames.
 	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
 			   AvatarPose& outPose);
-
-	// measure then place
-	void solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
-			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
-			   const DirectRetargetConfig& config, AvatarPose& outPose);
 
 	// The current filtered measurements as a neutral pose. False when no
 	// torso has been solved yet.
@@ -192,8 +190,12 @@ public:
 			glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
-			bool bResting= false; // no chain to place: the arm is easing into, or at, the rest pose
-			float restBlend= 0.f; // how far into the rest pose, 1 at rest
+			// The loss stage's readout, which the retarget stage writes from
+			// the source pose it hands on (the solver leaves both at rest
+			// values): no chain to place, the arm is easing into, or at, the
+			// rest pose, and how far into it, 1 at rest
+			bool bResting= false;
+			float restBlend= 0.f;
 		};
 		DirectCameraModel camera;
 		float tiltRadians= 0.f;
@@ -229,6 +231,18 @@ public:
 		std::array<FingerAngles, FINGER_COUNT> fingers{};
 	};
 
+	// The rig's rest placement of one arm under the lean: the chain's
+	// directions from the rest offsets, the palm facing the rest normal
+	// through the same hand math as a measured palm, the four fingers at the
+	// rest curl and the thumb at the avatar's rest
+	static ArmPlacement makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+										  const AvatarRetargetConfig::Side& sideConfig);
+
+	// The placement part way from one to another: the directions and the
+	// finger angles linearly, the twist by the shorter way round, the wrist
+	// along the arc
+	static ArmPlacement blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t);
+
 	// Both arms at the rig's rest pose with the spine straight, the rest of
 	// the pose absent: what a lost arm has eased into, for the preview and
 	// the tests
@@ -247,7 +261,6 @@ public:
 private:
 	void configureFilters();
 	void resetMeasure();
-	void resetPlace();
 
 	struct ArmState
 	{
@@ -313,19 +326,6 @@ private:
 		OneEuroFilter depthFilter;
 	};
 
-	// The placement's own state per arm
-	struct PlaceArmState
-	{
-		// What the bones took last frame, and whether anything has placed
-		// them in this epoch: the ease into rest starts from here
-		bool bPlaced= false;
-		ArmPlacement lastPlacement;
-		// The ease into rest: when it began (negative while the source
-		// places the arm) and the placement it started from
-		double easeStartMs= -1.0;
-		ArmPlacement easeFrom;
-	};
-
 	// The source clock, owned by measure; the epoch survives a reset
 	uint32_t m_resetEpoch= 0;
 	bool m_bHasTime= false;
@@ -336,7 +336,4 @@ private:
 	HeadState m_head;
 	ArmState m_arms[2];
 	SolveState m_state;
-	// The placement's state and the epoch it belongs to
-	uint32_t m_placeEpoch= 0;
-	PlaceArmState m_placeArms[2];
 };

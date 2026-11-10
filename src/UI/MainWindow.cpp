@@ -456,7 +456,7 @@ void MainWindow::update(float deltaSeconds)
 			m_videoPreviewPanel->setFrame(cameraIndex, m_latestPreviews[cameraIndex].bgr);
 		}
 	}
-	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState, &m_latestFusionDiagnostics);
+	visionThread->fetchFusedResult(m_latestFused, &m_latestRetarget, &m_latestFusionDiagnostics);
 
 	// Newest per-camera results, for the preview overlays and the 3D scene
 	std::vector<const TrackingFrameResult*> perCameraResults;
@@ -565,7 +565,8 @@ void MainWindow::update(float deltaSeconds)
 	}
 	// Direct mode: which of the direct camera's hand slots the solver took
 	m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
-									{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
+									{m_latestRetarget.directState.arms[0].bHandSeen,
+									 m_latestRetarget.directState.arms[1].bHandSeen});
 
 	// The 3D scene's inputs. In replay view the whole feed comes from the
 	// timeline's scrub position instead, with the frustums built from the
@@ -887,21 +888,19 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const AppConfig* config= m_app->getConfig();
 	const AvatarRigSettings& rig= m_app->getAvatarRig();
 
-	// The feed: a preview pose from the Retarget stage, else replay frames
-	// (with the recording's body lengths), else live ones (with the
-	// project's). Switching feeds resets the root follow so the filter never
-	// bridges two timelines.
+	// The feed: a preview pose from the Retarget stage, else replay frames,
+	// else the live output. Switching feeds starts the window's stage over,
+	// so nothing it holds or filters bridges two timelines.
 	const AvatarPanel::ePreviewPose preview= m_avatarPanel->getPreviewPose();
 	const bool bReplay= m_shown.bReplay;
 	const int feed= preview != AvatarPanel::ePreviewPose::Live ? 1 + (int)preview : (bReplay ? 1 : 0);
 	if (feed != m_avatarPoseFeed)
 	{
-		m_avatarRetarget.reset();
-		m_directRetarget.reset();
+		m_displayStage.reset();
+		m_replayPlayhead.invalidate();
 		m_avatarPoseFeed= feed;
 	}
 
-	const AvatarRetargetConfig retargetConfig= makeAvatarRetargetConfig(*config, rig);
 	const DirectRetarget::SolveState* directState= nullptr;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
@@ -918,37 +917,29 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
 			else
 				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-			m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+			RetargetStageConfig stageConfig= makeRetargetStageConfig(*config, rig, skeleton);
+			stageConfig.user= user;
+			m_displayStage.setConfig(stageConfig);
+			m_displayStage.solvePosition(frame, m_displayResult);
+			m_avatarPose= m_displayResult.pose;
 		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
+	else if (bReplay)
+	{
+		directState= updateReplayRetarget(*config, rig, skeleton);
+		m_avatarPose= m_displayResult.pose;
+		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
+	}
 	else
 	{
-		const AppConfig& lengthsConfig= *m_shown.config;
-		const TrackingFrameResult& shownFused= *m_shown.fused;
-		// Direct mode: live, the vision thread's pose arrives with the result;
-		// in replay the window's own solver runs the recorded camera's frame
-		// under the recorded config. Either way the position retarget is
-		// skipped, so the scene shows exactly what the stream carries.
-		bool bDirectShown= false;
-		if (bReplay)
-		{
-			bDirectShown= solveReplayDirectPose(lengthsConfig, *skeleton, rig);
-			if (bDirectShown)
-				directState= &m_directRetarget.getSolveState();
-		}
-		else if (m_latestDirectPose.valid)
-		{
-			m_avatarPose= m_latestDirectPose;
-			bDirectShown= true;
-			directState= &m_latestDirectState;
-		}
-		if (!bDirectShown)
-		{
-			m_avatarRetarget.solve(shownFused, makeBodyDimensions(lengthsConfig), *skeleton, retargetConfig,
-								   m_avatarPose);
-		}
-		m_scene3dPanel->setAvatarFace(&shownFused.face);
+		// Live: the vision thread's retarget stage posed the avatar for the
+		// stream, through the same loss rules, so the scene shows exactly
+		// what the stream carries
+		m_avatarPose= m_latestRetarget.pose;
+		if (m_latestRetarget.bDirectState)
+			directState= &m_latestRetarget.directState;
+		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
 	updateDirectReadout(directState);
@@ -1020,33 +1011,58 @@ void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* direct
 	m_scene3dPanel->setCameraMatch(match);
 }
 
-bool MainWindow::solveReplayDirectPose(const AppConfig& recordedConfig, const AvatarSkeleton& skeleton,
-									   const AvatarRigSettings& rig)
+const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
+	const AppConfig& liveConfig, const AvatarRigSettings& rig, const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	if (!recordedConfig.direct.enabled)
-		return false;
-	const int cameraIndex= recordedConfig.direct.cameraIndex;
-	const std::vector<const TrackingFrameResult*> perCamera= m_timelinePanel->getPerCameraResults();
-	if (cameraIndex < 0 || cameraIndex >= (int)perCamera.size() || perCamera[cameraIndex] == nullptr ||
-		cameraIndex >= (int)recordedConfig.cameraCount() || !recordedConfig.camera(cameraIndex).intrinsics.present)
-		return false;
+	// The recording's lengths, direct settings and loss rules, the project's
+	// avatar placement, and the live rig
+	const AppConfig& recordedConfig= m_timelinePanel->getRecordedConfig();
+	RetargetStageConfig stageConfig= makeRetargetStageConfig(recordedConfig, rig, skeleton);
+	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig);
+	m_displayStage.setConfig(stageConfig);
 
-	// The recording's undistorted pinhole, the space its landmarks live in
-	const TrackingFrameResult& frame= *perCamera[cameraIndex];
-	const MikanMatrix3d& cameraMatrix=
-		recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
-	DirectCameraModel cameraModel;
-	cameraModel.fx= (float)cameraMatrix.x0;
-	cameraModel.fy= (float)cameraMatrix.y1;
-	cameraModel.cx= (float)cameraMatrix.z0;
-	cameraModel.cy= (float)cameraMatrix.z1;
-	cameraModel.width= frame.frameWidth;
-	cameraModel.height= frame.frameHeight;
-	// No phone head in a replay: the recording carries the camera inputs
-	const TrackingFrameResult::HeadPose noPhoneHead;
-	m_directRetarget.solve(frame, cameraModel, noPhoneHead, frame.timestampMs, skeleton,
-						   makeDirectRetargetConfig(recordedConfig, rig), m_avatarPose);
-	return m_avatarPose.valid;
+	// A direct-mode recording's camera and its undistorted pinhole, the
+	// space its landmarks live in
+	const int cameraIndex= recordedConfig.direct.cameraIndex;
+	const bool bDirect= recordedConfig.direct.enabled && cameraIndex >= 0 &&
+		cameraIndex < (int)recordedConfig.cameraCount() && recordedConfig.camera(cameraIndex).intrinsics.present;
+	DirectCameraModel pinhole;
+	if (bDirect)
+	{
+		const MikanMatrix3d& cameraMatrix=
+			recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
+		pinhole.fx= (float)cameraMatrix.x0;
+		pinhole.fy= (float)cameraMatrix.y1;
+		pinhole.cx= (float)cameraMatrix.z0;
+		pinhole.cy= (float)cameraMatrix.z1;
+	}
+
+	// One recorded frame through the stage the way the vision thread ran it.
+	// No phone head in a replay: the recording carries the camera inputs.
+	const TimelinePanel& timeline= *m_timelinePanel;
+	auto solveFrame= [&](int frameIndex, RetargetStage& stage, RetargetResult& ioResult) {
+		TrackingFrameResult fused;
+		std::vector<const TrackingFrameResult*> perCamera;
+		timeline.getRetargetInputs(frameIndex, fused, perCamera);
+		if (bDirect && cameraIndex < (int)perCamera.size() && perCamera[cameraIndex] != nullptr)
+		{
+			const TrackingFrameResult& frame= *perCamera[cameraIndex];
+			DirectCameraModel cameraModel= pinhole;
+			cameraModel.width= frame.frameWidth;
+			cameraModel.height= frame.frameHeight;
+			const TrackingFrameResult::HeadPose noPhoneHead;
+			if (stage.solveDirect(frame, cameraModel, noPhoneHead, frame.timestampMs, ioResult))
+				return;
+		}
+		stage.solvePosition(fused, ioResult);
+	};
+	auto frameTimeMs= [&timeline](int frameIndex) { return timeline.getFrameTimeMs(frameIndex); };
+
+	const bool bSolved= m_replayPlayhead.seek(m_displayStage, timeline.getReplayTimelineId(),
+											  timeline.getCurrentFrameIndex(), frameTimeMs, solveFrame, m_displayResult);
+	if (!bSolved)
+		m_displayStage.resolveTarget(m_displayResult);
+	return m_displayResult.bDirectState ? &m_displayResult.directState : nullptr;
 }
 
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)

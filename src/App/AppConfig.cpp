@@ -18,6 +18,7 @@
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
 #include "Logger.h"
+#include "RetargetStage.h"
 
 using json= nlohmann::json;
 
@@ -387,6 +388,20 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.restBlendMs= rig.restBlendMs;
 	direct.sides= retarget.sides;
 	return direct;
+}
+
+RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const AvatarRigSettings& rig,
+											std::shared_ptr<const AvatarSkeleton> skeleton)
+{
+	RetargetStageConfig stage;
+	stage.skeleton= std::move(skeleton);
+	stage.position= makeAvatarRetargetConfig(config, rig);
+	stage.user= makeBodyDimensions(config);
+	stage.direct= makeDirectRetargetConfig(config, rig);
+	stage.positionLoss=
+		makePositionLossPolicy(config.osc.minConfidence, config.osc.holdOnDropoutMs, config.osc.vmcFreezeOnLoss);
+	stage.directLoss= makeDirectLossPolicy(stage.direct.restBlendMs);
+	return stage;
 }
 
 BodyDimensions makeBodyDimensions(const AppConfig& config)

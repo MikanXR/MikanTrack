@@ -27,13 +27,18 @@ struct SourcePose
 		Direct,   // the single camera's world, the avatar's units
 	};
 
-	// What a group carries this frame: measured on this frame, held by the
-	// pipeline from an earlier one, or nothing
+	// What a group carries this frame: measured on this frame, held from an
+	// earlier one (by the pipeline, or by the loss stage within its hold), or
+	// nothing. Past a hold the loss stage writes the two states after it:
+	// frozen, the last values it handed on repeated, and resting, the rig's
+	// rest pose or the ease into it. A filler writes only the first three.
 	enum class eGroupState : uint8_t
 	{
 		Lost,
 		Measured,
 		Held,
+		Frozen,
+		Resting,
 	};
 
 	// What a finger angle of zero means: the user's captured rest pose (the
@@ -92,7 +97,8 @@ struct SourcePose
 	// forearm length. Direct: the solved chain, every joint present, plus the
 	// placement: the chain's directions and the forearm's twist about its
 	// axis against the avatar's rest palm (zero while the hand was never
-	// measured).
+	// measured). A resting arm carries the placement the loss stage eased it
+	// to and no chain, its hand the rest wrist and fingers.
 	struct Arm
 	{
 		eGroupState state= eGroupState::Lost;
@@ -108,12 +114,17 @@ struct SourcePose
 		glm::vec3 upperDirection{0.f};   // Direct
 		glm::vec3 forearmDirection{0.f}; // Direct
 		float twist= 0.f;                // Direct
+		// Resting: how far the ease has carried the arm into the rest pose, 1
+		// at rest
+		float restBlend= 0.f;
 	};
 
 	// One hand. Position: the world palm frame. Direct: the palm in the
 	// measured forearm frame (identity, the avatar's rest wrist, while the
 	// hand was never measured). Both: the finger angle table against the
-	// zero the enum names.
+	// zero the enum names. A hand the position pipeline tracked without a
+	// world anchor reads lost with its confidence present: seen, but nothing
+	// to place, which ends a hold where an unseen hand would bridge one.
 	struct Hand
 	{
 		eGroupState state= eGroupState::Lost;

@@ -333,8 +333,7 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 	return m_cameras[cameraIndex]->fetchPreviewFrame(outFrame);
 }
 
-bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose,
-									DirectRetarget::SolveState* outDirectState,
+bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, RetargetResult* outRetarget,
 									FusionDiagnostics* outFusionDiagnostics)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
@@ -342,10 +341,8 @@ bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* 
 		return false;
 
 	outResult= m_fusedResult;
-	if (outDirectPose != nullptr)
-		*outDirectPose= m_fusedDirectPose;
-	if (outDirectState != nullptr)
-		*outDirectState= m_fusedDirectState;
+	if (outRetarget != nullptr)
+		*outRetarget= m_fusedRetarget;
 	if (outFusionDiagnostics != nullptr)
 		*outFusionDiagnostics= m_fusedDiagnostics;
 	m_bFusedFresh= false;
@@ -583,12 +580,13 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 
 	// The avatar half: the direct solver's pose for this output and the
 	// state behind it
-	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_directPose.valid;
+	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_bDirectRetarget &&
+		m_retarget.pose.valid;
 	if (bAvatar)
 	{
 		avatar.skeleton= m_avatar.skeleton.get();
-		avatar.pose= &m_directPose;
-		avatar.solveState= &m_directRetarget.getSolveState();
+		avatar.pose= &m_retarget.pose;
+		avatar.solveState= &m_retarget.directState;
 		avatar.modelPath= m_avatarIdentity.path;
 		avatar.cameraIndex= m_config->direct.cameraIndex;
 	}
@@ -733,15 +731,17 @@ void VisionThread::refreshConfigOnThread()
 		m_imuService->setConfig(imuConfig);
 	}
 
-	// Direct retarget: the solver config follows the project and the rig
-	m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
-
-	// OSC
+	// OSC, and the retarget stage that feeds it, which follows the project
+	// and the rig
 	applyOscConfigOnThread();
 }
 
 void VisionThread::applyOscConfigOnThread()
 {
+	// The stage keeps its holds, freezes and filters across a config change,
+	// and starts over only on a new skeleton
+	m_retargetStage.setConfig(makeRetargetStageConfig(*m_config, m_avatar.rig, m_avatar.skeleton));
+
 	if (m_oscStreamer == nullptr)
 	{
 		m_oscStreamer= std::make_unique<OscStreamer>();
@@ -760,8 +760,6 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.targetIp= m_config->osc.targetIp;
 		oscConfig.port= (uint16_t)m_config->osc.port;
 		oscConfig.maxRateHz= (float)m_config->osc.maxRateHz;
-		oscConfig.minConfidence= m_config->osc.minConfidence;
-		oscConfig.holdOnDropoutMs= m_config->osc.holdOnDropoutMs;
 		// The VMC bone offsets must agree with the lengths the body-pose solver
 		// placed those joints with, or the streamed skeleton contradicts the
 		// pose it is carrying.
@@ -769,11 +767,7 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.upperArmLengthMeters= bodyDimensions.upperArmLengthMeters;
 		oscConfig.shoulderWidthMeters= bodyDimensions.shoulderWidthMeters;
 		oscConfig.vmcHeadOffsetMeters= m_config->osc.vmcHeadOffsetMeters;
-		oscConfig.vmcFreezeOnLoss= m_config->osc.vmcFreezeOnLoss;
-		// The avatar path takes the same lengths the solver placed the joints
-		// with, plus the skeleton the main thread handed over
-		oscConfig.bodyDimensions= bodyDimensions;
-		oscConfig.avatarRetarget= makeAvatarRetargetConfig(*m_config, m_avatar.rig);
+		// The skeleton the main thread handed over, which the stage poses
 		oscConfig.avatarSkeleton= m_avatar.skeleton;
 		oscConfig.avatarPath= m_avatarIdentity.path;
 		oscConfig.avatarTitle= m_avatarIdentity.title;
@@ -795,6 +789,11 @@ void VisionThread::applyOscConfigOnThread()
 void VisionThread::threadLoop()
 {
 	MIKAN_MT_LOG_INFO("VisionThread") << "Vision thread started";
+
+	// A new run streams to a fresh streamer: nothing held or frozen in the
+	// last run carries into it
+	m_retargetStage.reset();
+	m_bDirectRetarget= false;
 
 	// Per-phase timing for the hitch watchdog, reset each iteration
 	double phaseMs[(int)eVisionPhase::Count]= {};
@@ -967,13 +966,8 @@ void VisionThread::servicePendingRequests()
 			m_faceRunner.setBinding(m_avatarIdentity.faceBinding != nullptr ? m_avatarIdentity.faceBinding
 																			 : makeAutoFaceBinding(nullptr));
 		}
-		if (bSkeletonChanged)
-		{
-			// A new skeleton means new lengths: the direct solver starts over
-			// on them with the rig that came with it
-			m_directRetarget.reset();
-			m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
-		}
+		// The rig that came with the skeleton reaches the retarget stage
+		// here, which starts its direct solver over on a new skeleton
 		applyOscConfigOnThread();
 	}
 	if (m_bRecordingStopRequested.exchange(false))
@@ -1087,12 +1081,11 @@ void VisionThread::runDirectStage(IterationState& iteration)
 	}
 }
 
-void VisionThread::solveDirectPose(IterationState& iteration)
+bool VisionThread::solveDirectRetarget(const IterationState& iteration)
 {
-	m_directPose.clear();
 	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
 	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
-		return;
+		return false;
 
 	DirectCameraModel cameraModel;
 	cameraModel.fx= camera.fx;
@@ -1103,8 +1096,8 @@ void VisionThread::solveDirectPose(IterationState& iteration)
 	cameraModel.height= camera.result.frameHeight;
 	// The only head on a camera-space result is the phone's, which the face
 	// stage just placed on the output when it streams
-	m_directRetarget.solve(camera.result, cameraModel, iteration.outputResult.head, camera.result.timestampMs,
-						   *m_avatar.skeleton, m_directConfig, m_directPose);
+	return m_retargetStage.solveDirect(camera.result, cameraModel, iteration.outputResult.head,
+									   camera.result.timestampMs, m_retarget);
 }
 
 void VisionThread::runImuStage(IterationState& iteration)
@@ -1283,23 +1276,26 @@ void VisionThread::runOutputStage(IterationState& iteration)
 	// expressions advance exactly once per frame
 	m_faceRunner.evaluate(iteration.outputResult.face, iteration.outputResult.timestampMs);
 
-	// In direct mode the streamer and the window take the solver's pose: a
-	// camera frame solves a fresh one, a face-only frame repeats the last
-	if (iteration.bDirect)
-		solveDirectPose(iteration);
-	const bool bDirectPose= isDirectModeActive();
-	if (!bDirectPose)
-		m_directPose.clear();
+	// The retarget stage, every output frame and ahead of the streamer's
+	// send-rate gate, so its holds and filters advance on every frame. In
+	// direct mode a camera frame runs the direct pipeline and a face-only
+	// frame repeats its result. Any other frame, and a direct frame the
+	// direct pipeline cannot solve, runs the position pipeline.
+	if (!isDirectModeActive())
+		m_bDirectRetarget= false;
+	else if (iteration.bDirect)
+		m_bDirectRetarget= solveDirectRetarget(iteration);
+	if (!m_bDirectRetarget)
+		m_retargetStage.solvePosition(iteration.outputResult, m_retarget);
 
 	if (m_oscStreamer != nullptr)
-		m_oscStreamer->sendFrame(iteration.outputResult, bDirectPose ? &m_directPose : nullptr);
+		m_oscStreamer->sendFrame(iteration.outputResult, m_retarget);
 
 	// Publish the result (latest-wins)
 	{
 		std::lock_guard<std::mutex> lock(m_fusedMutex);
 		m_fusedResult= iteration.outputResult;
-		m_fusedDirectPose= m_directPose;
-		m_fusedDirectState= bDirectPose ? m_directRetarget.getSolveState() : DirectRetarget::SolveState();
+		m_fusedRetarget= m_retarget;
 		// A camera frame publishes what its fuse reported, and a passthrough
 		// or direct frame, which ran no fuse, an empty report
 		if (iteration.bAnyNewResult)
@@ -1485,7 +1481,7 @@ void VisionThread::runCalibrationCaptures()
 	if (m_bNeutralCaptureRequested.exchange(false))
 	{
 		NeutralCapture capture;
-		if (m_directRetarget.captureNeutral(capture.neutral))
+		if (m_retargetStage.captureNeutral(capture.neutral))
 		{
 			{
 				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);

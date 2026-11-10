@@ -144,6 +144,29 @@ void AvatarRetarget::fillSource(const std::array<HandPose, 2>& poses, const bool
 	}
 }
 
+void AvatarRetarget::fillSource(const TrackingFrameResult& frame, const BodyDimensions& user, SourcePose& outSource)
+{
+	const bool bSideValid[2]= {
+		frame.poses[0].tracked && frame.poses[0].hasWorldPose,
+		frame.poses[1].tracked && frame.poses[1].hasWorldPose,
+	};
+	fillSource(frame.poses, bSideValid, frame.head, frame.timestampMs, user, outSource);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= frame.poses[sideIndex];
+		if (pose.tracked && !pose.hasWorldPose)
+		{
+			outSource.hands[sideIndex].confidence.bPresent= true;
+			outSource.hands[sideIndex].confidence.value= pose.confidence;
+		}
+	}
+}
+
+void AvatarRetarget::resetRootFollow()
+{
+	m_root= RootState();
+}
+
 void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 						   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
 						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose)

@@ -3,6 +3,7 @@
 #include <array>
 #include <cassert>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -414,6 +415,14 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, con
 // and the gate tool all solve from this one mapping
 struct DirectRetargetConfig;
 DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+
+// And for the retarget stage: both pipelines' solves through the mappings
+// above, and their loss rules from the stream's dropout settings and the
+// rig's rest blend
+struct RetargetStageConfig;
+class AvatarSkeleton;
+RetargetStageConfig makeRetargetStageConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+											std::shared_ptr<const AvatarSkeleton> skeleton);
 
 class AppConfig
 {

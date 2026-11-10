@@ -115,9 +115,9 @@ TrackingFrameResult makePositionFrame(const AvatarSkeleton& skeleton, double mot
 	return frame;
 }
 
-OscStreamerConfig makeStreamConfig(const std::shared_ptr<const AvatarSkeleton>& skeleton)
+StreamConfig makeStreamConfig(const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	OscStreamerConfig config;
+	StreamConfig config;
 	config.maxRateHz= 0.f;
 	config.bodyDimensions= makeUserDimensions();
 	config.forearmLengthMeters= config.bodyDimensions.forearmLengthMeters;
@@ -143,7 +143,7 @@ struct StreamShadow
 	Frozen::OscStreamer::HeldPoseState last[2];
 	int counts[2][4]= {};
 
-	void step(const TrackingFrameResult& frame, const OscStreamerConfig& config)
+	void step(const TrackingFrameResult& frame, const StreamConfig& config)
 	{
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
@@ -176,7 +176,7 @@ struct PositionStep
 	TrackingFrameResult frame;
 	// Added to every later frame's timestamp: a gap or a regression
 	double timeShiftMs= 0.0;
-	OscStreamerConfig config;
+	StreamConfig config;
 	bool bConfigDirty= false;
 	// The frame is also sent again as a face-only frame stamped this far
 	// ahead, the way a phone or microphone sample re-sends the last output
@@ -188,15 +188,25 @@ struct PositionResult
 	Tally tally;
 	StreamShadow shadow;
 	int encodedFrames= 0;
+	// Under a tolerance: the largest difference the compare saw in the pose
+	// and in the stream's floats, and the sent frames not bit-identical
+	float maxPoseDifference= 0.f;
+	float maxStreamDifference= 0.f;
+	int inexactFrames= 0;
 };
 
-PositionResult runPositionSequence(const PositionRig& inputRig, const OscStreamerConfig& baseConfig, int frameCount,
+// The live retarget stage runs on every frame, ahead of the send-rate gate as
+// on the vision thread; with bDecimate only the frames the gate passes are
+// encoded, and the frozen streamer, which resolved only those, sees only
+// those. A nonzero tolerance compares the stream within it.
+PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConfig& baseConfig, int frameCount,
 								   double frameMs, bool bDecimate,
 								   const std::function<void(PositionStep&)>& edit,
-								   const std::function<void(StreamPair&)>& skew= nullptr)
+								   const std::function<void(StreamPair&)>& skew= nullptr, float tolerance= 0.f)
 {
 	PositionResult result;
 	StreamPair stream;
+	stream.tolerance= tolerance;
 	PositionPair position;
 	RateGate gate;
 	std::string why;
@@ -236,6 +246,7 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const OscStreame
 			result.tally.note(bSame, index, "retarget", why);
 		}
 
+		stream.retarget(step.frame);
 		if (bDecimate && !gate.pass(step.frame.timestampMs, step.config.maxRateHz))
 			continue;
 		result.shadow.step(step.frame, step.config);
@@ -247,9 +258,13 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const OscStreame
 			TrackingFrameResult faceFrame= step.frame;
 			faceFrame.timestampMs+= step.faceFrameAheadMs;
 			result.shadow.step(faceFrame, step.config);
+			stream.retarget(faceFrame);
 			result.tally.note(stream.encode(faceFrame, why), index, "stream face frame", why);
 		}
 	}
+	result.maxPoseDifference= stream.maxPoseDifference;
+	result.maxStreamDifference= stream.maxStreamDifference;
+	result.inexactFrames= stream.inexactFrames;
 	return result;
 }
 
@@ -456,7 +471,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 
 	const PositionRig rig= makePositionRig(eVrmVersion::Vrm1, false);
 	const PositionRig otherRig= makePositionRig(eVrmVersion::Vrm0, true);
-	const OscStreamerConfig baseConfig= makeStreamConfig(rig.skeleton);
+	const StreamConfig baseConfig= makeStreamConfig(rig.skeleton);
 
 	// -- Position pipeline -----------------------------------------------------
 
@@ -481,7 +496,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 
 	// (p3) The same with freeze off: past the hold the arm goes silent
 	{
-		OscStreamerConfig config= baseConfig;
+		StreamConfig config= baseConfig;
 		config.vmcFreezeOnLoss= false;
 		const PositionResult result= runPositionSequence(rig, config, 110, kFrameMs, false, [](PositionStep& step) {
 			if (inRange(step.index, 30, 35) || inRange(step.index, 60, 85))
@@ -496,7 +511,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 	// (p4) The confidence gate: a tracked hand under the threshold is held,
 	// then frozen
 	{
-		OscStreamerConfig config= baseConfig;
+		StreamConfig config= baseConfig;
 		config.minConfidence= 0.5f;
 		const PositionResult result= runPositionSequence(rig, config, 90, kFrameMs, false, [](PositionStep& step) {
 			if (inRange(step.index, 20, 50))
@@ -563,7 +578,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 
 	// (p9) No avatar: the measured-length chain, through the same dropouts
 	{
-		OscStreamerConfig config= baseConfig;
+		StreamConfig config= baseConfig;
 		config.avatarSkeleton= nullptr;
 		const PositionResult result= runPositionSequence(rig, config, 110, kFrameMs, false, [](PositionStep& step) {
 			if (inRange(step.index, 30, 35) || inRange(step.index, 60, 85))
@@ -618,18 +633,31 @@ static int runRetargetGoldenTest(const TestArgs&)
 	}
 
 	// (p11) A camera faster than the send rate: only the frames a live send
-	// would pass are encoded, so the hold and the root follow advance on those
+	// would pass are encoded. The frozen streamer resolved and retargeted only
+	// those, while the live retarget stage runs on every frame ahead of the
+	// send-rate gate, so this run differs by design: the hold's start, its
+	// decay and the frame it ends on, and the root follow's steps, follow
+	// every camera frame instead of every sent one. Every sent frame's pose
+	// and stream floats, held and frozen arms included, are compared within
+	// kDecimatedTolerance (0.05), the addresses, the bone set, the strings and
+	// the ints exactly. The largest differences measured are 0.011 in the pose
+	// and 0.019 in the stream, on 123 of the 124 sent frames.
 	{
-		OscStreamerConfig config= baseConfig;
+		StreamConfig config= baseConfig;
 		config.maxRateHz= 60.f;
-		const PositionResult result=
-			runPositionSequence(rig, config, 360, 1000.0 / 120.0, true, [](PositionStep& step) {
+		const PositionResult result= runPositionSequence(
+			rig, config, 360, 1000.0 / 120.0, true,
+			[](PositionStep& step) {
 				if (inRange(step.index, 120, 200))
 					step.frame.poses[0].tracked= false;
-			});
-		MIKAN_LOG_INFO(kTag) << "  (p11) " << result.encodedFrames << " of " << result.tally.frames << " frames sent";
+			},
+			nullptr, kDecimatedTolerance);
+		MIKAN_LOG_INFO(kTag) << "  (p11) " << result.encodedFrames << " of " << result.tally.frames << " frames sent, "
+							 << result.inexactFrames << " of them not bit-identical, largest difference "
+							 << result.maxPoseDifference << " in the pose and " << result.maxStreamDifference
+							 << " in the stream against a tolerance of " << kDecimatedTolerance;
 		checkSame(result.tally, result.encodedFrames < result.tally.frames && result.encodedFrames > 0,
-				  "(p11) decimating send rate");
+				  "(p11) decimating send rate, within tolerance");
 	}
 
 	// -- Direct pipeline -------------------------------------------------------
@@ -976,7 +1004,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 
 	// (s1) A live stream configured with another elbow hint must differ
 	{
-		OscStreamerConfig skewed= baseConfig;
+		StreamConfig skewed= baseConfig;
 		skewed.avatarRetarget.sides[0].elbowHintOffset= glm::vec3(0.1f, 0.2f, -0.2f);
 		const PositionResult result= runPositionSequence(
 			rig, baseConfig, 60, kFrameMs, false,

@@ -4,8 +4,8 @@
 #include "TrackingTypes.h"
 #include "UdpSocket.h"
 #include "VmcRetarget.h"
-#include "AvatarRetarget.h"
 #include "FaceProfileBinding.h"
+#include "RetargetStage.h"
 
 #include <atomic>
 #include <chrono>
@@ -24,17 +24,6 @@ struct OscStreamerConfig
 	// The conventional VMC receiver port
 	uint16_t port= 39539;
 	float maxRateHz= 60.f; // <= 0 disables rate limiting
-	// Hands whose fused confidence falls below this stop being measured on the
-	// wire: past the dropout hold their bones freeze or go silent (see
-	// vmcFreezeOnLoss) instead of following a jittering estimate.
-	// 0 = always send.
-	float minConfidence= 0.f;
-	// Dropout grace window: after a hand goes untracked (or below
-	// minConfidence), keep streaming its last good pose for this long before
-	// the loss rule applies. Bridges 2-10 frame dropouts so the avatar does
-	// not stall and resume on every brief loss. 0 = apply the loss rule
-	// immediately.
-	float holdOnDropoutMs= 250.f;
 	// Wrist-to-elbow distance used to place the streamed elbow. Only the
 	// length is assumed; the direction is measured, so an error here slides
 	// the elbow along the forearm rather than rotating it.
@@ -49,16 +38,11 @@ struct OscStreamerConfig
 	// setting: too small and the head sinks into the neck, too large and it
 	// floats.
 	float vmcHeadOffsetMeters= 0.08f;
-	// VMC carries no confidence and no tracked flag, so a lost hand can only be
-	// expressed as motion. Freezing the last streamed bones reads far better
-	// than going silent, which drops the arm back to the avatar's T-pose.
-	bool vmcFreezeOnLoss= true;
-	// With a loaded avatar the VMC bones come from retargeting the resolved
-	// poses onto its skeleton (its proportions, its rest hand) instead of the
-	// measured-length chain above. Null keeps the measured-length path.
+	// With a loaded avatar the VMC bones come from the retarget stage's
+	// posed avatar, measured against this skeleton (its proportions, its rest
+	// hand), instead of the measured-length chain above. Null keeps the
+	// measured-length path.
 	std::shared_ptr<const AvatarSkeleton> avatarSkeleton;
-	AvatarRetargetConfig avatarRetarget;
-	BodyDimensions bodyDimensions;
 	// The loaded avatar file, announced as /VMC/Ext/VRM so a receiver on the
 	// same machine can load the very file the bones were retargeted onto.
 	// An empty path announces nothing.
@@ -115,29 +99,29 @@ public:
 	OscStreamerConfig getConfig() const;
 	void setConfig(const OscStreamerConfig& config);
 
-	/// Encode and send one bundle for the given frame.
-	/// Called from the inference thread; allocation-light after warm-up
+	/// Encode and send one bundle for the given frame, past the send-rate
+	/// gate. Called from the inference thread; allocation-light after warm-up
 	/// (reuses a pooled bundle and a scratch encode buffer).
-	/// directPose is the pose the single-camera direct retarget solved for this
-	/// frame, or null on the stereo path. When it is non-null and valid the
-	/// streamer skips its own confidence gate, dropout hold, freeze rule and
-	/// AvatarRetarget (the direct solver holds and rests on its own) and
-	/// streams that pose through the configured avatar skeleton: with no
-	/// skeleton the frame carries no bones, while the blendshapes and the OK,
-	/// T, Root and VRM messages go out as usual. The OK tracking status is 1
-	/// when either upper arm is present in the pose. A null or invalid
-	/// directPose leaves the stereo behavior exactly as it was.
-	void sendFrame(const TrackingFrameResult& frame, const AvatarPose* directPose= nullptr);
+	/// retarget is what the retarget stage made of the frame, its loss rules
+	/// already applied (the confidence gate, the dropout hold, the freeze, the
+	/// ease into rest): the streamer only encodes it. A valid pose streams
+	/// through the configured avatar skeleton, and with no skeleton the frame
+	/// carries no bones; the OK tracking status is 1 when either upper arm is
+	/// present in the pose. An invalid pose streams the measured-length chain
+	/// over the stage's resolved hands, the OK tracking status 1 when either
+	/// is carried. The blendshapes and the OK, T, Root and VRM messages go out
+	/// either way.
+	void sendFrame(const TrackingFrameResult& frame, const RetargetResult& retarget);
 
 	/// Encode one frame without touching the socket, advancing the same
-	/// streaming state (dropout holds, freeze-on-loss, face and avatar throttles).
-	/// sendFrame is this plus the rate gate and the send, so a test reads
-	/// exactly the bytes a receiver would rather than a reconstruction of them.
+	/// streaming state (the face and avatar throttles). sendFrame is this
+	/// plus the rate gate and the send, so a test reads exactly the bytes a
+	/// receiver would rather than a reconstruction of them.
 	/// One entry per datagram: a frame too large for a single packet is split
 	/// into several complete bundles (see k_maxDatagramBytes).
-	/// directPose has the meaning it has on sendFrame.
-	void encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets,
-					 const AvatarPose* directPose= nullptr);
+	/// retarget has the meaning it has on sendFrame.
+	void encodeFrame(const TrackingFrameResult& frame, const RetargetResult& retarget,
+					 std::vector<std::vector<uint8_t>>& outPackets);
 
 	/// Largest datagram the streamer will put on the wire. Sized to stay inside
 	/// a 1500-byte ethernet MTU (so nothing depends on IP fragmentation, where
@@ -153,36 +137,12 @@ public:
 	int getLastPacketCount() const { return m_lastPacketCount.load(std::memory_order_relaxed); }
 	int getLastFrameBytes() const { return m_lastFrameBytes.load(std::memory_order_relaxed); }
 
-	// -- Dropout hold logic (pure; public for the self test) -----
-	struct HeldPoseState
-	{
-		bool valid= false;
-		double timestampMs= 0.0;
-		HandPose pose;
-	};
-	/// Decides what (if anything) to send for a hand this frame. A live,
-	/// confident pose passes through and refreshes ioHeld; on a dropout the
-	/// held pose bridges up to holdMs (confidence decaying linearly to 0);
-	/// past the window (or on a timestamp regression) the hold is dropped.
-	/// @returns true when outPose should be sent as tracked
-	static bool resolveOutputPose(const HandPose& pose, double frameTimestampMs, float minConfidence,
-								  float holdMs, HeldPoseState& ioHeld, HandPose& outPose);
-
-	/// What the stream carries for one hand, applied AFTER resolveOutputPose.
-	/// VMC has no confidence and no tracked flag, so the only way to say "this
-	/// is no longer measured" is to stop moving: past the dropout hold the last
-	/// streamed bones freeze rather than going silent, because a silent address
-	/// drops that arm back to the avatar's rest T-pose.
-	/// @returns true when outPose should be streamed as bones
-	static bool resolveVmcOutputPose(const HandPose& pose, bool bPoseSent, bool bFreezeOnLoss,
-									 HeldPoseState& ioLast, HandPose& outPose);
-
 private:
 	using ClockTimePoint= std::chrono::steady_clock::time_point;
 
-	void encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* directPose,
+	void encodeFrameLocked(const TrackingFrameResult& frame, const RetargetResult& retarget,
 						   const ClockTimePoint& now, std::vector<std::vector<uint8_t>>& outPackets);
-	void appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* directPose,
+	void appendVmcMessages(const TrackingFrameResult& frame, const RetargetResult& retarget,
 						   const ClockTimePoint& now);
 	void appendVmcBlendMessages(const TrackingFrameResult& frame);
 	void appendVmcAvatarMessage(const ClockTimePoint& now);
@@ -197,14 +157,9 @@ private:
 	OscBundle m_bundle;
 	std::vector<std::vector<uint8_t>> m_scratchPackets;
 
-	// Dropout hold state per side
-	HeldPoseState m_heldPose[2];
-	// VMC freeze-on-loss state per side, plus the retarget scratch (reused so
-	// the per-frame encode stays allocation-light)
-	HeldPoseState m_lastVmcPose[2];
+	// The VMC bone scratch (reused so the per-frame encode stays
+	// allocation-light)
 	VmcRetarget::VmcPose m_vmcPose;
-	AvatarRetarget m_avatarRetarget;
-	AvatarPose m_avatarPose;
 	ClockTimePoint m_startTime;
 	// Face blendshape state: the wire scratch, whether the last frame carried
 	// a face (for the one relaxing frame), and the names it sent (zeroed once

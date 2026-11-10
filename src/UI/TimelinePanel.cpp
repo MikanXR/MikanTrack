@@ -165,6 +165,7 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 			m_replay.setCaptureDiagnostics(true);
 			m_replay.runAll();
 			m_bLoaded= true;
+			++m_timelineGeneration;
 			m_bWhatIfSeeded= false;
 			m_whatIfStatus.clear();
 			m_builtFrame= -1;
@@ -384,6 +385,7 @@ void TimelinePanel::drawWhatIfSection()
 	if (ImGui::Button(locLabel("timelinePanel.resimulateButton"), ImVec2(-1, 0)))
 	{
 		m_replay.runWhatIf(m_whatIfParams);
+		++m_timelineGeneration;
 		m_viewMode= 2;
 		m_builtFrame= -1;
 
@@ -581,6 +583,34 @@ void TimelinePanel::rebuildDisplayFace()
 		m_faceRunner.evaluate(m_displayFace, m_replay.getFrame(frameIndex).recorded->nowTimestampMs);
 	}
 	m_faceFrame= m_currentFrame;
+}
+
+int TimelinePanel::getReplayTimelineId() const
+{
+	return m_timelineGeneration * 3 + m_viewMode;
+}
+
+double TimelinePanel::getFrameTimeMs(int frameIndex) const
+{
+	return m_replay.getFrame(frameIndex).recorded->nowTimestampMs;
+}
+
+void TimelinePanel::getRetargetInputs(int frameIndex, TrackingFrameResult& outFused,
+									  std::vector<const TrackingFrameResult*>& outPerCamera) const
+{
+	const TrackingReplay::ReplayFrame& frame= m_replay.getFrame(frameIndex);
+	if (m_viewMode == 0)
+		buildRecordedResult(*frame.recorded, outFused);
+	else if (m_viewMode == 2 && frame.bHasWhatIf)
+		outFused= frame.whatIfFused;
+	else
+		outFused= frame.replayedFused;
+	outPerCamera.clear();
+	for (size_t cameraIndex= 0; cameraIndex < frame.perCamera.size(); ++cameraIndex)
+	{
+		const bool bValid= cameraIndex < frame.perCameraValid.size() && frame.perCameraValid[cameraIndex];
+		outPerCamera.push_back(bValid ? &frame.perCamera[cameraIndex] : nullptr);
+	}
 }
 
 std::vector<SceneCameraView> TimelinePanel::getSceneCameras() const

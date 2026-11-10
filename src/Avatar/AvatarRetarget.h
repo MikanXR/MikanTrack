@@ -112,14 +112,25 @@ public:
 	void reset();
 
 	// The source pose of a frame: a copy of exactly what the solve reads.
-	// bSideValid selects which sides carry an arm and a hand (the caller has
-	// applied its confidence gate and dropout hold, so a valid side reads as
-	// measured); the torso is measured while both valid sides carry a
+	// bSideValid selects which sides carry an arm and a hand, each written as
+	// measured; the torso is measured while both valid sides carry a
 	// shoulder. Owns the clock: the frame time, the interval since the last
 	// fill, and the epoch reset() advances.
 	void fillSource(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 					const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
 					SourcePose& outSource);
+
+	// The source pose of a fused frame as tracking delivered it, before any
+	// loss rule: a side tracked with a world pose reads as measured, and a
+	// side tracked without one reads as lost with its hand's confidence
+	// present, so the loss stage can tell a hand seen but not placeable from
+	// one not seen at all
+	void fillSource(const TrackingFrameResult& frame, const BodyDimensions& user, SourcePose& outSource);
+
+	// Forgets the root follow alone, so the next solve snaps to its
+	// measurement, without starting a new epoch: what a new skeleton needs,
+	// since the source's clock and everything that follows it carry on
+	void resetRootFollow();
 
 	// Poses the avatar from a position pipeline's source pose; an arm that
 	// is lost stays at rest. Always produces a valid pose with a root,

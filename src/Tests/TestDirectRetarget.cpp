@@ -6,6 +6,7 @@
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "DirectRetarget.h"
+#include "DirectStageSolver.h"
 #include "MathGLM.h"
 #include "OneEuroFilter.h"
 #include "SyntheticAvatar.h"
@@ -75,7 +76,7 @@ Rig makeRig(float tiltDegrees)
 
 // Runs the neutral frame a few times (the filters settle on repeats of one
 // pose), captures it, and installs it in the config
-void captureNeutral(Rig& rig, const Camera& camera, DirectRetarget& solver, double& ioTimestampMs)
+void captureNeutral(Rig& rig, const Camera& camera, DirectStageSolver& solver, double& ioTimestampMs)
 {
 	const User user= makeNeutralUser();
 	const TrackingFrameResult::HeadPose noPhone;
@@ -185,7 +186,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		check(rig.config.neutral.present, "(b) the neutral capture measured a torso");
@@ -231,7 +232,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		{
 			User unseen= makeNeutralUser();
 			unseen.bHandTracked[0]= false;
-			DirectRetarget later;
+			DirectStageSolver later;
 			Rig laterRig= makeRig(kTiltDegrees);
 			for (int repeat= 0; repeat < 3; ++repeat)
 			{
@@ -261,7 +262,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -315,7 +316,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -362,7 +363,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -444,7 +445,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -496,8 +497,8 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solverA;
-		DirectRetarget solverB;
+		DirectStageSolver solverA;
+		DirectStageSolver solverB;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solverA, timestampMs);
 		solverA.reset();
@@ -528,7 +529,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -548,7 +549,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -603,7 +604,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -676,7 +677,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -783,15 +784,15 @@ static int runDirectRetargetTest(const TestArgs&)
 			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
 			return rotationAngle(glm::inverse(a.bones[(int)upper].deltaWorld) * b.bones[(int)upper].deltaWorld);
 		};
-		auto resting= [](const DirectRetarget& solver, int sideIndex) {
+		auto resting= [](const DirectStageSolver& solver, int sideIndex) {
 			return solver.getSolveState().arms[sideIndex].bResting;
 		};
 
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		User user= makeRaisedUser();
-		auto step= [&](DirectRetarget& stepSolver, int frameIndex, AvatarPose& outPose) {
+		auto step= [&](DirectStageSolver& stepSolver, int frameIndex, AvatarPose& outPose) {
 			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex);
 			stepSolver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
 			timestampMs+= 33.0;
@@ -875,7 +876,7 @@ static int runDirectRetargetTest(const TestArgs&)
 
 		// No blend: the first frame past the hold is the rest pose
 		rig.config.restBlendMs= 0.f;
-		DirectRetarget snapSolver;
+		DirectStageSolver snapSolver;
 		timestampMs= 0.0;
 		captureNeutral(rig, camera, snapSolver, timestampMs);
 		for (int repeat= 0; repeat < 40; ++repeat)
@@ -897,7 +898,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -1002,7 +1003,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -1051,7 +1052,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectRetarget solver;
+		DirectStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 

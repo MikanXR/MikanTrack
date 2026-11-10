@@ -46,6 +46,18 @@ public:
 	// last fresh result, like the live preview panes). Pointers are valid for
 	// the rest of the current UI frame.
 	std::vector<const TrackingFrameResult*> getPerCameraResults() const;
+	// The timeline the shown frames come from, for a retarget run over them:
+	// an id that changes with the recording, the view and a what-if run (a
+	// new id is a new timeline), the current frame's index, any frame's
+	// recorded time, and any frame's fused result for the selected view and
+	// its per-camera results (null where a camera has none; the pointers
+	// live as long as the loaded recording). The face sources are left out:
+	// no retarget reads them.
+	int getReplayTimelineId() const;
+	int getCurrentFrameIndex() const { return m_currentFrame; }
+	double getFrameTimeMs(int frameIndex) const;
+	void getRetargetInputs(int frameIndex, TrackingFrameResult& outFused,
+						   std::vector<const TrackingFrameResult*>& outPerCamera) const;
 	// Current frame's recorded stage state while the replay view is active,
 	// null when it is not or the frame carries none (a recording made before
 	// it was recorded). Valid for the rest of the current UI frame.
@@ -82,6 +94,8 @@ private:
 	bool m_bReplayViewActive= false;
 	int m_currentFrame= 0;
 	int m_viewMode= 1; // 0=Recorded, 1=Replayed, 2=What-if
+	// Counts the loads and the what-if runs, each a new timeline
+	int m_timelineGeneration= 0;
 
 	bool m_bPlaying= false;
 	float m_playSpeed= 1.f;
