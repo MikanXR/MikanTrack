@@ -103,6 +103,8 @@ private:
 		int index= -1;
 		std::string label;
 		ImU32 color= 0;
+		// Shown in the plot as of the last draw. The plot's legend owns the
+		// toggle, and this copy is what the value range fits.
 		bool bOn= true;
 	};
 	struct Sample
@@ -174,7 +176,6 @@ private:
 	double m_lastSampleTimestampMs= -1.0;
 	std::vector<int> m_seriesInputSlots;
 	std::vector<int> m_seriesLetIndices;
-	std::vector<ImVec2> m_plotPoints;
 
 	// The preview
 	std::unique_ptr<GlFrameBuffer> m_frameBuffer;

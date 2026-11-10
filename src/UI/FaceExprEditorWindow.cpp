@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 #include "GL/glew.h"
 
 #include "imgui.h"
+#include "implot.h"
 #include "misc/cpp/imgui_stdlib.h"
 
 #include "glm/ext/matrix_float4x4.hpp"
@@ -48,6 +50,11 @@ constexpr ImU32 k_seriesColors[]= {
 	IM_COL32(90, 220, 220, 255),  IM_COL32(255, 120, 120, 255),
 };
 constexpr ImU32 k_resultColor= IM_COL32(245, 245, 245, 255);
+// The trace's line weights in pixels: the result over the inputs over the
+// variables
+constexpr float k_resultLineWeight= 2.5f;
+constexpr float k_inputLineWeight= 1.5f;
+constexpr float k_variableLineWeight= 1.f;
 
 // The operators the lexer knows, as the palette lists them. Word-like ones
 // get a tooltip; every one inserts with a space around it, bar '!'.
@@ -560,21 +567,10 @@ void FaceExprEditorWindow::syncSeries(const FaceProfile& profile, const Frame& f
 		return;
 	}
 
-	// The legend's toggles survive a rebuild for the labels that stay
-	std::vector<Series> previous= std::move(m_series);
-	auto wasOn= [&](const std::string& label) {
-		for (const Series& series : previous)
-		{
-			if (series.label == label)
-				return series.bOn;
-		}
-		return true;
-	};
 	m_series.clear();
 	Series result;
 	result.label= rowLabel(profile);
 	result.color= k_resultColor;
-	result.bOn= wasOn(result.label);
 	m_series.push_back(result);
 	size_t colorIndex= 0;
 	const size_t colorCount= sizeof(k_seriesColors) / sizeof(k_seriesColors[0]);
@@ -584,7 +580,6 @@ void FaceExprEditorWindow::syncSeries(const FaceProfile& profile, const Frame& f
 		series.index= slot;
 		series.label= FaceExprInputs::name(slot);
 		series.color= k_seriesColors[colorIndex++ % colorCount];
-		series.bOn= wasOn(series.label);
 		m_series.push_back(series);
 	}
 	for (int letIndex : letIndices)
@@ -594,7 +589,6 @@ void FaceExprEditorWindow::syncSeries(const FaceProfile& profile, const Frame& f
 		series.index= letIndex;
 		series.label= (size_t)letIndex < profile.lets.size() ? profile.lets[(size_t)letIndex].name : std::string("?");
 		series.color= k_seriesColors[colorIndex++ % colorCount];
-		series.bOn= wasOn(series.label);
 		m_series.push_back(series);
 	}
 	m_seriesInputSlots= inputSlots;
@@ -640,16 +634,7 @@ void FaceExprEditorWindow::drawTrace()
 	ImGui::SameLine();
 	ImGui::TextDisabled("%s", locText("exprEditor.traceNote"));
 
-	const float legendHeight= ImGui::GetFrameHeightWithSpacing() * 2.f;
-	ImVec2 plotSize= ImGui::GetContentRegionAvail();
-	plotSize.x= std::max(plotSize.x, 60.f);
-	plotSize.y= std::max(60.f, plotSize.y - legendHeight);
-	const ImVec2 plotMin= ImGui::GetCursorScreenPos();
-	const ImVec2 plotMax(plotMin.x + plotSize.x, plotMin.y + plotSize.y);
-	ImDrawList* drawList= ImGui::GetWindowDrawList();
-	drawList->AddRectFilled(plotMin, plotMax, IM_COL32(18, 18, 24, 255), 4.f);
-
-	// 0..1 unless a series leaves it
+	// 0..1 unless a shown series leaves it
 	float yMin= 0.f;
 	float yMax= 1.f;
 	for (const Sample& sample : m_samples)
@@ -662,86 +647,131 @@ void FaceExprEditorWindow::drawTrace()
 			yMax= std::max(yMax, sample.values[index]);
 		}
 	}
-	const float yRange= std::max(yMax - yMin, 1e-3f);
-	auto toY= [&](float value) { return plotMax.y - (value - yMin) / yRange * plotSize.y; };
-	const double now= m_shownTimestampMs;
-	const double t0= now - k_traceWindowMs;
-	auto toX= [&](double timestampMs) {
-		return plotMin.x + (float)((timestampMs - t0) / k_traceWindowMs) * plotSize.x;
+	if (yMax - yMin < 1e-3f)
+		yMax= yMin + 1e-3f;
+
+	// Each legend entry shows the name and the live value. Its identity is a
+	// key that outlives both, so a toggle survives a changing value and a
+	// renamed variable.
+	const Sample* last= m_samples.empty() ? nullptr : &m_samples.back();
+	std::vector<std::string> labels;
+	labels.reserve(m_series.size());
+	float legendRowWidth= 0.f;
+	for (size_t seriesIndex= 0; seriesIndex < m_series.size(); ++seriesIndex)
+	{
+		const Series& series= m_series[seriesIndex];
+		const std::string key= series.index < 0 ? std::string("result")
+							   : series.bLet    ? "let:" + std::to_string(series.index)
+												: FaceExprInputs::name(series.index);
+		char value[32]= "";
+		if (last != nullptr && seriesIndex < last->values.size())
+			std::snprintf(value, sizeof(value), " %.2f", last->values[seriesIndex]);
+		labels.push_back(series.label + value + "###" + key);
+		// Measured with a fixed value, so the layout does not flip as the
+		// digits change
+		legendRowWidth+= ImGui::CalcTextSize((series.label + " 0.00").c_str()).x;
+	}
+
+	// The axes are locked: time is seconds before the shown frame, and the
+	// value range is the one fitted above. The legend below the plot owns
+	// each line's visibility: one row while its entries fit the plot's
+	// width, stacked when they do not, so every entry stays in view.
+	const ImVec2 avail= ImGui::GetContentRegionAvail();
+	const ImVec2 plotSize(std::max(avail.x, 60.f), std::max(avail.y, 80.f));
+	const ImPlotStyle& plotStyle= ImPlot::GetStyle();
+	const float entryCount= (float)m_series.size();
+	legendRowWidth+= plotStyle.LegendInnerPadding.x * 2.f + ImGui::GetTextLineHeight() * entryCount +
+					 plotStyle.LegendSpacing.x * std::max(0.f, entryCount - 1.f);
+	const bool bLegendRow= legendRowWidth <= plotSize.x - plotStyle.PlotPadding.x * 2.f;
+	const ImPlotLegendFlags legendFlags=
+		ImPlotLegendFlags_Outside | ImPlotLegendFlags_NoMenus | (bLegendRow ? ImPlotLegendFlags_Horizontal : 0);
+	constexpr ImPlotFlags k_plotFlags=
+		ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText;
+	constexpr ImPlotAxisFlags k_axisFlags=
+		ImPlotAxisFlags_Lock | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoSideSwitch;
+	if (!ImPlot::BeginPlot("##trace", plotSize, k_plotFlags))
+		return;
+	ImPlot::SetupAxes(nullptr, nullptr, k_axisFlags, k_axisFlags);
+	ImPlot::SetupAxisLimits(ImAxis_X1, -k_traceWindowMs / 1000.0, 0.0, ImPlotCond_Always);
+	ImPlot::SetupAxisLimits(ImAxis_Y1, (double)yMin, (double)yMax, ImPlotCond_Always);
+	ImPlot::SetupAxisFormat(ImAxis_X1, "%g s");
+	ImPlot::SetupLegend(ImPlotLocation_South, legendFlags);
+
+	struct PointSource
+	{
+		const std::deque<Sample>* samples;
+		size_t seriesIndex;
+		double shownTimestampMs;
+	};
+	const ImPlotGetter getPoint= [](int index, void* data) -> ImPlotPoint {
+		const PointSource& source= *static_cast<const PointSource*>(data);
+		const Sample& sample= (*source.samples)[(size_t)index];
+		// A missing or non-finite value is a gap in the line
+		double value= std::numeric_limits<double>::quiet_NaN();
+		if (source.seriesIndex < sample.values.size() && std::isfinite(sample.values[source.seriesIndex]))
+			value= (double)sample.values[source.seriesIndex];
+		return ImPlotPoint((sample.timestampMs - source.shownTimestampMs) / 1000.0, value);
 	};
 
-	drawList->PushClipRect(plotMin, plotMax, true);
-	const ImU32 gridColor= IM_COL32(255, 255, 255, 22);
-	const ImU32 midColor= IM_COL32(255, 255, 255, 60);
-	for (float level= std::floor(yMin * 4.f) / 4.f; level <= yMax + 1e-4f; level+= 0.25f)
+	auto plotSeries= [&](size_t seriesIndex, bool bLegendOnly) {
+		Series& series= m_series[seriesIndex];
+		const char* label= labels[seriesIndex].c_str();
+		ImPlotSpec spec;
+		spec.LineColor= ImGui::ColorConvertU32ToFloat4(series.color);
+		spec.LineWeight= series.index < 0 ? k_resultLineWeight : series.bLet ? k_variableLineWeight : k_inputLineWeight;
+		if (bLegendOnly)
+		{
+			ImPlot::PlotDummy(label, spec);
+		}
+		else
+		{
+			PointSource source{&m_samples, seriesIndex, m_shownTimestampMs};
+			ImPlot::PlotLineG(label, getPoint, &source, (int)m_samples.size(), spec);
+		}
+		series.bOn= !ImPlot::IsLastItemHidden();
+	};
+	if (!m_series.empty())
 	{
-		const float y= toY(level);
-		drawList->AddLine(ImVec2(plotMin.x, y), ImVec2(plotMax.x, y), std::fabs(level - 0.5f) < 1e-4f ? midColor : gridColor,
-						  1.f);
-	}
-	for (int second= 1; second < 6; ++second)
-	{
-		const float x= toX(now - second * 1000.0);
-		drawList->AddLine(ImVec2(x, plotMin.y), ImVec2(x, plotMax.y), gridColor, 1.f);
+		// The result heads the legend and draws last, over what it reads: one
+		// label submitted twice is one item
+		plotSeries(0, true);
+		for (size_t seriesIndex= 1; seriesIndex < m_series.size(); ++seriesIndex)
+			plotSeries(seriesIndex, false);
+		plotSeries(0, false);
 	}
 
-	// Inputs and variables first, the result on top
-	for (size_t pass= 0; pass < m_series.size(); ++pass)
+	// Hover: a cursor at the nearest sample and every shown series' value there
+	if (ImPlot::IsPlotHovered() && !m_samples.empty())
 	{
-		const size_t seriesIndex= (pass + 1) % m_series.size();
-		const Series& series= m_series[seriesIndex];
-		if (!series.bOn)
-			continue;
-		m_plotPoints.clear();
-		for (const Sample& sample : m_samples)
+		const double hoverMs= m_shownTimestampMs + ImPlot::GetPlotMousePos().x * 1000.0;
+		auto nearest= std::lower_bound(m_samples.begin(), m_samples.end(), hoverMs,
+									   [](const Sample& sample, double timestampMs) { return sample.timestampMs < timestampMs; });
+		if (nearest == m_samples.end())
+			--nearest;
+		else if (nearest != m_samples.begin() && hoverMs - (nearest - 1)->timestampMs < nearest->timestampMs - hoverMs)
+			--nearest;
+		const double seconds= (nearest->timestampMs - m_shownTimestampMs) / 1000.0;
+
+		ImPlot::PushPlotClipRect();
+		ImPlot::GetPlotDrawList()->AddLine(ImPlot::PlotToPixels(ImPlotPoint(seconds, (double)yMax)),
+										   ImPlot::PlotToPixels(ImPlotPoint(seconds, (double)yMin)),
+										   IM_COL32(255, 255, 255, 110), 1.f);
+		ImPlot::PopPlotClipRect();
+
+		ImGui::BeginTooltip();
+		ImGui::TextDisabled("%.2f s", seconds);
+		for (size_t seriesIndex= 0; seriesIndex < m_series.size() && seriesIndex < nearest->values.size(); ++seriesIndex)
 		{
-			if (seriesIndex >= sample.values.size() || !std::isfinite(sample.values[seriesIndex]))
+			const Series& series= m_series[seriesIndex];
+			if (!series.bOn)
 				continue;
-			m_plotPoints.push_back(ImVec2(toX(sample.timestampMs), toY(sample.values[seriesIndex])));
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(series.color), "%s", series.label.c_str());
+			ImGui::SameLine();
+			ImGui::Text("%.2f", nearest->values[seriesIndex]);
 		}
-		if (m_plotPoints.size() < 2)
-			continue;
-		const float thickness= series.index < 0 ? 2.5f : 1.5f;
-		if (series.bLet)
-		{
-			// Variables dashed: every other segment
-			for (size_t point= 0; point + 1 < m_plotPoints.size(); point+= 2)
-				drawList->AddLine(m_plotPoints[point], m_plotPoints[point + 1], series.color, thickness);
-		}
-		else
-		{
-			drawList->AddPolyline(m_plotPoints.data(), (int)m_plotPoints.size(), series.color, ImDrawFlags_None,
-								  thickness);
-		}
+		ImGui::EndTooltip();
 	}
-
-	const ImU32 labelColor= IM_COL32(200, 200, 200, 160);
-	const float lineHeight= ImGui::GetTextLineHeight();
-	drawList->AddText(ImVec2(plotMin.x + 4.f, plotMin.y + 2.f), labelColor, formatValue(yMax).c_str());
-	drawList->AddText(ImVec2(plotMin.x + 4.f, plotMax.y - lineHeight - 2.f), labelColor, formatValue(yMin).c_str());
-	drawList->AddText(ImVec2(plotMin.x + 48.f, plotMax.y - lineHeight - 2.f), labelColor, "-6 s");
-	const float nowWidth= ImGui::CalcTextSize("now").x;
-	drawList->AddText(ImVec2(plotMax.x - nowWidth - 4.f, plotMax.y - lineHeight - 2.f), labelColor, "now");
-	drawList->PopClipRect();
-	ImGui::Dummy(plotSize);
-
-	// The legend: a chip per series toggles its line
-	const Sample* last= m_samples.empty() ? nullptr : &m_samples.back();
-	for (size_t index= 0; index < m_series.size(); ++index)
-	{
-		Series& series= m_series[index];
-		char label[160];
-		if (last != nullptr && index < last->values.size())
-			std::snprintf(label, sizeof(label), "%s %.2f", series.label.c_str(), last->values[index]);
-		else
-			std::snprintf(label, sizeof(label), "%s", series.label.c_str());
-		ImGui::PushID((int)index);
-		ImGui::PushStyleColor(ImGuiCol_Text, series.bOn ? series.color : ImGui::GetColorU32(ImGuiCol_TextDisabled));
-		if (paletteButton(label, index == 0))
-			series.bOn= !series.bOn;
-		ImGui::PopStyleColor();
-		ImGui::PopID();
-	}
+	ImPlot::EndPlot();
 }
 
 bool FaceExprEditorWindow::paletteButton(const char* label, bool bFirstInRow)

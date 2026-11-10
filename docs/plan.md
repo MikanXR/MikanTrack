@@ -52,7 +52,7 @@ The living plan: what is in flight now, what comes next, and the open questions.
 - [ ] A node graph editor for face profiles that bakes to the same `FaceExprProgram` the text expressions compile to.
 - [ ] A `webcam.*` face source: a webcam face model's blendshapes as a third input namespace in `FaceExprInputs`.
 - [ ] Lua-defined inputs for face profiles: scripted values as an input namespace.
-- [ ] Curve-preview widgets in the Face tab: the response of `remap`, `smoothstep`, `pow` and `hysteresis` drawn over their input range.
+- [ ] Curve-preview widgets in the Face tab: the response of `remap`, `smoothstep`, `pow` and `hysteresis` drawn over their input range, as ImPlot plots like the expression editor's trace.
 - [ ] Human-review the machine-translated Japanese strings for the Face tab (`faceTab`, `avatarPanel.tabFace`, `windows.modalDeleteFaceProfile`, `audioPanel.weightsNone` in `resources/localization/ja.json`).
 - [ ] Human-review the machine-translated Japanese strings for the expression editor (`exprEditor`, `windows.expressionEditor` in `resources/localization/ja.json`).
 
