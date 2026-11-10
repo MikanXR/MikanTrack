@@ -55,7 +55,7 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 
 ### Synthetic input (input)
 
-Injected input is posted to SDL's own event queue stamped with the target window's id, so it travels the path a user's input does: the same backend, the same ImGui routing. A driven session is therefore evidence about the shipping input path rather than about a test-only shortcut. Every verb raises the target window first, since input only lands where the OS is delivering it.
+Injected input is posted to SDL's own event queue stamped with the target window's id, so it travels the path a user's input does: the same backend, the same ImGui routing. A driven session is therefore evidence about the shipping input path rather than about a test-only shortcut. Every verb raises the target window first, since input only lands where the OS is delivering it. A window that already has the input focus is not raised again, because a repeated raise of a torn-out window makes ImGui refocus its viewport and close a popup the previous verb opened.
 
 Mouse position is warped rather than fabricated, which moves the real cursor. ImGui's backend re-reads the OS cursor every frame whenever the pointer is not over one of our windows, and would overwrite a fabricated position before the widget under it saw the click.
 
