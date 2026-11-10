@@ -61,6 +61,7 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// a second camera
 		return section != eStageSection::Settings || m_tracking.config->cameraCount() > 1;
 	case ePipelineStage::Imu:
+	case ePipelineStage::BodySolver:
 		return true;
 	default:
 		return false;
@@ -152,6 +153,21 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 			// keep theirs to set them apart from it
 			SettingsPanels::drawWristImuDeviceTable(m_tracking);
 			SettingsPanels::drawWristReadoutSection(m_tracking);
+		}
+		break;
+	case ePipelineStage::BodySolver:
+		if (section == eStageSection::Inputs)
+		{
+			SettingsPanels::drawBodyCalibrationControl(m_tracking);
+		}
+		else if (section == eStageSection::Settings)
+		{
+			SettingsPanels::drawBodyDimensionControls(m_tracking);
+		}
+		else
+		{
+			// The readout is the section's only content
+			SettingsPanels::drawBodySolveReadout(m_tracking, false);
 		}
 		break;
 	default:

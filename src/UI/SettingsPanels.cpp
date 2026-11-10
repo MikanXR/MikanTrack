@@ -995,9 +995,6 @@ void SettingsPanels::drawWristReadoutSection(const TrackingSectionContext& conte
 						forearm.w);
 			ImGui::Text(locText("oscPanel.wristQuatFmt"), wristRotation.x, wristRotation.y,
 						wristRotation.z, wristRotation.w);
-
-			const glm::vec3 elbow= pose.getElbowPositionWorld(context.config->body.forearmLengthMeters);
-			ImGui::Text(locText("oscPanel.elbowFmt"), elbow.x, elbow.y, elbow.z);
 		}
 		else
 		{
@@ -1136,17 +1133,27 @@ void SettingsPanels::drawBodyPoseCameraControls(const TrackingSectionContext& co
 
 void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader)
 {
-	AppConfig* config= context.config;
-
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.bodyPoseSection"));
 
-	bool bChanged= false;
+	drawBodyCalibrationControl(context);
+	drawBodyDimensionControls(context);
+}
+
+void SettingsPanels::drawBodyCalibrationControl(const TrackingSectionContext& context)
+{
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseProportionsIntro"));
 
 	if (ImGui::Button(locLabel("trackingPanel.measureMyBody"), ImVec2(-1, 0)))
 		context.state->bLaunchBodyCalibrationWizard= true;
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.measureMyBodyTooltip"));
+}
+
+void SettingsPanels::drawBodyDimensionControls(const TrackingSectionContext& context)
+{
+	AppConfig* config= context.config;
+
+	bool bChanged= false;
 	bChanged|=
 		ImGui::Checkbox(locLabel("trackingPanel.deriveUpperArmFromShoulderWidth"), &config->body.bDeriveUpperArmFromShoulderWidth);
 	ImGui::SetItemTooltip(locText("trackingPanel.deriveUpperArmTooltip"));
@@ -1173,6 +1180,63 @@ void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, 
 
 	if (bChanged)
 		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context, bool bWithHeader)
+{
+	const TrackingFrameResult* fused= context.fusion->fused;
+	if (fused == nullptr)
+		return;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("pipeline.stageBodySolver"));
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused->poses[sideIndex];
+		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
+
+		// The shoulder is torso-fixed, so the solver places it with or without
+		// a tracked hand
+		if (pose.hasShoulder)
+		{
+			const glm::vec3& shoulder= pose.shoulderPositionWorld;
+			ImGui::Text(locText("trackingPanel.bodyShoulderFmt"), shoulder.x, shoulder.y, shoulder.z,
+						pose.shoulderConfidence);
+		}
+		else
+		{
+			ImGui::TextDisabled("%s", locText("trackingPanel.bodyNoShoulder"));
+		}
+
+		if (!pose.tracked)
+		{
+			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
+			continue;
+		}
+
+		if (pose.hasForearmPose && pose.hasWorldPose)
+		{
+			const glm::vec3 elbow= pose.getElbowPositionWorld(context.config->body.forearmLengthMeters);
+			ImGui::Text(locText("oscPanel.elbowFmt"), elbow.x, elbow.y, elbow.z);
+			ImGui::Text(locText("trackingPanel.bodyForearmConfidenceFmt"), pose.forearmConfidence);
+		}
+		else
+		{
+			ImGui::TextDisabled("%s", locText("trackingPanel.bodyNoForearm"));
+		}
+	}
+
+	ImGui::Text("%s", locText("avatarPanel.sectionHead"));
+	if (fused->head.valid)
+	{
+		const glm::vec3& head= fused->head.positionWorld;
+		ImGui::Text(locText("trackingPanel.bodyHeadFmt"), head.x, head.y, head.z, fused->head.confidence);
+	}
+	else
+	{
+		ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
+	}
 }
 
 void SettingsPanels::drawDirectSection(const TrackingSectionContext& context, bool bWithHeader)
@@ -1446,15 +1510,17 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	// The live panel holds rig facts, calibration, and readouts only.
 
 	// A direct project's pipeline has no Fusion stage to host the hand
-	// calibration block (its direct mode note) and the hold-still test, and
-	// no IMU stage to host the wrist IMU section, so the panel keeps them in
-	// direct mode
+	// calibration block (its direct mode note) and the hold-still test, no
+	// IMU stage to host the wrist IMU section, and no Body solver stage to
+	// host the body proportions the direct solve also reads, so the panel
+	// keeps them in direct mode
 	const bool bDirect= context.config->direct.enabled;
 
 	if (bDirect)
 		drawWristImuSection(context);
 	drawFaceSection(context);
-	drawBodyPoseSection(context);
+	if (bDirect)
+		drawBodyPoseSection(context);
 	drawDirectSection(context);
 	if (bDirect)
 		drawHandCalibrationSection(context);

@@ -66,7 +66,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
 - Live preview with landmark overlay; alternate 3D scene view rendering the
   forward-kinematics hand reconstruction (what the VMC finger bones are built from),
   camera frustums, marker grid, orbit camera
-- **Body measurement wizard** (Tracking panel -> Measure My Body): the elbow,
+- **Body measurement wizard** (Body solver stage -> Measure My Body): the elbow,
   shoulder and head estimates rest on lengths that are NOT anatomical - they
   are distances between the pose model's own landmarks, which sit inside the
   real joints by an amount that varies per person and per model. Raise ONE hand
@@ -124,7 +124,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   reopening a closed panel; per-project config persisted to
   `%USERPROFILE%/Documents/MikanTrack/<project>/project.json` (the last-project
   pointer lives in `%APPDATA%/MikanTrack/config.json`)
-- **Image quality diagnostics** (Tracking panel): per-camera statistics of
+- **Image quality diagnostics** (Capture stage): per-camera statistics of
   each hand's region in the exact image the model consumed - luminance,
   highlight/shadow clipping, contrast, hand-vs-background separation,
   sharpness, sensor noise, plus whole-frame flicker/auto-exposure-hunting

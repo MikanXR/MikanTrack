@@ -162,8 +162,9 @@ void commitOscConfigChange(const OscSectionContext& context);
 // image quality, inference and capture timing are the Capture stage's, and
 // fusion, hand scale, the fused hands, the fusion detail, the per-camera
 // skeletons toggle and the hold-still test are the Fusion stage's; none of
-// them is in the panel. The wrist IMU pieces are the IMU stage's, and the
-// panel draws them only in a direct project, which has no IMU stage.
+// them is in the panel. The wrist IMU pieces are the IMU stage's and the body
+// pieces the Body solver stage's, and the panel draws them only in a direct
+// project, which has neither stage.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -184,13 +185,22 @@ void drawWristImuEnableControl(const TrackingSectionContext& context);
 void drawWristImuArmControls(const TrackingSectionContext& context);
 void drawWristImuDeviceTable(const TrackingSectionContext& context);
 void drawMountingCalibrationControl(const TrackingSectionContext& context);
-// Each hand's wrist bend, forearm and wrist rotations and elbow in the shown
-// fused result (context.fusion->fused)
+// Each hand's wrist bend and forearm and wrist rotations in the shown fused
+// result (context.fusion->fused)
 void drawWristReadoutSection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawFaceSection(const TrackingSectionContext& context, bool bWithHeader= true);
-// The body proportions and Measure My Body; the per-camera enables are
-// drawBodyPoseCameraControls
+// The body pieces composed in one section: Measure My Body and the body
+// proportions. The per-camera enables are drawBodyPoseCameraControls. The
+// Body solver stage hosts the pieces, and the panel draws the section only in
+// a direct project, which has no Body solver stage.
 void drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The body pieces, no headers: the proportions intro with Measure My Body,
+// and the proportion controls, which edit the live config
+void drawBodyCalibrationControl(const TrackingSectionContext& context);
+void drawBodyDimensionControls(const TrackingSectionContext& context);
+// Each side's shoulder, elbow and forearm confidence, and the head, in the
+// shown fused result (context.fusion->fused)
+void drawBodySolveReadout(const TrackingSectionContext& context, bool bWithHeader= true);
 // What body tracking is for and which cameras should run it
 void drawBodyPoseIntro();
 // One camera's body pose enable and, when enabled, its model. Draws nothing
