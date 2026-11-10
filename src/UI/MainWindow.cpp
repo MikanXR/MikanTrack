@@ -490,7 +490,8 @@ void MainWindow::update(float deltaSeconds)
 	oscContext.visionThread= visionThread;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
-							   m_microphoneReadout, m_oscReadout, m_faceExprEditor->getTarget(), bWizardActive);
+							   m_microphoneReadout, m_oscReadout, m_directReadout, m_faceExprEditor->getTarget(),
+							   bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -848,7 +849,7 @@ void MainWindow::updateOscReadout()
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
-	m_shownDirectState= nullptr;
+	updateDirectReadout(nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
@@ -924,7 +925,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		m_scene3dPanel->setAvatarFace(&shownFused.face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
-	m_shownDirectState= directState;
+	updateDirectReadout(directState);
 	updateSceneCameraMatch(directState, skeleton.get());
 
 	// The elbow hints where the solve put them: off the posed upper-arm
@@ -939,6 +940,19 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		hint.shoulderWorld= posed[(int)upperArm].positionWorld;
 		hint.hintWorld= hint.shoulderWorld + m_avatarPose.rootRotationWorld * rig.sides[sideIndex].elbowHintOffset;
 	}
+}
+
+void MainWindow::updateDirectReadout(const DirectRetarget::SolveState* state)
+{
+	DirectReadout readout;
+	readout.state= state;
+	readout.bNeutralPresent= m_shown.config->direct.neutralPresent;
+	if (state != nullptr)
+	{
+		readout.shoulderDepth= glm::length(state->shoulderMidpoint);
+		readout.leanDegrees= glm::degrees(glm::angle(glm::normalize(state->spineDelta)));
+	}
+	m_directReadout= readout;
 }
 
 void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)
@@ -1167,13 +1181,13 @@ void MainWindow::gatherPipelineInputs()
 	if (in.bDirect && in.directCameraIndex >= 0 && in.directCameraIndex < in.cameraCount)
 		in.bDirectIntrinsics= config->camera(in.directCameraIndex).intrinsics.present;
 	in.bDirectNeutral= config->direct.neutralPresent;
-	if (m_shownDirectState != nullptr)
+	if (m_directReadout.state != nullptr)
 	{
-		const DirectRetarget::SolveState& state= *m_shownDirectState;
+		const DirectRetarget::SolveState& state= *m_directReadout.state;
 		in.bDirectTorso= state.torsoValid;
 		in.bDirectHeadMeasured= state.headMeasured;
-		in.directShoulderDepthMeters= glm::length(state.shoulderMidpoint);
-		in.directLeanDegrees= glm::degrees(glm::angle(glm::normalize(state.spineDelta)));
+		in.directShoulderDepthMeters= m_directReadout.shoulderDepth;
+		in.directLeanDegrees= m_directReadout.leanDegrees;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];

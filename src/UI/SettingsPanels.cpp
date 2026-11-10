@@ -1,6 +1,7 @@
 #include "SettingsPanels.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "imgui.h"
@@ -215,10 +216,9 @@ static void updateImageQualityEma(const TrackingSectionContext& context, float d
 	}
 }
 
-void SettingsPanels::drawImageQualitySection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawImageQualitySection(const TrackingSectionContext& context)
 {
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.imageQualitySection"));
+	ImGui::SeparatorText(locText("trackingPanel.imageQualitySection"));
 
 	const TrackingPanelState& panelState= *context.state;
 	const std::vector<VisionPreviewFrame>& latestPreviews= *context.latestPreviews;
@@ -387,18 +387,15 @@ static void updateCaptureTimingEma(const TrackingSectionContext& context, float 
 	}
 }
 
-void SettingsPanels::drawCaptureTimingSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawCaptureTimingSection(const TrackingSectionContext& context)
 {
 	const TrackingPanelState& panelState= *context.state;
 	const int cameraCount= getReadoutCameraCount(context.config);
 	if (cameraCount <= 0)
 		return;
 
-	if (bWithHeader)
-	{
-		ImGui::SeparatorText(locText("trackingPanel.captureTimingSection"));
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.captureTimingTooltip"));
-	}
+	ImGui::SeparatorText(locText("trackingPanel.captureTimingSection"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.captureTimingTooltip"));
 
 	if (!ImGui::BeginTable("captureTiming", 1 + cameraCount,
 						   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
@@ -522,12 +519,11 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 	}
 }
 
-void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context)
 {
 	TrackingPanelState& panelState= *context.state;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.holdStillSection"));
+	ImGui::SeparatorText(locText("trackingPanel.holdStillSection"));
 
 	if (panelState.holdStillCountdown > 0.f)
 	{
@@ -614,14 +610,13 @@ void SettingsPanels::drawFlipHandednessSection(const TrackingSectionContext& con
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.flipHandednessTooltip"));
 }
 
-void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawFusionSection(const TrackingSectionContext& context)
 {
 	const FusionReadout& fusion= *context.fusion;
 	if (fusion.cameraCount <= 1)
 		return;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.fusionSection"));
+	ImGui::SeparatorText(locText("trackingPanel.fusionSection"));
 
 	if (!fusion.bAvailable)
 	{
@@ -664,15 +659,14 @@ void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bo
 	}
 }
 
-void SettingsPanels::drawHandScaleSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawHandScaleSection(const TrackingSectionContext& context)
 {
 	const AppConfig* config= context.config;
 	const FusionReadout& fusion= *context.fusion;
 	if (fusion.cameraCount <= 1)
 		return;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.handScaleSection"));
+	ImGui::SeparatorText(locText("trackingPanel.handScaleSection"));
 	if (!fusion.bAvailable)
 	{
 		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
@@ -688,14 +682,13 @@ void SettingsPanels::drawHandScaleSection(const TrackingSectionContext& context,
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.measuredScaleTooltip"));
 }
 
-void SettingsPanels::drawFusedPalmReadout(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawFusedPalmReadout(const TrackingSectionContext& context)
 {
 	const TrackingFrameResult* fused= context.fusion->fused;
 	if (fused == nullptr)
 		return;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.fusedHandsSection"));
+	ImGui::SeparatorText(locText("trackingPanel.fusedHandsSection"));
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -714,12 +707,11 @@ void SettingsPanels::drawFusedPalmReadout(const TrackingSectionContext& context,
 	}
 }
 
-void SettingsPanels::drawFusionDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawFusionDiagnosticsSection(const TrackingSectionContext& context)
 {
 	const FusionReadout& fusion= *context.fusion;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.fusionDiagnosticsSection"));
+	ImGui::SeparatorText(locText("trackingPanel.fusionDiagnosticsSection"));
 
 	if (fusion.diagnostics == nullptr)
 	{
@@ -807,21 +799,6 @@ void SettingsPanels::drawFusionDiagnosticsSection(const TrackingSectionContext& 
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader)
-{
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.wristImuSection"));
-
-	drawWristImuEnableControl(context);
-	drawWristImuDeviceTable(context);
-	drawWristImuArmControls(context);
-
-	// No "vision yaw anchor" slider: the value is settled, and it is still
-	// in the config file for anyone who needs to retune it
-
-	drawMountingCalibrationControl(context);
-}
-
 void SettingsPanels::drawWristImuEnableControl(const TrackingSectionContext& context)
 {
 	const bool bChanged= ImGui::Checkbox(locLabel("trackingPanel.enableWristImu"), &context.config->imu.enabled);
@@ -837,17 +814,24 @@ void SettingsPanels::drawWristImuArmControls(const TrackingSectionContext& conte
 
 	ImGui::BeginDisabled(!config->imu.enabled);
 
-	bool bChanged= false;
-	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &config->imu.swapSides);
+	if (ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &config->imu.swapSides))
+		commitTrackingConfigChange(context);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.swapWristsTooltip"));
 
-	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f, "%.2f m");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.forearmLengthTooltip"));
+	// No "vision yaw anchor" slider: the value is settled, and it is still
+	// in the config file for anyone who needs to retune it
+	drawForearmLengthControl(context, "trackingPanel.forearmLengthTooltip");
 
 	ImGui::EndDisabled();
+}
 
-	if (bChanged)
+void SettingsPanels::drawForearmLengthControl(const TrackingSectionContext& context, const char* tooltipKey)
+{
+	AppConfig* config= context.config;
+	if (ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f,
+						   "%.2f m"))
 		commitTrackingConfigChange(context);
+	ImGui::SetItemTooltip("%s", locText(tooltipKey));
 }
 
 void SettingsPanels::drawWristImuDeviceTable(const TrackingSectionContext& context)
@@ -952,14 +936,13 @@ void SettingsPanels::drawMountingCalibrationControl(const TrackingSectionContext
 	ImGui::EndDisabled();
 }
 
-void SettingsPanels::drawWristReadoutSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawWristReadoutSection(const TrackingSectionContext& context)
 {
 	const TrackingFrameResult* fused= context.fusion->fused;
 	if (fused == nullptr)
 		return;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.wristReadoutSection"));
+	ImGui::SeparatorText(locText("trackingPanel.wristReadoutSection"));
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -1151,15 +1134,6 @@ void SettingsPanels::drawBodyPoseCameraControls(const TrackingSectionContext& co
 		commitTrackingConfigChange(context);
 }
 
-void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader)
-{
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.bodyPoseSection"));
-
-	drawBodyCalibrationControl(context);
-	drawBodyDimensionControls(context);
-}
-
 void SettingsPanels::drawBodyCalibrationControl(const TrackingSectionContext& context)
 {
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseProportionsIntro"));
@@ -1202,14 +1176,11 @@ void SettingsPanels::drawBodyDimensionControls(const TrackingSectionContext& con
 		commitTrackingConfigChange(context);
 }
 
-void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context)
 {
 	const TrackingFrameResult* fused= context.fusion->fused;
 	if (fused == nullptr)
 		return;
-
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("pipeline.stageBodySolver"));
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -1259,19 +1230,34 @@ void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context,
 	}
 }
 
-void SettingsPanels::drawDirectSection(const TrackingSectionContext& context, bool bWithHeader)
+// -- Direct solver -------------------------------------------------------------
+
+void SettingsPanels::drawDirectEnableSection(const TrackingSectionContext& context)
+{
+	ImGui::SeparatorText(locText("trackingPanel.directSection"));
+	ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
+	drawDirectEnableControl(context);
+}
+
+void SettingsPanels::drawDirectEnableControl(const TrackingSectionContext& context)
+{
+	DirectConfig& direct= context.config->direct;
+	if (ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled))
+	{
+		// updateTrackingState cancels a countdown while the mode is off; this
+		// stops it on the same frame
+		if (!direct.enabled)
+			context.state->directNeutral.reset();
+		commitTrackingConfigChange(context);
+	}
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+}
+
+void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& context)
 {
 	AppConfig* config= context.config;
-
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.directSection"));
-
-	bool bChanged= false;
 	DirectConfig& direct= config->direct;
-	ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
-
-	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+	bool bChanged= false;
 
 	// A shrinking camera list must not leave the index dangling
 	const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
@@ -1300,17 +1286,26 @@ void SettingsPanels::drawDirectSection(const TrackingSectionContext& context, bo
 		}
 	}
 
-	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
-								  locText("trackingPanel.directTiltFmt"));
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawDirectTiltControl(const TrackingSectionContext& context)
+{
+	DirectConfig& direct= context.config->direct;
+	if (ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
+						   locText("trackingPanel.directTiltFmt")))
+		commitTrackingConfigChange(context);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+}
 
-	// The countdown and the landed capture run in updateTrackingState. The
-	// cancel is repeated here so switching the mode off stops a countdown on
-	// the same frame.
+void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& context)
+{
+	DirectConfig& direct= context.config->direct;
+	bool bChanged= false;
+
+	// The countdown and the landed capture run in updateTrackingState
 	NeutralCaptureControl& neutral= context.state->directNeutral;
-	if (!direct.enabled)
-		neutral.reset();
-
 	ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
 	if (ImGui::Button(locLabel("trackingPanel.directCapture")))
 		neutral.start();
@@ -1344,13 +1339,235 @@ void SettingsPanels::drawDirectSection(const TrackingSectionContext& context, bo
 		commitTrackingConfigChange(context);
 }
 
+// The shown frame's direct solve, or null after one dim line saying it has
+// none
+static const DirectRetarget::SolveState* getShownDirectSolve(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= context.direct != nullptr ? context.direct->state : nullptr;
+	if (state == nullptr)
+		ImGui::TextDisabled("%s", locText("directStage.noSolve"));
+	return state;
+}
+
+// A readout table: a label column, then one value column or one per side
+// under the side headers
+static bool beginDirectTable(const char* id, bool bPerSide)
+{
+	if (!ImGui::BeginTable(id, bPerSide ? 3 : 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return false;
+	ImGui::TableSetupColumn("");
+	if (bPerSide)
+	{
+		ImGui::TableSetupColumn(locText("trackingPanel.left"));
+		ImGui::TableSetupColumn(locText("trackingPanel.right"));
+		ImGui::TableHeadersRow();
+	}
+	else
+	{
+		ImGui::TableSetupColumn("");
+	}
+	return true;
+}
+
+// A new row with its label, the label carrying the values' unit
+static void drawDirectRowLabel(const char* labelKey)
+{
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::TextUnformatted(locText(labelKey));
+}
+
+static void drawDirectTextCell(const char* text)
+{
+	ImGui::TableNextColumn();
+	ImGui::TextUnformatted(text);
+}
+
+static void drawDirectYesNoCell(bool bYes)
+{
+	drawDirectTextCell(locText(bYes ? "common.yes" : "common.no"));
+}
+
+// The value, or a dim dash where the solve did not measure it
+static void drawDirectValueCell(bool bMeasured, const char* format, float value)
+{
+	ImGui::TableNextColumn();
+	if (bMeasured)
+		ImGui::Text(format, value);
+	else
+		ImGui::TextDisabled("-");
+}
+
+void SettingsPanels::drawDirectSolveSummary(const TrackingSectionContext& context)
+{
+	ImGui::SeparatorText(locText("directStage.solveSection"));
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directSummary", false))
+		return;
+
+	drawDirectRowLabel("directStage.person");
+	drawDirectTextCell(locText(state->torsoValid ? "directStage.torsoSeen" : "directStage.noPerson"));
+	// The undistorted pinhole the landmarks were read in
+	drawDirectRowLabel("directStage.cameraModel");
+	ImGui::TableNextColumn();
+	ImGui::Text(locText("directStage.cameraModelFmt"), state->camera.width, state->camera.height, state->camera.fx,
+				state->camera.fy);
+	drawDirectRowLabel("directStage.tilt");
+	drawDirectValueCell(true, "%.1f", glm::degrees(state->tiltRadians));
+	ImGui::EndTable();
+}
+
+void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directFilters", true))
+		return;
+
+	drawDirectRowLabel("directStage.handAgrees");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectYesNoCell(arm.bHandSeen);
+	drawDirectRowLabel("directStage.elbowGate");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectYesNoCell(arm.bElbowSeen);
+	ImGui::EndTable();
+}
+
+void SettingsPanels::drawDirectTorsoReadout(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directTorso", false))
+		return;
+
+	const DirectReadout& readout= *context.direct;
+	drawDirectRowLabel("directStage.person");
+	drawDirectTextCell(locText(state->torsoValid ? "directStage.torsoSeen" : "directStage.noPerson"));
+	drawDirectRowLabel("directStage.shoulderDepth");
+	drawDirectValueCell(state->torsoValid, "%.2f", readout.shoulderDepth);
+	// The lean is measured against the neutral's torso, so it needs one
+	drawDirectRowLabel("directStage.lean");
+	drawDirectValueCell(state->torsoValid && readout.bNeutralPresent, "%.0f", readout.leanDegrees);
+	drawDirectRowLabel("directStage.head");
+	drawDirectTextCell(locText(state->headMeasured ? "directStage.headMeasured" : "directStage.headNotMeasured"));
+	drawDirectRowLabel("directStage.neutral");
+	drawDirectTextCell(locText(readout.bNeutralPresent ? "directStage.neutralCaptured" : "directStage.neutralNone"));
+	ImGui::EndTable();
+}
+
+void SettingsPanels::drawDirectArmChainReadout(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directArmChain", true))
+		return;
+
+	// The reach interval, and the model's prior with it, are measured only
+	// where the wrist's ray crosses the arm's reach, and the interval is
+	// never empty there
+	drawDirectRowLabel("directStage.reachInterval");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	{
+		ImGui::TableNextColumn();
+		if (arm.depthHigh > 0.f)
+			ImGui::Text(locText("directStage.intervalFmt"), arm.depthLow, arm.depthHigh);
+		else
+			ImGui::TextDisabled("-");
+	}
+	drawDirectRowLabel("directStage.depthChosen");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectYesNoCell(arm.bDepthChosen);
+	drawDirectRowLabel("directStage.chosenDepth");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.chosenDepth);
+	drawDirectRowLabel("directStage.chosenCost");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.chosenCost);
+	// The miss is scored only against a seen elbow
+	drawDirectRowLabel("directStage.elbowMiss");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.bDepthChosen && arm.bElbowSeen, "%.1f", arm.chosenElbowPx);
+	drawDirectRowLabel("directStage.modelDepth");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.depthHigh > 0.f, "%+.2f", arm.modelDepthDelta);
+	drawDirectRowLabel("directStage.filteredDepth");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.filteredDepth);
+	// The hand lift's wrist distance is zero without a lift
+	drawDirectRowLabel("directStage.liftDistance");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.pnpDistance > 0.f, "%.2f", arm.pnpDistance);
+	drawDirectRowLabel("directStage.liftDepth");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.pnpDistance > 0.f, "%.2f", arm.liftDepth);
+	// The scale is reported only for an arm the chain places, and before its
+	// first sample it is the avatar-to-user length ratio
+	drawDirectRowLabel("directStage.liftScale");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	{
+		ImGui::TableNextColumn();
+		if (arm.chain.valid)
+			ImGui::Text(locText("directStage.liftScaleFmt"), arm.pnpScale.scale, arm.pnpScale.sampleCount);
+		else
+			ImGui::TextDisabled("-");
+	}
+	ImGui::EndTable();
+}
+
+void SettingsPanels::drawDirectPalmReadout(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directPalm", true))
+		return;
+
+	// A resting arm reports no hand
+	drawDirectRowLabel("directStage.handMeasured");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	{
+		if (arm.bResting)
+		{
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("-");
+		}
+		else
+		{
+			drawDirectYesNoCell(arm.bHandMeasured);
+		}
+	}
+	drawDirectRowLabel("directStage.forearmTwist");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(!arm.bResting && arm.bHandMeasured, "%.0f", glm::degrees(arm.twist));
+	ImGui::EndTable();
+}
+
+void SettingsPanels::drawDirectHoldRestReadout(const TrackingSectionContext& context)
+{
+	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
+	if (state == nullptr || !beginDirectTable("directHoldRest", true))
+		return;
+
+	drawDirectRowLabel("directStage.armState");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectTextCell(locText(arm.bResting ? "directStage.resting" : "directStage.live"));
+	drawDirectRowLabel("directStage.intoRest");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	{
+		ImGui::TableNextColumn();
+		if (!arm.bResting)
+		{
+			ImGui::TextDisabled("-");
+			continue;
+		}
+		char overlay[16];
+		snprintf(overlay, sizeof(overlay), "%.0f%%", arm.restBlend * 100.f);
+		ImGui::ProgressBar(arm.restBlend, ImVec2(-1.f, 0.f), overlay);
+	}
+	ImGui::EndTable();
+}
+
 // One wizard, in the only order that works
-void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& context)
 {
 	AppConfig* config= context.config;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.handCalibrationSection"));
+	ImGui::SeparatorText(locText("trackingPanel.handCalibrationSection"));
 
 	bool bChanged= false;
 	ImGui::Text(locText("trackingPanel.handCalibrationStatusFmt"),
@@ -1395,10 +1612,9 @@ void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& co
 		commitTrackingConfigChange(context);
 }
 
-void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context)
 {
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
+	ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
 
 	drawViewFromCameraControl(context);
 }
@@ -1459,12 +1675,11 @@ void SettingsPanels::drawViewFromCameraControl(const TrackingSectionContext& con
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
 }
 
-void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context)
 {
 	VisionThread* visionThread= context.visionThread;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
+	ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
 
 	for (int cameraIndex= 0; cameraIndex < (int)context.config->cameraCount(); ++cameraIndex)
 		ImGui::Text(locText("trackingPanel.cameraEpFmt"), cameraIndex + 1, visionThread->getActiveExecutionProvider(cameraIndex));
@@ -1487,12 +1702,11 @@ void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context,
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.frameLoopHitchesTooltip"));
 }
 
-void SettingsPanels::drawDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawDiagnosticsSection(const TrackingSectionContext& context)
 {
 	TrackingPanelState& panelState= *context.state;
 
-	if (bWithHeader)
-		ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
+	ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
 
 	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingState")))
 		panelState.bDumpRequested= true;
@@ -1529,24 +1743,13 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	// Timeline what-if panel, where they can be swept against a recording.
 	// The live panel holds rig facts, calibration, and readouts only.
 
-	// A direct project's pipeline has no Fusion stage to host the hand
-	// calibration block (its direct mode note) and the hold-still test, no
-	// IMU stage to host the wrist IMU section, and no Body solver stage to
-	// host the body proportions the direct solve also reads, so the panel
-	// keeps them in direct mode
-	const bool bDirect= context.config->direct.enabled;
-
-	if (bDirect)
-		drawWristImuSection(context);
-	if (bDirect)
-		drawBodyPoseSection(context);
-	drawDirectSection(context);
-	if (bDirect)
-		drawHandCalibrationSection(context);
+	// A multi-camera project's pipeline has no Direct solver stage, whose
+	// settings hold the switch, so the panel keeps the switch while the mode
+	// is off
+	if (!context.config->direct.enabled)
+		drawDirectEnableSection(context);
 	drawOverlaySection(context);
 	drawDiagnosticsSection(context);
-	if (bDirect)
-		drawHoldStillSection(context, false);
 
 	ImGui::End();
 }

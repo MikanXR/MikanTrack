@@ -143,7 +143,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   so any phase that overruns the frame budget drops frames on all of them at
   once and reads downstream as a camera or USB fault. Iterations over 50 ms are
   logged with a per-phase breakdown (capture/inference, IMU, fusion, OSC,
-  diagnostics) and counted in the Tracking panel. Device discovery, which used
+  diagnostics) and counted in the Performance panel. Device discovery, which used
   to block that thread for ~200 ms at a time, runs on its own worker.
 - **Tracking recording + deterministic replay (F10 / Timeline panel)**:
   records every input to the post-inference stages (per-camera landmarks and

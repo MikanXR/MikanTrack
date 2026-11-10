@@ -68,7 +68,7 @@ The vision body-pose solver runs after this fill and defers to it: `BodyPoseSolv
 - `bool mountingPresent[2]`, indexed by `eHandSide`, whether a mounting has been captured for that side
 - `std::array<glm::quat, 2> forearmToSensor`, the captured mounting rotation per side
 
-The IMU stage in the Inspector (`SettingsPanels::drawWristImuSection` and its pieces, `src/UI/SettingsPanels.cpp`, drawn as one section in the Tracking panel on a direct project) exposes the enable checkbox, the swap-wrists checkbox, the per-wrist device table, and the entry point into `MountingWizard`. The wizard's requests are serviced on every vision-thread iteration that updates the service, with or without a hand in view. The enable checkbox's tooltip states the forearm drives the streamed lower arm bone (see [wire-protocol.md](./wire-protocol.md)).
+The IMU stage in the Inspector (`SettingsPanels::drawWristImuEnableControl` and the pieces beside it, `src/UI/SettingsPanels.cpp`) exposes the enable checkbox, the swap-wrists checkbox, the per-wrist device table, and the entry point into `MountingWizard`. The wizard's requests are serviced on every vision-thread iteration that updates the service, with or without a hand in view. The enable checkbox's tooltip states the forearm drives the streamed lower arm bone (see [wire-protocol.md](./wire-protocol.md)).
 
 Test flags registered in `src/Tests`:
 

@@ -161,9 +161,12 @@ private:
 	void updateImuReadout();
 	void updateFaceReadouts();
 	void updateOscReadout();
-	// The direct solve behind the shown avatar pose, null when the shown
-	// frame is not a direct-mode frame
-	const DirectRetarget::SolveState* m_shownDirectState= nullptr;
+	// The direct solve behind the shown avatar pose (its state null when the
+	// shown frame is not a direct-mode frame), refilled when the avatar is
+	// posed for the shown frame. The pipeline's status rules and the Direct
+	// solver stages' sections read it, the sections in place.
+	DirectReadout m_directReadout;
+	void updateDirectReadout(const DirectRetarget::SolveState* state);
 
 	// What the pipeline's status rules read, gathered once per update after
 	// the avatar is posed for the shown frame

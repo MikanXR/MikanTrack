@@ -26,7 +26,7 @@ StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel*
 void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc,
 							  const FusionReadout& fusion, const ImuReadout& imu, const FaceReadout& face,
 							  const MicrophoneReadout& microphone, const OscReadout& oscReadout,
-							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
+							  const DirectReadout& direct, const FaceExprEditTarget* activeEdit, bool bWizardActive)
 {
 	m_tracking= tracking;
 	m_osc= osc;
@@ -34,6 +34,7 @@ void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscS
 	m_tracking.fusion= &fusion;
 	m_tracking.imu= &imu;
 	m_tracking.face= &face;
+	m_tracking.direct= &direct;
 	m_microphone= &microphone;
 	m_activeEdit= activeEdit;
 	m_bWizardActive= bWizardActive;
@@ -84,7 +85,17 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 	case ePipelineStage::Imu:
 	case ePipelineStage::BodySolver:
 	case ePipelineStage::Microphone:
+	case ePipelineStage::DirectSolver:
 		return true;
+	case ePipelineStage::Filters:
+	case ePipelineStage::Torso:
+	case ePipelineStage::ArmChain:
+	case ePipelineStage::Palm:
+		return section == eStageSection::Diagnostics;
+	case ePipelineStage::HoldRest:
+		// The rest blend belongs to the loaded avatar's rig
+		return section == eStageSection::Diagnostics ||
+			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
 	case ePipelineStage::Phone:
 		// The stream status shows only while the shown frame's stream is
 		// enabled, or to say the take did not record it
@@ -209,8 +220,53 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		else
 		{
 			// The readout is the section's only content
-			SettingsPanels::drawBodySolveReadout(m_tracking, false);
+			SettingsPanels::drawBodySolveReadout(m_tracking);
 		}
+		break;
+	case ePipelineStage::DirectSolver:
+		if (section == eStageSection::Inputs)
+		{
+			SettingsPanels::drawDirectCameraControl(m_tracking);
+			SettingsPanels::drawDirectNeutralControl(m_tracking);
+			SettingsPanels::drawHandCalibrationSection(m_tracking);
+			ImGui::SeparatorText(locText("directStage.bodySection"));
+			SettingsPanels::drawBodyCalibrationControl(m_tracking);
+		}
+		else if (section == eStageSection::Settings)
+		{
+			SettingsPanels::drawDirectEnableControl(m_tracking);
+			SettingsPanels::drawDirectTiltControl(m_tracking);
+			// The proportions the arm chain and the head are solved with
+			ImGui::SeparatorText(locText("directStage.bodySection"));
+			SettingsPanels::drawBodyDimensionControls(m_tracking);
+			SettingsPanels::drawForearmLengthControl(m_tracking, "directStage.forearmLengthTooltip");
+		}
+		else
+		{
+			// Two readouts share the section, so each keeps its heading
+			SettingsPanels::drawDirectSolveSummary(m_tracking);
+			SettingsPanels::drawHoldStillSection(m_tracking);
+		}
+		break;
+	case ePipelineStage::Filters:
+		SettingsPanels::drawDirectFiltersReadout(m_tracking);
+		break;
+	case ePipelineStage::Torso:
+		SettingsPanels::drawDirectTorsoReadout(m_tracking);
+		break;
+	case ePipelineStage::ArmChain:
+		SettingsPanels::drawDirectArmChainReadout(m_tracking);
+		break;
+	case ePipelineStage::Palm:
+		SettingsPanels::drawDirectPalmReadout(m_tracking);
+		break;
+	case ePipelineStage::HoldRest:
+		// The interim home of the rest blend, the same control as the
+		// Retarget stage's Loss tab
+		if (section == eStageSection::Settings)
+			m_avatarPanel->drawRestBlendControl();
+		else
+			SettingsPanels::drawDirectHoldRestReadout(m_tracking);
 		break;
 	case ePipelineStage::Phone:
 		if (section == eStageSection::Settings)

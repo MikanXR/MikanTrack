@@ -115,7 +115,7 @@ What-if replay: the recording's header line embeds the full config used to build
 
 Named phases (`VisionThread::eVisionPhase`): `ConfigRefresh` (config refresh / recording start-stop), `Capture` (frame pop, undistort, ML inference, 3D projection), `Imu` (wrist IMU sample drain, discovery, forearm publish), `Fusion` (cross-camera fusion, smoothing, auto-scale bookkeeping), `Osc`, `Diagnostics` (dump history record, recording enqueue, dump writes).
 
-Over threshold, `MIKAN_MT_LOG_WARNING` logs the total time, the worst phase and its time, and the full per-phase breakdown; `m_hitchCount` increments and `m_lastHitchMs` / `m_lastHitchPhase` are published for the Tracking panel's watchdog readout. A stall now names its phase instead of leaving a generic "tracking froze" symptom to diagnose from scratch.
+Over threshold, `MIKAN_MT_LOG_WARNING` logs the total time, the worst phase and its time, and the full per-phase breakdown; `m_hitchCount` increments and `m_lastHitchMs` / `m_lastHitchPhase` are published for the Performance panel's hitch readout. A stall now names its phase instead of leaving a generic "tracking froze" symptom to diagnose from scratch.
 
 Rule this watchdog enforces: anything that can block for hundreds of milliseconds must not run on the vision thread. HID enumeration and the Bluetooth open handshake are the concrete case already built this way: `ImuService::update()` runs on every vision-thread iteration and must never block on them, so device discovery runs on a separate worker (`ImuService::discoveryLoop`) instead.
 
@@ -137,7 +137,7 @@ The hitch watchdog only speaks when an iteration overruns; the steady-state cost
 
 The hand pipeline's own `inferenceMs` sits alongside. The capture side adds two counters per camera on `VideoCaptureSystem`: `getCallbackCopyMs` (an EMA of the time the driver's callback spends copying a frame out of the driver buffer, during which the driver thread is blocked) and `getQueuedFrameCount` (frames waiting for the vision thread right now), next to the existing dropped-frame count.
 
-The Tracking panel's Capture Timing table shows all of it per camera as a ~1 s EMA, with the two counters shown raw. The dump records the raw per-frame series as `captureTimings` in every history record and in each camera's snapshot, plus `callbackCopyMs` and `queuedFrames` in the camera's dump-time entry. Everything before ONNX Runtime runs on the CPU, so this table is the evidence any GPU pre-processing decision waits on.
+The Capture stage's Capture Timing table, under its Diagnostics, shows all of it per camera as a ~1 s EMA, with the two counters shown raw. The dump records the raw per-frame series as `captureTimings` in every history record and in each camera's snapshot, plus `callbackCopyMs` and `queuedFrames` in the camera's dump-time entry. Everything before ONNX Runtime runs on the CPU, so this table is the evidence any GPU pre-processing decision waits on.
 
 ---
 
@@ -151,13 +151,13 @@ All heavy statistics run on a nearest-neighbor decimated crop, capped at `kAnaly
 
 Sharpness and noise are split deliberately: raw Laplacian variance alone scores a noisy frame as sharp, because sensor noise reads as edges. Noise is measured separately (the median-filtered residual), and sharpness is measured on the median-filtered image so it is not rewarding noise. Sharpness only means something when it DROPS: a well-lit, low-jitter camera reads in the low thousands, and a higher value than that is just texture or scale, not "better."
 
-These metrics show up in two places: the Tracking panel's per-camera table (`SettingsPanels::drawImageQualitySection`, worst tracked hand per camera, roughly a 1s EMA, each row's tooltip naming the camera-setting or lighting change to make), and the F9 dump / recording's per-hand `imageQuality` field, which carries the exact raw per-frame series behind that live readout.
+These metrics show up in two places: the Capture stage's per-camera table under its Diagnostics (`SettingsPanels::drawImageQualitySection`, worst tracked hand per camera, roughly a 1s EMA, each row's tooltip naming the camera-setting or lighting change to make), and the F9 dump / recording's per-hand `imageQuality` field, which carries the exact raw per-frame series behind that live readout.
 
 ---
 
 ## The hold-still jitter test
 
-Lives in the Fusion stage's Diagnostics in the Inspector, and in the Tracking panel on a direct project, which has no Fusion stage (`SettingsPanels::drawHoldStillSection`, "Hold-Still Jitter Test" button), with its transient state in `TrackingPanelState::holdStill*`.
+Lives in the Fusion stage's Diagnostics in the Inspector, and in the Direct solver stage's on a direct project (`SettingsPanels::drawHoldStillSection`, "Hold-Still Jitter Test" button), with its transient state in `TrackingPanelState::holdStill*`.
 
 Sequence: a `k_holdStillCountdownSeconds= 3` countdown (time to get the hands back into position), then a `k_holdStillSampleSeconds= 3` sampling window that accumulates every NEW fused result (deduplicated on `fusedResult.timestampMs`, since fused results arrive slower than UI frames and re-adding a held UI frame would fake stability). For each tracked, world-posed hand it rebuilds all 21 world-space joints via `HandPoseModel::buildFingerJoints` (the same forward kinematics a client rebuilds) and accumulates a sum and sum-of-squares per joint.
 

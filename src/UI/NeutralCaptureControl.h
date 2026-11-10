@@ -4,8 +4,8 @@ class AppConfig;
 class VisionThread;
 struct DirectConfig;
 
-// The direct retarget's neutral capture as the Tracking panel and the guided
-// setup share it: a settle countdown, the capture request to the vision
+// The direct retarget's neutral capture as the Direct solver stage and the
+// guided setup share it: a settle countdown, the capture request to the vision
 // thread at zero, then the landed capture written into the project as the
 // direct config's neutral references. The status is drawn here too, since
 // both callers show the same; the countdown and the buttons stay with them.
