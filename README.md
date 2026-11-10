@@ -55,7 +55,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   triangulation, and a hand tracked by one camera but lost by another is
   projected into the lost camera's image to re-seed its search directly.
   Prefer 720p per camera and separate USB controllers for two streams.
-- **VRM avatar**: load a VRM 0.x or 1.0 avatar (Avatar panel) and see it
+- **VRM avatar**: load a VRM 0.x or 1.0 avatar (Retarget stage, or File > Load Avatar) and see it
   toon-shaded in the 3D scene, posed from the tracked hands, elbows and head
   with the avatar's own proportions (reach scaled onto its arms, elbows from a
   two-bone solve hinted by the measured elbow, fingers on its own hand rig).
@@ -302,7 +302,7 @@ the rotation and the translation of every bone it is sent, so each one carries
 a real offset: shoulder width, upper arm and forearm from the Body panel, and
 the finger offsets from the calibrated hand skeleton. The one length nothing
 here measures is neck-to-head, which is the **Head offset** slider (raise it if
-the head sinks into the shoulders). With a VRM loaded in the Avatar panel the
+the head sinks into the shoulders). With a VRM loaded in the Retarget stage the
 bones carry that avatar's own proportions instead.
 
 **Bones degrade one at a time.** VMC carries no confidence, so an unmeasured

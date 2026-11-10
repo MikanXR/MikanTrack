@@ -65,89 +65,55 @@ AvatarPanel::AvatarPanel(App* app, AppConfig* config)
 {
 }
 
-void AvatarPanel::draw(bool* pOpen)
-{
-	if (!ImGui::Begin(locWindowTitle("windows.avatar"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-
-	drawBody();
-
-	ImGui::End();
-}
-
 void AvatarPanel::update()
 {
 	if (m_app->getAvatarModel() == nullptr)
 		m_previewPose= ePreviewPose::Live;
 }
 
-void AvatarPanel::drawBody()
+void AvatarPanel::loadAvatarFromDialog()
 {
-	drawLoadControls();
+	AvatarConfig& avatar= m_config->avatar;
 
-	if (m_app->getAvatarModel() != nullptr)
+	// Seed the dialog at the shipped samples the first time, at the current
+	// model afterwards
+	std::string defaultPath= (PathUtils::getModulePath() / "models" / "avatars" / "").string();
+	if (!avatar.modelPath.empty())
+		defaultPath= m_app->resolveAvatarPath(avatar.modelPath).string();
+
+	const char* filterPatterns[]= {"*.vrm"};
+	const char* selectedPath= tinyfd_openFileDialog(
+		locText("avatarPanel.browseDialogTitle"), defaultPath.c_str(), 1, filterPatterns,
+		locText("avatarPanel.browseDialogFilterDescription"), 0);
+	if (selectedPath != nullptr)
 	{
-		ImGui::Separator();
-		if (ImGui::BeginTabBar("avatarTabs"))
+		const std::filesystem::path path= PathUtils::utf8ToPath(selectedPath);
+		if (m_app->loadAvatar(path))
 		{
-			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabModel")))
-			{
-				drawModelTab();
-				ImGui::EndTabItem();
-			}
-			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabMapping")))
-			{
-				drawMappingTab();
-				ImGui::EndTabItem();
-			}
-			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabRetarget")))
-			{
-				drawRetargetTab();
-				ImGui::EndTabItem();
-			}
-			ImGui::EndTabBar();
+			avatar.modelPath= PathUtils::pathToUtf8(path);
+			m_config->markDirty();
+			m_selectedBone= HUMANOID_BONE_NONE;
 		}
 	}
 }
 
+void AvatarPanel::unloadAvatar()
+{
+	m_app->clearAvatar();
+	m_config->avatar.modelPath.clear();
+	m_config->markDirty();
+	m_selectedBone= HUMANOID_BONE_NONE;
+}
+
 void AvatarPanel::drawLoadControls()
 {
-	AvatarConfig& avatar= m_config->avatar;
+	const AvatarConfig& avatar= m_config->avatar;
 
 	if (ImGui::Button(locLabel("avatarPanel.browseButton")))
-	{
-		// Seed the dialog at the shipped samples the first time, at the
-		// current model afterwards
-		std::string defaultPath= (PathUtils::getModulePath() / "models" / "avatars" / "").string();
-		if (!avatar.modelPath.empty())
-			defaultPath= m_app->resolveAvatarPath(avatar.modelPath).string();
-
-		const char* filterPatterns[]= {"*.vrm"};
-		const char* selectedPath= tinyfd_openFileDialog(
-			locText("avatarPanel.browseDialogTitle"), defaultPath.c_str(), 1, filterPatterns,
-			locText("avatarPanel.browseDialogFilterDescription"), 0);
-		if (selectedPath != nullptr)
-		{
-			const std::filesystem::path path= PathUtils::utf8ToPath(selectedPath);
-			if (m_app->loadAvatar(path))
-			{
-				avatar.modelPath= PathUtils::pathToUtf8(path);
-				m_config->markDirty();
-				m_selectedBone= HUMANOID_BONE_NONE;
-			}
-		}
-	}
+		loadAvatarFromDialog();
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("avatarPanel.unloadButton")))
-	{
-		m_app->clearAvatar();
-		avatar.modelPath.clear();
-		m_config->markDirty();
-		m_selectedBone= HUMANOID_BONE_NONE;
-	}
+		unloadAvatar();
 
 	if (avatar.modelPath.empty())
 	{
@@ -164,13 +130,6 @@ void AvatarPanel::drawLoadControls()
 	const std::string& error= m_app->getAvatarLoadError();
 	if (!error.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", error.c_str());
-}
-
-void AvatarPanel::drawModelTab()
-{
-	drawModelSummary();
-	ImGui::Separator();
-	drawPlacement();
 }
 
 void AvatarPanel::drawModelSummary()
@@ -476,16 +435,19 @@ void AvatarPanel::drawRetargetTab()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", locText("avatarPanel.previewPoseTooltip"));
 
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		drawArmControls(sideIndex);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		drawHandControls(sideIndex);
+}
+
+void AvatarPanel::drawRestBlendControl()
+{
 	AvatarRigSettings rig= m_app->getAvatarRig();
 	if (ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &rig.restBlendMs, 0.f, 1000.f, "%.0f ms"))
 		m_app->setAvatarRig(rig);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", locText("avatarPanel.restBlendTooltip"));
-
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		drawArmControls(sideIndex);
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		drawHandControls(sideIndex);
 }
 
 void AvatarPanel::drawArmControls(int sideIndex)

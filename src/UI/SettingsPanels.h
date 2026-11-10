@@ -256,11 +256,13 @@ void drawHoldStillSection(const TrackingSectionContext& context, bool bWithHeade
 void drawOscConnectionSection(const OscSectionContext& context);
 void drawOscVmcSection(const OscSectionContext& context, bool bWithHeader= true);
 void drawOscSolverSection(const OscSectionContext& context, bool bWithHeader= true);
+// What the stream does with a lost hand, no header: the dropout hold and
+// freeze on loss. The Retarget stage's, not in the panel.
+void drawOscLossControls(const OscSectionContext& context);
 
 // Draws the sections only; updateTrackingState runs the panel's state
 void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);
-// fusedResult: the latest fused tracking output (for the live angle readout)
-void drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, const TrackingFrameResult& fusedResult);
+void drawOscPanel(bool* pOpen, const OscSectionContext& context);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel(bool* pOpen);
 // The language combo alone, shared between the Settings panel and the main

@@ -46,7 +46,6 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 	- `Tracking`
 	- `Settings`
 	- `"OSC Output"`
-	- `Avatar`
 	- `Log`
 	- `Timeline`
 	- `Pipeline`

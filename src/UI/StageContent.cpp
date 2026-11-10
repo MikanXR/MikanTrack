@@ -6,24 +6,30 @@
 #include "AppConfig.h"
 #include "AvatarFaceTab.h"
 #include "AvatarMouthReadout.h"
+#include "AvatarPanel.h"
 #include "DevicePanel.h"
+#include "LocText.h"
 
 StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel* calibrationPanel,
-						   AudioPanel* audioPanel, AvatarFaceTab* faceTab, AvatarMouthReadout* mouthReadout)
+						   AudioPanel* audioPanel, AvatarPanel* avatarPanel, AvatarFaceTab* faceTab,
+						   AvatarMouthReadout* mouthReadout)
 	: m_app(app)
 	, m_devicePanel(devicePanel)
 	, m_calibrationPanel(calibrationPanel)
 	, m_audioPanel(audioPanel)
+	, m_avatarPanel(avatarPanel)
 	, m_faceTab(faceTab)
 	, m_mouthReadout(mouthReadout)
 {
 }
 
-void StageContent::beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, const ImuReadout& imu,
-							  const FaceReadout& face, const MicrophoneReadout& microphone,
-							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
+void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc,
+							  const FusionReadout& fusion, const ImuReadout& imu, const FaceReadout& face,
+							  const MicrophoneReadout& microphone, const FaceExprEditTarget* activeEdit,
+							  bool bWizardActive)
 {
 	m_tracking= tracking;
+	m_osc= osc;
 	m_tracking.fusion= &fusion;
 	m_tracking.imu= &imu;
 	m_tracking.face= &face;
@@ -87,6 +93,10 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 	case ePipelineStage::Profile:
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
+	case ePipelineStage::Retarget:
+		// The loss rules apply with or without an avatar, so the settings
+		// always show
+		return section != eStageSection::Diagnostics;
 	default:
 		return false;
 	}
@@ -244,7 +254,59 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 			m_mouthReadout->draw(m_app->getAvatarModel(), m_app->getFaceBinding(), m_tracking.fusion->fused->face);
 		}
 		break;
+	case ePipelineStage::Retarget:
+		if (section == eStageSection::Inputs)
+		{
+			m_avatarPanel->drawLoadControls();
+			if (m_app->getAvatarModel() != nullptr)
+			{
+				ImGui::Separator();
+				m_avatarPanel->drawModelSummary();
+			}
+		}
+		else
+		{
+			drawRetargetSettings();
+		}
+		break;
 	default:
 		break;
 	}
+}
+
+void StageContent::drawRetargetSettings()
+{
+	if (!ImGui::BeginTabBar("avatarTabs"))
+		return;
+
+	// Placement, Mapping and Retarget need a loaded model, read as the tabs
+	// draw since the inputs above can unload it this frame
+	if (m_app->getAvatarModel() != nullptr)
+	{
+		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabPlacement")))
+		{
+			m_avatarPanel->drawPlacement();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabMapping")))
+		{
+			m_avatarPanel->drawMappingTab();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabRetarget")))
+		{
+			m_avatarPanel->drawRetargetTab();
+			ImGui::EndTabItem();
+		}
+	}
+	if (ImGui::BeginTabItem(locLabel("avatarPanel.tabLoss")))
+	{
+		// The stream's loss rules apply with or without an avatar, and the
+		// rest blend eases the avatar's arms
+		SettingsPanels::drawOscLossControls(m_osc);
+		if (m_app->getAvatarModel() != nullptr)
+			m_avatarPanel->drawRestBlendControl();
+		ImGui::EndTabItem();
+	}
+	ImGui::EndTabBar();
 }

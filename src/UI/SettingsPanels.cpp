@@ -1581,8 +1581,20 @@ void SettingsPanels::drawOscConnectionSection(const OscSectionContext& context)
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.minConfidence"), &osc.minConfidence, 0.f, 1.f, "%.2f");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.minConfidenceTooltip"));
 
+	if (bChanged)
+		commitOscConfigChange(context);
+}
+
+void SettingsPanels::drawOscLossControls(const OscSectionContext& context)
+{
+	bool bChanged= false;
+	OscConfig& osc= context.config->osc;
+
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &osc.holdOnDropoutMs, 0.f, 1000.f, "%.0f ms");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
+
+	bChanged|= ImGui::Checkbox(locLabel("oscPanel.freezeOnLoss"), &osc.vmcFreezeOnLoss);
+	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
 
 	if (bChanged)
 		commitOscConfigChange(context);
@@ -1601,9 +1613,6 @@ void SettingsPanels::drawOscVmcSection(const OscSectionContext& context, bool bW
 
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.headOffset"), &osc.vmcHeadOffsetMeters, 0.f, 0.25f, "%.3f m");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.headOffsetTooltip"));
-
-	bChanged|= ImGui::Checkbox(locLabel("oscPanel.freezeOnLoss"), &osc.vmcFreezeOnLoss);
-	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
 
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcBonesInfo"));
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcAvatarBoneLengths"));
@@ -1681,19 +1690,13 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 	}
 }
 
-void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
-								  const TrackingFrameResult& fusedResult)
+void SettingsPanels::drawOscPanel(bool* pOpen, const OscSectionContext& context)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
 	{
 		ImGui::End();
 		return;
 	}
-
-	OscSectionContext context;
-	context.config= config;
-	context.visionThread= visionThread;
-	context.fusedResult= &fusedResult;
 
 	drawOscConnectionSection(context);
 	drawOscVmcSection(context);

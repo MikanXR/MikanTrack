@@ -92,6 +92,8 @@ private:
 	std::unique_ptr<CalibrationPanel> m_calibrationPanel;
 	std::unique_ptr<WizardHost> m_wizardHost;
 	std::unique_ptr<TimelinePanel> m_timelinePanel;
+	// The Retarget stage's sections, which the Inspector hosts, and the
+	// preview pose and elbow gizmo toggles the scene reads
 	std::unique_ptr<AvatarPanel> m_avatarPanel;
 	// The expression editor the Profile stage's Edit buttons open, updated
 	// after the Inspector on the same shown frame
@@ -104,8 +106,8 @@ private:
 	std::unique_ptr<PipelinePanel> m_pipelinePanel;
 	std::unique_ptr<StageInspector> m_stageInspector;
 	// The stage sections the Inspector hosts, drawn from the device,
-	// calibration and audio panels, the tracking sections and the face
-	// profile editor
+	// calibration, audio and avatar panels, the tracking and OSC sections and
+	// the face profile editor
 	std::unique_ptr<StageContent> m_stageContent;
 	// Guided new-project setup chain; needs the wizards above, so it is
 	// constructed last (in the constructor body)
@@ -202,7 +204,6 @@ private:
 	bool m_bShowTimelinePanel= true;
 	bool m_bShowLogPanel= true;
 	bool m_bShowSettingsPanel= true;
-	bool m_bShowAvatarPanel= true;
 	bool m_bShowPipelinePanel= true;
 	bool m_bShowInspectorPanel= true;
 	bool m_bShowPerformancePanel= true;

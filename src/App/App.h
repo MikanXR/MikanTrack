@@ -81,7 +81,7 @@ public:
 
 	// The loaded VRM avatar, if any. Loaded on the main thread (the renderer
 	// builds GL resources from it) when a project activates and from the
-	// Avatar panel; cleared with the project. The generation counter advances
+	// Retarget stage or the File menu; cleared with the project. The generation counter advances
 	// on every change so the renderer knows when to re-upload.
 	bool loadAvatar(const std::filesystem::path& path);
 	void clearAvatar();

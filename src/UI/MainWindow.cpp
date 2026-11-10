@@ -68,7 +68,8 @@ MainWindow::MainWindow(App* app)
 	, m_pipelinePanel(std::make_unique<PipelinePanel>())
 	, m_stageInspector(std::make_unique<StageInspector>())
 	, m_stageContent(std::make_unique<StageContent>(app, m_devicePanel.get(), m_calibrationPanel.get(),
-												   m_audioPanel.get(), m_faceTab.get(), m_mouthReadout.get()))
+												   m_audioPanel.get(), m_avatarPanel.get(), m_faceTab.get(),
+												   m_mouthReadout.get()))
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -245,7 +246,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.timeline"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.performance"), bottomId);
@@ -291,6 +291,13 @@ void MainWindow::drawDockspaceAndMenuBar()
 			if (ImGui::MenuItem(locLabel("mainWindow.closeProject"), nullptr, false, !bWizardActive))
 				m_app->requestCloseProject();
 			ImGui::Separator();
+			// The Retarget stage's load controls run the same two actions
+			if (ImGui::MenuItem(locLabel("mainWindow.loadAvatar")))
+				m_avatarPanel->loadAvatarFromDialog();
+			const bool bAvatarLoaded= m_app->getAvatarModel() != nullptr;
+			if (ImGui::MenuItem(locLabel("mainWindow.unloadAvatar"), nullptr, false, bAvatarLoaded))
+				m_avatarPanel->unloadAvatar();
+			ImGui::Separator();
 			if (ImGui::MenuItem(locLabel("mainWindow.quit"), "Alt+F4"))
 				m_app->requestShutdown();
 			ImGui::EndMenu();
@@ -328,7 +335,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewPerformancePanel"), nullptr, &m_bShowPerformancePanel);
@@ -339,7 +345,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 				m_bResetDockLayout= true;
 				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowTrackingPanel= true;
 				m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
-				m_bShowSettingsPanel= m_bShowAvatarPanel= true;
+				m_bShowSettingsPanel= true;
 				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
 			}
 			ImGui::EndMenu();
@@ -482,9 +488,13 @@ void MainWindow::update(float deltaSeconds)
 	// The tracking panel's countdowns, captures and readouts run whether or
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
-	// The stage sections the Inspector draws read this frame's context
-	m_stageContent->beginFrame(trackingContext, m_fusionReadout, m_imuReadout, m_faceReadout, m_microphoneReadout,
-							   m_faceExprEditor->getTarget(), bWizardActive);
+	OscSectionContext oscContext;
+	oscContext.config= config;
+	oscContext.visionThread= visionThread;
+	oscContext.fusedResult= &m_latestFused;
+	// The stage sections the Inspector draws read this frame's contexts
+	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
+							   m_microphoneReadout, m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -498,9 +508,7 @@ void MainWindow::update(float deltaSeconds)
 		dumpDiagnosticsDelayed();
 	}
 	if (m_bShowOscPanel)
-	{
-		SettingsPanels::drawOscPanel(&m_bShowOscPanel, config, visionThread, m_latestFused);
-	}
+		SettingsPanels::drawOscPanel(&m_bShowOscPanel, oscContext);
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
 	if (m_bShowTimelinePanel)
@@ -509,11 +517,6 @@ void MainWindow::update(float deltaSeconds)
 		// A scrub or a view switch in the panel changes the shown frame
 		updateShownFrame(perCameraResults);
 	}
-	if (m_bShowAvatarPanel)
-		m_avatarPanel->draw(&m_bShowAvatarPanel);
-	// After the panel, so an unload in it lands before the scene reads the
-	// preview pose
-	m_avatarPanel->update();
 
 	// Launch requests raised by the panels this frame
 	if (m_trackingPanelState.bLaunchMountingWizard)
@@ -600,6 +603,10 @@ void MainWindow::update(float deltaSeconds)
 		if (requested.isValid())
 			m_pipelinePanel->setSelected(requested);
 	}
+	// After the menu bar and the Inspector, the draws that can unload the
+	// avatar, so the preview pose is back to Live before the next frame's
+	// scene reads it. This frame's scene was posed before the Inspector drew.
+	m_avatarPanel->update();
 	// The calibration wizards the Inspector's stage sections asked for
 	const CalibrationPanel::DrawResult& calibrationAction= m_stageContent->getCalibrationAction();
 	if (calibrationAction.bLaunchIntrinsicsWizard)
@@ -828,7 +835,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const AppConfig* config= m_app->getConfig();
 	const AvatarRigSettings& rig= m_app->getAvatarRig();
 
-	// The feed: a preview pose from the Avatar panel, else replay frames
+	// The feed: a preview pose from the Retarget stage, else replay frames
 	// (with the recording's body lengths), else live ones (with the
 	// project's). Switching feeds resets the root follow so the filter never
 	// bridges two timelines.
