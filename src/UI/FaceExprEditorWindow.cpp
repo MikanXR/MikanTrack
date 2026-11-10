@@ -42,6 +42,8 @@ constexpr float k_previewRadius= 0.45f;
 constexpr float k_previewMinRadius= 0.2f;
 constexpr float k_previewMaxRadius= 1.5f;
 constexpr int k_drivenTargetRows= 8;
+// The most lines the header's row picker shows before its list scrolls
+constexpr size_t k_rowPickerLines= 18;
 
 // The input series' colors, cycled; the result is white
 constexpr ImU32 k_seriesColors[]= {
@@ -339,7 +341,8 @@ void FaceExprEditorWindow::update(const TrackingFrameResult& shown)
 		return;
 	}
 
-	bool bChanged= drawHeader(profile, frame);
+	bool bChanged= false;
+	drawHeader(profile, frame);
 	ImGui::Separator();
 	if (ImGui::BeginTable("##columns", 3, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV))
 	{
@@ -359,15 +362,19 @@ void FaceExprEditorWindow::update(const TrackingFrameResult& shown)
 
 	if (bChanged)
 		m_app->editActiveFaceProfile(profile);
+	// A row picked in the header takes effect once this draw is over
+	const FaceExprEditTarget switchTarget= m_switchTarget;
+	m_switchTarget= FaceExprEditTarget();
 	if (!bStayOpen)
 		close();
+	else if (switchTarget.index >= 0)
+		open(switchTarget);
 }
 
-bool FaceExprEditorWindow::drawHeader(FaceProfile& profile, const Frame& frame)
+void FaceExprEditorWindow::drawHeader(const FaceProfile& profile, const Frame& frame)
 {
-	bool bChanged= false;
 	if (!ImGui::BeginTable("##header", 4, ImGuiTableFlags_SizingFixedFit))
-		return false;
+		return;
 	ImGui::TableSetupColumn("##kind", ImGuiTableColumnFlags_WidthFixed);
 	ImGui::TableSetupColumn("##target", ImGuiTableColumnFlags_WidthFixed, 320.f);
 	ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
@@ -378,25 +385,83 @@ bool FaceExprEditorWindow::drawHeader(FaceProfile& profile, const Frame& frame)
 	ImGui::AlignTextToFramePadding();
 	ImGui::TextDisabled("%s", locText(m_target.bLet ? "exprEditor.kindVariable" : "exprEditor.kindBinding"));
 
+	// The row picker: every row of the profile, the variables and then the
+	// bindings. Picking one is the Edit button on that row. The row's name
+	// and target are edited in the Face tab.
 	ImGui::TableNextColumn();
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	if (ImGui::BeginCombo("##row", rowLabel(profile).c_str(), ImGuiComboFlags_HeightLargest))
+	{
+		bool bPicked= false;
+		// The filter stays put above the list. It starts empty and takes the
+		// keyboard as the picker opens, and the list opens scrolled to the
+		// row being edited.
+		const bool bAppearing= ImGui::IsWindowAppearing();
+		if (bAppearing)
+		{
+			m_rowFilter.clear();
+			ImGui::SetKeyboardFocusHere();
+		}
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		ImGui::InputTextWithHint("##filter", locText("exprEditor.filterHint"), &m_rowFilter);
+		const size_t lineCount= profile.lets.size() + profile.outputs.size() + 2;
+		const float listHeight= ImGui::GetTextLineHeightWithSpacing() * (float)std::min(lineCount, k_rowPickerLines);
+		if (ImGui::BeginChild("##rows", ImVec2(0.f, listHeight)))
+		{
+			auto drawRow= [&](bool bLet, size_t index, const std::string& label) {
+				if (!containsIgnoringCase(label, m_rowFilter))
+					return;
+				const FaceExprEditTarget target{bLet, (int)index};
+				const bool bCurrent= target == m_target;
+				ImGui::PushID(bLet ? "let" : "out");
+				ImGui::PushID((int)index);
+				if (ImGui::Selectable(label.c_str(), bCurrent) && !bCurrent)
+				{
+					m_switchTarget= target;
+					bPicked= true;
+				}
+				if (bCurrent && bAppearing)
+					ImGui::SetScrollHereY();
+				ImGui::PopID();
+				ImGui::PopID();
+			};
+			if (!profile.lets.empty())
+			{
+				ImGui::SeparatorText(locText("faceTab.variablesHeader"));
+				for (size_t letIndex= 0; letIndex < profile.lets.size(); ++letIndex)
+					drawRow(true, letIndex, profile.lets[letIndex].name);
+			}
+			if (!profile.outputs.empty())
+			{
+				ImGui::SeparatorText(locText("faceTab.bindingsHeader"));
+				for (size_t outputIndex= 0; outputIndex < profile.outputs.size(); ++outputIndex)
+					drawRow(false, outputIndex, FaceTabWidgets::targetLabel(profile.outputs[outputIndex]));
+			}
+		}
+		ImGui::EndChild();
+		// A Selectable inside the child does not close the picker by itself
+		if (bPicked)
+			ImGui::CloseCurrentPopup();
+		ImGui::EndCombo();
+	}
 	if (m_target.bLet)
 	{
-		FaceProfileLet& let= profile.lets[(size_t)m_target.index];
-		bChanged|= FaceTabWidgets::textInputWithError("##name", let.name, rowError(frame, true));
-	}
-	else
-	{
-		FaceProfileOutput& output= profile.outputs[(size_t)m_target.index];
-		bChanged|= FaceTabWidgets::drawTargetPicker(m_app, output, m_targetFilter);
-		if (frame.bStructural &&
-			frame.binding->getOutputProblemCodes()[(size_t)m_target.index] != eFaceTargetProblem::None)
+		const FaceExprCompileError* nameError= rowError(frame, true);
+		if (nameError != nullptr)
 		{
-			ImGui::PushStyleColor(ImGuiCol_Text, FaceTabWidgets::k_warningColor);
-			ImGui::TextWrapped("%s", locFormat("faceTab.unresolvedTooltipFmt",
-											   FaceTabWidgets::problemText(*frame.binding, (size_t)m_target.index).c_str())
-										 .c_str());
+			ImGui::PushStyleColor(ImGuiCol_Text, FaceTabWidgets::k_errorColor);
+			ImGui::TextWrapped("%s", FaceTabWidgets::errorText(*nameError).c_str());
 			ImGui::PopStyleColor();
 		}
+	}
+	else if (frame.bStructural &&
+			 frame.binding->getOutputProblemCodes()[(size_t)m_target.index] != eFaceTargetProblem::None)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, FaceTabWidgets::k_warningColor);
+		ImGui::TextWrapped("%s", locFormat("faceTab.unresolvedTooltipFmt",
+										   FaceTabWidgets::problemText(*frame.binding, (size_t)m_target.index).c_str())
+									 .c_str());
+		ImGui::PopStyleColor();
 	}
 
 	ImGui::TableNextColumn();
@@ -414,7 +479,6 @@ bool FaceExprEditorWindow::drawHeader(FaceProfile& profile, const Frame& frame)
 		ImGui::SetTooltip("%s", locText("exprEditor.revertTooltip"));
 
 	ImGui::EndTable();
-	return bChanged;
 }
 
 // -- Inputs ---------------------------------------------------------------------

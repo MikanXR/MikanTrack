@@ -168,11 +168,11 @@ The value bars and the variable values read the frame the 3D scene shows, live o
 
 The Expression Editor window (`FaceExprEditorWindow`) edits one row of the active profile at a time. It is not in the default dock layout: it floats at first use and docks or tears out like every other window. The design record is the interactive mockup at `docs/proposals/face-expr-editor-mockup.html`.
 
-- One editor: Edit on another row retargets it. It closes itself when its row goes away: the active profile changes, the row is deleted, or Auto becomes active.
+- One editor: Edit on another row moves it to that row, and so does its own header's row picker. It closes itself when its row goes away: the active profile changes, the row is deleted, or Auto becomes active.
 
 - Edits apply live through the same path as the tab's (the last good binding keeps running while the text does not compile). Revert restores the text the editor opened with on this row, and is disabled while the text matches it.
 
-- The header carries the row's kind, the binding's target picker (the same one the tab row has, with its unresolved-target warning) or the variable's name field with its name error, and the live value bar.
+- The header carries the row's kind, the row picker, and the live value bar. The row picker lists the profile's variables and then its bindings under a filter box, and picking a row is the Edit button on that row: the edits to the row being left stay applied, and Revert then covers the picked row. A binding's target and a variable's name are edited in the tab, not here. Under the picker the header shows the binding's unresolved-target warning or the variable's name error.
 
 - The inputs column lists every input the language knows, enumerated from `FaceExprInputs` and grouped by namespace with the flags (`present`, `tracked`) first, then the profile's variables, each with its live value. A filter box narrows the list. The rows the compiled expression reads directly draw highlighted, and clicking a row inserts its name at the caret. The variable being edited is disabled.
 

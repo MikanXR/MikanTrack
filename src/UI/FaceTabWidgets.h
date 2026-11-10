@@ -10,9 +10,9 @@
 class App;
 class FaceProfileBinding;
 
-// The widgets and the text the Face tab and the expression editor share, so
-// an error reads the same and a target is picked the same wherever an
-// expression is edited.
+// The Face tab's row widgets and the text it shares with the expression
+// editor, so an error and a target read the same wherever an expression is
+// edited.
 namespace FaceTabWidgets
 {
 inline const ImVec4 k_errorColor(1.f, 0.4f, 0.4f, 1.f);

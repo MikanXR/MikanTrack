@@ -25,7 +25,8 @@ struct TrackingFrameResult;
 
 // The expression editor: one window on one row of the active face profile,
 // a variable or a VRM expression binding, opened from the row's Edit button
-// in the Face tab and retargeted by the next one. Its edits go to the
+// in the Face tab and moved to another row by the next one or by its own
+// header's row picker. Its edits go to the
 // profile as the tab's do (the last good binding keeps running while an
 // edit does not compile), and Revert restores the text it opened with.
 //
@@ -125,7 +126,7 @@ private:
 	void readReferences(const Frame& frame, std::vector<int>& outInputSlots, std::vector<int>& outLetIndices) const;
 	float rowValue(const Frame& frame) const;
 
-	bool drawHeader(FaceProfile& profile, const Frame& frame);
+	void drawHeader(const FaceProfile& profile, const Frame& frame);
 	void drawInputs(const FaceProfile& profile, const Frame& frame);
 	bool drawFunction(FaceProfile& profile, const Frame& frame);
 	void drawTrace();
@@ -170,7 +171,10 @@ private:
 
 	FaceExprTextField m_field;
 	std::string m_inputFilter;
-	std::string m_targetFilter;
+	// The header's row picker: its search text, and the row picked this draw
+	// (index -1 for none)
+	std::string m_rowFilter;
+	FaceExprEditTarget m_switchTarget;
 
 	// The trace
 	std::vector<Series> m_series;
