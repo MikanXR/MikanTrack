@@ -49,6 +49,15 @@ public:
 
 	// outValues receives one raw (unclamped) value per program output.
 	// Non-finite intermediate results are replaced with zero.
+	//
+	// inputs holds one value per slot of the table the program was compiled
+	// against, in slot order, and inputCount says how many. A count other
+	// than the program's inputCount (or null inputs) runs nothing: every
+	// output and every inspector value reads 0, the state does not step, and
+	// it returns false. Without a program it writes nothing and returns false.
+	bool evaluate(const float* inputs, int inputCount, double timeSeconds, FaceExprState& state, float* outValues);
+
+	// The face table's form: fills the inputs from the sources
 	void evaluate(const FaceSources& sources, double timeSeconds, FaceExprState& state, float* outValues);
 
 	// The last evaluate's values, for the inspector

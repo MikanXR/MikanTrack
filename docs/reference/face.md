@@ -99,7 +99,11 @@ Names compare without case, the input namespaces and the variable names alike:
 - `viseme.present`
 - the profile's variable names
 
-An unknown name is a compile error. The input table (`FaceExprInputs`) is the one place a new namespace is added.
+An unknown name is a compile error. The face input table (`FaceExprInputs`) is the one place a new face namespace is added.
+
+The language itself is not tied to that table. The compiler takes an `ExprInputTable` (`src/FaceExpr/ExprInputTable.h`: a slot count, a slot by name without case, a name by slot), and `compileFaceProfile(profile)` is the form that passes the face table, `FaceExprInputs::table()`. A program records the input count it was compiled against, and `FaceExprEvaluator::evaluate` over a caller-filled array of that many floats is the general entry, the `FaceSources` form filling the face table's values and calling it. A count that does not match runs nothing, writes zeros and returns false. `ExprNameTable` is a table built from a list of names.
+
+`ExprParameter` (`src/FaceExpr/ExprParameter.h`) is a setting that is a plain value or a function over some table: the value, the expression text and which of the two is in force. It saves as a bare JSON number while it is a plain value with no text, so a numeric setting that becomes one reads and writes existing files unchanged, and otherwise as an object of `value`, `expression` and `useExpression`. `ExprParameterRunner` evaluates one such setting at one site: it compiles the text as a one-output profile, again only when the text or the table changes, and returns the expression's value clamped to the parameter's range, or the plain value clamped when the setting is a plain value, the text did not compile, or the result is not finite. It keeps the compile error and the last raw value for an editor. No setting uses the type yet.
 
 Operators, loosest first, all left associative:
 

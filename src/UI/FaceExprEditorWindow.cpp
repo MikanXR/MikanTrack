@@ -103,9 +103,9 @@ const std::vector<InputGroup>& inputGroups()
 {
 	static const std::vector<InputGroup> s_groups= [] {
 		std::vector<InputGroup> groups;
-		for (int slot= 0; slot < FaceExprInputs::k_count; ++slot)
+		for (int slot= 0; slot < FaceExprInputs::table().getCount(); ++slot)
 		{
-			const std::string name= FaceExprInputs::name(slot);
+			const std::string name= FaceExprInputs::table().getName(slot);
 			const size_t dot= name.find('.');
 			const std::string prefix= dot == std::string::npos ? name : name.substr(0, dot);
 			auto it= std::find_if(groups.begin(), groups.end(),
@@ -120,7 +120,7 @@ const std::vector<InputGroup>& inputGroups()
 		for (InputGroup& group : groups)
 		{
 			std::stable_partition(group.slots.begin(), group.slots.end(), [](int slot) {
-				const std::string name= FaceExprInputs::name(slot);
+				const std::string name= FaceExprInputs::table().getName(slot);
 				const size_t dot= name.find('.');
 				const std::string suffix= dot == std::string::npos ? name : name.substr(dot + 1);
 				return suffix == "present" || suffix == "tracked";
@@ -536,7 +536,7 @@ void FaceExprEditorWindow::drawInputs(const FaceProfile& profile, const Frame& f
 				ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthFixed, 44.f);
 				for (int slot : group.slots)
 				{
-					const std::string name= FaceExprInputs::name(slot);
+					const std::string name= FaceExprInputs::table().getName(slot);
 					if (!containsIgnoringCase(name, m_inputFilter))
 						continue;
 					const bool bReferenced=
@@ -659,7 +659,7 @@ void FaceExprEditorWindow::syncSeries(const FaceProfile& profile, const Frame& f
 	{
 		Series series;
 		series.index= slot;
-		series.label= FaceExprInputs::name(slot);
+		series.label= FaceExprInputs::table().getName(slot);
 		series.color= k_seriesColors[colorIndex++ % colorCount];
 		series.bOn= wasOn(false, slot);
 		m_series.push_back(series);
@@ -1150,7 +1150,7 @@ FaceExprEditorWindow::Status FaceExprEditorWindow::getStatus() const
 	std::vector<int> letIndices;
 	readReferences(frame, inputSlots, letIndices);
 	for (int slot : inputSlots)
-		status.reads.push_back(FaceExprInputs::name(slot));
+		status.reads.push_back(FaceExprInputs::table().getName(slot));
 	for (int letIndex : letIndices)
 	{
 		if ((size_t)letIndex < profile.lets.size())

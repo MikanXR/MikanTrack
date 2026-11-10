@@ -52,9 +52,23 @@ void FaceExprState::bindTo(const std::shared_ptr<const FaceExprProgram>& newProg
 void FaceExprEvaluator::evaluate(const FaceSources& sources, double timeSeconds, FaceExprState& state,
 								 float* outValues)
 {
+	float inputs[FaceExprInputs::k_count];
+	FaceExprInputs::fill(sources, inputs);
+	evaluate(inputs, FaceExprInputs::k_count, timeSeconds, state, outValues);
+}
+
+bool FaceExprEvaluator::evaluate(const float* inputs, int inputCount, double timeSeconds, FaceExprState& state,
+								 float* outValues)
+{
 	if (m_program == nullptr)
-		return;
+		return false;
 	const FaceExprProgram& program= *m_program;
+	if (inputCount != program.inputCount || (inputs == nullptr && inputCount > 0))
+	{
+		m_registers.assign((size_t)program.registerCount, 0.f);
+		std::fill(outValues, outValues + program.outputs.size(), 0.f);
+		return false;
+	}
 	state.bindTo(m_program);
 
 	// The time rule: forward steps clamp to the cap, small regressions step
@@ -73,7 +87,7 @@ void FaceExprEvaluator::evaluate(const FaceSources& sources, double timeSeconds,
 	state.bHasTime= true;
 
 	m_registers.resize((size_t)program.registerCount);
-	FaceExprInputs::fill(sources, m_registers.data());
+	std::copy(inputs, inputs + inputCount, m_registers.begin());
 	std::copy(program.constants.begin(), program.constants.end(), m_registers.begin() + program.constantBase);
 
 	float* reg= m_registers.data();
@@ -173,12 +187,14 @@ void FaceExprEvaluator::evaluate(const FaceSources& sources, double timeSeconds,
 
 	for (size_t outputIndex= 0; outputIndex < program.outputs.size(); ++outputIndex)
 		outValues[outputIndex]= reg[program.outputs[outputIndex].resultRegister];
+	return true;
 }
 
 float FaceExprEvaluator::getInputValue(int slot) const
 {
-	return slot >= 0 && slot < FaceExprInputs::k_count && slot < (int)m_registers.size() ? m_registers[(size_t)slot]
-																						 : 0.f;
+	if (m_program == nullptr || slot < 0 || slot >= m_program->inputCount || slot >= (int)m_registers.size())
+		return 0.f;
+	return m_registers[(size_t)slot];
 }
 
 float FaceExprEvaluator::getLetValue(int letIndex) const
