@@ -86,6 +86,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
 - `--test-direct-retarget`: direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism, the body-wrist gate on hand slots
+- `--test-retarget-golden`: retarget golden: the live retarget path against its frozen copy, bit for bit, over synthetic sequences
 - `--test-setup-flow`: guided setup: the step chain of every tracking variant
 - `--test-vrm`: VRM loader and rest skeleton on synthetic in-memory files, both VRM generations
 
@@ -112,6 +113,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
 - `--pose-report <recording.jsonl> [frameIndex] [outDir]`: re-solves one frame of a direct-mode take or a dump's `dump.jsonl` through the direct retarget and reports the posed avatar against the landmarks (reprojection per joint, arm angles and depths, finger angles) with a compare image, the loop after a solver change
 - `--replay-verify`: re-runs a recording and verifies every frame checksum
+- `--retarget-golden <recording.jsonl>`: the live retarget path against its frozen copy over a recording, bit for bit
 - `--replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path] [--gain db] [--gate dbfs]`: re-runs the microphone mouth stage over a recording's audio sidecar on the live hop grid (under the recording's model unless `--model` names another) and reports the per-viseme difference against the recorded frames, the A/B for a model, profile, gain, or gate change; the JSON carries the `recorded` and `replayed` series, `model`, and `recordedModel` for `--render-mouth`
 - `--viseme-bench <clip.wav> [out.json] [--model loudness|mfcc|ovrlipsync] [--hop ms] [--window ms] [--lookahead frames] [--profile path] [--cutoff hz] [--beta b]`: runs a mouth model over a wav clip under the live rolling-window policy (defaults: `mfcc`, volume-only without a profile, the live hop, window, and lookahead) and reports the share of frames each viseme dominated, the chunked frames' drift from one whole-clip run, the per-run inference p50 and p95 against the hop, and the viseme weights as JSON (the `offline`, `chunked`, and `filtered` series, with `model`)
 - `--render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]`: renders a contact sheet of the avatar's face under a bench JSON's viseme frames through the scene renderer and the avatar's Auto face profile from a hidden window, tiles spread evenly over the clip and labelled with the frame index and the dominant viseme

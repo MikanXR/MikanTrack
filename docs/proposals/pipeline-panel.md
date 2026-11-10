@@ -2,7 +2,7 @@
 
 A proposal to replace most of the app's settings panels with a Pipeline strip, a stage inspector and a central view that follows the selected stage. The interactive mockup is [pipeline-panel-mockup.html](./pipeline-panel-mockup.html), a self-contained file that opens by double-click. This document records the decisions the mockup is built on and the checklist that maps every control in today's panels to its new home.
 
-Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). No application code has changed.
+Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 is in. No application code has changed yet.
 
 ---
 
@@ -187,11 +187,37 @@ Every section of today's panels, and the stage and inspector section that receiv
 - Body model: the person box source and the mean keypoint score.
 - Output: the send rate, the bundle sizes and the avatar announcement.
 
+## Implementation order
+
+A golden test harness first, then the UI track, then the retarget track. Each milestone ships on its own and ends at a review.
+
+- M0: the retarget golden harness, the live retarget path against a frozen copy of it (testing.md)
+- M1: the stage model and its status rules, the read-only Pipeline strip, an inspector with Status only, the dock layout rebuilt once with View > Reset Layout
+- M2: the Tracking and OSC panels split into per-section functions that commit on their own, with their per-frame logic run whether drawn or not
+- M3: recordings carry the stage state that is not recorded today, as an optional block at the same format version
+- M4 to M11: one stage per milestone moves out of the old panels (Capture, Fusion, IMU, Body solver, Face and mouth, Retarget, Output, Direct solver), and a panel is deleted when it empties
+- M12: the Stage View replaces the 3D Scene and Video Preview tabs
+- M13: pinned stage windows and the Performance tab
+- M14: the expression language's input table becomes a parameter
+- M15: the source pose, with both solvers' output bit-identical to M0
+- M16: one shared target solve and loss stage, run every output frame on the vision thread and published, so the display shows what is streamed
+- M17: chain settings in the project file and the sidecar, the Retarget inspector regrouped into chains, the Retarget view
+- M18: value-or-function parameters edited inline
+- M19: the new behaviors (IK weight in both pipelines, selectable loss policies, reach scale and goal offset, rotation limits)
+
+Three things hold through the retarget track:
+
+- Rig corrections stay in the avatar's sidecar. The mapping mode, IK weight, reach scale, goal offset and loss policy are the project's and go in `project.json`.
+
+- The direct source pose stays in the avatar's units and carries the forearm twist as measured against the avatar's rest palm, so splitting the solver changes no output.
+
+- The elbow parameter becomes a direct weight toward the measured elbow. Its default is the function form of today's rule, `clamp(source.<side>LowerArm.confidence / threshold, 0, 1)`, so output is unchanged until someone switches it to a plain weight.
+
+Until M17, two pieces of the UI are interim: a flat Loss group under Retarget (dropout hold, freeze on loss, rest blend) and the Direct solver's Hold and rest sub-stage.
+
 ## Open points
 
 - The Retarget inspector shows one chain at a time below a six-row chain list, which is what keeps it readable. Whether one chain at a time is enough when tuning both arms together is untested. The arm chain has a "Copy to the other arm" button for that case.
-
-- The mockup's "Measured elbow blend" is a plain weight toward the measured elbow. Today's setting is the forearm confidence at which the measured elbow takes over. The function form covers both, and which the plain slider means is undecided.
 
 - Several chain parameters are new and have no solver behind them yet: the IK weight, the reach scale, the goal offset, the release policy, and the limits on a multi-camera project.
 

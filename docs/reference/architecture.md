@@ -40,7 +40,7 @@ Tracking data flows `Video` -> `Vision` -> `Tracking` -> `Osc`. `App` orchestrat
 
 - `src/Utility`: `Logger`, `PathUtils`, `StringUtils`, `ThreadUtils`, `WorkerThread`, `MemoryUtils.h`. `src/Utility/easy/profiler.h` is a no-op stub of the easy_profiler macros (`EASY_FUNCTION`, `EASY_BLOCK`, ...) so files copied from MikanXR compile unmodified; there is no easy_profiler in this repo.
 
-- `src/Tests`: command-line self-tests and headless diagnostic tools, one per file, compiled into the main executable (`KalidokitStyleRetarget` is the one file there that is no command: the baseline solver `--gate-direct` measures the direct retarget against). Each registers itself with `TestRegistry`; `src/main.cpp` routes recognized CLI flags to them (`--list-tests` prints the catalog) and otherwise launches the app. See [debugging.md](./debugging.md).
+- `src/Tests`: command-line self-tests and headless diagnostic tools, one per file, compiled into the main executable (the files there that are no command: `KalidokitStyleRetarget`, the baseline solver `--gate-direct` measures the direct retarget against, the `Frozen*` files, a copy of the retarget path in namespace `Frozen` that the retarget golden test compares the live code against and that is never edited, `RetargetGolden.h`, the comparison both golden commands share, and the synthetic fixtures `SyntheticAvatar.h` and `SyntheticDirectUser.h`). Each registers itself with `TestRegistry`; `src/main.cpp` routes recognized CLI flags to them (`--list-tests` prints the catalog) and otherwise launches the app. See [debugging.md](./debugging.md).
 
 ---
 
