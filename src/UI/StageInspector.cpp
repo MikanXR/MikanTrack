@@ -7,7 +7,6 @@
 
 #include "LocText.h"
 #include "PipelineText.h"
-#include "VisionThread.h"
 
 namespace
 {
@@ -42,14 +41,7 @@ void drawRow(const char* labelKey, const char* value)
 bool drawStageRow(const PipelineStatusInputs& inputs, const PipelineStageId& stage)
 {
 	const StageStatus status= PipelineModel::computeStatus(inputs, stage);
-	std::string label= PipelineText::stageName(stage);
-	if (stage.cameraIndex >= 0 && stage.stage != ePipelineStage::Camera)
-	{
-		PipelineStageId camera;
-		camera.stage= ePipelineStage::Camera;
-		camera.cameraIndex= stage.cameraIndex;
-		label= PipelineText::stageName(camera) + " / " + label;
-	}
+	std::string label= PipelineText::stageDisplayName(stage);
 	label+= "   " + PipelineText::format(status.value);
 
 	ImGui::PushID(PipelineModel::toString(stage).c_str());
@@ -87,15 +79,15 @@ PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& in
 		return request;
 	}
 	if (selected.isValid())
-		request= drawStage(inputs, selected, content);
+		request= drawStageBody(inputs, selected, content);
 	else
 		request= drawProject(inputs);
 	ImGui::End();
 	return request;
 }
 
-PipelineStageId StageInspector::drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
-										  IStageContent* content)
+PipelineStageId StageInspector::drawStageBody(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
+											  IStageContent* content)
 {
 	PipelineStageId request;
 	const StageStatus status= PipelineModel::computeStatus(inputs, stage);
@@ -241,50 +233,4 @@ PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)
 	if (listed == 0)
 		ImGui::TextDisabled("%s", locText("stageInspector.allRunning"));
 	return request;
-}
-
-void PerformancePanel::draw(bool* pOpen, const VisionThread& visionThread)
-{
-	if (!ImGui::Begin(locWindowTitle("windows.performance"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-	const VisionThread::Telemetry telemetry= visionThread.getTelemetry();
-	if (!telemetry.bValid)
-	{
-		ImGui::TextDisabled("%s", locText("performancePanel.noTelemetry"));
-		ImGui::End();
-		return;
-	}
-
-	ImGui::TextUnformatted(locFormat("performancePanel.totalFmt", (double)telemetry.totalMs).c_str());
-	ImGui::SameLine(0.f, 24.f);
-	const int hitchCount= visionThread.getHitchCount();
-	if (hitchCount == 0)
-	{
-		ImGui::TextDisabled("%s", locText("performancePanel.hitchesNone"));
-	}
-	else
-	{
-		ImGui::TextUnformatted(
-			locFormat("performancePanel.hitchesFmt", hitchCount, (double)visionThread.getLastHitchMs()).c_str());
-	}
-
-	if (ImGui::BeginTable("##phases", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
-	{
-		ImGui::TableSetupColumn(locText("performancePanel.phaseColumn"));
-		ImGui::TableSetupColumn(locText("performancePanel.msColumn"));
-		ImGui::TableHeadersRow();
-		for (int phaseIndex= 1; phaseIndex < (int)VisionThread::eVisionPhase::Count; ++phaseIndex)
-		{
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(VisionThread::getPhaseName((VisionThread::eVisionPhase)phaseIndex));
-			ImGui::TableNextColumn();
-			ImGui::Text("%.2f", telemetry.phaseMs[phaseIndex]);
-		}
-		ImGui::EndTable();
-	}
-	ImGui::End();
 }

@@ -27,6 +27,13 @@ static_assert(RecordedTelemetry::k_phaseCount == (int)VisionThread::eVisionPhase
 			  "RecordedTelemetry::phaseMs must hold one entry per vision phase");
 static_assert(RecordedTelemetry::k_maxCameras == VisionThread::k_maxReportedCameras,
 			  "RecordedTelemetry must hold every reported camera");
+static_assert(IterationHistory::k_phaseCount == (int)VisionThread::eVisionPhase::Count,
+			  "IterationHistory::Entry::phaseMs must hold one entry per vision phase");
+
+double VisionThread::getHitchThresholdMs()
+{
+	return k_hitchThresholdMs;
+}
 
 const char* VisionThread::getPhaseName(eVisionPhase phase)
 {
@@ -107,23 +114,44 @@ void VisionThread::publishTelemetry(Telemetry::ePath path, double timestampMs, d
 	if (bCameraPath)
 		m_lastCameraTelemetryMs= nowMs;
 
-	std::lock_guard<std::mutex> lock(m_telemetryMutex);
-	snapshot.iteration= m_telemetry.iteration + 1;
-	if (!bCameraPath && m_telemetry.bValid && nowMs - m_lastCameraTelemetryMs < k_cameraTelemetryHoldMs)
+	bool bOwnTimings= true;
 	{
-		snapshot.path= m_telemetry.path;
-		snapshot.timestampMs= m_telemetry.timestampMs;
-		snapshot.totalMs= m_telemetry.totalMs;
-		for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
-			snapshot.phaseMs[phaseIndex]= m_telemetry.phaseMs[phaseIndex];
+		std::lock_guard<std::mutex> lock(m_telemetryMutex);
+		snapshot.iteration= m_telemetry.iteration + 1;
+		if (!bCameraPath && m_telemetry.bValid && nowMs - m_lastCameraTelemetryMs < k_cameraTelemetryHoldMs)
+		{
+			bOwnTimings= false;
+			snapshot.path= m_telemetry.path;
+			snapshot.timestampMs= m_telemetry.timestampMs;
+			snapshot.totalMs= m_telemetry.totalMs;
+			for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
+				snapshot.phaseMs[phaseIndex]= m_telemetry.phaseMs[phaseIndex];
+		}
+		m_telemetry= snapshot;
 	}
-	m_telemetry= snapshot;
+
+	// The history holds the iterations whose own timings were published,
+	// which leaves out the idle spins and the face-only frames between
+	// camera frames
+	if (bOwnTimings && path != Telemetry::ePath::Idle)
+	{
+		std::lock_guard<std::mutex> lock(m_iterationHistoryMutex);
+		m_iterationHistory.push(snapshot.phaseMs, snapshot.totalMs, totalMs >= k_hitchThresholdMs);
+	}
 }
 
 VisionThread::Telemetry VisionThread::getTelemetry() const
 {
 	std::lock_guard<std::mutex> lock(m_telemetryMutex);
 	return m_telemetry;
+}
+
+uint64_t VisionThread::fetchIterationHistory(uint64_t afterSequence,
+											 std::vector<IterationHistory::Entry>& outEntries) const
+{
+	std::lock_guard<std::mutex> lock(m_iterationHistoryMutex);
+	m_iterationHistory.fetchNewerThan(afterSequence, outEntries);
+	return m_iterationHistory.getNewestSequence();
 }
 
 VisionThread::Telemetry::ePath VisionThread::getCameraIterationPath(const IterationState& iteration)

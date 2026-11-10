@@ -40,6 +40,15 @@ struct StageViewContent
 // direct solve's chains and the gizmos go with the stage's avatar layer.
 SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvatar, bool bShowPerCameraSkeletons);
 
+// What a stage is shown with when the view follows it: the cameras for
+// Capture and its sub-stages (a lane's stage its own camera alone) and for
+// the Direct solver and its sub-stages (the direct camera in a direct
+// project), and the scene with the top-level stage's layers for everything
+// else and for nothing selected. A camera index the view has no camera for
+// shows every camera. Never a wizard's content.
+StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDirect, int directCameraIndex,
+										int cameraCount);
+
 // The central view: one window that shows the camera view or the 3D scene
 // for the stage selected in the Pipeline strip, with a header row naming
 // what it shows, the mode override and the view-from-camera toggle. The two
@@ -69,9 +78,10 @@ public:
 	// project shape the strip shows.
 	void update(const PipelineStageId& selected, bool bDirect, int directCameraIndex, bool bCameraWizardActive);
 
-	// Draws the window and the body update chose. The camera body is the
-	// frame's only one: on a frame it is not drawn here, the preview's draw
-	// list is cleared, and the caller clears it on a frame this is not called.
+	// Draws the window and the body update chose. Its camera body is the
+	// only one the wizards draw on: on a frame it is not drawn here, the
+	// preview's draw list is cleared, and the caller clears it on a frame
+	// this is not called.
 	void draw(bool* pOpen, const Frame& frame);
 
 	const StageViewContent& getContent() const { return m_content; }

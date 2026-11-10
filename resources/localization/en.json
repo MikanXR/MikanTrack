@@ -1113,7 +1113,8 @@
 	"pipelinePanel": {
 		"cameraLabelFmt": "Camera %d",
 		"selectHint": "Select a stage. A stage with sub-stages opens here.",
-		"noSubStagesFmt": "%s has no sub-stages."
+		"noSubStagesFmt": "%s has no sub-stages.",
+		"pinHint": "Double-click to pin the stage in a window of its own."
 	},
 	"directStage": {
 		"noSolve": "No direct solve on the shown frame.",
@@ -1201,6 +1202,11 @@
 		"msColumn": "ms",
 		"totalFmt": "Frame loop: %.1f ms",
 		"hitchesNone": "No hitches.",
-		"hitchesFmt": "Hitches: %d (last %.0f ms)"
+		"hitchesFmt": "Hitches: %d (last %.0f ms)",
+		"replayNote": "A replay is shown. The frame loop here is the live one.",
+		"iterationsAgoAxis": "iterations ago",
+		"chartTotal": "total",
+		"chartHitchLimit": "hitch limit",
+		"chartHitches": "hitches"
 	}
 }

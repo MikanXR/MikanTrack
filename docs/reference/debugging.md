@@ -115,7 +115,7 @@ What-if replay: the recording's header line embeds the full config used to build
 
 Named phases (`VisionThread::eVisionPhase`): `ConfigRefresh` (config refresh / recording start-stop), `Capture` (frame pop, undistort, ML inference, 3D projection), `Imu` (wrist IMU sample drain, discovery, forearm publish), `Fusion` (cross-camera fusion, smoothing, auto-scale bookkeeping), `Osc`, `Diagnostics` (dump history record, recording enqueue, dump writes).
 
-Over threshold, `MIKAN_MT_LOG_WARNING` logs the total time, the worst phase and its time, and the full per-phase breakdown; `m_hitchCount` increments and `m_lastHitchMs` / `m_lastHitchPhase` are published for the Performance panel's hitch readout. A stall now names its phase instead of leaving a generic "tracking froze" symptom to diagnose from scratch.
+Over threshold, `MIKAN_MT_LOG_WARNING` logs the total time, the worst phase and its time, and the full per-phase breakdown; `m_hitchCount` increments and `m_lastHitchMs` / `m_lastHitchPhase` are published for the Performance panel's hitch readout. The panel's chart marks each hitch on the last 600 iterations' per-phase history. A stall now names its phase instead of leaving a generic "tracking froze" symptom to diagnose from scratch.
 
 Rule this watchdog enforces: anything that can block for hundreds of milliseconds must not run on the vision thread. HID enumeration and the Bluetooth open handshake are the concrete case already built this way: `ImuService::update()` runs on every vision-thread iteration and must never block on them, so device discovery runs on a separate worker (`ImuService::discoveryLoop`) instead.
 

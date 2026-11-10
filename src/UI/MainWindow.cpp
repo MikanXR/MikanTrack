@@ -33,6 +33,8 @@
 #include "Logger.h"
 #include "MainMenuScreen.h"
 #include "PathUtils.h"
+#include "PerformancePanel.h"
+#include "PinnedStageWindows.h"
 #include "PipelinePanel.h"
 #include "PipelineText.h"
 #include "ProjectManager.h"
@@ -69,6 +71,8 @@ MainWindow::MainWindow(App* app)
 	, m_pipelinePanel(std::make_unique<PipelinePanel>())
 	, m_stageInspector(std::make_unique<StageInspector>())
 	, m_stageView(std::make_unique<StageView>(m_videoPreviewPanel.get(), m_scene3dPanel.get()))
+	, m_pinnedWindows(std::make_unique<PinnedStageWindows>(m_videoPreviewPanel.get(), m_scene3dPanel.get()))
+	, m_performancePanel(std::make_unique<PerformancePanel>())
 	, m_stageContent(std::make_unique<StageContent>(app, m_devicePanel.get(), m_calibrationPanel.get(),
 												   m_audioPanel.get(), m_avatarPanel.get(), m_faceTab.get(),
 												   m_mouthReadout.get()))
@@ -90,7 +94,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 	server->registerCommandNamespace(
 		"pipeline",
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
-		 "pipeline view [follow|cameras|scene]"},
+		 "pipeline view [follow|cameras|scene]", "pipeline pin <stage>", "pipeline unpin <stage>|all",
+		 "pipeline pinned"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -423,6 +428,8 @@ void MainWindow::update(float deltaSeconds)
 {
 	if (m_app->getAppState() == App::eAppState::MainMenu)
 	{
+		// A closed project's pinned stages close with it
+		m_pinnedWindows->unpinAll();
 		drawMainMenu();
 		return;
 	}
@@ -575,25 +582,22 @@ void MainWindow::update(float deltaSeconds)
 	// the avatar is posed for the shown frame: the camera view or the scene
 	m_stageView->update(m_pipelinePanel->getSelected(), m_pipelineInputs.bDirect, m_pipelineInputs.directCameraIndex,
 						m_wizardHost->isCameraWizardActive());
+	// The frame both the Stage View and the pinned stages' windows draw
+	const std::vector<SceneCameraView> replayCameras=
+		m_shown.bReplay ? m_timelinePanel->getSceneCameras() : std::vector<SceneCameraView>();
+	StageView::Frame stageFrame;
+	stageFrame.cameraResults= &perCameraResults;
+	stageFrame.executionProviders= &executionProviders;
+	stageFrame.forearms= &forearmOverlays;
+	stageFrame.fused= m_shown.fused;
+	// The frustums come from the config the shown frame was made under
+	stageFrame.sceneCameras= m_shown.bReplay ? &replayCameras : &sceneCameras;
+	stageFrame.scenePerCamera= &m_shown.perCamera;
+	stageFrame.gizmos= &gizmos;
 	if (!m_bShowStageViewPanel)
-	{
 		m_videoPreviewPanel->clearLastDrawList();
-	}
 	else
-	{
-		const std::vector<SceneCameraView> replayCameras=
-			m_shown.bReplay ? m_timelinePanel->getSceneCameras() : std::vector<SceneCameraView>();
-		StageView::Frame stageFrame;
-		stageFrame.cameraResults= &perCameraResults;
-		stageFrame.executionProviders= &executionProviders;
-		stageFrame.forearms= &forearmOverlays;
-		stageFrame.fused= m_shown.fused;
-		// The frustums come from the config the shown frame was made under
-		stageFrame.sceneCameras= m_shown.bReplay ? &replayCameras : &sceneCameras;
-		stageFrame.scenePerCamera= &m_shown.perCamera;
-		stageFrame.gizmos= &gizmos;
 		m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
-	}
 	applyGizmoDrags(gizmos);
 
 	// The pipeline, once the avatar is posed for the shown frame: the strip,
@@ -601,6 +605,9 @@ void MainWindow::update(float deltaSeconds)
 	gatherPipelineInputs();
 	if (m_bShowPipelinePanel)
 		m_pipelinePanel->draw(&m_bShowPipelinePanel, m_pipelineInputs);
+	const PipelineStageId pinRequest= m_pipelinePanel->consumePinRequest();
+	if (pinRequest.isValid())
+		m_pinnedWindows->pin(pinRequest);
 	if (m_bShowInspectorPanel)
 	{
 		const PipelineStageId requested= m_stageInspector->draw(&m_bShowInspectorPanel, m_pipelineInputs,
@@ -608,11 +615,20 @@ void MainWindow::update(float deltaSeconds)
 		if (requested.isValid())
 			m_pipelinePanel->setSelected(requested);
 	}
-	// After the menu bar and the Inspector, the draws that can unload the
-	// avatar, so the preview pose is back to Live before the next frame's
-	// scene reads it. This frame's scene was posed before the Inspector drew.
+	// The pinned stages' windows, after the Inspector on the same inputs and
+	// sections, and before the launch requests their sections raise are read
+	// below. Their scenes render from the pose the Stage View's did.
+	{
+		const PipelineStageId requested= m_pinnedWindows->draw(m_pipelineInputs, stageFrame, m_stageContent.get());
+		if (requested.isValid())
+			m_pipelinePanel->setSelected(requested);
+	}
+	// After the menu bar, the Inspector and the pinned windows, the draws
+	// that can unload the avatar, so the preview pose is back to Live before
+	// the next frame's scene reads it. This frame's scenes were posed before
+	// the Inspector drew.
 	m_avatarPanel->update();
-	// The calibration wizards the Inspector's stage sections asked for
+	// The calibration wizards the stage sections drawn this frame asked for
 	const CalibrationPanel::DrawResult& calibrationAction= m_stageContent->getCalibrationAction();
 	if (calibrationAction.bLaunchIntrinsicsWizard)
 		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
@@ -627,7 +643,7 @@ void MainWindow::update(float deltaSeconds)
 		m_faceExprEditor->open(*m_stageContent->getFaceEditRequest());
 	m_faceExprEditor->update(*m_shown.fused);
 	if (m_bShowPerformancePanel)
-		PerformancePanel::draw(&m_bShowPerformancePanel, *visionThread);
+		m_performancePanel->draw(&m_bShowPerformancePanel, *visionThread, m_shown.bReplay);
 
 	// The dump, once the avatar is posed for this frame
 	const bool bCountdownDone= m_trackingPanelState.dumpCountdown.update(deltaSeconds);
@@ -1319,7 +1335,38 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		outLines.push_back(m_stageView->describe());
 		return true;
 	}
-	if (verb == "status" || verb == "select")
+	if (verb == "pinned")
+	{
+		const std::vector<PipelineStageId> pinned= m_pinnedWindows->getPinned();
+		for (const PipelineStageId& stage : pinned)
+			outLines.push_back(PipelineModel::toString(stage));
+		if (pinned.empty())
+			outLines.push_back("none");
+		return true;
+	}
+	if (verb == "unpin")
+	{
+		if (args.size() < 2)
+		{
+			outError= "missing stage";
+			return false;
+		}
+		if (args[1] == "all")
+		{
+			m_pinnedWindows->unpinAll();
+			outLines.push_back("none");
+			return true;
+		}
+		PipelineStageId stage;
+		if (!PipelineModel::fromString(args[1], stage) || !m_pinnedWindows->unpin(stage))
+		{
+			outError= "not pinned: " + args[1];
+			return false;
+		}
+		outLines.push_back(PipelineModel::toString(stage));
+		return true;
+	}
+	if (verb == "status" || verb == "select" || verb == "pin")
 	{
 		if (args.size() < 2)
 		{
@@ -1338,6 +1385,14 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		{
 			outError= "no such stage in this project: " + args[1];
 			return false;
+		}
+		if (verb == "pin")
+		{
+			// The window opens on the next draw; the reply is the id the gui
+			// namespace addresses it by
+			m_pinnedWindows->pin(stage);
+			outLines.push_back(PinnedStageWindows::getWindowId(stage));
+			return true;
 		}
 		if (verb == "select")
 			m_pipelinePanel->setSelected(stage);

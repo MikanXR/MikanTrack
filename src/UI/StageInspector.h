@@ -31,16 +31,14 @@ public:
 	PipelineStageId draw(bool* pOpen, const PipelineStatusInputs& inputs, const PipelineStageId& selected,
 						 IStageContent* content);
 
+	// One stage on the template, without a window of its own, so a pinned
+	// stage's window hosts the same body: the header, Status, the stage's
+	// sections, and for a stage with no section of its own whose sub-stages
+	// have some, one row per sub-stage. Returns the sub-stage a row's click
+	// asks to select, an invalid id otherwise.
+	static PipelineStageId drawStageBody(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
+										 IStageContent* content);
+
 private:
-	// A stage with no section of its own whose sub-stages have some lists
-	// them as rows; returns the one clicked
-	PipelineStageId drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage, IStageContent* content);
 	PipelineStageId drawProject(const PipelineStatusInputs& inputs);
 };
-
-// The Performance panel: the vision thread's last frame loop iteration by phase
-class VisionThread;
-namespace PerformancePanel
-{
-void draw(bool* pOpen, const VisionThread& visionThread);
-}

@@ -16,6 +16,9 @@ std::string format(const StageText& text);
 
 // The stage's name; a camera's lane reads "Camera <n>"
 std::string stageName(const PipelineStageId& stage);
+// The stage's name where stages of several cameras are listed together: a
+// camera's sub-stage reads "Camera <n> / <name>", so two cameras' differ
+std::string stageDisplayName(const PipelineStageId& stage);
 
 ImU32 stateColor(eStageState state, float alpha= 1.f);
 // Running and degraded are filled; inactive and not configured are rings,

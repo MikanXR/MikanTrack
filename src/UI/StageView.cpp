@@ -65,27 +65,37 @@ void StageView::setMode(eStageViewMode mode)
 	decide();
 }
 
-void StageView::decide()
+StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDirect, int directCameraIndex,
+										int cameraCount)
 {
-	const PipelineStageId& selected= m_selected;
-	const PipelineStageId topLevel= selected.isValid() ? PipelineModel::getTopLevel(selected) : PipelineStageId();
+	const PipelineStageId topLevel= stage.isValid() ? PipelineModel::getTopLevel(stage) : PipelineStageId();
 
 	// The capture and the direct solver are about the frames themselves:
 	// the camera a lane's stage belongs to, or the direct solver's camera
-	bool bSelectionShowsCameras= false;
-	int selectedCamera= -1;
+	StageViewContent content;
 	if (topLevel.stage == ePipelineStage::Capture)
 	{
-		bSelectionShowsCameras= true;
-		selectedCamera= selected.cameraIndex;
+		content.bCameras= true;
+		content.cameraIndex= stage.cameraIndex;
 	}
 	else if (topLevel.stage == ePipelineStage::DirectSolver)
 	{
-		bSelectionShowsCameras= true;
-		selectedCamera= m_bDirect ? m_directCameraIndex : -1;
+		content.bCameras= true;
+		content.cameraIndex= bDirect ? directCameraIndex : -1;
 	}
-	if (selectedCamera >= (int)m_previewPanel->getCameraCount())
-		selectedCamera= -1;
+	else
+	{
+		content.sceneStage= topLevel;
+	}
+	if (content.cameraIndex >= cameraCount)
+		content.cameraIndex= -1;
+	return content;
+}
+
+void StageView::decide()
+{
+	const StageViewContent follow=
+		decideStageViewContent(m_selected, m_bDirect, m_directCameraIndex, (int)m_previewPanel->getCameraCount());
 
 	StageViewContent content;
 	if (m_bCameraWizardActive)
@@ -94,14 +104,14 @@ void StageView::decide()
 		content.bCameras= true;
 		content.bWizard= true;
 	}
-	else if (m_mode == eStageViewMode::Cameras || (m_mode == eStageViewMode::Follow && bSelectionShowsCameras))
+	else if (m_mode == eStageViewMode::Cameras || (m_mode == eStageViewMode::Follow && follow.bCameras))
 	{
 		content.bCameras= true;
-		content.cameraIndex= selectedCamera;
+		content.cameraIndex= follow.bCameras ? follow.cameraIndex : -1;
 	}
-	else if (!bSelectionShowsCameras)
+	else if (!follow.bCameras)
 	{
-		content.sceneStage= topLevel;
+		content.sceneStage= follow.sceneStage;
 	}
 	m_content= content;
 }

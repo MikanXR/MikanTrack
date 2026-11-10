@@ -80,13 +80,19 @@ static const glm::vec3 k_cameraColors[4]= {
 	glm::vec3(0.6f, 1.f, 0.5f),  // green
 };
 
-Scene3dPanel::Scene3dPanel()
-	: m_frameBuffer(std::make_unique<GlFrameBuffer>())
-	, m_captureBuffer(std::make_unique<GlFrameBuffer>())
-	, m_lineRenderer(std::make_unique<GlLineRenderer>())
-	, m_camera(std::make_unique<OrbitCamera>())
+SceneViewState::SceneViewState()
+	: frameBuffer(std::make_unique<GlFrameBuffer>())
+	, camera(std::make_unique<OrbitCamera>())
 {
-	m_camera->setOrbitLocation(30.f, -40.f, 1.8f);
+	camera->setOrbitLocation(30.f, -40.f, 1.8f);
+}
+
+SceneViewState::~SceneViewState()= default;
+
+Scene3dPanel::Scene3dPanel()
+	: m_captureBuffer(std::make_unique<GlFrameBuffer>())
+	, m_lineRenderer(std::make_unique<GlLineRenderer>())
+{
 }
 
 void Scene3dPanel::setAvatar(std::shared_ptr<const AvatarModel> model, std::shared_ptr<const AvatarSkeleton> skeleton,
@@ -158,14 +164,48 @@ void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::v
 	for (SceneGizmos::ElbowHint& hint : gizmos.elbowHints)
 		hint.bDragging= false;
 
+	const bool bCameraView= m_bViewFromCamera && m_cameraMatch.valid && m_cameraMatch.camera.width > 0 &&
+		m_cameraMatch.camera.height > 0;
+	glm::vec2 imageMin, imageSize;
+	if (!drawViewImage(m_mainView, bCameraView, layers, fusedResult, cameras, perCameraResults, gizmos, imageMin,
+					   imageSize))
+		return;
+
+	// The gizmos and the orbit belong to the orbit view: the camera view is
+	// a fixed viewpoint
+	bool bGizmoOwnsMouse= false;
+	if (bCameraView || !layers.bGizmos)
+		m_draggedElbowHint= -1;
+	else
+		bGizmoOwnsMouse= updateGizmoDrag(gizmos, imageMin, imageSize);
+	if (!bCameraView)
+		updateOrbit(*m_mainView.camera, !bGizmoOwnsMouse);
+}
+
+void Scene3dPanel::drawViewBody(SceneViewState& view, const TrackingFrameResult& fusedResult,
+								const std::vector<SceneCameraView>& cameras,
+								const std::vector<const TrackingFrameResult*>& perCameraResults,
+								const SceneLayers& layers)
+{
+	SceneLayers viewLayers= layers;
+	viewLayers.bGizmos= false;
+	const SceneGizmos noGizmos;
+	glm::vec2 imageMin, imageSize;
+	if (drawViewImage(view, false, viewLayers, fusedResult, cameras, perCameraResults, noGizmos, imageMin, imageSize))
+		updateOrbit(*view.camera, true);
+}
+
+bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, const SceneLayers& layers,
+								 const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+								 const std::vector<const TrackingFrameResult*>& perCameraResults,
+								 const SceneGizmos& gizmos, glm::vec2& outImageMin, glm::vec2& outImageSize)
+{
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const uint16_t fbWidth= (uint16_t)std::max(64.f, panelSize.x);
 	const uint16_t fbHeight= (uint16_t)std::max(64.f, panelSize.y);
 
-	// The orbit view fills the panel; the camera view letterboxes the
+	// The orbit view fills the region; the camera view letterboxes the
 	// frame's aspect inside it
-	const bool bCameraView= m_bViewFromCamera && m_cameraMatch.valid && m_cameraMatch.camera.width > 0 &&
-		m_cameraMatch.camera.height > 0;
 	if (bCameraView)
 	{
 		const float frameAspect= (float)m_cameraMatch.camera.width / (float)m_cameraMatch.camera.height;
@@ -176,64 +216,53 @@ void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::v
 			viewHeight= fbHeight;
 			viewWidth= (int)((float)fbHeight * frameAspect);
 		}
-		m_viewport[0]= (fbWidth - viewWidth) / 2;
-		m_viewport[1]= (fbHeight - viewHeight) / 2;
-		m_viewport[2]= viewWidth;
-		m_viewport[3]= viewHeight;
-		glm::mat4 view, projection;
-		makeCameraMatchedView(m_cameraMatch.camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
-		m_viewProjection= projection * view;
+		view.viewport= glm::ivec4((fbWidth - viewWidth) / 2, (fbHeight - viewHeight) / 2, viewWidth, viewHeight);
+		glm::mat4 viewMatrix, projection;
+		makeCameraMatchedView(m_cameraMatch.camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, viewMatrix, projection);
+		view.viewProjection= projection * viewMatrix;
 	}
 	else
 	{
-		m_viewport[0]= 0;
-		m_viewport[1]= 0;
-		m_viewport[2]= fbWidth;
-		m_viewport[3]= fbHeight;
-		m_camera->setPerspectiveProjection(50.f, (float)fbWidth / (float)fbHeight, 0.01f, 100.f);
-		m_viewProjection= m_camera->getViewProjection();
+		view.viewport= glm::ivec4(0, 0, fbWidth, fbHeight);
+		view.camera->setPerspectiveProjection(50.f, (float)fbWidth / (float)fbHeight, 0.01f, 100.f);
+		view.viewProjection= view.camera->getViewProjection();
 	}
-	if (!renderToTarget(*m_frameBuffer, fbWidth, fbHeight,
-						glm::ivec4(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]), m_viewProjection,
-						layers, fusedResult, cameras, perCameraResults, gizmos))
+	if (!renderToTarget(*view.frameBuffer, fbWidth, fbHeight, view.viewport, view.viewProjection, layers,
+						fusedResult, cameras, perCameraResults, gizmos))
 	{
 		ImGui::TextDisabled("%s", locText("scene3dPanel.rendererInitFailedText"));
-		return;
+		return false;
 	}
 
 	// FBO textures are bottom-up; flip V
 	ImGui::Image(
-		(ImTextureID)(intptr_t)m_frameBuffer->getColorTextureId(),
+		(ImTextureID)(intptr_t)view.frameBuffer->getColorTextureId(),
 		ImVec2((float)fbWidth, (float)fbHeight),
 		ImVec2(0, 1), ImVec2(1, 0));
 	const ImVec2 imageMin= ImGui::GetItemRectMin();
-	// The gizmos and the orbit belong to the orbit view: the camera view is
-	// a fixed viewpoint
-	bool bGizmoOwnsMouse= false;
-	if (bCameraView || !layers.bGizmos)
-		m_draggedElbowHint= -1;
-	else
-		bGizmoOwnsMouse= updateGizmoDrag(gizmos, glm::vec2(imageMin.x, imageMin.y),
-										 glm::vec2((float)fbWidth, (float)fbHeight));
+	outImageMin= glm::vec2(imageMin.x, imageMin.y);
+	outImageSize= glm::vec2((float)fbWidth, (float)fbHeight);
+	return true;
+}
 
-	// Orbit interaction on the image item
-	if (ImGui::IsItemHovered() && !bCameraView)
+void Scene3dPanel::updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits)
+{
+	if (!ImGui::IsItemHovered())
+		return;
+	ImGuiIO& io= ImGui::GetIO();
+
+	if (bLeftDragOrbits && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+		camera.adjustOrbitAngles(io.MouseDelta.x * 0.4f, -io.MouseDelta.y * 0.4f);
+
+	if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
 	{
-		ImGuiIO& io= ImGui::GetIO();
-
-		if (!bGizmoOwnsMouse && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-			m_camera->adjustOrbitAngles(io.MouseDelta.x * 0.4f, -io.MouseDelta.y * 0.4f);
-
-		if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-		{
-			// Pan in the display-space horizontal plane
-			const float panScale= m_camera->getOrbitRadius() * 0.002f;
-			m_camera->adjustOrbitTargetPosition(glm::vec3(-io.MouseDelta.x * panScale, io.MouseDelta.y * panScale, 0.f));
-		}
-
-		if (io.MouseWheel != 0.f)
-			m_camera->adjustOrbitRadius(-io.MouseWheel * 0.15f);
+		// Pan in the display-space horizontal plane
+		const float panScale= camera.getOrbitRadius() * 0.002f;
+		camera.adjustOrbitTargetPosition(glm::vec3(-io.MouseDelta.x * panScale, io.MouseDelta.y * panScale, 0.f));
 	}
+
+	if (io.MouseWheel != 0.f)
+		camera.adjustOrbitRadius(-io.MouseWheel * 0.15f);
 }
 
 void Scene3dPanel::drawSkeleton(const TrackingFrameResult& result, float brightness, const glm::vec3* colorOverride)
@@ -381,16 +410,17 @@ void Scene3dPanel::drawDirectSolve()
 bool Scene3dPanel::projectToImage(const glm::vec3& world, const glm::vec2& imageMin, const glm::vec2& imageSize,
 								  glm::vec2& outPixel) const
 {
-	const glm::vec4 clip= m_viewProjection * k_displayFromWorld * glm::vec4(world, 1.f);
+	const glm::vec4 clip= m_mainView.viewProjection * k_displayFromWorld * glm::vec4(world, 1.f);
 	if (clip.w <= 1e-6f)
 		return false;
 	const glm::vec2 ndc= glm::vec2(clip) / clip.w;
 	// The image shows the framebuffer flipped, so NDC +Y is the image top,
 	// and the viewport sits inside it from the bottom up
-	const float viewportTop= imageSize.y - (float)(m_viewport[1] + m_viewport[3]);
+	const glm::ivec4& viewport= m_mainView.viewport;
+	const float viewportTop= imageSize.y - (float)(viewport.y + viewport.w);
 	outPixel= imageMin +
-		glm::vec2((float)m_viewport[0] + (ndc.x * 0.5f + 0.5f) * (float)m_viewport[2],
-				  viewportTop + (0.5f - ndc.y * 0.5f) * (float)m_viewport[3]);
+		glm::vec2((float)viewport.x + (ndc.x * 0.5f + 0.5f) * (float)viewport.z,
+				  viewportTop + (0.5f - ndc.y * 0.5f) * (float)viewport.w);
 	return true;
 }
 
@@ -462,7 +492,7 @@ bool Scene3dPanel::updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMi
 		if (m_draggedElbowHint >= 0)
 		{
 			m_dragPlanePoint= glm::vec3(k_displayFromWorld * glm::vec4(gizmos.elbowHints[m_draggedElbowHint].hintWorld, 1.f));
-			m_dragPlaneNormal= glm::normalize(m_camera->getCameraPosition() - m_dragPlanePoint);
+			m_dragPlaneNormal= glm::normalize(m_mainView.camera->getCameraPosition() - m_dragPlanePoint);
 		}
 	}
 	if (m_draggedElbowHint < 0)
@@ -475,7 +505,7 @@ bool Scene3dPanel::updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMi
 	const float ndcX= (mousePixel.x - imageMin.x) / imageSize.x * 2.f - 1.f;
 	const float ndcY= 1.f - (mousePixel.y - imageMin.y) / imageSize.y * 2.f;
 	glm::vec3 rayOrigin, rayDirection;
-	m_camera->unprojectRay(ndcX, ndcY, rayOrigin, rayDirection);
+	m_mainView.camera->unprojectRay(ndcX, ndcY, rayOrigin, rayDirection);
 	const float denominator= glm::dot(rayDirection, m_dragPlaneNormal);
 	if (std::fabs(denominator) > 1e-6f)
 	{
@@ -494,7 +524,7 @@ void Scene3dPanel::drawGizmos(const SceneGizmos& gizmos)
 	// Rings face the camera: the circle helper draws in its local XZ plane,
 	// so local Y goes along the view direction (the orbit camera's: the
 	// gizmos are not drawn in the camera view)
-	const glm::mat3 cameraRotation= glm::transpose(glm::mat3(m_camera->getViewMatrix()));
+	const glm::mat3 cameraRotation= glm::transpose(glm::mat3(m_mainView.camera->getViewMatrix()));
 	const glm::mat3 facing(cameraRotation[0], cameraRotation[2], cameraRotation[1]);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{

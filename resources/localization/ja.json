@@ -1113,7 +1113,8 @@
 	"pipelinePanel": {
 		"cameraLabelFmt": "カメラ %d",
 		"selectHint": "ステージを選択してください。サブステージを持つステージはここに開きます。",
-		"noSubStagesFmt": "%s にサブステージはありません。"
+		"noSubStagesFmt": "%s にサブステージはありません。",
+		"pinHint": "ダブルクリックでステージを専用のウィンドウに固定します。"
 	},
 	"directStage": {
 		"noSolve": "表示中のフレームにダイレクトソルブはありません。",
@@ -1201,6 +1202,11 @@
 		"msColumn": "ms",
 		"totalFmt": "フレームループ: %.1f ms",
 		"hitchesNone": "ヒッチなし。",
-		"hitchesFmt": "ヒッチ: %d (直近 %.0f ms)"
+		"hitchesFmt": "ヒッチ: %d (直近 %.0f ms)",
+		"replayNote": "リプレイを表示中です。ここに示すフレームループはライブのものです。",
+		"iterationsAgoAxis": "イテレーション前",
+		"chartTotal": "合計",
+		"chartHitchLimit": "ヒッチのしきい値",
+		"chartHitches": "ヒッチ"
 	}
 }

@@ -100,6 +100,23 @@ void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cam
 bool projectCameraMatched(const glm::mat4& viewProjection, const glm::vec3& world, int width, int height,
 						  glm::vec2& outPixel);
 
+// One view onto the scene: the framebuffer it renders into, its orbit
+// camera, and where its last draw rendered inside that framebuffer (the
+// viewport, the letterbox while the camera view is on) with the
+// view-projection it used. The panel holds the Stage View's, and every
+// other window that shows the scene holds one of its own.
+struct SceneViewState
+{
+	SceneViewState();
+	~SceneViewState();
+
+	std::unique_ptr<GlFrameBuffer> frameBuffer;
+	std::unique_ptr<OrbitCamera> camera;
+	glm::mat4 viewProjection{1.f};
+	// x, y, width, height from the framebuffer's bottom left
+	glm::ivec4 viewport{0};
+};
+
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
 // calibrated camera, the FUSED hand/arm skeletons (full brightness), each
 // camera's unfused skeleton (dimmed, in that camera's color), the avatar,
@@ -124,6 +141,15 @@ public:
 				  const std::vector<const TrackingFrameResult*>& perCameraResults,
 				  SceneGizmos& gizmos,
 				  const SceneLayers& layers);
+
+	// Draws the scene the way drawBody does, through a view the caller
+	// holds: its own framebuffer and orbit (dragged and wheeled while the
+	// image is hovered), never the camera view and never the gizmos, which
+	// belong to the panel's own view. The avatar, the renderers and the
+	// frame's inputs are the panel's, shared with every view.
+	void drawViewBody(SceneViewState& view, const TrackingFrameResult& fusedResult,
+					  const std::vector<SceneCameraView>& cameras,
+					  const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneLayers& layers);
 
 	// Renders the scene into target, sized width by height (created or
 	// resized as needed), cleared whole and drawn inside viewport (x, y,
@@ -192,6 +218,18 @@ private:
 					 const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos,
 					 const glm::mat4& viewProjection, const SceneLayers& layers);
 	bool startRenderers();
+	// Renders the scene through the view at the size of the current
+	// window's remaining region, with the view's orbit camera or, while
+	// bCameraView, the matched camera letterboxed, and shows it as an image
+	// item. False, with a note drawn instead, when the renderer failed.
+	bool drawViewImage(SceneViewState& view, bool bCameraView, const SceneLayers& layers,
+					   const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+					   const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos,
+					   glm::vec2& outImageMin, glm::vec2& outImageSize);
+	// The orbit on the image item just drawn, while it is hovered: the left
+	// drag turns it (unless bLeftDragOrbits is off, when a gizmo holds the
+	// mouse), the middle drag pans, the wheel zooms
+	static void updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits);
 	void drawGizmos(const SceneGizmos& gizmos);
 	void drawDirectSolve();
 	// Picks and drags the gizmos with the mouse over the scene image; returns
@@ -205,20 +243,15 @@ private:
 	// anything was drawn. An unloaded avatar drops its GPU copy either way.
 	bool drawAvatar(const glm::mat4& viewProjection, bool bShow);
 
-	std::unique_ptr<GlFrameBuffer> m_frameBuffer;
+	// The Stage View's view, the one the gizmos are picked and drawn in
+	SceneViewState m_mainView;
 	std::unique_ptr<GlFrameBuffer> m_captureBuffer;
 	std::unique_ptr<GlLineRenderer> m_lineRenderer;
-	std::unique_ptr<OrbitCamera> m_camera;
 	bool m_bLineRendererInitialized= false;
 	AvatarMeshView m_meshView;
 
 	SceneCameraMatch m_cameraMatch;
 	bool m_bViewFromCamera= false;
-	// The last draw's view and where it rendered inside the panel's
-	// framebuffer (the letterbox when the camera view is on), for the gizmo
-	// picking
-	glm::mat4 m_viewProjection{1.f};
-	int m_viewport[4]= {0, 0, 0, 0};
 	bool m_bHasDirectSolve= false;
 	DirectRetarget::SolveState m_directSolve;
 	glm::mat4 m_solveToWorld{1.f};

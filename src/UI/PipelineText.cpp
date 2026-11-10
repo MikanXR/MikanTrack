@@ -24,6 +24,16 @@ std::string stageName(const PipelineStageId& stage)
 	return locText(PipelineModel::getNameKey(stage.stage));
 }
 
+std::string stageDisplayName(const PipelineStageId& stage)
+{
+	if (stage.cameraIndex < 0 || stage.stage == ePipelineStage::Camera)
+		return stageName(stage);
+	PipelineStageId camera;
+	camera.stage= ePipelineStage::Camera;
+	camera.cameraIndex= stage.cameraIndex;
+	return stageName(camera) + " / " + stageName(stage);
+}
+
 ImU32 stateColor(eStageState state, float alpha)
 {
 	ImVec4 color(0.6f, 0.65f, 0.7f, 1.f);

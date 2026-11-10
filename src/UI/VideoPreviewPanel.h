@@ -32,11 +32,20 @@ public:
 	// (optional, indexed by camera) draws the wrist-IMU forearm projected
 	// into each camera's image; pass nullptr to skip. cameraFilter -1 draws
 	// every camera, a camera's index draws that camera alone; an index the
-	// panel has no camera for draws every camera.
+	// panel has no camera for draws every camera. This is the body the
+	// wizards draw on: it publishes its draw list and the drawn cameras'
+	// mappings, and a click on a pane makes that camera the active one.
 	void drawBody(const std::vector<const TrackingFrameResult*>& results,
 				  const std::vector<const char*>& executionProviders,
 				  const std::vector<ForearmOverlay>* forearms,
 				  int cameraFilter);
+
+	// Draws the cameras the way drawBody does for another window showing
+	// them: nothing is published, so the wizards keep drawing on drawBody's
+	// panes, and a click changes no active camera
+	void drawSecondaryBody(const std::vector<const TrackingFrameResult*>& results,
+						   const std::vector<const char*>& executionProviders,
+						   const std::vector<ForearmOverlay>* forearms, int cameraFilter) const;
 
 	// Called on a frame the body is not drawn, so the wizard overlays see no
 	// draw list rather than last frame's
@@ -84,6 +93,14 @@ private:
 		ImageToScreenMapping mapping;
 		bool bHasFrame= false;
 	};
+
+	// Draws the panes into the current window's remaining region on its
+	// draw list. inOutMappings holds one mapping per camera, and each pane
+	// drawn with a frame writes its own. Returns the camera whose pane was
+	// clicked, -1 for none.
+	int drawPanes(const std::vector<const TrackingFrameResult*>& results,
+				  const std::vector<const char*>& executionProviders, const std::vector<ForearmOverlay>* forearms,
+				  int cameraFilter, std::vector<ImageToScreenMapping>& inOutMappings) const;
 
 	std::vector<std::unique_ptr<CameraPane>> m_panes;
 	ImageToScreenMapping m_fallbackMapping;

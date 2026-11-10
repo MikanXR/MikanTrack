@@ -128,6 +128,8 @@ void drawStageTooltip(const PipelineStageId& stage, const BoxText& text)
 		ImGui::Text("%s: %s", locText(PipelineModel::getStateKey(text.status.state)), reason.c_str());
 		ImGui::PopStyleColor();
 	}
+	ImGui::Spacing();
+	ImGui::TextDisabled("%s", locText("pipelinePanel.pinHint"));
 	ImGui::PopTextWrapPos();
 	ImGui::EndTooltip();
 }
@@ -239,12 +241,22 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	const ImVec2 origin= ImGui::GetCursorScreenPos();
 	const PipelineStageId selectedTop= PipelineModel::getTopLevel(m_selected);
 	PipelineStageId clicked;
+	PipelineStageId doubleClicked;
 	auto box= [&](const PipelineStageId& stage, const BoxText& text, eBoxStyle style, const ImVec2& position,
 				  const ImVec2& size) {
 		const bool bSelected= stage == m_selected;
 		const bool bParent= !bSelected && m_selected.isValid() && stage == selectedTop;
 		if (drawStageBox(stage, text, style, position, size, bSelected, bParent))
-			clicked= stage;
+		{
+			// A box reports the release of each click, so a double-click's
+			// second release reads here with the click count it ended. A
+			// keyboard press is never one.
+			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+				ImGui::GetIO().MouseClickedLastCount[ImGuiMouseButton_Left] >= 2)
+				doubleClicked= stage;
+			else
+				clicked= stage;
+		}
 	};
 
 	// The top row: each stage in frame order, the source pose as a pill
@@ -386,6 +398,15 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	ImGui::EndChild();
 	ImGui::End();
 
-	if (clicked.isValid())
+	// The first click of a double-click selected the stage or cleared it, so
+	// the second selects it whatever the first did, and asks for its pin
+	if (doubleClicked.isValid())
+	{
+		m_selected= doubleClicked;
+		m_pinRequest= doubleClicked;
+	}
+	else if (clicked.isValid())
+	{
 		m_selected= clicked == m_selected ? PipelineStageId() : clicked;
+	}
 }

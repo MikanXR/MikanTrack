@@ -19,6 +19,7 @@
 #include "HandBoneCalibrator.h"
 #include "HandPoseModel.h"
 #include "HandFusion.h"
+#include "IterationHistory.h"
 #include "TrackingRecorder.h"
 #include "TrackingTypes.h"
 
@@ -300,6 +301,16 @@ public:
 	};
 	Telemetry getTelemetry() const;
 
+	// The frame loop's recent iterations, for the Performance chart (display
+	// only: no recording and no replayed stage reads it). Appends every held
+	// entry numbered after afterSequence, oldest first, and returns the
+	// newest entry's number. An entry is an iteration whose own timings the
+	// telemetry published: a camera frame, or a face-only frame while no
+	// camera frame is recent. The idle spins between frames are left out.
+	uint64_t fetchIterationHistory(uint64_t afterSequence, std::vector<IterationHistory::Entry>& outEntries) const;
+	// An iteration at least this long is a hitch
+	static double getHitchThresholdMs();
+
 private:
 	// Scratch for one loop iteration, threaded through the stages below
 	struct IterationState
@@ -513,6 +524,11 @@ private:
 	void publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs);
 	mutable std::mutex m_telemetryMutex;
 	Telemetry m_telemetry;
+	// Written once per published iteration, after the telemetry, under a
+	// mutex of its own so a reader copying the history never holds up the
+	// telemetry
+	mutable std::mutex m_iterationHistoryMutex;
+	IterationHistory m_iterationHistory;
 	// When the last camera-frame iteration published (vision thread only),
 	// and how long its path stands in for the idle iterations after it
 	double m_lastCameraTelemetryMs= -1.0e9;

@@ -21,6 +21,8 @@ class CalibrationPanel;
 class DevicePanel;
 class FaceExprEditorWindow;
 class MainMenuScreen;
+class PerformancePanel;
+class PinnedStageWindows;
 class PipelinePanel;
 class Scene3dPanel;
 class SetupFlow;
@@ -109,6 +111,11 @@ private:
 	// The central view over the preview and scene panels, following the
 	// strip's selection
 	std::unique_ptr<StageView> m_stageView;
+	// The stages pinned into windows of their own, each its view and its
+	// inspector on the shown frame
+	std::unique_ptr<PinnedStageWindows> m_pinnedWindows;
+	// The frame loop's timings and their recent history, always live
+	std::unique_ptr<PerformancePanel> m_performancePanel;
 	// The stage sections the Inspector hosts, drawn from the device,
 	// calibration, audio and avatar panels, the tracking and OSC sections and
 	// the face profile editor
