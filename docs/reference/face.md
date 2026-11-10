@@ -125,6 +125,8 @@ Functions:
 - `smooth(x, tauSeconds)`: exponential smoothing, stateful
 - `hysteresis(x, on, off)`: 1 once `x` reaches `on`, 0 once it falls to `off`, stateful
 
+The function table is `FaceExprFunctions` (`src/FaceExpr/FaceExprFunctions.h`): each function's name, opcode, arity, statefulness and the argument names an editor inserts as placeholders. The compiler resolves calls through it and the expression editor's palette enumerates it, so a function added there appears in both.
+
 Each stateful call site has its own slot in a `FaceExprState` kept apart from the program, so one program can drive several evaluators (the live stream, the timeline's replay). Every call site advances every frame, including in the branch a `select` does not take. A slot's key is its variable or output, that expression's text, and the call site's ordinal in it. A recompile carries over the slots whose key still exists.
 
 Time: the evaluator steps on the frame's own timestamp. The step a stateful call sees is the timestamp's advance clamped to zero and one second. Camera and face-only frames interleave a few milliseconds out of order, so a small regression steps nothing and keeps the clock where it was. Only a regression of more than a second, or an explicit reset (the timeline's seek), reinitializes the state. A program swap does not reset: it carries the state over by slot key.
@@ -160,7 +162,29 @@ The Avatar panel's Face tab (`AvatarFaceTab`) edits the profiles:
 
 - A compile error in a function is underlined at its span and spelled out beneath the row.
 
+- An Edit button on every variable and binding row opens the row in the Expression Editor window. The row the editor is on draws highlighted.
+
 The value bars and the variable values read the frame the 3D scene shows, live or the timeline's replay, and are live only for a frame of the current binding's generation, drawing empty otherwise.
+
+The Expression Editor window (`FaceExprEditorWindow`) edits one row of the active profile at a time. It is not in the default dock layout: it floats at first use and docks or tears out like every other window. The design record is the interactive mockup at `docs/proposals/face-expr-editor-mockup.html`.
+
+- One editor: Edit on another row moves it to that row, and so does its own header's row picker. It closes itself when its row goes away: the active profile changes, the row is deleted, or Auto becomes active.
+
+- Edits apply live through the same path as the tab's (the last good binding keeps running while the text does not compile). Revert restores the text the editor opened with on this row, and is disabled while the text matches it.
+
+- The header carries the row's kind, the row picker, and the live value bar. The row picker lists the profile's variables and then its bindings under a filter box, and picking a row is the Edit button on that row: the edits to the row being left stay applied, and Revert then covers the picked row. A binding's target and a variable's name are edited in the tab, not here. Under the picker the header shows the binding's unresolved-target warning or the variable's name error.
+
+- The inputs column lists every input the language knows, enumerated from `FaceExprInputs` and grouped by namespace with the flags (`present`, `tracked`) first, then the profile's variables, each with its live value. A filter box narrows the list. The rows the compiled expression reads directly draw highlighted, and clicking a row inserts its name at the caret. The variable being edited is disabled.
+
+- The function field is multi-line in the monospace font (M PLUS 1 Code, which carries its own Japanese glyphs) and grows with its text between two and ten lines. A compile error is underlined at its span, line by line, and spelled out beneath the field.
+
+- The trace plots the last six seconds of the row's value (the clamped output value for a binding, the raw value for a variable) over the inputs and variables it reads directly, one sample per shown frame, so a replayed take traces the same as a live one. It is an ImPlot plot with locked axes: time in seconds before the shown frame, and a value range of 0..1 that expands to fit the shown lines. The result draws heaviest, the inputs lighter, and the variables thinnest. The legend below the plot carries each line's name and live value, toggles a line on a click, and draws it heavier on hover. The editor draws it itself as a grid that wraps at the plot's width, since an ImPlot legend is a single row or a single column. Every cell is as wide as the longest name plus a fixed value slot, so the grid does not reflow as the digits change. Hovering the plot shows a cursor at the nearest sample and a tooltip of every shown line's value there. A seek backwards or an edit that changes what the row reads starts the trace over.
+
+- The palette's function buttons insert the signature with the first placeholder selected, so typing replaces it. A selection becomes the first argument instead. Operators and punctuation insert literally. Stateful functions draw tinted, and each function's tooltip carries its signature and a note.
+
+- The preview is a head close-up of the avatar at rest, framed on the head bone, orbited by dragging and zoomed with the wheel, with Reset view restoring the framing. Solo on shows the rest face plus this row's own target alone, a variable reaching every binding that reads it. Solo off shows the whole profile as the 3D scene does. Beneath it the driven targets list by value. The preview draws through its own `AvatarMeshView` (a second GPU copy of the model, released when the editor closes) and only while the binding fits the loaded model and the frame is live, as the scene does.
+
+- The `face` automation namespace drives all of this without the mouse ([automation.md](./automation.md)).
 
 The OSC panel's mouth section is a filtered view of the same values: the mouth targets of the active binding, the targets whose outputs read a mouth input. Its header counts them, and its source line says what they read this frame: the phone, the visemes, or both.
 

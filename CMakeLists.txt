@@ -77,6 +77,14 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
+# ImPlot (plots over Dear ImGui), compiled directly into the exe. Its demo is
+# left out.
+set(IMPLOT_DIR ${THIRDPARTY_DIR}/implot)
+set(IMPLOT_SOURCES
+    ${IMPLOT_DIR}/implot.cpp
+    ${IMPLOT_DIR}/implot_items.cpp
+)
+
 # tinyfiledialogs (native file dialogs), compiled directly into the exe
 set(TINYFD_DIR ${THIRDPARTY_DIR}/tinyfiledialogs)
 set(TINYFD_SOURCES ${TINYFD_DIR}/tinyfiledialogs.c ${TINYFD_DIR}/tinyfiledialogs.h)
@@ -126,6 +134,7 @@ add_executable(MikanTrack WIN32
     ${UI_SRC}
     ${TESTS_SRC}
     ${IMGUI_SOURCES}
+    ${IMPLOT_SOURCES}
     ${TINYFD_SOURCES}
 )
 
@@ -135,6 +144,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
     ${CALIBRATION_SRC} ${VISION_SRC} ${TRACKING_SRC}
     ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
+source_group("thirdparty\\implot" FILES ${IMPLOT_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
 
 target_include_directories(MikanTrack PRIVATE
@@ -169,6 +179,7 @@ target_include_directories(MikanTrack PRIVATE
     ${CGLTF_INCLUDE_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${IMPLOT_DIR}
     ${TINYFD_DIR}
 )
 

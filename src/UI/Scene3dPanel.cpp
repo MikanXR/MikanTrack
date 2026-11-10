@@ -15,7 +15,6 @@
 #include "DebugDraw.h"
 #include "GlFrameBuffer.h"
 #include "GlLineRenderer.h"
-#include "GlSkinnedMeshRenderer.h"
 #include "HandPoseModel.h"
 #include "MikanVideoSourceTypes.h"
 #include "OrbitCamera.h"
@@ -86,7 +85,6 @@ Scene3dPanel::Scene3dPanel()
 	, m_captureBuffer(std::make_unique<GlFrameBuffer>())
 	, m_lineRenderer(std::make_unique<GlLineRenderer>())
 	, m_camera(std::make_unique<OrbitCamera>())
-	, m_meshRenderer(std::make_unique<GlSkinnedMeshRenderer>())
 {
 	m_camera->setOrbitLocation(30.f, -40.f, 1.8f);
 }
@@ -96,7 +94,7 @@ void Scene3dPanel::setAvatar(std::shared_ptr<const AvatarModel> model, std::shar
 {
 	m_avatarModel= std::move(model);
 	m_avatarSkeleton= std::move(skeleton);
-	m_avatarGeneration= generation;
+	m_meshView.setAvatar(m_avatarModel, generation);
 }
 
 void Scene3dPanel::setAvatarFace(const FaceSources* face)
@@ -323,26 +321,11 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 	if (m_avatarModel == nullptr || m_avatarSkeleton == nullptr)
 	{
 		// Unloaded: drop the GPU copy rather than keeping a 12 MB model resident
-		if (m_meshRenderer->hasModel())
-			m_meshRenderer->clear();
+		m_meshView.clear();
 		return false;
 	}
 	if (!m_bShowAvatar)
 		return false;
-
-	if (!m_bMeshRendererInitialized)
-	{
-		m_bMeshRendererInitialized= m_meshRenderer->startup();
-		if (!m_bMeshRendererInitialized)
-			return false;
-	}
-	// Rebuild the GPU copy only when the model changed, not per frame
-	if (m_uploadedAvatarGeneration != m_avatarGeneration || !m_meshRenderer->hasModel())
-	{
-		if (!m_meshRenderer->upload(*m_avatarModel))
-			return false;
-		m_uploadedAvatarGeneration= m_avatarGeneration;
-	}
 
 	// The pose carries the root placement, so the model matrix is only the
 	// avatar's own axis convention and the display rotation every
@@ -358,14 +341,7 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 	const glm::vec3 lightDirection= glm::normalize(glm::vec3(0.6f, 1.f, 0.4f));
 	// The rest face unless the frame's values came from the binding built
 	// for this model
-	bool bBindingFits= m_faceBinding != nullptr &&
-					   m_faceBinding->getMeshMorphCounts().size() == m_avatarModel->meshes.size();
-	for (size_t meshIndex= 0; bBindingFits && meshIndex < m_avatarModel->meshes.size(); ++meshIndex)
-	{
-		bBindingFits= m_faceBinding->getMeshMorphCounts()[meshIndex] ==
-					  m_avatarModel->meshes[meshIndex].morphTargetNames.size();
-	}
-	if (bBindingFits)
+	if (m_faceBinding != nullptr && m_faceBinding->fitsModel(*m_avatarModel))
 	{
 		const bool bFace= m_bHasAvatarFace && m_avatarFace.outputs.generation == m_faceBinding->getGeneration();
 		m_faceBinding->evaluateMorphs(bFace ? &m_avatarFace.outputs.targetValues : nullptr, m_morphWeights);
@@ -376,9 +352,7 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 		for (size_t meshIndex= 0; meshIndex < m_avatarModel->meshes.size(); ++meshIndex)
 			m_morphWeights[meshIndex].assign(m_avatarModel->meshes[meshIndex].morphTargetNames.size(), 0.f);
 	}
-	m_meshRenderer->setMorphWeights(m_morphWeights);
-	m_meshRenderer->draw(viewProjection, modelMatrix, m_posedGlobals, lightDirection);
-	return true;
+	return m_meshView.draw(viewProjection, modelMatrix, m_posedGlobals, lightDirection, m_morphWeights);
 }
 
 void Scene3dPanel::drawDirectSolve()

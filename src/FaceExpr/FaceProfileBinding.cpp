@@ -156,6 +156,32 @@ std::shared_ptr<const FaceProfileBinding> FaceProfileBinding::build(const FacePr
 	return binding;
 }
 
+bool FaceProfileBinding::fitsModel(const AvatarModel& model) const
+{
+	if (m_meshMorphCounts.size() != model.meshes.size())
+		return false;
+	for (size_t meshIndex= 0; meshIndex < model.meshes.size(); ++meshIndex)
+	{
+		if (m_meshMorphCounts[meshIndex] != model.meshes[meshIndex].morphTargetNames.size())
+			return false;
+	}
+	return true;
+}
+
+std::vector<int> FaceProfileBinding::outputsReadingLet(int letIndex) const
+{
+	std::vector<int> outputs;
+	if (m_program == nullptr)
+		return outputs;
+	for (size_t outputIndex= 0; outputIndex < m_program->outputs.size(); ++outputIndex)
+	{
+		const std::vector<int>& lets= m_program->outputs[outputIndex].lets;
+		if (std::find(lets.begin(), lets.end(), letIndex) != lets.end())
+			outputs.push_back((int)outputIndex);
+	}
+	return outputs;
+}
+
 void FaceProfileBinding::combineTargets(const std::vector<float>& outputValues, std::vector<float>& outTargetValues,
 										std::vector<int>* outWinners) const
 {

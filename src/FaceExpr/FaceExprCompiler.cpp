@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 
+#include "FaceExprFunctions.h"
 #include "FaceExprInputs.h"
 #include "FaceExprParser.h"
 
@@ -18,40 +19,6 @@ std::string toLower(const std::string& text)
 	for (char& character : lower)
 		character= (char)std::tolower((unsigned char)character);
 	return lower;
-}
-
-struct FunctionInfo
-{
-	const char* name;
-	eFaceExprOp op;
-	int minArgs;
-	int maxArgs;
-	bool bStateful;
-};
-
-const FunctionInfo k_functions[]= {
-	{"min", eFaceExprOp::Min, 2, INT_MAX, false},
-	{"max", eFaceExprOp::Max, 2, INT_MAX, false},
-	{"clamp", eFaceExprOp::Clamp, 3, 3, false},
-	{"abs", eFaceExprOp::Abs, 1, 1, false},
-	{"pow", eFaceExprOp::Pow, 2, 2, false},
-	{"lerp", eFaceExprOp::Lerp, 3, 3, false},
-	{"remap", eFaceExprOp::Remap, 3, 5, false},
-	{"smoothstep", eFaceExprOp::Smoothstep, 3, 3, false},
-	{"select", eFaceExprOp::Select, 3, 3, false},
-	{"smooth", eFaceExprOp::Smooth, 2, 2, true},
-	{"hysteresis", eFaceExprOp::Hysteresis, 3, 3, true},
-};
-
-const FunctionInfo* findFunction(const std::string& name)
-{
-	const std::string lower= toLower(name);
-	for (const FunctionInfo& function : k_functions)
-	{
-		if (lower == function.name)
-			return &function;
-	}
-	return nullptr;
 }
 
 bool binaryOpFromText(const std::string& text, eFaceExprOp& outOp)
@@ -188,7 +155,7 @@ private:
 			if (!isValidLetName(name))
 				fail(unit, nameSpan, eFaceExprErrorCode::InvalidVariableName, {name},
 					 "'" + name + "' is not a valid variable name", true);
-			else if (findFunction(name) != nullptr)
+			else if (findFaceExprFunction(name) != nullptr)
 				fail(unit, nameSpan, eFaceExprErrorCode::VariableIsFunctionName, {name}, "'" + name + "' is a function name",
 					 true);
 			else if (m_letsByName.count(lower) != 0)
@@ -381,7 +348,7 @@ private:
 	int emitCall(const FaceExprNode& node, Unit& unit)
 	{
 		const FaceExprSpan nameSpan{node.span.begin, node.span.begin + (int)node.text.size()};
-		const FunctionInfo* function= findFunction(node.text);
+		const FaceExprFunctionInfo* function= findFaceExprFunction(node.text);
 		if (function == nullptr)
 		{
 			fail(unit, nameSpan, eFaceExprErrorCode::UnknownFunction, {node.text}, "unknown function '" + node.text + "'");
@@ -490,5 +457,5 @@ FaceExprCompileResult compileFaceProfile(const FaceProfile& profile)
 
 bool isFaceExprFunctionName(const std::string& name)
 {
-	return findFunction(name) != nullptr;
+	return findFaceExprFunction(name) != nullptr;
 }

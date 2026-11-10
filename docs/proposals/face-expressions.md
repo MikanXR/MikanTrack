@@ -169,6 +169,7 @@ The tab sits in the existing tab bar (`src/UI/AvatarPanel.cpp:82-92`). It holds:
 - Every assigned profile, a missing id included, has its own unassign control.
 - `AvatarMouthReadout` becomes a filtered view of the same data, or is removed in favor of the tab.
 - Strings go through `locLabel` with `en.json` and `ja.json` entries (`--loc-test`).
+- The per-row Expression Editor window that followed is designed in the interactive mockup `face-expr-editor-mockup.html` beside this file.
 
 ### 7. Removals
 

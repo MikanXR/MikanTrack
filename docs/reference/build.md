@@ -59,6 +59,7 @@ Then rerun `GenerateProjectFiles_X64_VS2022.bat`. CMake detects `Include/OVRLipS
 ### Submodules (`thirdparty/`)
 
 - `thirdparty/imgui`: Dear ImGui, `docking` branch, compiled directly into the exe (not a prebuilt library).
+- `thirdparty/implot`: ImPlot, pinned to the `v1.1` tag, the plots drawn over Dear ImGui. `implot.cpp` and `implot_items.cpp` are compiled directly into the exe, and its demo is not built. An ImPlot release declares the Dear ImGui versions it supports through its `IMGUI_VERSION_NUM` gates, so the two submodules move together.
 - `thirdparty/glm`: header-only.
 - `thirdparty/nlohmann_json`: header-only, the include path is `thirdparty/nlohmann_json/single_include`.
 - `thirdparty/readerwriterqueue`: header-only.

@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include "imgui.h"
+#include "implot.h"
 
 #include "Logger.h"
 #include "PathUtils.h"
@@ -99,6 +100,22 @@ void applyStyle()
 	style.ItemSpacing= ImVec2(10, 10);
 	style.ItemInnerSpacing= ImVec2(6, 4);
 	style.IndentSpacing= 20.0f;
+
+	// Plots: a dark plot area set straight into the window, no frame and no
+	// border, compact padding. Every other plot color stays on auto, which
+	// follows the ImGui colors above.
+	ImPlotStyle& plotStyle= ImPlot::GetStyle();
+	plotStyle.Colors[ImPlotCol_PlotBg]= ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
+	plotStyle.Colors[ImPlotCol_FrameBg]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.Colors[ImPlotCol_LegendBg]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.Colors[ImPlotCol_LegendBorder]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.PlotBorderSize= 0.f;
+	// Wide enough sideways for the last tick label, which centers on the edge
+	plotStyle.PlotPadding= ImVec2(12, 4);
+	plotStyle.LabelPadding= ImVec2(4, 3);
+	plotStyle.LegendPadding= ImVec2(2, 2);
+	plotStyle.LegendInnerPadding= ImVec2(2, 2);
+	plotStyle.LegendSpacing= ImVec2(12, 0);
 }
 
 const ImWchar* getJapaneseGlyphRanges()
@@ -108,6 +125,11 @@ const ImWchar* getJapaneseGlyphRanges()
 	// which lets the localization self-test share these exact ranges)
 	static ImFontAtlas s_rangeAtlas;
 	return s_rangeAtlas.GetGlyphRangesJapanese();
+}
+
+namespace
+{
+ImFont* s_monoFont= nullptr;
 }
 
 void loadFonts()
@@ -127,6 +149,26 @@ void loadFonts()
 		MIKAN_LOG_WARNING("ImGuiTheme::loadFonts")
 			<< "UI font not found at " << fontPath << ", using the ImGui default";
 	}
+
+	// Added after the UI font so the UI font stays the default. No glyph
+	// ranges: the renderer rasterizes glyphs on demand, so whatever the file
+	// carries renders.
+	const std::filesystem::path monoPath= PathUtils::getFontPath("MPLUS1Code-Regular");
+	if (std::filesystem::exists(monoPath))
+	{
+		s_monoFont= io.Fonts->AddFontFromFileTTF(monoPath.string().c_str(), 15.f);
+	}
+	else
+	{
+		s_monoFont= nullptr;
+		MIKAN_LOG_WARNING("ImGuiTheme::loadFonts")
+			<< "Monospace font not found at " << monoPath << ", expression text uses the UI font";
+	}
+}
+
+ImFont* getMonoFont()
+{
+	return s_monoFont;
 }
 
 } // namespace ImGuiTheme

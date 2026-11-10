@@ -650,8 +650,11 @@ bool AutomationServer::handleInputCommand(const std::vector<std::string>& args, 
 	const uint32_t targetWindowId= SDL_GetWindowID(targetWindow);
 
 	// Injected input only reaches ImGui if the window is the one receiving OS
-	// input, so every verb raises it first
-	SDL_RaiseWindow(targetWindow);
+	// input, so every verb raises it first. A window that already has the
+	// input focus is left alone: raising it again makes ImGui refocus its
+	// viewport, which closes a popup the previous verb opened.
+	if ((SDL_GetWindowFlags(targetWindow) & SDL_WINDOW_INPUT_FOCUS) == 0)
+		SDL_RaiseWindow(targetWindow);
 
 	if (verb == "move" || verb == "click" || verb == "press" || verb == "release" || verb == "wheel")
 	{

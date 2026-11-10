@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
+#include "implot.h"
 
 #include "AppConfig.h"
 #include "AutomationServer.h"
@@ -180,9 +181,11 @@ bool App::startup()
 	MIKAN_LOG_INFO("App::startup") << "OpenGL " << (const char*)glGetString(GL_VERSION)
 		<< " on " << (const char*)glGetString(GL_RENDERER);
 
-	// ImGui (docking)
+	// ImGui (docking), and ImPlot's context beside it before the theme
+	// styles both
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
+	ImPlot::CreateContext();
 	ImGuiIO& io= ImGui::GetIO();
 	io.ConfigFlags|= ImGuiConfigFlags_DockingEnable;
 	io.ConfigFlags|= ImGuiConfigFlags_ViewportsEnable;
@@ -220,6 +223,7 @@ bool App::startup()
 	// The command channel registers its namespaces whether or not it listens
 	m_automationServer= std::make_unique<AutomationServer>();
 	m_automationServer->initialize(this);
+	m_mainWindow->registerAutomation(m_automationServer.get());
 	if (m_bAutomationServerRequested && !m_automationServer->startListener(m_automationPort))
 	{
 		// Tolerated: the app runs on, it just cannot be driven externally
@@ -776,6 +780,7 @@ void App::shutdown()
 	{
 		ImGui_ImplOpenGL3_Shutdown();
 		ImGui_ImplSDL2_Shutdown();
+		ImPlot::DestroyContext();
 		ImGui::DestroyContext();
 	}
 
