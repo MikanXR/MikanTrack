@@ -100,8 +100,12 @@ struct PipelineStatusInputs
 	bool bDirect= false;
 	int cameraCount= 0;
 	int directCameraIndex= 0;
-	// The shown frame is a recording's, so live-only state describes now
+	// The shown frame is a recording's
 	bool bReplay= false;
+	// The shown frame carries its stage state: always live, and in a replay
+	// only for a take recorded with it. False leaves the device, IMU, face,
+	// microphone and output fields below unset.
+	bool bStageStateRecorded= true;
 
 	struct Camera
 	{

@@ -194,6 +194,10 @@ std::vector<Fault> makeFaults()
 		{"imu silent", [](Inputs& in) { in.imu[0].bStreaming= false; }},
 		{"imu converging", [](Inputs& in) { in.imu[1].bOrientationValid= false; }},
 		{"replay", [](Inputs& in) { in.bReplay= true; }},
+		{"replay of a take with no stage state", [](Inputs& in) {
+			 in.bReplay= true;
+			 in.bStageStateRecorded= false;
+		 }},
 		{"no neutral", [](Inputs& in) { in.bDirectNeutral= false; }},
 		{"no neutral, nobody in view", [](Inputs& in) {
 			 in.bDirectNeutral= false;
@@ -393,6 +397,32 @@ static int runPipelineModelTest(const TestArgs&)
 				  stateOf(noNeutral, id(S::Torso)) == eStageState::Degraded &&
 				  stateOf(noNeutral, id(S::ArmChain)) == eStageState::Running,
 			  "(f) direct with no neutral: the solver and the torso degraded, the arm chain running");
+	}
+
+	// (f2) A replayed frame from a take with no stage state: the stages that
+	// are nothing but that state say so, the rest read from the frame
+	{
+		Inputs in= makeHealthy(false, 3, true, 2);
+		in.bReplay= true;
+		in.bStageStateRecorded= false;
+		check(valueOf(in, id(S::Imu)) == "pipeline.valNotRecorded" && stateOf(in, id(S::Imu)) == eStageState::Inactive &&
+				  valueOf(in, id(S::Output)) == "pipeline.valNotRecorded" &&
+				  valueOf(in, id(S::VmcStream)) == "pipeline.valNotRecorded" &&
+				  valueOf(in, id(S::Phone)) == "pipeline.valNotRecorded" &&
+				  valueOf(in, id(S::Microphone)) == "pipeline.valNotRecorded" &&
+				  valueOf(in, id(S::Face)) == "pipeline.valNotRecorded",
+			  "(f2) unrecorded replay: IMU, output, phone, microphone and face say not recorded");
+		check(stateOf(in, id(S::Capture)) == eStageState::Running && stateOf(in, id(S::Fusion)) == eStageState::Running &&
+				  stateOf(in, id(S::DeliveryRules)) == eStageState::Running &&
+				  stateOf(in, id(S::Retarget)) == eStageState::Running,
+			  "(f2) unrecorded replay: capture, fusion, delivery rules and retarget read from the frame and the config");
+
+		Inputs recorded= makeHealthy(false, 3, true, 2);
+		recorded.bReplay= true;
+		check(stateOf(recorded, id(S::Imu)) == eStageState::Running &&
+				  reasonOf(recorded, id(S::Imu)) == "pipeline.whyImuReplay" &&
+				  stateOf(recorded, id(S::Output)) == eStageState::Running,
+			  "(f2) recorded replay: the IMU runs with the replay note, the output runs");
 	}
 
 	// (g) Every text the rules return is in the string table, a format key

@@ -315,7 +315,19 @@ private:
 		// The recording record under assembly, live only while recording
 		bool bRecordingThisFrame= false;
 		RecordedFrame recordFrame;
+		// The loop's per-phase times so far this iteration, for the recorded
+		// telemetry
+		const double* phaseMs= nullptr;
 	};
+
+	// Which path the iteration took: the direct camera, the fusion, or the
+	// camera-space passthrough
+	static Telemetry::ePath getCameraIterationPath(const IterationState& iteration);
+	// The stage state a recorded frame carries for display. nowMs places the
+	// cameras' last frames in time (a camera whose newest frame is older than
+	// the telemetry hold window reads as not streaming).
+	void gatherRecordedTelemetry(Telemetry::ePath path, const double* phaseMs, double nowMs,
+								 RecordedTelemetry& outTelemetry);
 
 	// The loop and its stages, in iteration order. Each stage works on the
 	// iteration scratch and the members; the main-thread handoffs stay here.
@@ -364,8 +376,10 @@ private:
 	// (Re)creates the OSC streamer and pushes the current config, body
 	// dimensions and avatar skeleton into it
 	void applyOscConfigOnThread();
-	// Services a pending requestDiagnosticDump on the vision thread
-	void performDiagnosticDump(const TrackingFrameResult& latestOutput);
+	// Services a pending requestDiagnosticDump on the vision thread. path and
+	// phaseMs describe the iteration that writes the dump, for the telemetry
+	// its one-frame recording carries.
+	void performDiagnosticDump(const TrackingFrameResult& latestOutput, Telemetry::ePath path, const double* phaseMs);
 
 	VideoCaptureSystem* m_videoCapture= nullptr;
 	AppConfig* m_config= nullptr;
@@ -491,6 +505,10 @@ private:
 	// and how long its path stands in for the idle iterations after it
 	double m_lastCameraTelemetryMs= -1.0e9;
 	static constexpr double k_cameraTelemetryHoldMs= 500.0;
+	// The last camera-frame iteration's Diagnostics phase time (vision thread
+	// only): a recorded frame is assembled inside that phase, so it carries
+	// the previous one's
+	double m_lastDiagnosticsPhaseMs= 0.0;
 
 	// Consumes a pending recording start request on the vision thread (state
 	// reset + header snapshot + recorder start)

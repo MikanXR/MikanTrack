@@ -46,6 +46,10 @@ public:
 	// last fresh result, like the live preview panes). Pointers are valid for
 	// the rest of the current UI frame.
 	std::vector<const TrackingFrameResult*> getPerCameraResults() const;
+	// Current frame's recorded stage state while the replay view is active,
+	// null when it is not or the frame carries none (a recording made before
+	// it was recorded). Valid for the rest of the current UI frame.
+	const RecordedTelemetry* getDisplayTelemetry() const;
 
 private:
 	void drawRecordingSection(AppConfig* config, VisionThread* visionThread);
@@ -89,6 +93,7 @@ private:
 	TrackingFrameResult m_displayFused;
 	std::vector<TrackingFrameResult> m_perCameraCopies;
 	std::vector<bool> m_perCameraCopyValid;
+	RecordedTelemetry m_displayTelemetry;
 	int m_builtFrame= -1;
 	int m_builtViewMode= -1;
 

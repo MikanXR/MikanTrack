@@ -322,21 +322,6 @@ static json poseSnapshotToJson(const HandPose& pose)
 	return out;
 }
 
-static json captureTimingsToJson(const TrackingFrameResult::CaptureTimings& timings)
-{
-	return {
-		{"queueAgeMs", timings.queueAgeMs},
-		{"convertMs", timings.convertMs},
-		{"undistortMs", timings.undistortMs},
-		{"flickerMs", timings.flickerMs},
-		{"bodyPoseMs", timings.bodyPoseMs},
-		{"roiQualityMs", timings.roiQualityMs},
-		{"liftMs", timings.liftMs},
-		{"publishMs", timings.publishMs},
-		{"totalMs", timings.totalMs},
-	};
-}
-
 static json resultSnapshotToJson(const TrackingFrameResult& result)
 {
 	json out= {

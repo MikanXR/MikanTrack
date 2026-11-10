@@ -2,7 +2,7 @@
 
 A proposal to replace most of the app's settings panels with a Pipeline strip, a stage inspector and a central view that follows the selected stage. The interactive mockup is [pipeline-panel-mockup.html](./pipeline-panel-mockup.html), a self-contained file that opens by double-click. This document records the decisions the mockup is built on and the checklist that maps every control in today's panels to its new home.
 
-Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0, M1 and M2 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control, and every panel section is now a function an inspector can host.
+Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 through M3 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control, every panel section is a function an inspector can host, and a recording carries the stage state a replay shows.
 
 ---
 
@@ -198,8 +198,8 @@ A golden test harness first, then the UI track, then the retarget track. Each mi
 - M0: the retarget golden harness, the live retarget path against a frozen copy of it (testing.md)
 - M1: the stage model and its status rules, the read-only Pipeline strip, an inspector with Status only, the dock layout rebuilt once with View > Reset Layout
 - M2: the Tracking and OSC panels split into per-section functions that commit on their own, with their per-frame logic run whether drawn or not
-- M3: recordings carry the stage state that is not recorded today, as an optional block at the same format version
-- M4 to M11: one stage per milestone moves out of the old panels (Capture, Fusion, IMU, Body solver, Face and mouth, Retarget, Output, Direct solver), and a panel is deleted when it empties
+- M3: recordings carry the stage state that is not recorded today, as an optional block at the same format version, and the strip reads it in a replay
+- M4 to M11: one stage per milestone moves out of the old panels (Capture, Fusion, IMU, Body solver, Face and mouth, Retarget, Output, Direct solver), and a panel is deleted when it empties The Fusion milestone also has the Timeline ask the replay for fusion diagnostics, which nothing reads before then.
 - M12: the Stage View replaces the 3D Scene and Video Preview tabs
 - M13: pinned stage windows and the Performance tab
 - M14: the expression language's input table becomes a parameter

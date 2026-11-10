@@ -240,6 +240,9 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 			result.inferenceMs= fresh.inferenceMs;
 			result.lumaInstability= fresh.lumaInstability;
 			result.lumaFlickerHz= fresh.lumaFlickerHz;
+			// Display only: no replayed stage reads the capture timings
+			if (fresh.bHaveCaptureTimings)
+				result.captureTimings= fresh.captureTimings;
 
 			if (fresh.valid)
 			{

@@ -40,6 +40,7 @@
 #include "SetupFlow.h"
 #include "StageInspector.h"
 #include "TimelinePanel.h"
+#include "TrackingRecording.h"
 #include "VideoModeUtils.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
@@ -847,33 +848,60 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 
 void MainWindow::gatherPipelineInputs()
 {
-	const AppConfig* config= m_app->getConfig();
+	// The project's shape and calibration are the shown frame's: a replayed
+	// take keeps the cameras and the pipeline it was recorded with
+	const AppConfig* config= m_shown.config;
 	VisionThread* visionThread= m_app->getVisionThread();
 	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
-	const VisionThread::Telemetry telemetry= visionThread->getTelemetry();
 	const TrackingFrameResult& fused= *m_shown.fused;
+	const bool bReplay= m_shown.bReplay;
+	// The stage state of the shown frame: the vision thread's snapshot and
+	// the services live, the frame's own record in a replay. A take made
+	// before stage state was recorded has none.
+	const VisionThread::Telemetry telemetry= visionThread->getTelemetry();
+	const RecordedTelemetry* recorded= bReplay ? m_timelinePanel->getDisplayTelemetry() : nullptr;
 
 	PipelineStatusInputs in;
 	in.bDirect= config->direct.enabled;
 	in.cameraCount= (int)config->cameraCount();
 	in.directCameraIndex= config->direct.cameraIndex;
-	in.bReplay= m_shown.bReplay;
+	in.bReplay= bReplay;
+	in.bStageStateRecorded= !bReplay || recorded != nullptr;
 
-	// Cameras: the device and the calibration are the project's; what a
-	// camera saw is the shown frame's
 	for (int cameraIndex= 0; cameraIndex < std::min(in.cameraCount, PipelineStatusInputs::k_maxCameras); ++cameraIndex)
 	{
 		PipelineStatusInputs::Camera& camera= in.cameras[cameraIndex];
 		const CameraProfile& profile= config->camera(cameraIndex);
-		camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
-		camera.bStreaming= videoCapture->isStreaming(cameraIndex);
-		camera.bHandPipelineReady= std::string(visionThread->getActiveExecutionProvider(cameraIndex)) != "none";
-		camera.bTrackingPaused= !visionThread->isTrackingEnabled(cameraIndex);
 		camera.bIntrinsics= profile.intrinsics.present;
 		camera.bExtrinsics= profile.extrinsics.present;
 		camera.bBodyEnabled= profile.bodyPose.enabled;
-		camera.bBodyModelLoaded=
-			cameraIndex < VisionThread::k_maxReportedCameras && telemetry.bBodyModelLoaded[cameraIndex];
+		if (!bReplay)
+		{
+			camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
+			camera.bStreaming= videoCapture->isStreaming(cameraIndex);
+			camera.bHandPipelineReady= std::string(visionThread->getActiveExecutionProvider(cameraIndex)) != "none";
+			camera.bTrackingPaused= !visionThread->isTrackingEnabled(cameraIndex);
+			camera.bBodyModelLoaded=
+				cameraIndex < VisionThread::k_maxReportedCameras && telemetry.bBodyModelLoaded[cameraIndex];
+		}
+		else if (recorded != nullptr && cameraIndex < recorded->cameraCount)
+		{
+			const RecordedTelemetry::Camera& state= recorded->cameras[cameraIndex];
+			camera.bDeviceOpen= state.deviceOpen;
+			camera.bStreaming= state.streaming;
+			camera.bHandPipelineReady= state.handPipelineReady;
+			camera.bTrackingPaused= !state.trackingEnabled;
+			camera.bBodyModelLoaded= state.bodyModelLoaded;
+		}
+		else
+		{
+			// The take holds this camera's frames, so it was open and its
+			// models ran; nothing says otherwise
+			camera.bDeviceOpen= true;
+			camera.bStreaming= true;
+			camera.bHandPipelineReady= true;
+			camera.bBodyModelLoaded= profile.bodyPose.enabled;
+		}
 		const TrackingFrameResult* result=
 			cameraIndex < (int)m_shown.perCamera.size() ? m_shown.perCamera[cameraIndex] : nullptr;
 		if (result != nullptr)
@@ -886,34 +914,37 @@ void MainWindow::gatherPipelineInputs()
 		}
 	}
 
-	// What the vision thread's last iteration did. A replayed frame's own
-	// path is not recorded, so it reads from whether the frame has a world.
+	// What the iteration behind the shown frame did
 	using ePath= PipelineStatusInputs::ePath;
-	if (m_shown.bReplay)
+	auto toPath= [](VisionThread::Telemetry::ePath path) {
+		switch (path)
+		{
+		case VisionThread::Telemetry::ePath::Idle:
+			return ePath::Idle;
+		case VisionThread::Telemetry::ePath::FaceOnly:
+			return ePath::FaceOnly;
+		case VisionThread::Telemetry::ePath::Fused:
+			return ePath::Fused;
+		case VisionThread::Telemetry::ePath::Passthrough:
+			return ePath::Passthrough;
+		case VisionThread::Telemetry::ePath::Direct:
+			return ePath::Direct;
+		}
+		return ePath::Unknown;
+	};
+	if (recorded != nullptr)
 	{
+		in.path= toPath((VisionThread::Telemetry::ePath)recorded->path);
+	}
+	else if (bReplay)
+	{
+		// Unrecorded: the frame's own world pose says which way it went
 		const bool bWorld= fused.poses[0].hasWorldPose || fused.poses[1].hasWorldPose;
-		in.path= m_shown.config->direct.enabled ? ePath::Direct : (bWorld ? ePath::Fused : ePath::Unknown);
+		in.path= in.bDirect ? ePath::Direct : (bWorld ? ePath::Fused : ePath::Unknown);
 	}
 	else if (telemetry.bValid)
 	{
-		switch (telemetry.path)
-		{
-		case VisionThread::Telemetry::ePath::Idle:
-			in.path= ePath::Idle;
-			break;
-		case VisionThread::Telemetry::ePath::FaceOnly:
-			in.path= ePath::FaceOnly;
-			break;
-		case VisionThread::Telemetry::ePath::Fused:
-			in.path= ePath::Fused;
-			break;
-		case VisionThread::Telemetry::ePath::Passthrough:
-			in.path= ePath::Passthrough;
-			break;
-		case VisionThread::Telemetry::ePath::Direct:
-			in.path= ePath::Direct;
-			break;
-		}
+		in.path= toPath(telemetry.path);
 	}
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -923,18 +954,31 @@ void MainWindow::gatherPipelineInputs()
 		hand.bTracked= pose.tracked;
 		hand.bWorldPose= pose.hasWorldPose;
 		hand.confidence= pose.confidence;
-		hand.dominantCamera= visionThread->getDominantCamera((eHandSide)sideIndex);
 		hand.bForearmPose= pose.hasForearmPose;
 		hand.forearmConfidence= pose.forearmConfidence;
 		hand.bShoulder= pose.hasShoulder;
 
-		const ImuSideStatus imuStatus= visionThread->getImuSideStatus((eHandSide)sideIndex);
 		PipelineStatusInputs::Imu& imu= in.imu[sideIndex];
-		imu.bConnected= imuStatus.deviceConnected;
-		imu.bStreaming= imuStatus.streaming;
-		imu.bCalibrated= imuStatus.calibrated;
-		imu.bOrientationValid= imuStatus.orientationValid;
-		imu.sampleRateHz= imuStatus.sampleRateHz;
+		if (!bReplay)
+		{
+			hand.dominantCamera= visionThread->getDominantCamera((eHandSide)sideIndex);
+			const ImuSideStatus imuStatus= visionThread->getImuSideStatus((eHandSide)sideIndex);
+			imu.bConnected= imuStatus.deviceConnected;
+			imu.bStreaming= imuStatus.streaming;
+			imu.bCalibrated= imuStatus.calibrated;
+			imu.bOrientationValid= imuStatus.orientationValid;
+			imu.sampleRateHz= imuStatus.sampleRateHz;
+		}
+		else if (recorded != nullptr)
+		{
+			hand.dominantCamera= recorded->dominantCamera[sideIndex];
+			const RecordedImuStatus& imuStatus= recorded->imu[sideIndex];
+			imu.bConnected= imuStatus.deviceConnected;
+			imu.bStreaming= imuStatus.streaming;
+			imu.bCalibrated= imuStatus.calibrated;
+			imu.bOrientationValid= imuStatus.orientationValid;
+			imu.sampleRateHz= imuStatus.sampleRateHz;
+		}
 	}
 	in.bHeadValid= fused.head.valid;
 	in.bImuEnabled= config->imu.enabled;
@@ -964,6 +1008,7 @@ void MainWindow::gatherPipelineInputs()
 		}
 	}
 
+	// The avatar is the one loaded now, whichever frame is shown
 	in.bAvatarLoaded= m_app->getAvatarSkeleton() != nullptr;
 	if (in.bAvatarLoaded)
 	{
@@ -972,29 +1017,46 @@ void MainWindow::gatherPipelineInputs()
 	}
 
 	in.bOscEnabled= config->osc.enabled;
-	in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;
-	in.oscSendRateHz= telemetry.oscSendRateHz;
 	in.oscMinConfidence= config->osc.minConfidence;
 	in.oscPort= config->osc.port;
-
 	in.bFaceEnabled= config->face.enabled;
-	if (FaceService* faceService= m_app->getFaceService())
-	{
-		const FaceServiceStatus faceStatus= faceService->getStatus();
-		in.bFaceBound= faceStatus.bound;
-		in.bFaceStreaming= faceStatus.streaming;
-		in.bFaceTracked= faceStatus.latest.valid && faceStatus.latest.faceTracked;
-		in.faceDatagramsPerSecond= faceStatus.datagramsPerSecond;
-	}
 	in.bAudioEnabled= config->audio.enabled;
-	if (AudioService* audioService= m_app->getAudioService())
+	if (!bReplay)
 	{
-		const AudioServiceStatus audioStatus= audioService->getStatus();
-		in.bAudioDeviceOpen= audioStatus.deviceOpen;
-		in.bAudioBackendReady= audioStatus.backendReady;
-		in.bAudioGateOpen= audioStatus.gateOpen;
-		in.audioLevelDbfs= audioStatus.levelDbfs;
+		in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;
+		in.oscSendRateHz= telemetry.oscSendRateHz;
+		if (FaceService* faceService= m_app->getFaceService())
+		{
+			const FaceServiceStatus faceStatus= faceService->getStatus();
+			in.bFaceBound= faceStatus.bound;
+			in.bFaceStreaming= faceStatus.streaming;
+			in.bFaceTracked= faceStatus.latest.valid && faceStatus.latest.faceTracked;
+			in.faceDatagramsPerSecond= faceStatus.datagramsPerSecond;
+		}
+		if (AudioService* audioService= m_app->getAudioService())
+		{
+			const AudioServiceStatus audioStatus= audioService->getStatus();
+			in.bAudioDeviceOpen= audioStatus.deviceOpen;
+			in.bAudioBackendReady= audioStatus.backendReady;
+			in.bAudioGateOpen= audioStatus.gateOpen;
+			in.audioLevelDbfs= audioStatus.levelDbfs;
+		}
 	}
+	else if (recorded != nullptr)
+	{
+		in.bOscRunning= recorded->oscRunning;
+		in.oscSendRateHz= recorded->oscSendRateHz;
+		in.bFaceBound= recorded->face.bound;
+		in.bFaceStreaming= recorded->face.streaming;
+		in.bFaceTracked= recorded->face.faceTracked;
+		in.faceDatagramsPerSecond= recorded->face.datagramsPerSecond;
+		in.bAudioDeviceOpen= recorded->audio.deviceOpen;
+		in.bAudioBackendReady= recorded->audio.backendReady;
+		in.bAudioGateOpen= recorded->audio.gateOpen;
+		in.audioLevelDbfs= recorded->audio.levelDbfs;
+	}
+
+	// The face profile is the live one, which a replay is evaluated through
 	in.bProfileAuto= m_app->isActiveFaceProfileAuto();
 	if (const std::shared_ptr<const FaceProfileBinding>& binding= m_app->getFaceBinding())
 	{

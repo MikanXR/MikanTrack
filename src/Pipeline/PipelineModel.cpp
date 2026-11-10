@@ -96,6 +96,18 @@ StageStatus notConfigured(const StageText& value, const StageText& reason)
 	return status(eStageState::NotConfigured, value, reason);
 }
 
+// A replayed frame from a take that holds no stage state: a stage that is
+// nothing but that state says so rather than reading as stopped
+bool isUnrecorded(const Inputs& in)
+{
+	return in.bReplay && !in.bStageStateRecorded;
+}
+
+StageStatus notRecorded()
+{
+	return inactive(text("valNotRecorded"), text("whyNotRecorded"));
+}
+
 int clampedCameraCount(const Inputs& in)
 {
 	return std::clamp(in.cameraCount, 0, Inputs::k_maxCameras);
@@ -147,7 +159,9 @@ StageStatus computeCapture(const Inputs& in)
 		if (camera.bDeviceOpen && camera.bStreaming)
 		{
 			++streamingCount;
-			fps= streamingCount == 1 ? camera.captureFps : std::min(fps, camera.captureFps);
+			// The slowest camera that has delivered a frame
+			if (camera.captureFps > 0.f)
+				fps= fps > 0.f ? std::min(fps, camera.captureFps) : camera.captureFps;
 		}
 		else if (firstStopped < 0)
 		{
@@ -252,6 +266,8 @@ StageStatus computeImu(const Inputs& in)
 {
 	if (!in.bImuEnabled)
 		return inactive(text("valOff"), text("whyImuDisabled"));
+	if (isUnrecorded(in))
+		return notRecorded();
 	const int connected= (in.imu[0].bConnected ? 1 : 0) + (in.imu[1].bConnected ? 1 : 0);
 	if (connected == 0)
 		return notConfigured(text("valImuCountFmt", 0, 2), text("whyImuNotConnected"));
@@ -259,8 +275,6 @@ StageStatus computeImu(const Inputs& in)
 		return degraded(text("valImuCountFmt", 1, 2), text("whyImuOneMissing"));
 	if (!in.imu[0].bCalibrated || !in.imu[1].bCalibrated)
 		return notConfigured(text("valUncalibrated"), text("whyImuNotCalibrated"));
-	if (in.bReplay)
-		return running(text("valRecorded"), text("whyImuReplay"));
 	if (isWithoutWorld(in))
 		return degraded(text("valNoYawAnchor"), text("whyImuNoYawAnchor"));
 	const int streaming= (in.imu[0].bStreaming ? 1 : 0) + (in.imu[1].bStreaming ? 1 : 0);
@@ -268,7 +282,9 @@ StageStatus computeImu(const Inputs& in)
 		return degraded(text("valImuCountFmt", streaming, 2), text("whyImuSilent"));
 	if (!in.imu[0].bOrientationValid || !in.imu[1].bOrientationValid)
 		return degraded(text("valConverging"), text("whyImuConverging"));
-	return running(text("valRateFmt", std::min(in.imu[0].sampleRateHz, in.imu[1].sampleRateHz)));
+	// A replay shows the wrists as they were recorded, not a filter re-run
+	return running(text("valRateFmt", std::min(in.imu[0].sampleRateHz, in.imu[1].sampleRateHz)),
+				   in.bReplay ? text("whyImuReplay") : StageText());
 }
 
 StageStatus computeBodySolver(const Inputs& in)
@@ -377,6 +393,8 @@ StageStatus computeOutput(const Inputs& in, S stage)
 		return inactive(text("valOff"), text("whyOscDisabled"));
 	if (stage == S::DeliveryRules)
 		return running(text("valMinConfFmt", in.oscMinConfidence));
+	if (isUnrecorded(in))
+		return notRecorded();
 	if (!in.bOscRunning)
 		return notConfigured(text("valSocketClosed"), text("whyOscSocket"));
 	if (isWithoutWorld(in))
@@ -390,6 +408,8 @@ StageStatus computePhone(const Inputs& in)
 {
 	if (!in.bFaceEnabled)
 		return inactive(text("valOff"), text("whyPhoneDisabled"));
+	if (isUnrecorded(in))
+		return notRecorded();
 	if (!in.bFaceBound)
 		return notConfigured(text("valPortBusy"), text("whyPhonePort"));
 	if (!in.bFaceStreaming)
@@ -403,6 +423,8 @@ StageStatus computeMicrophone(const Inputs& in)
 {
 	if (!in.bAudioEnabled)
 		return inactive(text("valOff"), text("whyMicDisabled"));
+	if (isUnrecorded(in))
+		return notRecorded();
 	if (!in.bAudioDeviceOpen)
 		return notConfigured(text("valNoDevice"), text("whyMicDevice"));
 	if (!in.bAudioBackendReady)
@@ -416,6 +438,8 @@ StageStatus computeFace(const Inputs& in)
 {
 	if (!in.bFaceEnabled && !in.bAudioEnabled)
 		return inactive(text("valOff"), text("whyFaceOff"));
+	if (isUnrecorded(in))
+		return notRecorded();
 	const StageStatus phone= computePhone(in);
 	const StageStatus microphone= computeMicrophone(in);
 	// A source the project wants and cannot run is the face's problem too

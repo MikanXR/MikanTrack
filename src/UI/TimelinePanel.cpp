@@ -528,6 +528,7 @@ void TimelinePanel::rebuildDisplayFrame()
 
 	m_perCameraCopies= frame.perCamera;
 	m_perCameraCopyValid.assign(frame.perCameraValid.begin(), frame.perCameraValid.end());
+	m_displayTelemetry= frame.recorded->telemetry;
 	m_builtFrame= m_currentFrame;
 	m_builtViewMode= m_viewMode;
 }
@@ -569,6 +570,11 @@ void TimelinePanel::rebuildDisplayFace()
 std::vector<SceneCameraView> TimelinePanel::getSceneCameras() const
 {
 	return makeSceneCameraViews(m_replay.getRecordedConfig());
+}
+
+const RecordedTelemetry* TimelinePanel::getDisplayTelemetry() const
+{
+	return isReplayViewActive() && m_displayTelemetry.present ? &m_displayTelemetry : nullptr;
 }
 
 std::vector<const TrackingFrameResult*> TimelinePanel::getPerCameraResults() const

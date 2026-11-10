@@ -77,6 +77,21 @@ json imageQualityToJson(const HandImageQuality& quality)
 	};
 }
 
+json captureTimingsToJson(const TrackingFrameResult::CaptureTimings& timings)
+{
+	return {
+		{"queueAgeMs", timings.queueAgeMs},
+		{"convertMs", timings.convertMs},
+		{"undistortMs", timings.undistortMs},
+		{"flickerMs", timings.flickerMs},
+		{"bodyPoseMs", timings.bodyPoseMs},
+		{"roiQualityMs", timings.roiQualityMs},
+		{"liftMs", timings.liftMs},
+		{"publishMs", timings.publishMs},
+		{"totalMs", timings.totalMs},
+	};
+}
+
 json fusionDiagnosticsToJson(const FusionDiagnostics& diagnostics)
 {
 	json clusters= json::array();
@@ -214,5 +229,22 @@ void bodyPoseFromJson(const json& j, BodyPoseObservation& outBody)
 		if (landmark < (int)visibility.size())
 			outBody.visibility[landmark]= floatFromJson(visibility[landmark]);
 	}
+}
+
+void captureTimingsFromJson(const json& j, TrackingFrameResult::CaptureTimings& outTimings)
+{
+	outTimings= TrackingFrameResult::CaptureTimings();
+	if (!j.is_object())
+		return;
+	auto read= [&j](const char* key) { return j.contains(key) ? floatFromJson(j[key]) : 0.f; };
+	outTimings.queueAgeMs= read("queueAgeMs");
+	outTimings.convertMs= read("convertMs");
+	outTimings.undistortMs= read("undistortMs");
+	outTimings.flickerMs= read("flickerMs");
+	outTimings.bodyPoseMs= read("bodyPoseMs");
+	outTimings.roiQualityMs= read("roiQualityMs");
+	outTimings.liftMs= read("liftMs");
+	outTimings.publishMs= read("publishMs");
+	outTimings.totalMs= read("totalMs");
 }
 } // namespace TrackingJson

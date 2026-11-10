@@ -112,6 +112,130 @@ static int runReplayTest(const TestArgs& args)
 		return input;
 	};
 
+	// The display-only stage state a frame carries: every field set, odd-valued
+	// floats so a lossy round trip shows
+	auto makeTelemetry= [](int frameIdx) {
+		const float k= 0.001f * (float)frameIdx;
+		RecordedTelemetry telemetry;
+		telemetry.present= true;
+		telemetry.path= 2 + frameIdx % 3;
+		for (int phase= 0; phase < RecordedTelemetry::k_phaseCount; ++phase)
+			telemetry.phaseMs[phase]= 1.f / (float)(3 + phase) + k;
+		telemetry.totalMs= 12.345f + k;
+		telemetry.oscRunning= frameIdx % 2 == 1;
+		telemetry.oscSendRateHz= 59.97f + k;
+		telemetry.oscLastPacketCount= 3 + frameIdx;
+		telemetry.oscLastFrameBytes= 1400 + frameIdx;
+		telemetry.dominantCamera[0]= -1;
+		telemetry.dominantCamera[1]= 1;
+		telemetry.autoHandScaleFactor= 1.0123f + k;
+		telemetry.cameraCount= 2;
+		for (int cameraIndex= 0; cameraIndex < 2; ++cameraIndex)
+		{
+			telemetry.observationConfidence[cameraIndex][0]= cameraIndex == 0 ? -1.f : 0.7f + k;
+			telemetry.observationConfidence[cameraIndex][1]= 0.9f / (1.3f + (float)cameraIndex) + k;
+			RecordedTelemetry::Camera& camera= telemetry.cameras[cameraIndex];
+			camera.deviceOpen= true;
+			camera.streaming= cameraIndex == 0 || frameIdx % 2 == 0;
+			camera.deviceFrameRate= 29.97f + (float)cameraIndex + k;
+			camera.droppedFrames= 7 * cameraIndex + frameIdx;
+			camera.queuedFrames= cameraIndex + 1;
+			camera.callbackCopyMs= 0.333f + k;
+			camera.trackingEnabled= cameraIndex != 1 || frameIdx % 4 != 0;
+			camera.handPipelineReady= true;
+			camera.bodyModelLoaded= cameraIndex == 1;
+		}
+		telemetry.imuEnabled= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			RecordedImuStatus& imu= telemetry.imu[sideIndex];
+			imu.deviceConnected= true;
+			imu.streaming= sideIndex == 0;
+			imu.calibrated= true;
+			imu.orientationValid= sideIndex == 1;
+			imu.sampleRateHz= 99.9f + (float)sideIndex + k;
+			imu.batteryLevel= 0.55f + 0.1f * (float)sideIndex;
+			imu.yawDriftDegPerSecond= -0.0123f * (float)(sideIndex + 1) + k;
+			imu.rollErrorDegrees= sideIndex == 0 ? -999.f : 3.21f + k;
+		}
+		telemetry.face.enabled= true;
+		telemetry.face.bound= true;
+		telemetry.face.streaming= frameIdx % 2 == 0;
+		telemetry.face.faceTracked= true;
+		telemetry.face.datagramsPerSecond= 59.94f + k;
+		telemetry.audio.enabled= true;
+		telemetry.audio.deviceOpen= true;
+		telemetry.audio.backendReady= frameIdx % 5 != 0;
+		telemetry.audio.gateOpen= frameIdx % 2 == 1;
+		telemetry.audio.levelDbfs= -23.456f + k;
+		telemetry.audio.inferMsEma= 1.789f + k;
+		return telemetry;
+	};
+	auto makeTimings= [](int frameIdx, int cameraIndex) {
+		const float k= 0.001f * (float)frameIdx + 0.0001f * (float)cameraIndex;
+		TrackingFrameResult::CaptureTimings timings;
+		timings.queueAgeMs= 4.1f + k;
+		timings.convertMs= 1.3f + k;
+		timings.undistortMs= 0.7f + k;
+		timings.flickerMs= 0.11f + k;
+		timings.bodyPoseMs= 6.6f + k;
+		timings.roiQualityMs= 0.23f + k;
+		timings.liftMs= 0.37f + k;
+		timings.publishMs= 0.19f + k;
+		timings.totalMs= 13.9f + k;
+		return timings;
+	};
+	auto timingsEqual= [](const TrackingFrameResult::CaptureTimings& a, const TrackingFrameResult::CaptureTimings& b) {
+		return a.queueAgeMs == b.queueAgeMs && a.convertMs == b.convertMs && a.undistortMs == b.undistortMs &&
+			   a.flickerMs == b.flickerMs && a.bodyPoseMs == b.bodyPoseMs && a.roiQualityMs == b.roiQualityMs &&
+			   a.liftMs == b.liftMs && a.publishMs == b.publishMs && a.totalMs == b.totalMs;
+	};
+	// Every field of the block, the unused camera slots included
+	auto countTelemetryMismatches= [](const RecordedTelemetry& a, const RecordedTelemetry& b) {
+		int mismatches= 0;
+		auto expect= [&mismatches](bool bEqual) { mismatches+= bEqual ? 0 : 1; };
+		expect(a.present == b.present);
+		expect(a.path == b.path);
+		for (int phase= 0; phase < RecordedTelemetry::k_phaseCount; ++phase)
+			expect(a.phaseMs[phase] == b.phaseMs[phase]);
+		expect(a.totalMs == b.totalMs);
+		expect(a.oscRunning == b.oscRunning);
+		expect(a.oscSendRateHz == b.oscSendRateHz);
+		expect(a.oscLastPacketCount == b.oscLastPacketCount);
+		expect(a.oscLastFrameBytes == b.oscLastFrameBytes);
+		expect(a.dominantCamera[0] == b.dominantCamera[0] && a.dominantCamera[1] == b.dominantCamera[1]);
+		expect(a.autoHandScaleFactor == b.autoHandScaleFactor);
+		expect(a.cameraCount == b.cameraCount);
+		for (int cameraIndex= 0; cameraIndex < RecordedTelemetry::k_maxCameras; ++cameraIndex)
+		{
+			expect(a.observationConfidence[cameraIndex][0] == b.observationConfidence[cameraIndex][0]);
+			expect(a.observationConfidence[cameraIndex][1] == b.observationConfidence[cameraIndex][1]);
+			const RecordedTelemetry::Camera& ca= a.cameras[cameraIndex];
+			const RecordedTelemetry::Camera& cb= b.cameras[cameraIndex];
+			expect(ca.deviceOpen == cb.deviceOpen && ca.streaming == cb.streaming);
+			expect(ca.deviceFrameRate == cb.deviceFrameRate && ca.callbackCopyMs == cb.callbackCopyMs);
+			expect(ca.droppedFrames == cb.droppedFrames && ca.queuedFrames == cb.queuedFrames);
+			expect(ca.trackingEnabled == cb.trackingEnabled && ca.handPipelineReady == cb.handPipelineReady &&
+				   ca.bodyModelLoaded == cb.bodyModelLoaded);
+		}
+		expect(a.imuEnabled == b.imuEnabled);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const RecordedImuStatus& ia= a.imu[sideIndex];
+			const RecordedImuStatus& ib= b.imu[sideIndex];
+			expect(ia.deviceConnected == ib.deviceConnected && ia.streaming == ib.streaming &&
+				   ia.calibrated == ib.calibrated && ia.orientationValid == ib.orientationValid);
+			expect(ia.sampleRateHz == ib.sampleRateHz && ia.batteryLevel == ib.batteryLevel);
+			expect(ia.yawDriftDegPerSecond == ib.yawDriftDegPerSecond && ia.rollErrorDegrees == ib.rollErrorDegrees);
+		}
+		expect(a.face.enabled == b.face.enabled && a.face.bound == b.face.bound && a.face.streaming == b.face.streaming &&
+			   a.face.faceTracked == b.face.faceTracked && a.face.datagramsPerSecond == b.face.datagramsPerSecond);
+		expect(a.audio.enabled == b.audio.enabled && a.audio.deviceOpen == b.audio.deviceOpen &&
+			   a.audio.backendReady == b.audio.backendReady && a.audio.gateOpen == b.audio.gateOpen &&
+			   a.audio.levelDbfs == b.audio.levelDbfs && a.audio.inferMsEma == b.audio.inferMsEma);
+		return mismatches;
+	};
+
 	// -- Live pass: the exact VisionThread call sequence, recorded
 	// through a real TrackingRecorder ------------------------------
 	std::vector<TrackingFrameResult> liveOutputs;
@@ -181,6 +305,16 @@ static int runReplayTest(const TestArgs& args)
 					fresh.push_back(buildCameraInput(1, frameIdx, false));
 				else if (frameIdx % 5 != 3)
 					fresh.push_back(buildCameraInput(1, frameIdx, true));
+			}
+
+			// Capture timings on every even frame's cameras (display only)
+			if (frameIdx % 2 == 0)
+			{
+				for (RecordedCameraInput& input : fresh)
+				{
+					input.bHaveCaptureTimings= true;
+					input.captureTimings= makeTimings(frameIdx, input.cameraIndex);
+				}
 			}
 
 			// Per-camera stage (mirrors VisionThread::processCameraFrame)
@@ -270,6 +404,9 @@ static int runReplayTest(const TestArgs& args)
 				for (int viseme= 0; viseme < VISEME_COUNT; ++viseme)
 					frame.mouth.frame.weights[viseme]= 0.01f * (float)(viseme + 1) + 0.001f * (float)frameIdx;
 			}
+			// The stage telemetry on every third frame, outside the checksum
+			if (frameIdx % 3 == 1)
+				frame.telemetry= makeTelemetry(frameIdx);
 			recorder.enqueueFrame(std::move(frame));
 		}
 		recorder.stop();
@@ -648,6 +785,208 @@ static int runReplayTest(const TestArgs& args)
 			loadedHeader.cameraCount != 1)
 		{
 			MIKAN_LOG_ERROR("test-replay") << "(f) FAILED: a version 1 header without either block loads with both sidecars absent";
+			result= 1;
+		}
+	}
+
+	MIKAN_LOG_INFO("test-replay") << "sizeof(RecordedFrame)=" << sizeof(RecordedFrame)
+								  << " sizeof(RecordedTelemetry)=" << sizeof(RecordedTelemetry)
+								  << " sizeof(RecordedCameraInput)=" << sizeof(RecordedCameraInput);
+
+	// -- (g) The stage telemetry and the capture timings round-trip, and the
+	// replayed per-camera results carry the recorded timings ------------
+	{
+		int telemetryMismatches= 0;
+		int timingMismatches= 0;
+		int mirrorMismatches= 0;
+		for (int frameIdx= 0; frameIdx < replay.getFrameCount(); ++frameIdx)
+		{
+			const TrackingReplay::ReplayFrame& frame= replay.getFrame(frameIdx);
+			const RecordedTelemetry& loaded= frame.recorded->telemetry;
+			if (frameIdx % 3 == 1)
+				telemetryMismatches+= countTelemetryMismatches(makeTelemetry(frameIdx), loaded);
+			else
+				telemetryMismatches+= countTelemetryMismatches(RecordedTelemetry(), loaded);
+
+			for (const RecordedCameraInput& camera : frame.recorded->freshCameras)
+			{
+				const bool bExpected= frameIdx % 2 == 0;
+				const TrackingFrameResult::CaptureTimings expected=
+					bExpected ? makeTimings(frameIdx, camera.cameraIndex) : TrackingFrameResult::CaptureTimings();
+				if (camera.bHaveCaptureTimings != bExpected || !timingsEqual(camera.captureTimings, expected))
+					++timingMismatches;
+				if (camera.cameraIndex >= (int)frame.perCamera.size() ||
+					!timingsEqual(frame.perCamera[camera.cameraIndex].captureTimings, expected))
+					++mirrorMismatches;
+			}
+		}
+
+		// Keys this build does not know are ignored, inside the block and in
+		// its sub-objects
+		RecordedFrame source;
+		source.seq= 7;
+		RecordedCameraInput sourceCamera;
+		sourceCamera.cameraIndex= 1;
+		sourceCamera.bHaveCaptureTimings= true;
+		sourceCamera.captureTimings= makeTimings(7, 1);
+		source.freshCameras.push_back(sourceCamera);
+		source.telemetry= makeTelemetry(7);
+		nlohmann::json sourceJson= TrackingRecording::frameToJson(source);
+		sourceJson["telemetry"]["futureBlock"]= {{"a", 1}, {"b", "x"}};
+		sourceJson["telemetry"]["osc"]["futureRate"]= 1.5;
+		sourceJson["telemetry"]["cameras"][0]["futureFlag"]= true;
+		sourceJson["fresh"][0]["timings"]["futureMs"]= 2.5;
+		RecordedFrame reloaded;
+		const bool bLoaded= TrackingRecording::frameFromJson(nlohmann::json::parse(sourceJson.dump()), reloaded);
+		const int unknownKeyMismatches= !bLoaded || reloaded.freshCameras.size() != 1
+			? 1
+			: countTelemetryMismatches(source.telemetry, reloaded.telemetry) +
+				(reloaded.freshCameras[0].bHaveCaptureTimings &&
+						 timingsEqual(reloaded.freshCameras[0].captureTimings, sourceCamera.captureTimings)
+					 ? 0
+					 : 1);
+
+		MIKAN_LOG_INFO("test-replay") << "(g) telemetry mismatches=" << telemetryMismatches
+									  << " timing mismatches=" << timingMismatches
+									  << " mirror timing mismatches=" << mirrorMismatches
+									  << " unknown-key mismatches=" << unknownKeyMismatches;
+		if (telemetryMismatches != 0 || timingMismatches != 0 || mirrorMismatches != 0 || unknownKeyMismatches != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay")
+				<< "(g) FAILED: the telemetry and the capture timings must round-trip field-exact and reach the replayed per-camera results";
+			result= 1;
+		}
+	}
+
+	// -- (h) A frame without the blocks loads as absent, and a version 1
+	// recording written before them still replays ----------------------
+	{
+		RecordedFrame plainFrame;
+		RecordedCameraInput plainCamera;
+		plainCamera.cameraIndex= 0;
+		plainFrame.freshCameras.push_back(plainCamera);
+		const nlohmann::json plainJson= TrackingRecording::frameToJson(plainFrame);
+		RecordedFrame loadedFrame;
+		const bool bPlainOk= !plainJson.contains("telemetry") && !plainJson["fresh"][0].contains("timings") &&
+							 TrackingRecording::frameFromJson(nlohmann::json::parse(plainJson.dump()), loadedFrame) &&
+							 !loadedFrame.telemetry.present && loadedFrame.freshCameras.size() == 1 &&
+							 !loadedFrame.freshCameras[0].bHaveCaptureTimings;
+
+		// A literal recording in the format as it stood before the blocks
+		char checksumHex[17];
+		snprintf(checksumHex, sizeof(checksumHex), "%016llx",
+				 (unsigned long long)TrackingRecording::computeFusedChecksum(TrackingFrameResult()));
+		const std::string literalPath=
+			(std::filesystem::temp_directory_path() / "mikan-test-replay-v1.jsonl").string();
+		{
+			std::ofstream literalFile(literalPath, std::ios::trunc);
+			literalFile << R"({"type":"header","formatVersion":1,"appConfig":)"
+						<< nlohmann::json::parse(config.toJsonString()).dump() << R"(,"cameraCount":2})" << '\n';
+			literalFile << R"({"type":"frame","seq":0,"nowMs":1000.0,"fused":false,"fresh":[{"cam":0,"tMs":1000.0,)"
+						<< R"("valid":false,"refLenM":0.0,"frameIndex":0,"w":1280,"h":720,"captureFps":30.0,)"
+						<< R"("inferenceMs":5.0,"lumaInstability":0.0,"lumaFlickerHz":0.0,)"
+						<< R"("hands":[{"tracked":false},{"tracked":false}]}],)"
+						<< R"("out":[{"tracked":false},{"tracked":false}],"imu":[{"has":false},{"has":false}],)"
+						<< R"("checksum":")" << checksumHex << R"("})" << '\n';
+			literalFile << R"({"type":"end","frameCount":1,"aborted":false,"reason":""})" << '\n';
+		}
+		TrackingReplay literalReplay;
+		std::string literalError;
+		bool bLiteralOk= literalReplay.load(literalPath, literalError);
+		if (bLiteralOk)
+		{
+			literalReplay.runAll();
+			const TrackingReplay::ReplayFrame& frame= literalReplay.getFrame(0);
+			bLiteralOk= literalReplay.getFrameCount() == 1 && literalReplay.getDivergentFrames().empty() &&
+						!frame.recorded->telemetry.present && frame.recorded->freshCameras.size() == 1 &&
+						!frame.recorded->freshCameras[0].bHaveCaptureTimings && !frame.perCamera.empty() &&
+						timingsEqual(frame.perCamera[0].captureTimings, TrackingFrameResult::CaptureTimings());
+		}
+		std::error_code removeError;
+		std::filesystem::remove(literalPath, removeError);
+
+		MIKAN_LOG_INFO("test-replay") << "(h) plain frame ok=" << bPlainOk << " literal version 1 recording ok=" << bLiteralOk
+									  << (literalError.empty() ? "" : " error=") << literalError;
+		if (!bPlainOk || !bLiteralOk)
+		{
+			MIKAN_LOG_ERROR("test-replay")
+				<< "(h) FAILED: a frame or recording without the telemetry and timings blocks must load them as absent and replay";
+			result= 1;
+		}
+	}
+
+	// -- (i) The telemetry is outside the checksum: the same recording with
+	// the blocks stripped replays to the same checksums ----------------
+	{
+		RecordedFrame withTelemetry;
+		withTelemetry.checksum= 0x0123456789abcdefull;
+		withTelemetry.telemetry= makeTelemetry(4);
+		RecordedFrame withoutTelemetry= withTelemetry;
+		withoutTelemetry.telemetry= RecordedTelemetry();
+		const bool bFrameChecksumSame= TrackingRecording::frameToJson(withTelemetry)["checksum"] ==
+									   TrackingRecording::frameToJson(withoutTelemetry)["checksum"];
+
+		const std::string strippedPath=
+			(std::filesystem::temp_directory_path() / "mikan-test-replay-stripped.jsonl").string();
+		{
+			std::ifstream inFile(recordingPath);
+			std::ofstream outFile(strippedPath, std::ios::trunc);
+			std::string line;
+			while (std::getline(inFile, line))
+			{
+				nlohmann::json j= nlohmann::json::parse(line);
+				if (j.value("type", "") == "frame")
+				{
+					j.erase("telemetry");
+					for (nlohmann::json& camera : j["fresh"])
+						camera.erase("timings");
+					line= j.dump();
+				}
+				outFile << line << '\n';
+			}
+		}
+
+		int telemetryFrames= 0;
+		int checksumMismatches= 0;
+		int strippedBlocks= 0;
+		TrackingReplay strippedReplay;
+		std::string strippedError;
+		const bool bStrippedLoaded= strippedReplay.load(strippedPath, strippedError);
+		if (bStrippedLoaded)
+		{
+			strippedReplay.runAll();
+			if (strippedReplay.getFrameCount() != replay.getFrameCount())
+				++checksumMismatches;
+			for (int frameIdx= 0; frameIdx < replay.getFrameCount() && frameIdx < strippedReplay.getFrameCount();
+				 ++frameIdx)
+			{
+				const TrackingReplay::ReplayFrame& a= replay.getFrame(frameIdx);
+				const TrackingReplay::ReplayFrame& b= strippedReplay.getFrame(frameIdx);
+				telemetryFrames+= a.recorded->telemetry.present ? 1 : 0;
+				strippedBlocks+= b.recorded->telemetry.present ? 1 : 0;
+				for (const RecordedCameraInput& camera : b.recorded->freshCameras)
+					strippedBlocks+= camera.bHaveCaptureTimings ? 1 : 0;
+				if (a.recorded->checksum != b.recorded->checksum || a.replayChecksum != b.replayChecksum ||
+					a.bChecksumMatch != b.bChecksumMatch ||
+					TrackingRecording::computeFusedChecksum(a.replayedFused) !=
+						TrackingRecording::computeFusedChecksum(b.replayedFused))
+					++checksumMismatches;
+			}
+		}
+		std::error_code removeError;
+		std::filesystem::remove(strippedPath, removeError);
+
+		MIKAN_LOG_INFO("test-replay") << "(i) frame checksum same=" << bFrameChecksumSame
+									  << " telemetry frames=" << telemetryFrames
+									  << " stripped divergent=" << strippedReplay.getDivergentFrames().size()
+									  << " checksum mismatches=" << checksumMismatches
+									  << " blocks left after stripping=" << strippedBlocks;
+		if (!bFrameChecksumSame || !bStrippedLoaded || telemetryFrames == 0 ||
+			!strippedReplay.getDivergentFrames().empty() || !replay.getDivergentFrames().empty() ||
+			checksumMismatches != 0 || strippedBlocks != 0)
+		{
+			MIKAN_LOG_ERROR("test-replay")
+				<< "(i) FAILED: a recording with telemetry must verify exactly as the same recording without it";
 			result= 1;
 		}
 	}

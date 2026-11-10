@@ -1,5 +1,7 @@
 #include "VisionThread.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 
 #include "AppConfig.h"
@@ -19,6 +21,12 @@
 // arriving, find no free block, and are dropped). Well above a healthy
 // iteration - two cameras of inference plus fusion runs in the low tens of ms.
 static constexpr double k_hitchThresholdMs= 50.0;
+
+// The recorded telemetry mirrors the loop's phase list and per-camera readouts
+static_assert(RecordedTelemetry::k_phaseCount == (int)VisionThread::eVisionPhase::Count,
+			  "RecordedTelemetry::phaseMs must hold one entry per vision phase");
+static_assert(RecordedTelemetry::k_maxCameras == VisionThread::k_maxReportedCameras,
+			  "RecordedTelemetry must hold every reported camera");
 
 const char* VisionThread::getPhaseName(eVisionPhase phase)
 {
@@ -116,6 +124,109 @@ VisionThread::Telemetry VisionThread::getTelemetry() const
 {
 	std::lock_guard<std::mutex> lock(m_telemetryMutex);
 	return m_telemetry;
+}
+
+VisionThread::Telemetry::ePath VisionThread::getCameraIterationPath(const IterationState& iteration)
+{
+	return iteration.bDirect ? Telemetry::ePath::Direct
+		: iteration.bAnyWorldCandidate ? Telemetry::ePath::Fused
+									   : Telemetry::ePath::Passthrough;
+}
+
+void VisionThread::gatherRecordedTelemetry(Telemetry::ePath path, const double* phaseMs, double nowMs,
+										   RecordedTelemetry& outTelemetry)
+{
+	outTelemetry= RecordedTelemetry();
+	outTelemetry.present= true;
+	outTelemetry.path= (int)path;
+	// The Diagnostics phase is still running while the record is assembled,
+	// so it carries the previous camera-frame iteration's
+	double totalMs= 0.0;
+	for (int phaseIndex= 0; phaseIndex < RecordedTelemetry::k_phaseCount; ++phaseIndex)
+	{
+		const double ms= phaseIndex == (int)eVisionPhase::Diagnostics ? m_lastDiagnosticsPhaseMs
+			: phaseMs != nullptr ? phaseMs[phaseIndex]
+								 : 0.0;
+		outTelemetry.phaseMs[phaseIndex]= (float)ms;
+		totalMs+= ms;
+	}
+	outTelemetry.totalMs= (float)totalMs;
+
+	if (m_oscStreamer != nullptr)
+	{
+		outTelemetry.oscRunning= m_oscStreamer->isRunning();
+		outTelemetry.oscSendRateHz= m_oscStreamer->getMessagesPerSecond();
+		outTelemetry.oscLastPacketCount= m_oscStreamer->getLastPacketCount();
+		outTelemetry.oscLastFrameBytes= m_oscStreamer->getLastFrameBytes();
+	}
+
+	outTelemetry.dominantCamera[0]= m_dominantCamera[0].load();
+	outTelemetry.dominantCamera[1]= m_dominantCamera[1].load();
+	for (int cameraIndex= 0; cameraIndex < RecordedTelemetry::k_maxCameras; ++cameraIndex)
+	{
+		outTelemetry.observationConfidence[cameraIndex][0]= m_observationConfidence[cameraIndex * 2].load();
+		outTelemetry.observationConfidence[cameraIndex][1]= m_observationConfidence[cameraIndex * 2 + 1].load();
+	}
+	outTelemetry.autoHandScaleFactor= m_autoScaleFactor.load();
+
+	// The capture system's main-thread device object is never dereferenced
+	// here: device-open compares the slot's pointer only, and a camera
+	// streams when its newest frame reached this thread within the hold window
+	outTelemetry.cameraCount= std::min((int)m_cameras.size(), RecordedTelemetry::k_maxCameras);
+	for (int cameraIndex= 0; cameraIndex < outTelemetry.cameraCount; ++cameraIndex)
+	{
+		const CameraContext& context= *m_cameras[cameraIndex];
+		const int deviceIndex= context.getCameraIndex();
+		const double lastFrameMs= context.getLastResult().timestampMs;
+		const char* executionProvider= context.getActiveExecutionProvider();
+		RecordedTelemetry::Camera& camera= outTelemetry.cameras[cameraIndex];
+		camera.deviceOpen= m_videoCapture->getIsDeviceOpen(deviceIndex);
+		camera.streaming= camera.deviceOpen && lastFrameMs > 0.0 && nowMs - lastFrameMs <= k_cameraTelemetryHoldMs;
+		camera.deviceFrameRate= m_videoCapture->getDeviceFrameRate(deviceIndex);
+		camera.droppedFrames= (int)m_videoCapture->getDroppedFrameCount(deviceIndex);
+		camera.queuedFrames= (int)m_videoCapture->getQueuedFrameCount(deviceIndex);
+		camera.callbackCopyMs= m_videoCapture->getCallbackCopyMs(deviceIndex);
+		camera.trackingEnabled= context.isTrackingEnabled();
+		camera.handPipelineReady= executionProvider != nullptr && std::strcmp(executionProvider, "none") != 0;
+		camera.bodyModelLoaded= context.isBodyModelLoaded();
+	}
+
+	// The statuses as they stand: in direct mode the service is not updated
+	outTelemetry.imuEnabled= m_config->imu.enabled;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const ImuSideStatus status= m_imuService->getSideStatus((eHandSide)sideIndex);
+		RecordedImuStatus& imu= outTelemetry.imu[sideIndex];
+		imu.deviceConnected= status.deviceConnected;
+		imu.streaming= status.streaming;
+		imu.calibrated= status.calibrated;
+		imu.orientationValid= status.orientationValid;
+		imu.sampleRateHz= status.sampleRateHz;
+		imu.batteryLevel= status.batteryLevel;
+		imu.yawDriftDegPerSecond= status.gyroBiasDegreesPerSecond.z;
+		imu.rollErrorDegrees= status.wristAxialTwistDegrees;
+	}
+
+	if (m_faceService != nullptr)
+	{
+		const FaceServiceStatus status= m_faceService->getStatus();
+		outTelemetry.face.enabled= status.enabled;
+		outTelemetry.face.bound= status.bound;
+		outTelemetry.face.streaming= status.streaming;
+		outTelemetry.face.faceTracked= status.latest.valid && status.latest.faceTracked;
+		outTelemetry.face.datagramsPerSecond= status.datagramsPerSecond;
+	}
+
+	if (m_audioService != nullptr)
+	{
+		const AudioServiceStatus status= m_audioService->getStatus();
+		outTelemetry.audio.enabled= status.enabled;
+		outTelemetry.audio.deviceOpen= status.deviceOpen;
+		outTelemetry.audio.backendReady= status.backendReady;
+		outTelemetry.audio.gateOpen= status.gateOpen;
+		outTelemetry.audio.levelDbfs= status.levelDbfs;
+		outTelemetry.audio.inferMsEma= status.inferMsEma;
+	}
 }
 
 VisionThread::VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
@@ -405,7 +516,8 @@ std::string VisionThread::getLastDumpPath()
 	return m_lastDumpPath;
 }
 
-void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput)
+void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput, Telemetry::ePath path,
+										 const double* phaseMs)
 {
 	std::string dumpDir;
 	DiagAvatarSnapshot avatar;
@@ -428,10 +540,15 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 	{
 		const RecordedCameraInput& input= context->getLastRecordInput();
 		if (input.frameIndex >= 0)
+		{
 			recordFrame.freshCameras.push_back(input);
+			recordFrame.freshCameras.back().bHaveCaptureTimings= true;
+			recordFrame.freshCameras.back().captureTimings= context->getLastResult().result.captureTimings;
+		}
 	}
 	TrackingRecording::snapshotFusedOutput(latestOutput, recordFrame.outPoses);
 	recordFrame.checksum= TrackingRecording::computeFusedChecksum(latestOutput);
+	gatherRecordedTelemetry(path, phaseMs, steadyNowMs(), recordFrame.telemetry);
 
 	// The avatar half: the direct solver's pose for this output and the
 	// state behind it
@@ -664,6 +781,7 @@ void VisionThread::threadLoop()
 		};
 
 		IterationState iteration;
+		iteration.phaseMs= phaseMs;
 
 		servicePendingRequests();
 		lapPhase(eVisionPhase::ConfigRefresh);
@@ -683,7 +801,10 @@ void VisionThread::threadLoop()
 
 			// Still service dump requests while idle (cameras may be stopped)
 			if (m_bDumpRequested.exchange(false))
-				performDiagnosticDump(m_lastOutputResult);
+			{
+				performDiagnosticDump(m_lastOutputResult,
+									  bFaceOnly ? Telemetry::ePath::FaceOnly : Telemetry::ePath::Idle, phaseMs);
+			}
 			lapPhase(eVisionPhase::Diagnostics);
 
 			// The idle sleep below is not a hitch, but a slow config refresh or
@@ -737,14 +858,12 @@ void VisionThread::threadLoop()
 		runCalibrationCaptures();
 		runDiagnosticsStage(iteration);
 		lapPhase(eVisionPhase::Diagnostics);
+		m_lastDiagnosticsPhaseMs= phaseMs[(int)eVisionPhase::Diagnostics];
 
 		const double totalMs= steadyNowMs() - iterationStartMs;
 		reportHitchIfSlow(totalMs, phaseMs);
 
-		const Telemetry::ePath path= iteration.bDirect ? Telemetry::ePath::Direct
-								   : iteration.bAnyWorldCandidate ? Telemetry::ePath::Fused
-																  : Telemetry::ePath::Passthrough;
-		publishTelemetry(path, iteration.outputResult.timestampMs, totalMs, phaseMs);
+		publishTelemetry(getCameraIterationPath(iteration), iteration.outputResult.timestampMs, totalMs, phaseMs);
 	}
 
 	// Finalize an in-flight recording before the contexts are torn down
@@ -1410,7 +1529,12 @@ void VisionThread::runDiagnosticsStage(IterationState& iteration)
 		{
 			RecordedCameraInput input;
 			if (context->consumePendingRecordInput(input))
+			{
+				// Display only: the step times of the frame this input came from
+				input.bHaveCaptureTimings= true;
+				input.captureTimings= context->getLastResult().result.captureTimings;
 				recordFrame.freshCameras.push_back(std::move(input));
+			}
 		}
 		// The mouth stage's newest frame, tied to the sidecar's stream when
 		// it is the one the sidecar records
@@ -1423,9 +1547,12 @@ void VisionThread::runDiagnosticsStage(IterationState& iteration)
 			recordFrame.mouth.audioFrameIndex=
 				m_bRecordingAudio && mouth.captureEpoch == m_recordingAudioEpoch ? mouth.audioFrameIndex : -1;
 		}
+		// The stage state behind this frame, for a replay to show
+		gatherRecordedTelemetry(getCameraIterationPath(iteration), iteration.phaseMs, iteration.newestTimestampMs,
+								recordFrame.telemetry);
 		m_recorder->enqueueFrame(std::move(recordFrame));
 	}
 
 	if (m_bDumpRequested.exchange(false))
-		performDiagnosticDump(m_lastOutputResult);
+		performDiagnosticDump(m_lastOutputResult, getCameraIterationPath(iteration), iteration.phaseMs);
 }
