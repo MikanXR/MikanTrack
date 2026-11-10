@@ -245,7 +245,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.timeline"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.performance"), bottomId);
@@ -333,7 +332,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
@@ -344,8 +342,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			{
 				m_bResetDockLayout= true;
 				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowTrackingPanel= true;
-				m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
-				m_bShowSettingsPanel= true;
+				m_bShowTimelinePanel= m_bShowLogPanel= m_bShowSettingsPanel= true;
 				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
 			}
 			ImGui::EndMenu();
@@ -491,10 +488,9 @@ void MainWindow::update(float deltaSeconds)
 	OscSectionContext oscContext;
 	oscContext.config= config;
 	oscContext.visionThread= visionThread;
-	oscContext.fusedResult= &m_latestFused;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
-							   m_microphoneReadout, m_faceExprEditor->getTarget(), bWizardActive);
+							   m_microphoneReadout, m_oscReadout, m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -507,8 +503,6 @@ void MainWindow::update(float deltaSeconds)
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
 	}
-	if (m_bShowOscPanel)
-		SettingsPanels::drawOscPanel(&m_bShowOscPanel, oscContext);
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
 	if (m_bShowTimelinePanel)
@@ -657,6 +651,7 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 	updateFusionReadout();
 	updateImuReadout();
 	updateFaceReadouts();
+	updateOscReadout();
 }
 
 void MainWindow::updateFusionReadout()
@@ -819,6 +814,36 @@ void MainWindow::updateFaceReadouts()
 	}
 	m_faceReadout= face;
 	m_microphoneReadout= microphone;
+}
+
+void MainWindow::updateOscReadout()
+{
+	OscReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			readout.bRunning= recorded->oscRunning;
+			readout.framesPerSecond= recorded->oscSendRateHz;
+			readout.lastPacketCount= recorded->oscLastPacketCount;
+			readout.lastFrameBytes= recorded->oscLastFrameBytes;
+		}
+	}
+	else
+	{
+		// Before the vision thread's first iteration the stream reads as not
+		// running
+		const VisionThread::Telemetry telemetry= m_app->getVisionThread()->getTelemetry();
+		readout.bAvailable= true;
+		readout.bRunning= telemetry.bValid && telemetry.bOscRunning;
+		readout.framesPerSecond= telemetry.oscSendRateHz;
+		readout.lastPacketCount= telemetry.oscLastPacketCount;
+		readout.lastFrameBytes= telemetry.oscLastFrameBytes;
+	}
+	m_oscReadout= readout;
 }
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)

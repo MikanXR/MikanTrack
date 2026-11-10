@@ -253,7 +253,7 @@ data is meaningful (no metric 3D / world space).
 
 MikanTrack streams the [VMC protocol](https://protocol.vmc.info): OSC 1.0
 bundles over UDP unicast, default target `127.0.0.1:39539` (VMC's
-conventional port; **OSC panel -> Target IP / Port**). It was developed
+conventional port; **VMC stream stage -> Target IP / Port**). It was developed
 against [VMC4UE](https://github.com/HAL9HARUKU/VMC4UE). In Unreal Engine the
 consumer is [VRM4U](https://github.com/ruyo/VRM4U)'s VMC node
 (`AnimNode_VrmVMC`): point it at the configured port and it drives the VRM's
@@ -320,7 +320,7 @@ answers "is a hand here" and stays near 1.0 on a badly conditioned edge-on
 view whose depth swings by centimeters, so it is not usable as a trust signal
 on its own. Fusion weights each camera by `confidence x how face-on the palm
 is`, so a camera with a poor view of a hand stops polluting the fused pose.
-Set **OSC panel -> Min confidence** to treat a hand below a threshold as lost.
+Set **Delivery rules stage -> Min confidence** to treat a hand below a threshold as lost.
 A lost hand keeps streaming its last good pose for the **Dropout hold**
 (default 250 ms), which bridges brief losses. Past the hold its bones keep
 streaming frozen (**Freeze on loss**, default on); turning that off stops the
@@ -328,7 +328,7 @@ messages instead, which returns that arm to the avatar's rest T-pose. Tune the
 threshold with the live per-camera confidence table in the Inspector (select
 the Fusion stage, Diagnostics).
 
-**Palm frame and finger angles.** The OSC panel shows what the solver
+**Palm frame and finger angles.** The Source pose stage shows what the solver
 measures for each hand, the inputs the bones are built from. The palm frame
 (Ultraleap-compatible) has its origin at the palm center (midway wrist to
 middle knuckle), **+X toward the fingers**, **+Z out of the palmar surface**,

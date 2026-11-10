@@ -1551,14 +1551,19 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	ImGui::End();
 }
 
-// -- OSC panel ---------------------------------------------------------------
+// -- OSC output --------------------------------------------------------------
 
-void SettingsPanels::drawOscConnectionSection(const OscSectionContext& context)
+void SettingsPanels::drawOscEnableControl(const OscSectionContext& context)
+{
+	OscConfig& osc= context.config->osc;
+	if (ImGui::Checkbox(locLabel("oscPanel.enabled"), &osc.enabled))
+		commitOscConfigChange(context);
+}
+
+void SettingsPanels::drawOscTargetControls(const OscSectionContext& context)
 {
 	bool bChanged= false;
 	OscConfig& osc= context.config->osc;
-
-	bChanged|= ImGui::Checkbox(locLabel("oscPanel.enabled"), &osc.enabled);
 
 	char ipBuffer[64];
 	snprintf(ipBuffer, sizeof(ipBuffer), "%s", osc.targetIp.c_str());
@@ -1575,6 +1580,15 @@ void SettingsPanels::drawOscConnectionSection(const OscSectionContext& context)
 		bChanged= true;
 	}
 	ImGui::SetItemTooltip("%s", locText("oscPanel.portTooltip"));
+
+	if (bChanged)
+		commitOscConfigChange(context);
+}
+
+void SettingsPanels::drawOscDeliveryControls(const OscSectionContext& context)
+{
+	bool bChanged= false;
+	OscConfig& osc= context.config->osc;
 
 	bChanged|= ImGui::SliderInt(locLabel("oscPanel.maxRate"), &osc.maxRateHz, 10, 120, "%d Hz");
 
@@ -1600,16 +1614,10 @@ void SettingsPanels::drawOscLossControls(const OscSectionContext& context)
 		commitOscConfigChange(context);
 }
 
-void SettingsPanels::drawOscVmcSection(const OscSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawOscVmcControls(const OscSectionContext& context)
 {
 	bool bChanged= false;
 	OscConfig& osc= context.config->osc;
-
-	if (bWithHeader)
-	{
-		ImGui::Separator();
-		ImGui::TextDisabled("%s", locText("oscPanel.vmcSection"));
-	}
 
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.headOffset"), &osc.vmcHeadOffsetMeters, 0.f, 0.25f, "%.3f m");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.headOffsetTooltip"));
@@ -1621,27 +1629,31 @@ void SettingsPanels::drawOscVmcSection(const OscSectionContext& context, bool bW
 		commitOscConfigChange(context);
 }
 
-void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool bWithHeader)
+void SettingsPanels::drawOscStreamReadout(const OscSectionContext& context)
+{
+	const OscReadout& readout= *context.readout;
+	if (!readout.bAvailable)
+	{
+		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
+		return;
+	}
+
+	if (!readout.bRunning)
+	{
+		ImGui::TextDisabled("%s", locText("oscPanel.streamStopped"));
+		return;
+	}
+	ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), locText("oscPanel.streamRunningFmt"), readout.framesPerSecond);
+	ImGui::Text(locText("oscPanel.lastFrameFmt"), readout.lastPacketCount, readout.lastFrameBytes);
+}
+
+void SettingsPanels::drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused)
 {
 	const OscConfig& osc= context.config->osc;
-	const TrackingFrameResult& fusedResult= *context.fusedResult;
-
-	if (bWithHeader)
-		ImGui::Separator();
-	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
-
-	// Solver diagnostic: the 20 finger angles per hand as the solver measures
-	// them (shown in degrees), which the VMC retarget then turns into bones
-	static const char* s_fingerNames[FINGER_COUNT]= {
-		"oscPanel.fingerThumb", "oscPanel.fingerIndex", "oscPanel.fingerMiddle",
-		"oscPanel.fingerRing", "oscPanel.fingerPinky"};
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		const HandPose& pose= fusedResult.poses[sideIndex];
-		const char* sideKey= sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand";
-
-		if (!ImGui::CollapsingHeader(locLabel(sideKey), ImGuiTreeNodeFlags_DefaultOpen))
-			continue;
+		const HandPose& pose= fused.poses[sideIndex];
+		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
 
 		// Confidence vs the gate: red while the pose is being withheld
 		const bool bGated= pose.tracked && pose.confidence < osc.minConfidence;
@@ -1651,6 +1663,24 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		else
 			ImGui::Text(locText("oscPanel.confidenceFmt"), pose.confidence);
 
+		if (!pose.tracked)
+			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
+	}
+}
+
+void SettingsPanels::drawFingerAngleReadout(const TrackingFrameResult& fused)
+{
+	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
+
+	// Solver diagnostic: the 20 finger angles per hand as the solver measures
+	// them (shown in degrees), which the VMC retarget then turns into bones
+	static const char* s_fingerNames[FINGER_COUNT]= {
+		"oscPanel.fingerThumb", "oscPanel.fingerIndex", "oscPanel.fingerMiddle",
+		"oscPanel.fingerRing", "oscPanel.fingerPinky"};
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused.poses[sideIndex];
+		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
 		if (!pose.tracked)
 		{
 			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
@@ -1688,21 +1718,6 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		}
 		ImGui::PopID();
 	}
-}
-
-void SettingsPanels::drawOscPanel(bool* pOpen, const OscSectionContext& context)
-{
-	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-
-	drawOscConnectionSection(context);
-	drawOscVmcSection(context);
-	drawOscSolverSection(context);
-
-	ImGui::End();
 }
 
 void SettingsPanels::drawLanguageCombo()

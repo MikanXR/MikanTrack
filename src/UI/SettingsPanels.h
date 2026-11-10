@@ -148,17 +148,30 @@ struct TrackingSectionContext
 	const FaceReadout* face= nullptr;
 };
 
-// What the OSC panel's sections read and write. fusedResult: the latest
-// fused tracking output (the live angle readout).
+// What the OSC stream reported for the shown frame
+struct OscReadout
+{
+	bool bAvailable= false; // false: a replayed frame from a take that recorded no stage state
+	bool bReplay= false;
+	bool bRunning= false; // the streamer exists and its socket is open
+	float framesPerSecond= 0.f;
+	// The datagrams and total bytes of the last frame sent
+	int lastPacketCount= 0;
+	int lastFrameBytes= 0;
+};
+
+// What the OSC sections read and write. readout: the shown frame's stream
+// status (the Output stage's diagnostics).
 struct OscSectionContext
 {
 	AppConfig* config= nullptr;
 	VisionThread* visionThread= nullptr;
-	const TrackingFrameResult* fusedResult= nullptr;
+	const OscReadout* readout= nullptr;
 };
 
-// Small side panels: tracking/fusion options and OSC output settings.
-// Config edits mark the config dirty and request a vision-thread refresh.
+// Small side panels and hostable sections: tracking/fusion options and the
+// OSC output's settings and readouts. Config edits mark the config dirty and
+// request a vision-thread refresh.
 // Each panel is a sequence of sections, and each section can be drawn on its
 // own in any window, more than once a frame: a section's widgets only read
 // the panel state and raise requests, and a section commits its own config
@@ -252,17 +265,28 @@ void drawDiagnosticsSection(const TrackingSectionContext& context, bool bWithHea
 // The hold-still jitter test: its button, countdown, progress and result
 void drawHoldStillSection(const TrackingSectionContext& context, bool bWithHeader= true);
 
-// The OSC panel's sections, in the panel's order
-void drawOscConnectionSection(const OscSectionContext& context);
-void drawOscVmcSection(const OscSectionContext& context, bool bWithHeader= true);
-void drawOscSolverSection(const OscSectionContext& context, bool bWithHeader= true);
-// What the stream does with a lost hand, no header: the dropout hold and
-// freeze on loss. The Retarget stage's, not in the panel.
+// The OSC stream pieces, no headers. The controls edit the live config.
+// The Output stage's enable, the VMC stream stage's target and head offset,
+// and the Delivery rules stage's rate and confidence gate.
+void drawOscEnableControl(const OscSectionContext& context);
+void drawOscTargetControls(const OscSectionContext& context);
+// The head offset and the notes on the streamed bones
+void drawOscVmcControls(const OscSectionContext& context);
+void drawOscDeliveryControls(const OscSectionContext& context);
+// What the stream does with a lost hand: the dropout hold and freeze on
+// loss. The Retarget stage's.
 void drawOscLossControls(const OscSectionContext& context);
+// Whether the stream runs, its frame rate and the last frame's size, from
+// context.readout
+void drawOscStreamReadout(const OscSectionContext& context);
+// Each hand's confidence in fused against the live confidence gate, red
+// while the hand is withheld
+void drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused);
+// Each hand's finger angles in fused, in degrees, as the retarget reads them
+void drawFingerAngleReadout(const TrackingFrameResult& fused);
 
 // Draws the sections only; updateTrackingState runs the panel's state
 void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);
-void drawOscPanel(bool* pOpen, const OscSectionContext& context);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel(bool* pOpen);
 // The language combo alone, shared between the Settings panel and the main

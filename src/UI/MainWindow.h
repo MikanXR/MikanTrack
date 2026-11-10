@@ -153,10 +153,14 @@ private:
 	// in place.
 	FaceReadout m_faceReadout;
 	MicrophoneReadout m_microphoneReadout;
+	// What the OSC stream reported for the shown frame, refilled with it. The
+	// Output stage's sections read it in place.
+	OscReadout m_oscReadout;
 	void updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera);
 	void updateFusionReadout();
 	void updateImuReadout();
 	void updateFaceReadouts();
+	void updateOscReadout();
 	// The direct solve behind the shown avatar pose, null when the shown
 	// frame is not a direct-mode frame
 	const DirectRetarget::SolveState* m_shownDirectState= nullptr;
@@ -200,7 +204,6 @@ private:
 	bool m_bShowVideoPreviewPanel= true;
 	bool m_bShowScene3dPanel= true;
 	bool m_bShowTrackingPanel= true;
-	bool m_bShowOscPanel= true;
 	bool m_bShowTimelinePanel= true;
 	bool m_bShowLogPanel= true;
 	bool m_bShowSettingsPanel= true;

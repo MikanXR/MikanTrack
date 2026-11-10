@@ -25,11 +25,12 @@ StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel*
 
 void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc,
 							  const FusionReadout& fusion, const ImuReadout& imu, const FaceReadout& face,
-							  const MicrophoneReadout& microphone, const FaceExprEditTarget* activeEdit,
-							  bool bWizardActive)
+							  const MicrophoneReadout& microphone, const OscReadout& oscReadout,
+							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
 {
 	m_tracking= tracking;
 	m_osc= osc;
+	m_osc.readout= &oscReadout;
 	m_tracking.fusion= &fusion;
 	m_tracking.imu= &imu;
 	m_tracking.face= &face;
@@ -97,6 +98,13 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The loss rules apply with or without an avatar, so the settings
 		// always show
 		return section != eStageSection::Diagnostics;
+	case ePipelineStage::Output:
+	case ePipelineStage::DeliveryRules:
+		return section != eStageSection::Inputs;
+	case ePipelineStage::VmcStream:
+		return section == eStageSection::Settings;
+	case ePipelineStage::SourcePose:
+		return section == eStageSection::Diagnostics;
 	default:
 		return false;
 	}
@@ -268,6 +276,25 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			drawRetargetSettings();
 		}
+		break;
+	case ePipelineStage::Output:
+		if (section == eStageSection::Settings)
+			SettingsPanels::drawOscEnableControl(m_osc);
+		else
+			SettingsPanels::drawOscStreamReadout(m_osc);
+		break;
+	case ePipelineStage::DeliveryRules:
+		if (section == eStageSection::Settings)
+			SettingsPanels::drawOscDeliveryControls(m_osc);
+		else
+			SettingsPanels::drawOscDeliveryReadout(m_osc, *m_tracking.fusion->fused);
+		break;
+	case ePipelineStage::VmcStream:
+		SettingsPanels::drawOscTargetControls(m_osc);
+		SettingsPanels::drawOscVmcControls(m_osc);
+		break;
+	case ePipelineStage::SourcePose:
+		SettingsPanels::drawFingerAngleReadout(*m_tracking.fusion->fused);
 		break;
 	default:
 		break;
