@@ -116,6 +116,10 @@ void DevicePanel::refreshCameraSettings(int cameraIndex)
 
 void DevicePanel::drawCameraSettings(int cameraIndex)
 {
+	syncCameraStateCount();
+	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size())
+		return;
+
 	CameraUiState& state= m_cameraStates[cameraIndex];
 	if (state.settings.empty())
 		return;
@@ -201,6 +205,10 @@ void DevicePanel::applyModeSelection(int cameraIndex)
 
 void DevicePanel::drawCameraSection(int cameraIndex)
 {
+	syncCameraStateCount();
+	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size())
+		return;
+
 	CameraUiState& state= m_cameraStates[cameraIndex];
 
 	ImGui::PushID(cameraIndex);
@@ -328,18 +336,35 @@ void DevicePanel::draw(bool* pOpen)
 		return;
 	}
 
+	drawBody();
+
+	ImGui::End();
+}
+
+void DevicePanel::drawBody()
+{
 	syncCameraStateCount();
 
-	if (ImGui::SmallButton(locLabel("devicePanel.rescanDevicesButton")))
-	{
-		m_videoCapture->refreshDeviceList();
-		refreshDeviceList();
-	}
+	drawRescanControl();
 
 	for (int cameraIndex= 0; cameraIndex < (int)m_cameraStates.size(); ++cameraIndex)
 		drawCameraSection(cameraIndex);
 
 	ImGui::Separator();
+	drawAddCameraControl();
+}
+
+void DevicePanel::drawRescanControl()
+{
+	if (ImGui::SmallButton(locLabel("devicePanel.rescanDevicesButton")))
+	{
+		m_videoCapture->refreshDeviceList();
+		refreshDeviceList();
+	}
+}
+
+void DevicePanel::drawAddCameraControl()
+{
 	ImGui::BeginDisabled((int)m_config->cameraCount() >= k_maxCameras);
 	if (ImGui::Button(locLabel("devicePanel.addCameraButton"), ImVec2(-1, 0)))
 	{
@@ -352,6 +377,4 @@ void DevicePanel::draw(bool* pOpen)
 		refreshDeviceList();
 	}
 	ImGui::EndDisabled();
-
-	ImGui::End();
 }

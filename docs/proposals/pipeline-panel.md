@@ -2,7 +2,7 @@
 
 A proposal to replace most of the app's settings panels with a Pipeline strip, a stage inspector and a central view that follows the selected stage. The interactive mockup is [pipeline-panel-mockup.html](./pipeline-panel-mockup.html), a self-contained file that opens by double-click. This document records the decisions the mockup is built on and the checklist that maps every control in today's panels to its new home.
 
-Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 and M1 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control.
+Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0, M1 and M2 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control, and every panel section is now a function an inspector can host.
 
 ---
 

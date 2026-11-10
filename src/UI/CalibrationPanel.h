@@ -18,6 +18,15 @@ public:
 	};
 
 	DrawResult draw(bool* pOpen, bool bWizardActive);
+	// The panel's contents without its window, for a host window
+	DrawResult drawBody(bool bWizardActive);
+
+	// The panel's sections, each drawable in a host window and each
+	// returning the launches it raised. A camera section draws nothing for a
+	// camera index the config does not have.
+	DrawResult drawCameraCalibration(int cameraIndex, bool bWizardActive);
+	DrawResult drawExtrinsicsSection(bool bWizardActive);
+	void drawHandScaleSection();
 
 private:
 	AppConfig* m_config;

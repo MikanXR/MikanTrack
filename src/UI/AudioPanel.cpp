@@ -60,16 +60,21 @@ AudioPanel::DrawResult AudioPanel::draw(bool* pOpen, bool bWizardActive, const T
 		return result;
 	}
 
-	if (!m_bDeviceListFetched)
-		refreshDeviceList();
+	result= drawBody(bWizardActive, shownFused, bReplayView);
 
+	ImGui::End();
+	return result;
+}
+
+AudioPanel::DrawResult AudioPanel::drawBody(bool bWizardActive, const TrackingFrameResult& shownFused,
+											bool bReplayView)
+{
+	DrawResult result;
 	drawControls(bWizardActive, result);
 	ImGui::Separator();
 	drawStatus();
 	ImGui::Separator();
 	drawWeights(shownFused, bReplayView);
-
-	ImGui::End();
 	return result;
 }
 
@@ -90,6 +95,9 @@ void AudioPanel::drawWeights(const TrackingFrameResult& shownFused, bool bReplay
 
 void AudioPanel::drawControls(bool bWizardActive, DrawResult& outResult)
 {
+	if (!m_bDeviceListFetched)
+		refreshDeviceList();
+
 	AudioConfig& audio= m_config->audio;
 	bool bChanged= false;
 

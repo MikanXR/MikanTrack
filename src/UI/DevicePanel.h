@@ -20,6 +20,16 @@ public:
 	DevicePanel(App* app, VideoCaptureSystem* videoCapture, AppConfig* config);
 
 	void draw(bool* pOpen);
+	// The panel's contents without its window, for a host window
+	void drawBody();
+
+	// The panel's sections, each drawable in a host window. A camera section
+	// sizes the per-camera state from the config itself, and draws nothing
+	// for a camera index the config does not have.
+	void drawRescanControl();
+	void drawCameraSection(int cameraIndex);
+	void drawCameraSettings(int cameraIndex);
+	void drawAddCameraControl();
 
 	// Re-reads the device list (call on hotplug events)
 	void refreshDeviceList();
@@ -49,8 +59,6 @@ private:
 	};
 
 	void syncCameraStateCount();
-	void drawCameraSection(int cameraIndex);
-	void drawCameraSettings(int cameraIndex);
 	void applyModeSelection(int cameraIndex);
 	void refreshCameraSettings(int cameraIndex);
 

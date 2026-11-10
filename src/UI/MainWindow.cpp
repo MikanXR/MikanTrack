@@ -469,6 +469,20 @@ void MainWindow::update(float deltaSeconds)
 	// Panels
 	if (m_bShowDevicePanel)
 		m_devicePanel->draw(&m_bShowDevicePanel);
+	{
+		// The tracking panel's countdowns, captures and readouts run whether
+		// or not any of its sections is drawn this frame
+		TrackingSectionContext trackingContext;
+		trackingContext.config= config;
+		trackingContext.visionThread= visionThread;
+		trackingContext.videoCapture= m_app->getVideoCapture();
+		trackingContext.previewPanel= m_videoPreviewPanel.get();
+		trackingContext.scene3dPanel= m_scene3dPanel.get();
+		trackingContext.state= &m_trackingPanelState;
+		trackingContext.latestPreviews= &m_latestPreviews;
+		trackingContext.fusedResult= &m_latestFused;
+		SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
+	}
 	if (m_bShowTrackingPanel)
 	{
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, config, visionThread, m_app->getVideoCapture(),
@@ -509,6 +523,9 @@ void MainWindow::update(float deltaSeconds)
 			if (editRequest.has_value())
 				m_faceExprEditor->open(*editRequest);
 		}
+		// After the panel, so an unload in it lands before the scene reads
+		// the preview pose
+		m_avatarPanel->update();
 		m_faceExprEditor->update(shownFrame);
 	}
 	AudioPanel::DrawResult audioAction;

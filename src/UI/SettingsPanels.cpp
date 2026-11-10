@@ -29,6 +29,28 @@ static constexpr float k_holdStillSampleSeconds= 3.f;
 // anything (one second at 30fps)
 static constexpr int k_holdStillMinSamples= 30;
 
+static void commitConfigChange(AppConfig* config, VisionThread* visionThread)
+{
+	config->markDirty();
+	visionThread->requestConfigRefresh();
+}
+
+void SettingsPanels::commitTrackingConfigChange(const TrackingSectionContext& context)
+{
+	commitConfigChange(context.config, context.visionThread);
+}
+
+void SettingsPanels::commitOscConfigChange(const OscSectionContext& context)
+{
+	commitConfigChange(context.config, context.visionThread);
+}
+
+// The cameras the image-quality and capture-timing readouts have slots for
+static int getReadoutCameraCount(const AppConfig* config)
+{
+	return std::min((int)config->cameraCount(), (int)TrackingPanelState::kQualityMaxCameras);
+}
+
 // -- Image quality readout ---------------------------------------------------
 
 // Band classification: good inside [goodLo, goodHi], warn inside
@@ -105,46 +127,39 @@ static const QualityRowDesc k_qualityRows[]= {
 // The flicker row is appended after these (per camera, not per hand)
 static constexpr int k_flickerRowIndex= (int)IM_ARRAYSIZE(k_qualityRows);
 
-static void drawImageQualitySection(AppConfig* config, TrackingPanelState& panelState,
-									const std::vector<VisionPreviewFrame>& latestPreviews)
+// The band and display format of a row, the flicker row included
+static void getQualityRowBand(int rowIndex, MetricBand& outBand, const char*& outFormat)
 {
-	const int cameraCount= std::min((int)config->cameraCount(),
-									(int)TrackingPanelState::kQualityMaxCameras);
-	if (cameraCount <= 0)
-		return;
-
-	ImGui::TextDisabled("%s", locText("trackingPanel.imageQualityHeader"));
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.imageQualityTooltip"));
-
-	if (!ImGui::BeginTable("imageQuality", 1 + cameraCount,
-						   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
-		return;
-
-	ImGui::TableSetupColumn(locText("trackingPanel.metricColumn"));
-	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	if (rowIndex == k_flickerRowIndex)
 	{
-		const std::string header= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-		ImGui::TableSetupColumn(header.c_str());
+		outBand= {0.f, 2.f, 0.f, 5.f};
+		outFormat= "%.1f%%";
 	}
-	ImGui::TableHeadersRow();
+	else
+	{
+		outBand= k_qualityRows[rowIndex].band;
+		outFormat= k_qualityRows[rowIndex].format;
+	}
+}
 
-	// ~1s EMA so the readout is legible at camera rate
-	const float emaAlpha= std::min(1.f, ImGui::GetIO().DeltaTime);
+// ~1s EMA so the readout is legible at camera rate. A cell with no value this
+// frame is left invalid, which the section draws as a dash.
+static void updateImageQualityEma(const TrackingSectionContext& context, float deltaSeconds)
+{
+	TrackingPanelState& panelState= *context.state;
+	const std::vector<VisionPreviewFrame>& latestPreviews= *context.latestPreviews;
+	const int cameraCount= getReadoutCameraCount(context.config);
+	const float emaAlpha= std::min(1.f, deltaSeconds);
 
 	for (int rowIndex= 0; rowIndex <= k_flickerRowIndex; ++rowIndex)
 	{
 		const bool bFlickerRow= rowIndex == k_flickerRowIndex;
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::Text("%s", bFlickerRow ? locText("trackingPanel.flickerLabel") : locText(k_qualityRows[rowIndex].labelKey));
-		ImGui::SetItemTooltip("%s", bFlickerRow
-			? locText("trackingPanel.flickerTooltip")
-			: locText(k_qualityRows[rowIndex].tooltipKey));
+		MetricBand band;
+		const char* format;
+		getQualityRowBand(rowIndex, band, format);
 
 		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
 		{
-			ImGui::TableNextColumn();
-
 			const bool bHavePreview= cameraIndex < (int)latestPreviews.size() &&
 									 latestPreviews[cameraIndex].valid;
 			float& ema= panelState.qualityEma[cameraIndex][rowIndex];
@@ -152,25 +167,17 @@ static void drawImageQualitySection(AppConfig* config, TrackingPanelState& panel
 
 			float rawValue= 0.f;
 			bool bHaveValue= false;
-			float flickerHz= 0.f;
-			MetricBand band;
-			const char* format;
 			if (bFlickerRow)
 			{
-				band= {0.f, 2.f, 0.f, 5.f};
-				format= "%.1f%%";
 				if (bHavePreview)
 				{
 					rawValue= latestPreviews[cameraIndex].result.lumaInstability * 100.f;
-					flickerHz= latestPreviews[cameraIndex].result.lumaFlickerHz;
 					bHaveValue= true;
 				}
 			}
 			else
 			{
 				const QualityRowDesc& row= k_qualityRows[rowIndex];
-				band= row.band;
-				format= row.format;
 				if (bHavePreview)
 				{
 					// Worst tracked hand: higher band class first, then the
@@ -199,19 +206,78 @@ static void drawImageQualitySection(AppConfig* config, TrackingPanelState& panel
 			if (!bHaveValue)
 			{
 				bEmaValid= false;
-				ImGui::TextDisabled("-");
 				continue;
 			}
 
 			ema= bEmaValid ? ema + (rawValue - ema) * emaAlpha : rawValue;
 			bEmaValid= true;
+		}
+	}
+}
+
+void SettingsPanels::drawImageQualitySection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.imageQualitySection"));
+
+	const TrackingPanelState& panelState= *context.state;
+	const std::vector<VisionPreviewFrame>& latestPreviews= *context.latestPreviews;
+	const int cameraCount= getReadoutCameraCount(context.config);
+	if (cameraCount <= 0)
+		return;
+
+	ImGui::TextDisabled("%s", locText("trackingPanel.imageQualityHeader"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.imageQualityTooltip"));
+
+	if (!ImGui::BeginTable("imageQuality", 1 + cameraCount,
+						   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return;
+
+	ImGui::TableSetupColumn(locText("trackingPanel.metricColumn"));
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		const std::string header= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+		ImGui::TableSetupColumn(header.c_str());
+	}
+	ImGui::TableHeadersRow();
+
+	for (int rowIndex= 0; rowIndex <= k_flickerRowIndex; ++rowIndex)
+	{
+		const bool bFlickerRow= rowIndex == k_flickerRowIndex;
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::Text("%s", bFlickerRow ? locText("trackingPanel.flickerLabel") : locText(k_qualityRows[rowIndex].labelKey));
+		ImGui::SetItemTooltip("%s", bFlickerRow
+			? locText("trackingPanel.flickerTooltip")
+			: locText(k_qualityRows[rowIndex].tooltipKey));
+
+		MetricBand band;
+		const char* format;
+		getQualityRowBand(rowIndex, band, format);
+
+		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+		{
+			ImGui::TableNextColumn();
+
+			if (!panelState.bQualityEmaValid[cameraIndex][rowIndex])
+			{
+				ImGui::TextDisabled("-");
+				continue;
+			}
+			const float ema= panelState.qualityEma[cameraIndex][rowIndex];
 
 			char text[48];
 			snprintf(text, sizeof(text), format, ema);
-			if (bFlickerRow && flickerHz > 0.f)
+			if (bFlickerRow)
 			{
-				const size_t len= strlen(text);
-				snprintf(text + len, sizeof(text) - len, " @%.1fHz", flickerHz);
+				const bool bHavePreview= cameraIndex < (int)latestPreviews.size() &&
+										 latestPreviews[cameraIndex].valid;
+				const float flickerHz= bHavePreview ? latestPreviews[cameraIndex].result.lumaFlickerHz : 0.f;
+				if (flickerHz > 0.f)
+				{
+					const size_t len= strlen(text);
+					snprintf(text + len, sizeof(text) - len, " @%.1fHz", flickerHz);
+				}
 			}
 			ImGui::TextColored(bandColor(classifyBand(ema, band)), "%s", text);
 		}
@@ -262,46 +328,22 @@ static_assert(IM_ARRAYSIZE(k_timingRows) == TrackingPanelState::kTimingRowCount,
 static constexpr int k_timingCallbackCopyRow= 10;
 static constexpr int k_timingQueuedFramesRow= 11;
 
-static void drawCaptureTimingSection(AppConfig* config, VideoCaptureSystem* videoCapture,
-									 TrackingPanelState& panelState,
-									 const std::vector<VisionPreviewFrame>& latestPreviews)
+// ~1s EMA, as for the image-quality readout: the per-frame values are twitchy
+// at camera rate. The counters are kept as they are, and a cell with no value
+// this frame is left invalid.
+static void updateCaptureTimingEma(const TrackingSectionContext& context, float deltaSeconds)
 {
-	const int cameraCount= std::min((int)config->cameraCount(),
-									(int)TrackingPanelState::kQualityMaxCameras);
-	if (cameraCount <= 0)
-		return;
-
-	ImGui::SeparatorText(locText("trackingPanel.captureTimingSection"));
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.captureTimingTooltip"));
-
-	if (!ImGui::BeginTable("captureTiming", 1 + cameraCount,
-						   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
-		return;
-
-	ImGui::TableSetupColumn(locText("trackingPanel.stepColumn"));
-	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
-	{
-		const std::string header= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-		ImGui::TableSetupColumn(header.c_str());
-	}
-	ImGui::TableHeadersRow();
-
-	// ~1s EMA, as for the image-quality readout: the per-frame values are
-	// twitchy at camera rate
-	const float emaAlpha= std::min(1.f, ImGui::GetIO().DeltaTime);
+	TrackingPanelState& panelState= *context.state;
+	const std::vector<VisionPreviewFrame>& latestPreviews= *context.latestPreviews;
+	VideoCaptureSystem* videoCapture= context.videoCapture;
+	const int cameraCount= getReadoutCameraCount(context.config);
+	const float emaAlpha= std::min(1.f, deltaSeconds);
 
 	for (int rowIndex= 0; rowIndex < (int)IM_ARRAYSIZE(k_timingRows); ++rowIndex)
 	{
 		const TimingRowDesc& row= k_timingRows[rowIndex];
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::Text("%s", locText(row.labelKey));
-		ImGui::SetItemTooltip("%s", locText(row.tooltipKey));
-
 		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
 		{
-			ImGui::TableNextColumn();
-
 			float rawValue= 0.f;
 			bool bHaveValue= false;
 			bool bSmoothed= true;
@@ -334,465 +376,713 @@ static void drawCaptureTimingSection(AppConfig* config, VideoCaptureSystem* vide
 			if (!bHaveValue)
 			{
 				bEmaValid= false;
-				ImGui::TextDisabled("-");
 				continue;
 			}
 			if (bSmoothed)
-			{
 				ema= bEmaValid ? ema + (rawValue - ema) * emaAlpha : rawValue;
-				bEmaValid= true;
-			}
 			else
-			{
 				ema= rawValue;
+			bEmaValid= true;
+		}
+	}
+}
+
+void SettingsPanels::drawCaptureTimingSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	const TrackingPanelState& panelState= *context.state;
+	const int cameraCount= getReadoutCameraCount(context.config);
+	if (cameraCount <= 0)
+		return;
+
+	if (bWithHeader)
+	{
+		ImGui::SeparatorText(locText("trackingPanel.captureTimingSection"));
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.captureTimingTooltip"));
+	}
+
+	if (!ImGui::BeginTable("captureTiming", 1 + cameraCount,
+						   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return;
+
+	ImGui::TableSetupColumn(locText("trackingPanel.stepColumn"));
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		const std::string header= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+		ImGui::TableSetupColumn(header.c_str());
+	}
+	ImGui::TableHeadersRow();
+
+	for (int rowIndex= 0; rowIndex < (int)IM_ARRAYSIZE(k_timingRows); ++rowIndex)
+	{
+		const TimingRowDesc& row= k_timingRows[rowIndex];
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::Text("%s", locText(row.labelKey));
+		ImGui::SetItemTooltip("%s", locText(row.tooltipKey));
+
+		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+		{
+			ImGui::TableNextColumn();
+			if (!panelState.bTimingEmaValid[cameraIndex][rowIndex])
+			{
+				ImGui::TextDisabled("-");
+				continue;
 			}
-			ImGui::Text(row.format, ema);
+			ImGui::Text(row.format, panelState.timingEma[cameraIndex][rowIndex]);
 		}
 	}
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
-									   VideoCaptureSystem* videoCapture, VideoPreviewPanel* previewPanel,
-									   Scene3dPanel* scene3dPanel,
-									   TrackingPanelState& panelState,
-									   const std::vector<VisionPreviewFrame>& latestPreviews,
-									   const TrackingFrameResult& fusedResult)
+// -- Hold-still jitter test --------------------------------------------------
+
+// THE repeatable A/B number for camera-settings and lighting changes. Rebuilds
+// the 21 world-space joints from each fused pose via forward kinematics
+// (exactly what a client rebuilds) and reports the mean per-landmark deviation
+// over a still window - with the hand genuinely still, deviation IS tracking
+// noise. Runs the countdown and the sampling window the section starts.
+static void updateHoldStill(const TrackingSectionContext& context, float deltaSeconds)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.tracking"), pOpen))
+	TrackingPanelState& panelState= *context.state;
+	const TrackingFrameResult& fusedResult= *context.fusedResult;
+
+	if (panelState.holdStillCountdown > 0.f)
 	{
-		ImGui::End();
-		return;
-	}
-
-	bool bChanged= false;
-	TrackingConfig& tracking= config->tracking;
-
-	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.flipHandedness"), &tracking.flipHandedness);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.flipHandednessTooltip"));
-
-	// The tracking/fusion tuning values (staleness window, jitter and
-	// residual references, detector cadence) live in config.json and the
-	// Timeline what-if panel, where they can be swept against a recording.
-	// The live panel holds rig facts, calibration, and readouts only.
-
-	if (config->cameraCount() > 1)
-	{
-		ImGui::SeparatorText(locText("trackingPanel.fusionSection"));
-
-		// Which camera won each hand in the last fusion
-		const int leftCam= visionThread->getDominantCamera(eHandSide::Left);
-		const int rightCam= visionThread->getDominantCamera(eHandSide::Right);
-		ImGui::Text(locText("trackingPanel.dominantCameraFmt"),
-					leftCam >= 0 ? std::to_string(leftCam + 1).c_str() : "-",
-					rightCam >= 0 ? std::to_string(rightCam + 1).c_str() : "-");
-
-		// Live per-camera confidence: the number the thresholds act on
-		if (ImGui::BeginTable("confidence", 3, ImGuiTableFlags_SizingStretchProp))
+		panelState.holdStillCountdown-= deltaSeconds;
+		if (panelState.holdStillCountdown <= 0.f)
 		{
-			ImGui::TableSetupColumn("");
-			ImGui::TableSetupColumn(locText("trackingPanel.left"));
-			ImGui::TableSetupColumn(locText("trackingPanel.right"));
-			ImGui::TableHeadersRow();
-			for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
-			{
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				ImGui::Text(locText("trackingPanel.cameraFmt"), cameraIndex + 1);
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					ImGui::TableNextColumn();
-					const float confidence= visionThread->getObservationConfidence(cameraIndex, (eHandSide)sideIndex);
-					if (confidence < 0.f)
-						ImGui::TextDisabled("-");
-					else
-						ImGui::Text("%.2f", confidence);
-				}
-			}
-			ImGui::EndTable();
+			panelState.holdStillCountdown= 0.f;
+			panelState.holdStillSecondsLeft= k_holdStillSampleSeconds;
+			panelState.holdStillLastTimestampMs= 0.0;
+			panelState.holdStillAccum[0]= TrackingPanelState::HoldStillAccum();
+			panelState.holdStillAccum[1]= TrackingPanelState::HoldStillAccum();
 		}
-
-		ImGui::SeparatorText(locText("trackingPanel.handScaleSection"));
-		// Measured live and applied live - there is nothing to press. The
-		// wrist->knuckle bone is re-measured from stereo/depth every session,
-		// so persisting it would only save the few seconds the EMA takes to
-		// converge, at the cost of a button and a stale value to explain.
-		const float scaleFactor= visionThread->getAutoHandScaleFactor();
-		const double autoScaleMeters= config->handScale.refLengthMeters * (double)scaleFactor;
-		ImGui::Text(locText("trackingPanel.measuredScaleFmt"), autoScaleMeters * 100.0, scaleFactor);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.measuredScaleTooltip"));
 	}
-
-	ImGui::SeparatorText(locText("trackingPanel.imageQualitySection"));
-	drawImageQualitySection(config, panelState, latestPreviews);
-
-	ImGui::SeparatorText(locText("trackingPanel.wristImuSection"));
+	else if (panelState.holdStillSecondsLeft > 0.f)
 	{
-		ImuConfig& imu= config->imu;
-		bChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableWristImu"), &imu.enabled);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.enableWristImuTooltip"));
-
-		ImGui::BeginDisabled(!imu.enabled);
-
-		// No scan button: the service rescans on its own while a wrist has no
-		// controller, so pairing one in Windows Bluetooth settings is enough
-		if (ImGui::BeginTable("imu", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		// Accumulate each NEW fused result (they arrive slower than UI
+		// frames; re-adding a held result would fake stability)
+		if (fusedResult.timestampMs > 0.0 &&
+			fusedResult.timestampMs != panelState.holdStillLastTimestampMs)
 		{
-			ImGui::TableSetupColumn(locText("trackingPanel.wristTableWrist"));
-			ImGui::TableSetupColumn(locText("trackingPanel.wristTableDevice"));
-			ImGui::TableSetupColumn(locText("trackingPanel.wristTableRate"));
-			ImGui::TableSetupColumn(locText("trackingPanel.wristTableYawDrift"));
-			ImGui::TableSetupColumn(locText("trackingPanel.wristTableRollError"));
-			ImGui::TableHeadersRow();
-
+			panelState.holdStillLastTimestampMs= fusedResult.timestampMs;
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const ImuSideStatus status= visionThread->getImuSideStatus((eHandSide)sideIndex);
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				ImGui::Text("%s", sideIndex == 0 ? locText("trackingPanel.left") : locText("trackingPanel.right"));
+				const HandPose& pose= fusedResult.poses[sideIndex];
+				if (!pose.tracked || !pose.hasWorldPose)
+					continue;
 
-				ImGui::TableNextColumn();
-				if (!status.deviceConnected)
-					ImGui::TextDisabled("%s", locText("trackingPanel.deviceNone"));
-				else if (!status.calibrated)
-					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), locText("trackingPanel.deviceUncalibratedFmt"),
-									   status.deviceName.c_str());
-				else if (status.orientationValid)
-					ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", status.deviceName.c_str());
-				else
-					ImGui::TextDisabled(locText("trackingPanel.deviceConvergingFmt"), status.deviceName.c_str());
+				glm::mat4 palmTransform= glm::mat4_cast(pose.palmOrientationWorld);
+				palmTransform[3]= glm::vec4(pose.palmPositionWorld, 1.f);
+				std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
+				HandPoseModel::buildFingerJoints(palmTransform, pose.skeleton, pose.fingers, joints);
 
-				ImGui::TableNextColumn();
-				if (status.streaming)
-				{
-					ImGui::Text("%.0f Hz  %d%%", status.sampleRateHz, (int)(status.batteryLevel * 100.f));
-				}
-				else if (status.deviceConnected && status.millisecondsSinceLastSample > 0.0)
-				{
-					// Silent but open: asleep or the link dropped. The service
-					// reopens it automatically; this just makes it visible.
-					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), locText("trackingPanel.deviceSilentFmt"),
-									   status.millisecondsSinceLastSample / 1000.0);
-				}
-				else
-				{
-					ImGui::TextDisabled("-");
-				}
-
-				ImGui::TableNextColumn();
-				// The yaw-axis gyro bias is the number that matters: it is the
-				// drift vision has to keep correcting
-				if (status.streaming)
-					ImGui::Text("%.2f deg/s", status.gyroBiasDegreesPerSecond.z);
-				else
-					ImGui::TextDisabled("-");
-
-				// Mounting error, measured against anatomy. Preferred over the
-				// twist-axis score because it is SIGNED and means something
-				// during any motion, not only a deliberate twist.
-				ImGui::TableNextColumn();
-				if (status.wristAxialTwistDegrees < -900.f)
-				{
-					ImGui::TextDisabled("%s", locText("trackingPanel.measuring"));
-				}
-				else
-				{
-					const float residual= fabsf(status.wristAxialTwistDegrees);
-					const ImVec4 color= residual < 5.f
-						? ImVec4(0.4f, 1.f, 0.5f, 1.f)
-						: (residual < 15.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.4f, 1.f));
-					ImGui::TextColored(color, "%+.0f deg", status.wristAxialTwistDegrees);
-				}
-				ImGui::SetItemTooltip("%s", locText("trackingPanel.wristRollErrorTooltip"));
+				TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
+				int pointIndex= 0;
+				auto addPoint= [&accum, &pointIndex](const glm::vec3& point) {
+					const glm::dvec3 p(point);
+					accum.sum[pointIndex]+= p;
+					accum.sumSq[pointIndex]+= p * p;
+					++pointIndex;
+				};
+				addPoint(pose.palmPositionWorld);
+				for (int fingerIndex= 0; fingerIndex < FINGER_COUNT; ++fingerIndex)
+					for (int jointIndex= 0; jointIndex < 4; ++jointIndex)
+						addPoint(joints[fingerIndex][jointIndex]);
+				++accum.sampleCount;
 			}
-			ImGui::EndTable();
 		}
 
-		bChanged|= ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &imu.swapSides);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.swapWristsTooltip"));
-
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f, "%.2f m");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.forearmLengthTooltip"));
-
-		// No "vision yaw anchor" slider: the value is settled, and it is still
-		// in the config file for anyone who needs to retune it
-
-		if (ImGui::Button(locLabel("trackingPanel.calibrateMounting"), ImVec2(-1, 0)))
-			panelState.bLaunchMountingWizard= true;
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateMountingTooltip"));
-
-		ImGui::EndDisabled();
-	}
-
-	ImGui::SeparatorText(locText("trackingPanel.faceSection"));
-	{
-		FaceConfig& face= config->face;
-		bool bFaceChanged= false;
-		bFaceChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableFace"), &face.enabled);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.enableFaceTooltip"));
-
-		ImGui::BeginDisabled(!face.enabled);
-		bFaceChanged|= ImGui::InputInt(locLabel("trackingPanel.facePort"), &face.port, 0, 0);
-		face.port= std::clamp(face.port, 1, 65535);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.facePortTooltip"));
-
-		char addressBuffer[64]= {};
-		strncpy(addressBuffer, face.phoneAddress.c_str(), sizeof(addressBuffer) - 1);
-		if (ImGui::InputText(locLabel("trackingPanel.facePhoneAddress"), addressBuffer, sizeof(addressBuffer)))
+		panelState.holdStillSecondsLeft-= deltaSeconds;
+		if (panelState.holdStillSecondsLeft <= 0.f)
 		{
-			face.phoneAddress= addressBuffer;
-			bFaceChanged= true;
-		}
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.facePhoneAddressTooltip"));
-		ImGui::EndDisabled();
-
-		if (bFaceChanged)
-		{
-			bChanged= true;
-			App::getInstance()->applyFaceConfig();
-		}
-
-		if (face.enabled)
-		{
-			const FaceService* faceService= App::getInstance()->getFaceService();
-			const FaceServiceStatus status= faceService->getStatus();
-			if (!status.bound)
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("trackingPanel.faceNotBound"));
-			else if (status.streaming)
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), locText("trackingPanel.faceStreamingFmt"),
-								   status.datagramsPerSecond);
-			else if (status.latest.valid)
-				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.faceQuiet"));
-			else
-				ImGui::TextDisabled("%s", locText("trackingPanel.faceWaiting"));
-
-			ImGui::TextDisabled(locText("trackingPanel.faceCountsFmt"), (unsigned long long)status.unknownNameCount,
-								(unsigned long long)status.parseFailures);
-			if (!status.lastUnknownName.empty())
-				ImGui::TextDisabled(locText("trackingPanel.faceLastUnknownFmt"), status.lastUnknownName.c_str());
-			if (status.latest.hasHead)
-				ImGui::TextDisabled(locText("trackingPanel.faceHeadFmt"), status.latest.headEulerDegrees.x,
-									status.latest.headEulerDegrees.y, status.latest.headEulerDegrees.z);
-
-			// The phone's head turns about the world axes once its straight
-			// ahead is known; the camera head supplies it
-			ImGui::BeginDisabled(!status.streaming);
-			if (ImGui::Button(locLabel("trackingPanel.faceAlignHead")))
-				visionThread->requestFaceAnchorCapture();
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.faceAlignHeadTooltip"));
-			ImGui::EndDisabled();
-			if (face.headAnchorPresent)
+			panelState.holdStillSecondsLeft= 0.f;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				ImGui::SameLine();
-				if (ImGui::Button(locLabel("trackingPanel.faceResetHeadAlign")))
+				const TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
+				if (accum.sampleCount < k_holdStillMinSamples)
 				{
-					face.headAnchorPresent= false;
-					face.headAnchor= glm::quat(1.f, 0.f, 0.f, 0.f);
-					bChanged= true;
+					panelState.holdStillDeviationMm[sideIndex]= -1.f;
+					continue;
 				}
-			}
-			ImGui::TextDisabled("%s", locText(face.headAnchorPresent ? "trackingPanel.faceHeadAligned"
-																	 : "trackingPanel.faceHeadNotAligned"));
-		}
 
-		glm::quat capturedAnchor;
-		if (visionThread->fetchFaceAnchorCapture(capturedAnchor))
-		{
-			face.headAnchor= capturedAnchor;
-			face.headAnchorPresent= true;
-			bChanged= true;
+				double deviationSum= 0.0;
+				for (int pointIndex= 0; pointIndex < HAND_LANDMARK_COUNT; ++pointIndex)
+				{
+					const glm::dvec3 mean= accum.sum[pointIndex] / (double)accum.sampleCount;
+					const glm::dvec3 variance=
+						accum.sumSq[pointIndex] / (double)accum.sampleCount - mean * mean;
+					deviationSum+= std::sqrt(std::max(0.0, variance.x + variance.y + variance.z));
+				}
+				panelState.holdStillDeviationMm[sideIndex]=
+					(float)(deviationSum / HAND_LANDMARK_COUNT * 1000.0);
+			}
+			panelState.bHoldStillHasResult= true;
 		}
 	}
+}
 
-	ImGui::SeparatorText(locText("trackingPanel.bodyPoseSection"));
+void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context)
+{
+	TrackingPanelState& panelState= *context.state;
+
+	if (panelState.holdStillCountdown > 0.f)
 	{
-		ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.holdStillCountdownFmt"),
+						   (int)ceilf(panelState.holdStillCountdown));
+		ImGui::ProgressBar(1.f - panelState.holdStillCountdown / k_holdStillCountdownSeconds,
+						   ImVec2(-1, 4), "");
+	}
+	else if (panelState.holdStillSecondsLeft > 0.f)
+	{
+		ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.f, 1.f), "%s", locText("trackingPanel.holdStillSampling"));
+		ImGui::ProgressBar(1.f - panelState.holdStillSecondsLeft / k_holdStillSampleSeconds,
+						   ImVec2(-1, 4), "");
+	}
+	else if (ImGui::Button(locLabel("trackingPanel.holdStillJitterTest")))
+	{
+		panelState.holdStillCountdown= k_holdStillCountdownSeconds;
+	}
+	if (panelState.holdStillCountdown <= 0.f && panelState.holdStillSecondsLeft <= 0.f)
+	{
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.holdStillJitterTestTooltip"));
+	}
 
+	if (panelState.bHoldStillHasResult)
+	{
+		ImGui::Text("%s", locText("trackingPanel.jitterLabel"));
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			ImGui::SameLine();
+			const float deviationMm= panelState.holdStillDeviationMm[sideIndex];
+			if (deviationMm < 0.f)
+			{
+				ImGui::TextDisabled(locText("trackingPanel.jitterTooFewSamplesFmt"),
+									sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"));
+				continue;
+			}
+			const ImVec4 color= deviationMm < 2.f
+				? ImVec4(0.4f, 1.f, 0.5f, 1.f)
+				: (deviationMm < 5.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.4f, 1.f));
+			ImGui::TextColored(color, "%s: %.1f mm", sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"), deviationMm);
+		}
+	}
+}
+
+// -- Tracking panel ----------------------------------------------------------
+
+void SettingsPanels::updateTrackingState(const TrackingSectionContext& context, float deltaSeconds)
+{
+	AppConfig* config= context.config;
+	VisionThread* visionThread= context.visionThread;
+	bool bChanged= false;
+
+	updateImageQualityEma(context, deltaSeconds);
+
+	// The phone head's straight ahead, captured by the vision thread at the
+	// Face section's request
+	glm::quat capturedAnchor;
+	if (visionThread->fetchFaceAnchorCapture(capturedAnchor))
+	{
+		config->face.headAnchor= capturedAnchor;
+		config->face.headAnchorPresent= true;
+		bChanged= true;
+	}
+
+	// A countdown left running while the mode is switched off would fire a
+	// capture nobody is waiting for
+	NeutralCaptureControl& neutral= context.state->directNeutral;
+	if (!config->direct.enabled)
+		neutral.reset();
+	bChanged|= neutral.update(deltaSeconds, visionThread, config);
+
+	updateCaptureTimingEma(context, deltaSeconds);
+	updateHoldStill(context, deltaSeconds);
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawFlipHandednessSection(const TrackingSectionContext& context)
+{
+	TrackingConfig& tracking= context.config->tracking;
+	if (ImGui::Checkbox(locLabel("trackingPanel.flipHandedness"), &tracking.flipHandedness))
+		commitTrackingConfigChange(context);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.flipHandednessTooltip"));
+}
+
+void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+	VisionThread* visionThread= context.visionThread;
+	if (config->cameraCount() <= 1)
+		return;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.fusionSection"));
+
+	// Which camera won each hand in the last fusion
+	const int leftCam= visionThread->getDominantCamera(eHandSide::Left);
+	const int rightCam= visionThread->getDominantCamera(eHandSide::Right);
+	ImGui::Text(locText("trackingPanel.dominantCameraFmt"),
+				leftCam >= 0 ? std::to_string(leftCam + 1).c_str() : "-",
+				rightCam >= 0 ? std::to_string(rightCam + 1).c_str() : "-");
+
+	// Live per-camera confidence: the number the thresholds act on
+	if (ImGui::BeginTable("confidence", 3, ImGuiTableFlags_SizingStretchProp))
+	{
+		ImGui::TableSetupColumn("");
+		ImGui::TableSetupColumn(locText("trackingPanel.left"));
+		ImGui::TableSetupColumn(locText("trackingPanel.right"));
+		ImGui::TableHeadersRow();
 		for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
 		{
-			BodyPoseCameraConfig& bodyPose= config->camera(cameraIndex).bodyPose;
-			ImGui::PushID(cameraIndex);
-
-			const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-			bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
-
-			if (bodyPose.enabled)
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text(locText("trackingPanel.cameraFmt"), cameraIndex + 1);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const bool bWholeBody= bodyPose.backend == "rtmw3d";
-				ImGui::SameLine();
-				ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
-				if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
-									  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
-														 : "trackingPanel.bodyBackendRtmPose")))
-				{
-					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
-					{
-						bodyPose.backend= "rtmpose";
-						bChanged= true;
-					}
-					if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
-					{
-						bodyPose.backend= "rtmw3d";
-						bChanged= true;
-					}
-					ImGui::EndCombo();
-				}
-				ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
+				ImGui::TableNextColumn();
+				const float confidence= visionThread->getObservationConfidence(cameraIndex, (eHandSide)sideIndex);
+				if (confidence < 0.f)
+					ImGui::TextDisabled("-");
+				else
+					ImGui::Text("%.2f", confidence);
+			}
+		}
+		ImGui::EndTable();
+	}
+}
+
+void SettingsPanels::drawHandScaleSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+	if (config->cameraCount() <= 1)
+		return;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.handScaleSection"));
+	// Measured live and applied live - there is nothing to press. The
+	// wrist->knuckle bone is re-measured from stereo/depth every session,
+	// so persisting it would only save the few seconds the EMA takes to
+	// converge, at the cost of a button and a stale value to explain.
+	const float scaleFactor= context.visionThread->getAutoHandScaleFactor();
+	const double autoScaleMeters= config->handScale.refLengthMeters * (double)scaleFactor;
+	ImGui::Text(locText("trackingPanel.measuredScaleFmt"), autoScaleMeters * 100.0, scaleFactor);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.measuredScaleTooltip"));
+}
+
+void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+	VisionThread* visionThread= context.visionThread;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.wristImuSection"));
+
+	bool bChanged= false;
+	ImuConfig& imu= config->imu;
+	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableWristImu"), &imu.enabled);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.enableWristImuTooltip"));
+
+	ImGui::BeginDisabled(!imu.enabled);
+
+	// No scan button: the service rescans on its own while a wrist has no
+	// controller, so pairing one in Windows Bluetooth settings is enough
+	if (ImGui::BeginTable("imu", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+	{
+		ImGui::TableSetupColumn(locText("trackingPanel.wristTableWrist"));
+		ImGui::TableSetupColumn(locText("trackingPanel.wristTableDevice"));
+		ImGui::TableSetupColumn(locText("trackingPanel.wristTableRate"));
+		ImGui::TableSetupColumn(locText("trackingPanel.wristTableYawDrift"));
+		ImGui::TableSetupColumn(locText("trackingPanel.wristTableRollError"));
+		ImGui::TableHeadersRow();
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const ImuSideStatus status= visionThread->getImuSideStatus((eHandSide)sideIndex);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text("%s", sideIndex == 0 ? locText("trackingPanel.left") : locText("trackingPanel.right"));
+
+			ImGui::TableNextColumn();
+			if (!status.deviceConnected)
+				ImGui::TextDisabled("%s", locText("trackingPanel.deviceNone"));
+			else if (!status.calibrated)
+				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), locText("trackingPanel.deviceUncalibratedFmt"),
+								   status.deviceName.c_str());
+			else if (status.orientationValid)
+				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", status.deviceName.c_str());
+			else
+				ImGui::TextDisabled(locText("trackingPanel.deviceConvergingFmt"), status.deviceName.c_str());
+
+			ImGui::TableNextColumn();
+			if (status.streaming)
+			{
+				ImGui::Text("%.0f Hz  %d%%", status.sampleRateHz, (int)(status.batteryLevel * 100.f));
+			}
+			else if (status.deviceConnected && status.millisecondsSinceLastSample > 0.0)
+			{
+				// Silent but open: asleep or the link dropped. The service
+				// reopens it automatically; this just makes it visible.
+				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), locText("trackingPanel.deviceSilentFmt"),
+								   status.millisecondsSinceLastSample / 1000.0);
+			}
+			else
+			{
+				ImGui::TextDisabled("-");
 			}
 
-			ImGui::PopID();
-		}
+			ImGui::TableNextColumn();
+			// The yaw-axis gyro bias is the number that matters: it is the
+			// drift vision has to keep correcting
+			if (status.streaming)
+				ImGui::Text("%.2f deg/s", status.gyroBiasDegreesPerSecond.z);
+			else
+				ImGui::TextDisabled("-");
 
-		ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseProportionsIntro"));
-
-		if (ImGui::Button(locLabel("trackingPanel.measureMyBody"), ImVec2(-1, 0)))
-			panelState.bLaunchBodyCalibrationWizard= true;
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.measureMyBodyTooltip"));
-		bChanged|=
-			ImGui::Checkbox(locLabel("trackingPanel.deriveUpperArmFromShoulderWidth"), &config->body.bDeriveUpperArmFromShoulderWidth);
-		ImGui::SetItemTooltip(locText("trackingPanel.deriveUpperArmTooltip"));
-		if (config->body.bDeriveUpperArmFromShoulderWidth)
-		{
-			bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArmRatio"), &config->body.upperArmPerShoulderWidth, 0.80f,
-										  1.40f, locText("trackingPanel.upperArmRatioFmt"));
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmRatioTooltip"));
-			ImGui::TextDisabled(locText("trackingPanel.upperArmDerivedFmt"), config->body.shoulderWidthMeters *
-															 config->body.upperArmPerShoulderWidth * 100.f);
+			// Mounting error, measured against anatomy. Preferred over the
+			// twist-axis score because it is SIGNED and means something
+			// during any motion, not only a deliberate twist.
+			ImGui::TableNextColumn();
+			if (status.wristAxialTwistDegrees < -900.f)
+			{
+				ImGui::TextDisabled("%s", locText("trackingPanel.measuring"));
+			}
+			else
+			{
+				const float residual= fabsf(status.wristAxialTwistDegrees);
+				const ImVec4 color= residual < 5.f
+					? ImVec4(0.4f, 1.f, 0.5f, 1.f)
+					: (residual < 15.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.4f, 1.f));
+				ImGui::TextColored(color, "%+.0f deg", status.wristAxialTwistDegrees);
+			}
+			ImGui::SetItemTooltip("%s", locText("trackingPanel.wristRollErrorTooltip"));
 		}
-		else
-		{
-			bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArm"), &config->body.upperArmLengthMeters, 0.20f, 0.45f,
-										  "%.2f m");
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmTooltip"));
-		}
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.shoulderWidth"), &config->body.shoulderWidthMeters, 0.25f, 0.60f, "%.2f m");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.shoulderWidthTooltip"));
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.headWidth"), &config->body.headWidthMeters, 0.10f, 0.22f, "%.2f m");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.headWidthTooltip"));
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.noseForward"), &config->body.noseForwardMeters, 0.05f, 0.18f, "%.2f m");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.noseForwardTooltip"));
+		ImGui::EndTable();
 	}
 
-	ImGui::SeparatorText(locText("trackingPanel.directSection"));
+	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &imu.swapSides);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.swapWristsTooltip"));
+
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f, "%.2f m");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.forearmLengthTooltip"));
+
+	// No "vision yaw anchor" slider: the value is settled, and it is still
+	// in the config file for anyone who needs to retune it
+
+	if (ImGui::Button(locLabel("trackingPanel.calibrateMounting"), ImVec2(-1, 0)))
+		context.state->bLaunchMountingWizard= true;
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateMountingTooltip"));
+
+	ImGui::EndDisabled();
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawFaceSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.faceSection"));
+
+	bool bChanged= false;
+	FaceConfig& face= context.config->face;
+	bool bFaceChanged= false;
+	bFaceChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableFace"), &face.enabled);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.enableFaceTooltip"));
+
+	ImGui::BeginDisabled(!face.enabled);
+	bFaceChanged|= ImGui::InputInt(locLabel("trackingPanel.facePort"), &face.port, 0, 0);
+	face.port= std::clamp(face.port, 1, 65535);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.facePortTooltip"));
+
+	char addressBuffer[64]= {};
+	strncpy(addressBuffer, face.phoneAddress.c_str(), sizeof(addressBuffer) - 1);
+	if (ImGui::InputText(locLabel("trackingPanel.facePhoneAddress"), addressBuffer, sizeof(addressBuffer)))
 	{
-		DirectConfig& direct= config->direct;
-		ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
+		face.phoneAddress= addressBuffer;
+		bFaceChanged= true;
+	}
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.facePhoneAddressTooltip"));
+	ImGui::EndDisabled();
 
-		bChanged|= ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+	if (bFaceChanged)
+	{
+		bChanged= true;
+		App::getInstance()->applyFaceConfig();
+	}
 
-		// A shrinking camera list must not leave the index dangling
-		const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
-		if (direct.cameraIndex < 0 || direct.cameraIndex > lastCameraIndex)
+	if (face.enabled)
+	{
+		const FaceService* faceService= App::getInstance()->getFaceService();
+		const FaceServiceStatus status= faceService->getStatus();
+		if (!status.bound)
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", locText("trackingPanel.faceNotBound"));
+		else if (status.streaming)
+			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), locText("trackingPanel.faceStreamingFmt"),
+							   status.datagramsPerSecond);
+		else if (status.latest.valid)
+			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.faceQuiet"));
+		else
+			ImGui::TextDisabled("%s", locText("trackingPanel.faceWaiting"));
+
+		ImGui::TextDisabled(locText("trackingPanel.faceCountsFmt"), (unsigned long long)status.unknownNameCount,
+							(unsigned long long)status.parseFailures);
+		if (!status.lastUnknownName.empty())
+			ImGui::TextDisabled(locText("trackingPanel.faceLastUnknownFmt"), status.lastUnknownName.c_str());
+		if (status.latest.hasHead)
+			ImGui::TextDisabled(locText("trackingPanel.faceHeadFmt"), status.latest.headEulerDegrees.x,
+								status.latest.headEulerDegrees.y, status.latest.headEulerDegrees.z);
+
+		// The phone's head turns about the world axes once its straight
+		// ahead is known; the camera head supplies it (the landed capture is
+		// written into the config by updateTrackingState)
+		ImGui::BeginDisabled(!status.streaming);
+		if (ImGui::Button(locLabel("trackingPanel.faceAlignHead")))
+			context.visionThread->requestFaceAnchorCapture();
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.faceAlignHeadTooltip"));
+		ImGui::EndDisabled();
+		if (face.headAnchorPresent)
 		{
-			direct.cameraIndex= std::clamp(direct.cameraIndex, 0, lastCameraIndex);
-			bChanged= true;
-		}
-		if (config->cameraCount() > 1)
-		{
-			const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
-			if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
+			ImGui::SameLine();
+			if (ImGui::Button(locLabel("trackingPanel.faceResetHeadAlign")))
 			{
-				for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+				face.headAnchorPresent= false;
+				face.headAnchor= glm::quat(1.f, 0.f, 0.f, 0.f);
+				bChanged= true;
+			}
+		}
+		ImGui::TextDisabled("%s", locText(face.headAnchorPresent ? "trackingPanel.faceHeadAligned"
+																 : "trackingPanel.faceHeadNotAligned"));
+	}
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.bodyPoseSection"));
+
+	bool bChanged= false;
+	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
+
+	for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+	{
+		BodyPoseCameraConfig& bodyPose= config->camera(cameraIndex).bodyPose;
+		ImGui::PushID(cameraIndex);
+
+		const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+		bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
+
+		if (bodyPose.enabled)
+		{
+			const bool bWholeBody= bodyPose.backend == "rtmw3d";
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
+			if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
+								  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
+													 : "trackingPanel.bodyBackendRtmPose")))
+			{
+				if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
 				{
-					ImGui::PushID(cameraIndex);
-					const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-					if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex))
-					{
-						direct.cameraIndex= cameraIndex;
-						bChanged= true;
-					}
-					ImGui::PopID();
+					bodyPose.backend= "rtmpose";
+					bChanged= true;
+				}
+				if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
+				{
+					bodyPose.backend= "rtmw3d";
+					bChanged= true;
 				}
 				ImGui::EndCombo();
 			}
+			ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
 		}
 
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
-									  locText("trackingPanel.directTiltFmt"));
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
-
-		// A countdown left running while the mode is switched off would fire a
-		// capture nobody is waiting for
-		NeutralCaptureControl& neutral= panelState.directNeutral;
-		if (!direct.enabled)
-			neutral.reset();
-
-		ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
-		if (ImGui::Button(locLabel("trackingPanel.directCapture")))
-			neutral.start();
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
-		ImGui::EndDisabled();
-
-		if (direct.neutralPresent)
-		{
-			ImGui::SameLine();
-			if (ImGui::Button(locLabel("trackingPanel.directClear")))
-			{
-				direct.neutralPresent= false;
-				direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
-				direct.neutralShoulderMidpoint= glm::vec3(0.f);
-				direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
-				bChanged= true;
-			}
-		}
-
-		bChanged|= neutral.update(ImGui::GetIO().DeltaTime, visionThread, config);
-		if (neutral.isCountingDown())
-		{
-			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
-							   (int)ceilf(neutral.getRemainingSeconds()));
-			ImGui::ProgressBar(1.f - neutral.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
-							   ImVec2(-1, 4), "");
-		}
-
-		neutral.drawStatus(direct);
+		ImGui::PopID();
 	}
 
-	// -- Hand calibration: one wizard, in the only order that works -----
-	ImGui::SeparatorText(locText("trackingPanel.handCalibrationSection"));
+	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseProportionsIntro"));
+
+	if (ImGui::Button(locLabel("trackingPanel.measureMyBody"), ImVec2(-1, 0)))
+		context.state->bLaunchBodyCalibrationWizard= true;
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.measureMyBodyTooltip"));
+	bChanged|=
+		ImGui::Checkbox(locLabel("trackingPanel.deriveUpperArmFromShoulderWidth"), &config->body.bDeriveUpperArmFromShoulderWidth);
+	ImGui::SetItemTooltip(locText("trackingPanel.deriveUpperArmTooltip"));
+	if (config->body.bDeriveUpperArmFromShoulderWidth)
 	{
-		ImGui::Text(locText("trackingPanel.handCalibrationStatusFmt"),
-					config->handSkeleton.present[0] ? locText("common.yes") : locText("common.no"),
-					config->handSkeleton.present[1] ? locText("common.yes") : locText("common.no"),
-					config->fusedRestAngles.present[0] ? locText("common.yes") : locText("common.no"),
-					config->fusedRestAngles.present[1] ? locText("common.yes") : locText("common.no"));
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArmRatio"), &config->body.upperArmPerShoulderWidth, 0.80f,
+									  1.40f, locText("trackingPanel.upperArmRatioFmt"));
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmRatioTooltip"));
+		ImGui::TextDisabled(locText("trackingPanel.upperArmDerivedFmt"), config->body.shoulderWidthMeters *
+														 config->body.upperArmPerShoulderWidth * 100.f);
+	}
+	else
+	{
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArm"), &config->body.upperArmLengthMeters, 0.20f, 0.45f,
+									  "%.2f m");
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmTooltip"));
+	}
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.shoulderWidth"), &config->body.shoulderWidthMeters, 0.25f, 0.60f, "%.2f m");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.shoulderWidthTooltip"));
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.headWidth"), &config->body.headWidthMeters, 0.10f, 0.22f, "%.2f m");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.headWidthTooltip"));
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.noseForward"), &config->body.noseForwardMeters, 0.05f, 0.18f, "%.2f m");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.noseForwardTooltip"));
 
-		// The wizard measures bones against the desk marker or by stereo and
-		// zeroes the fingers from the fuse, none of which a direct project
-		// runs or needs
-		if (config->direct.enabled)
-		{
-			ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));
-		}
-		else
-		{
-			if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
-				panelState.bLaunchHandCalibrationWizard= true;
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
-		}
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
 
-		const bool bAnyHandCalibration= config->handSkeleton.present[0] ||
-			config->handSkeleton.present[1] || config->fusedRestAngles.present[0] ||
-			config->fusedRestAngles.present[1];
-		if (bAnyHandCalibration)
+void SettingsPanels::drawDirectSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.directSection"));
+
+	bool bChanged= false;
+	DirectConfig& direct= config->direct;
+	ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
+
+	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
+
+	// A shrinking camera list must not leave the index dangling
+	const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
+	if (direct.cameraIndex < 0 || direct.cameraIndex > lastCameraIndex)
+	{
+		direct.cameraIndex= std::clamp(direct.cameraIndex, 0, lastCameraIndex);
+		bChanged= true;
+	}
+	if (config->cameraCount() > 1)
+	{
+		const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
+		if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
 		{
-			if (ImGui::Button(locLabel("trackingPanel.clearHandCalibration")))
+			for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
 			{
-				// One Clear for both: they are a matched set (the rest pose is
-				// measured against the skeleton's thumb zero)
-				config->handSkeleton.present[0]= false;
-				config->handSkeleton.present[1]= false;
-				config->fusedRestAngles.present[0]= false;
-				config->fusedRestAngles.present[1]= false;
-				bChanged= true;
+				ImGui::PushID(cameraIndex);
+				const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+				if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex))
+				{
+					direct.cameraIndex= cameraIndex;
+					bChanged= true;
+				}
+				ImGui::PopID();
 			}
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.clearHandCalibrationTooltip"));
+			ImGui::EndCombo();
 		}
 	}
 
-	ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
+								  locText("trackingPanel.directTiltFmt"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+
+	// The countdown and the landed capture run in updateTrackingState. The
+	// cancel is repeated here so switching the mode off stops a countdown on
+	// the same frame.
+	NeutralCaptureControl& neutral= context.state->directNeutral;
+	if (!direct.enabled)
+		neutral.reset();
+
+	ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
+	if (ImGui::Button(locLabel("trackingPanel.directCapture")))
+		neutral.start();
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
+	ImGui::EndDisabled();
+
+	if (direct.neutralPresent)
+	{
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("trackingPanel.directClear")))
+		{
+			direct.neutralPresent= false;
+			direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
+			direct.neutralShoulderMidpoint= glm::vec3(0.f);
+			direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+			bChanged= true;
+		}
+	}
+
+	if (neutral.isCountingDown())
+	{
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
+						   (int)ceilf(neutral.getRemainingSeconds()));
+		ImGui::ProgressBar(1.f - neutral.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
+						   ImVec2(-1, 4), "");
+	}
+
+	neutral.drawStatus(direct);
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+// One wizard, in the only order that works
+void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	AppConfig* config= context.config;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.handCalibrationSection"));
+
+	bool bChanged= false;
+	ImGui::Text(locText("trackingPanel.handCalibrationStatusFmt"),
+				config->handSkeleton.present[0] ? locText("common.yes") : locText("common.no"),
+				config->handSkeleton.present[1] ? locText("common.yes") : locText("common.no"),
+				config->fusedRestAngles.present[0] ? locText("common.yes") : locText("common.no"),
+				config->fusedRestAngles.present[1] ? locText("common.yes") : locText("common.no"));
+
+	// The wizard measures bones against the desk marker or by stereo and
+	// zeroes the fingers from the fuse, none of which a direct project
+	// runs or needs
+	if (config->direct.enabled)
+	{
+		ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));
+	}
+	else
+	{
+		if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
+			context.state->bLaunchHandCalibrationWizard= true;
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
+	}
+
+	const bool bAnyHandCalibration= config->handSkeleton.present[0] ||
+		config->handSkeleton.present[1] || config->fusedRestAngles.present[0] ||
+		config->fusedRestAngles.present[1];
+	if (bAnyHandCalibration)
+	{
+		if (ImGui::Button(locLabel("trackingPanel.clearHandCalibration")))
+		{
+			// One Clear for both: they are a matched set (the rest pose is
+			// measured against the skeleton's thumb zero)
+			config->handSkeleton.present[0]= false;
+			config->handSkeleton.present[1]= false;
+			config->fusedRestAngles.present[0]= false;
+			config->fusedRestAngles.present[1]= false;
+			bChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.clearHandCalibrationTooltip"));
+	}
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	VideoPreviewPanel* previewPanel= context.previewPanel;
+	Scene3dPanel* scene3dPanel= context.scene3dPanel;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
+
 	bool bShowOverlay= previewPanel->getShowOverlay();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showSkeletonOverlay"), &bShowOverlay))
 		previewPanel->setShowOverlay(bShowOverlay);
@@ -801,7 +1091,7 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 	if (ImGui::Checkbox(locLabel("trackingPanel.showDetectionBoxes"), &bShowBoxes))
 		previewPanel->setShowDetectionBoxes(bShowBoxes);
 
-	if (config->direct.enabled)
+	if (context.config->direct.enabled)
 	{
 		bool bShowAllHands= previewPanel->getShowAllHands();
 		if (ImGui::Checkbox(locLabel("trackingPanel.showAllHands"), &bShowAllHands))
@@ -813,7 +1103,7 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
-	if (config->cameraCount() > 1)
+	if (context.config->cameraCount() > 1)
 	{
 		bool bShowPerCamera= scene3dPanel->getShowPerCameraSkeletons();
 		if (ImGui::Checkbox(locLabel("trackingPanel.showPerCameraSkeletons"), &bShowPerCamera))
@@ -828,33 +1118,43 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 		ImGui::EndDisabled();
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
 	}
+}
 
-	ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
-	for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	VisionThread* visionThread= context.visionThread;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.inferenceSection"));
+
+	for (int cameraIndex= 0; cameraIndex < (int)context.config->cameraCount(); ++cameraIndex)
 		ImGui::Text(locText("trackingPanel.cameraEpFmt"), cameraIndex + 1, visionThread->getActiveExecutionProvider(cameraIndex));
 	ImGui::Text(locText("trackingPanel.inferenceMsFmt"), visionThread->getLastInferenceMs());
 
 	// Frame-loop hitches: one thread serves every camera, so a long phase
 	// starves all of them at once and reads downstream as a camera fault
+	const int hitchCount= visionThread->getHitchCount();
+	if (hitchCount == 0)
 	{
-		const int hitchCount= visionThread->getHitchCount();
-		if (hitchCount == 0)
-		{
-			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("trackingPanel.frameLoopNoHitches"));
-		}
-		else
-		{
-			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.frameLoopHitchesFmt"),
-							   hitchCount,
-							   VisionThread::getPhaseName(visionThread->getLastHitchPhase()),
-							   visionThread->getLastHitchMs());
-		}
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.frameLoopHitchesTooltip"));
+		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("trackingPanel.frameLoopNoHitches"));
 	}
+	else
+	{
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.frameLoopHitchesFmt"),
+						   hitchCount,
+						   VisionThread::getPhaseName(visionThread->getLastHitchPhase()),
+						   visionThread->getLastHitchMs());
+	}
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frameLoopHitchesTooltip"));
+}
 
-	drawCaptureTimingSection(config, videoCapture, panelState, latestPreviews);
+void SettingsPanels::drawDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	TrackingPanelState& panelState= *context.state;
 
-	ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.diagnosticsSection"));
+
 	if (ImGui::Button(locLabel("trackingPanel.dumpTrackingState")))
 		panelState.bDumpRequested= true;
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.dumpTrackingStateTooltip"));
@@ -871,154 +1171,66 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 		ImGui::ProgressBar(panelState.dumpCountdown.getProgress(), ImVec2(-1, 4), "");
 	}
 	{
-		const std::string lastDump= visionThread->getLastDumpPath();
+		const std::string lastDump= context.visionThread->getLastDumpPath();
 		if (!lastDump.empty())
 			ImGui::TextWrapped(locText("trackingPanel.lastDumpFmt"), lastDump.c_str());
 	}
 
-	// Hold-still jitter test: THE repeatable A/B number for camera-settings
-	// and lighting changes. Rebuilds the 21 world-space joints from each fused
-	// pose via forward kinematics (exactly what a client rebuilds) and reports
-	// the mean per-landmark deviation over a still window - with the hand
-	// genuinely still, deviation IS tracking noise.
-	{
-		const float deltaSeconds= ImGui::GetIO().DeltaTime;
-
-		if (panelState.holdStillCountdown > 0.f)
-		{
-			panelState.holdStillCountdown-= deltaSeconds;
-			if (panelState.holdStillCountdown <= 0.f)
-			{
-				panelState.holdStillCountdown= 0.f;
-				panelState.holdStillSecondsLeft= k_holdStillSampleSeconds;
-				panelState.holdStillLastTimestampMs= 0.0;
-				panelState.holdStillAccum[0]= TrackingPanelState::HoldStillAccum();
-				panelState.holdStillAccum[1]= TrackingPanelState::HoldStillAccum();
-			}
-
-			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.holdStillCountdownFmt"),
-							   (int)ceilf(panelState.holdStillCountdown));
-			ImGui::ProgressBar(1.f - panelState.holdStillCountdown / k_holdStillCountdownSeconds,
-							   ImVec2(-1, 4), "");
-		}
-		else if (panelState.holdStillSecondsLeft > 0.f)
-		{
-			// Accumulate each NEW fused result (they arrive slower than UI
-			// frames; re-adding a held result would fake stability)
-			if (fusedResult.timestampMs > 0.0 &&
-				fusedResult.timestampMs != panelState.holdStillLastTimestampMs)
-			{
-				panelState.holdStillLastTimestampMs= fusedResult.timestampMs;
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					const HandPose& pose= fusedResult.poses[sideIndex];
-					if (!pose.tracked || !pose.hasWorldPose)
-						continue;
-
-					glm::mat4 palmTransform= glm::mat4_cast(pose.palmOrientationWorld);
-					palmTransform[3]= glm::vec4(pose.palmPositionWorld, 1.f);
-					std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
-					HandPoseModel::buildFingerJoints(palmTransform, pose.skeleton, pose.fingers, joints);
-
-					TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
-					int pointIndex= 0;
-					auto addPoint= [&accum, &pointIndex](const glm::vec3& point) {
-						const glm::dvec3 p(point);
-						accum.sum[pointIndex]+= p;
-						accum.sumSq[pointIndex]+= p * p;
-						++pointIndex;
-					};
-					addPoint(pose.palmPositionWorld);
-					for (int fingerIndex= 0; fingerIndex < FINGER_COUNT; ++fingerIndex)
-						for (int jointIndex= 0; jointIndex < 4; ++jointIndex)
-							addPoint(joints[fingerIndex][jointIndex]);
-					++accum.sampleCount;
-				}
-			}
-
-			panelState.holdStillSecondsLeft-= deltaSeconds;
-			if (panelState.holdStillSecondsLeft <= 0.f)
-			{
-				panelState.holdStillSecondsLeft= 0.f;
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					const TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
-					if (accum.sampleCount < k_holdStillMinSamples)
-					{
-						panelState.holdStillDeviationMm[sideIndex]= -1.f;
-						continue;
-					}
-
-					double deviationSum= 0.0;
-					for (int pointIndex= 0; pointIndex < HAND_LANDMARK_COUNT; ++pointIndex)
-					{
-						const glm::dvec3 mean= accum.sum[pointIndex] / (double)accum.sampleCount;
-						const glm::dvec3 variance=
-							accum.sumSq[pointIndex] / (double)accum.sampleCount - mean * mean;
-						deviationSum+= std::sqrt(std::max(0.0, variance.x + variance.y + variance.z));
-					}
-					panelState.holdStillDeviationMm[sideIndex]=
-						(float)(deviationSum / HAND_LANDMARK_COUNT * 1000.0);
-				}
-				panelState.bHoldStillHasResult= true;
-			}
-
-			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.f, 1.f), "%s", locText("trackingPanel.holdStillSampling"));
-			ImGui::ProgressBar(1.f - panelState.holdStillSecondsLeft / k_holdStillSampleSeconds,
-							   ImVec2(-1, 4), "");
-		}
-		else if (ImGui::Button(locLabel("trackingPanel.holdStillJitterTest")))
-		{
-			panelState.holdStillCountdown= k_holdStillCountdownSeconds;
-		}
-		if (panelState.holdStillCountdown <= 0.f && panelState.holdStillSecondsLeft <= 0.f)
-		{
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.holdStillJitterTestTooltip"));
-		}
-
-		if (panelState.bHoldStillHasResult)
-		{
-			ImGui::Text("%s", locText("trackingPanel.jitterLabel"));
-			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			{
-				ImGui::SameLine();
-				const float deviationMm= panelState.holdStillDeviationMm[sideIndex];
-				if (deviationMm < 0.f)
-				{
-					ImGui::TextDisabled(locText("trackingPanel.jitterTooFewSamplesFmt"),
-										sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"));
-					continue;
-				}
-				const ImVec4 color= deviationMm < 2.f
-					? ImVec4(0.4f, 1.f, 0.5f, 1.f)
-					: (deviationMm < 5.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.4f, 1.f));
-				ImGui::TextColored(color, "%s: %.1f mm", sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"), deviationMm);
-			}
-		}
-	}
-
-	if (bChanged)
-	{
-		config->markDirty();
-		visionThread->requestConfigRefresh();
-	}
-
-	ImGui::End();
+	drawHoldStillSection(context);
 }
 
-void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
-								  const TrackingFrameResult& fusedResult, AvatarMouthReadout& mouthReadout,
-								  const std::shared_ptr<const AvatarModel>& avatar,
-								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
+void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
+									   VideoCaptureSystem* videoCapture, VideoPreviewPanel* previewPanel,
+									   Scene3dPanel* scene3dPanel,
+									   TrackingPanelState& panelState,
+									   const std::vector<VisionPreviewFrame>& latestPreviews,
+									   const TrackingFrameResult& fusedResult)
 {
-	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
+	if (!ImGui::Begin(locWindowTitle("windows.tracking"), pOpen))
 	{
 		ImGui::End();
 		return;
 	}
 
+	TrackingSectionContext context;
+	context.config= config;
+	context.visionThread= visionThread;
+	context.videoCapture= videoCapture;
+	context.previewPanel= previewPanel;
+	context.scene3dPanel= scene3dPanel;
+	context.state= &panelState;
+	context.latestPreviews= &latestPreviews;
+	context.fusedResult= &fusedResult;
+
+	drawFlipHandednessSection(context);
+
+	// The tracking/fusion tuning values (staleness window, jitter and
+	// residual references, detector cadence) live in config.json and the
+	// Timeline what-if panel, where they can be swept against a recording.
+	// The live panel holds rig facts, calibration, and readouts only.
+
+	drawFusionSection(context);
+	drawHandScaleSection(context);
+	drawImageQualitySection(context);
+	drawWristImuSection(context);
+	drawFaceSection(context);
+	drawBodyPoseSection(context);
+	drawDirectSection(context);
+	drawHandCalibrationSection(context);
+	drawOverlaySection(context);
+	drawInferenceSection(context);
+	drawCaptureTimingSection(context);
+	drawDiagnosticsSection(context);
+
+	ImGui::End();
+}
+
+// -- OSC panel ---------------------------------------------------------------
+
+void SettingsPanels::drawOscConnectionSection(const OscSectionContext& context)
+{
 	bool bChanged= false;
-	OscConfig& osc= config->osc;
+	OscConfig& osc= context.config->osc;
 
 	bChanged|= ImGui::Checkbox(locLabel("oscPanel.enabled"), &osc.enabled);
 
@@ -1046,8 +1258,20 @@ void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* 
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &osc.holdOnDropoutMs, 0.f, 1000.f, "%.0f ms");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
 
-	ImGui::Separator();
-	ImGui::TextDisabled("%s", locText("oscPanel.vmcSection"));
+	if (bChanged)
+		commitOscConfigChange(context);
+}
+
+void SettingsPanels::drawOscVmcSection(const OscSectionContext& context, bool bWithHeader)
+{
+	bool bChanged= false;
+	OscConfig& osc= context.config->osc;
+
+	if (bWithHeader)
+	{
+		ImGui::Separator();
+		ImGui::TextDisabled("%s", locText("oscPanel.vmcSection"));
+	}
 
 	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.headOffset"), &osc.vmcHeadOffsetMeters, 0.f, 0.25f, "%.3f m");
 	ImGui::SetItemTooltip("%s", locText("oscPanel.headOffsetTooltip"));
@@ -1058,12 +1282,26 @@ void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* 
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcBonesInfo"));
 	ImGui::TextDisabled("%s", locText("oscPanel.vmcAvatarBoneLengths"));
 
-	ImGui::Separator();
+	if (bChanged)
+		commitOscConfigChange(context);
+}
+
+void SettingsPanels::drawOscMouthSection(const OscSectionContext& context, bool bWithHeader)
+{
+	if (bWithHeader)
+		ImGui::Separator();
 	// The avatar's mouth targets as the stream carries them, after the face
 	// profile
-	mouthReadout.draw(avatar, faceBinding, fusedResult.face);
+	context.mouthReadout->draw(context.avatar, context.faceBinding, context.fusedResult->face);
+}
 
-	ImGui::Separator();
+void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool bWithHeader)
+{
+	const OscConfig& osc= context.config->osc;
+	const TrackingFrameResult& fusedResult= *context.fusedResult;
+
+	if (bWithHeader)
+		ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
 
 	// Solver diagnostic: the palm transform, forearm and the 20 finger angles
@@ -1124,7 +1362,7 @@ void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* 
 			ImGui::Text(locText("oscPanel.wristQuatFmt"), wristRotation.x, wristRotation.y,
 						wristRotation.z, wristRotation.w);
 
-			const glm::vec3 elbow= pose.getElbowPositionWorld(config->body.forearmLengthMeters);
+			const glm::vec3 elbow= pose.getElbowPositionWorld(context.config->body.forearmLengthMeters);
 			ImGui::Text(locText("oscPanel.elbowFmt"), elbow.x, elbow.y, elbow.z);
 		}
 		else
@@ -1163,12 +1401,31 @@ void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* 
 		}
 		ImGui::PopID();
 	}
+}
 
-	if (bChanged)
+void SettingsPanels::drawOscPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
+								  const TrackingFrameResult& fusedResult, AvatarMouthReadout& mouthReadout,
+								  const std::shared_ptr<const AvatarModel>& avatar,
+								  const std::shared_ptr<const FaceProfileBinding>& faceBinding)
+{
+	if (!ImGui::Begin(locWindowTitle("windows.oscOutput"), pOpen))
 	{
-		config->markDirty();
-		visionThread->requestConfigRefresh();
+		ImGui::End();
+		return;
 	}
+
+	OscSectionContext context;
+	context.config= config;
+	context.visionThread= visionThread;
+	context.fusedResult= &fusedResult;
+	context.mouthReadout= &mouthReadout;
+	context.avatar= avatar;
+	context.faceBinding= faceBinding;
+
+	drawOscConnectionSection(context);
+	drawOscVmcSection(context);
+	drawOscMouthSection(context);
+	drawOscSolverSection(context);
 
 	ImGui::End();
 }

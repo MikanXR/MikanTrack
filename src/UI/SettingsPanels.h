@@ -72,12 +72,80 @@ struct TrackingPanelState
 	Countdown dumpCountdown;
 };
 
+// What the Tracking panel's sections read and write. latestPreviews: the
+// newest per-camera results (image-quality and timing readouts); fusedResult:
+// the latest live fused tracking output (hold-still jitter test).
+struct TrackingSectionContext
+{
+	AppConfig* config= nullptr;
+	VisionThread* visionThread= nullptr;
+	VideoCaptureSystem* videoCapture= nullptr;
+	VideoPreviewPanel* previewPanel= nullptr;
+	Scene3dPanel* scene3dPanel= nullptr;
+	TrackingPanelState* state= nullptr;
+	const std::vector<VisionPreviewFrame>* latestPreviews= nullptr;
+	const TrackingFrameResult* fusedResult= nullptr;
+};
+
+// What the OSC panel's sections read and write. fusedResult: the latest
+// fused tracking output (the live angle readout and the mouth section, which
+// mouthReadout draws from the loaded avatar and its face profile binding).
+struct OscSectionContext
+{
+	AppConfig* config= nullptr;
+	VisionThread* visionThread= nullptr;
+	const TrackingFrameResult* fusedResult= nullptr;
+	AvatarMouthReadout* mouthReadout= nullptr;
+	std::shared_ptr<const AvatarModel> avatar;
+	std::shared_ptr<const FaceProfileBinding> faceBinding;
+};
+
 // Small side panels: tracking/fusion options and OSC output settings.
 // Config edits mark the config dirty and request a vision-thread refresh.
+// Each panel is a sequence of sections, and each section can be drawn on its
+// own in any window, more than once a frame: a section's widgets only read
+// the panel state and raise requests, and a section commits its own config
+// edits. bWithHeader false leaves out the section's separator heading, for a
+// host that supplies its own.
 namespace SettingsPanels
 {
+// The Tracking panel's per-frame work, run once per frame whether or not any
+// of its sections is drawn, before they are: the neutral capture countdown
+// and its write-back, the face head-anchor fetch, the hold-still jitter test,
+// and the image-quality and capture-timing readout smoothing
+void updateTrackingState(const TrackingSectionContext& context, float deltaSeconds);
+// Marks the config dirty and requests a vision-thread refresh
+void commitTrackingConfigChange(const TrackingSectionContext& context);
+void commitOscConfigChange(const OscSectionContext& context);
+
+// The Tracking panel's sections, in the panel's order
+void drawFlipHandednessSection(const TrackingSectionContext& context);
+// Fusion and Hand Scale draw only with more than one camera
+void drawFusionSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawHandScaleSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawImageQualitySection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawFaceSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawDirectSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawHandCalibrationSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawOverlaySection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawInferenceSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// Draws nothing without a camera
+void drawCaptureTimingSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The dump buttons, then the hold-still jitter test
+void drawDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader= true);
+void drawHoldStillSection(const TrackingSectionContext& context);
+
+// The OSC panel's sections, in the panel's order
+void drawOscConnectionSection(const OscSectionContext& context);
+void drawOscVmcSection(const OscSectionContext& context, bool bWithHeader= true);
+void drawOscMouthSection(const OscSectionContext& context, bool bWithHeader= true);
+void drawOscSolverSection(const OscSectionContext& context, bool bWithHeader= true);
+
 // latestPreviews: newest per-camera results (image-quality and timing readouts);
-// fusedResult: the latest fused tracking output (hold-still jitter test)
+// fusedResult: the latest fused tracking output (hold-still jitter test).
+// Draws the sections only; updateTrackingState runs the panel's state.
 void drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread, VideoCaptureSystem* videoCapture,
 					   VideoPreviewPanel* previewPanel, Scene3dPanel* scene3dPanel, TrackingPanelState& panelState,
 					   const std::vector<VisionPreviewFrame>& latestPreviews,

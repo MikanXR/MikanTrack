@@ -74,6 +74,28 @@ std::optional<FaceExprEditTarget> AvatarPanel::draw(bool* pOpen, const FaceSourc
 		return editRequest;
 	}
 
+	editRequest= drawBody(face, activeEdit);
+
+	ImGui::End();
+	return editRequest;
+}
+
+void AvatarPanel::update()
+{
+	if (m_app->getAvatarModel() == nullptr)
+		m_previewPose= ePreviewPose::Live;
+}
+
+std::optional<FaceExprEditTarget> AvatarPanel::drawFaceTab(const FaceSources& face,
+														   const FaceExprEditTarget* activeEdit)
+{
+	return m_faceTab.draw(m_app, face, activeEdit);
+}
+
+std::optional<FaceExprEditTarget> AvatarPanel::drawBody(const FaceSources& face, const FaceExprEditTarget* activeEdit)
+{
+	std::optional<FaceExprEditTarget> editRequest;
+
 	drawLoadControls();
 
 	if (m_app->getAvatarModel() != nullptr)
@@ -98,18 +120,13 @@ std::optional<FaceExprEditTarget> AvatarPanel::draw(bool* pOpen, const FaceSourc
 			}
 			if (ImGui::BeginTabItem(locLabel("avatarPanel.tabFace")))
 			{
-				editRequest= m_faceTab.draw(m_app, face, activeEdit);
+				editRequest= drawFaceTab(face, activeEdit);
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
 		}
 	}
-	else
-	{
-		m_previewPose= ePreviewPose::Live;
-	}
 
-	ImGui::End();
 	return editRequest;
 }
 
@@ -175,6 +192,8 @@ void AvatarPanel::drawModelTab()
 
 void AvatarPanel::drawModelSummary()
 {
+	if (m_app->getAvatarModel() == nullptr || m_app->getAvatarSkeleton() == nullptr)
+		return;
 	const AvatarModel& model= *m_app->getAvatarModel();
 	const AvatarSkeleton& skeleton= *m_app->getAvatarSkeleton();
 
@@ -307,6 +326,8 @@ std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> AvatarPanel::computeDotState
 
 void AvatarPanel::drawMappingTab()
 {
+	if (m_app->getAvatarModel() == nullptr || m_app->getAvatarSkeleton() == nullptr)
+		return;
 	const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states= computeDotStates();
 
 	ImGui::TextWrapped("%s", locText("avatarPanel.mappingHelpText"));

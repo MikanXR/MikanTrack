@@ -26,6 +26,25 @@ public:
 	// activeEdit: the row the expression editor is on (null: none). Returns
 	// the row whose Edit button the Face tab saw pressed this frame.
 	std::optional<FaceExprEditTarget> draw(bool* pOpen, const FaceSources& face, const FaceExprEditTarget* activeEdit);
+	// The panel's contents without its window, for a host window
+	std::optional<FaceExprEditTarget> drawBody(const FaceSources& face, const FaceExprEditTarget* activeEdit);
+	// Per-frame state, run every frame whether or not the panel is drawn:
+	// the preview pose falls back to Live while no model is loaded
+	void update();
+
+	// The panel's sections, each drawable in a host window. The tabs and the
+	// model summary need a loaded model; drawModelSummary and drawMappingTab
+	// draw nothing without one.
+	void drawLoadControls();
+	void drawModelTab();
+	void drawModelSummary();
+	void drawPlacement();
+	void drawMappingTab();
+	void drawRetargetTab();
+	void drawArmControls(int sideIndex);
+	void drawHandControls(int sideIndex);
+	// The Face tab: the same arguments and result as drawBody
+	std::optional<FaceExprEditTarget> drawFaceTab(const FaceSources& face, const FaceExprEditTarget* activeEdit);
 
 	// What the 3D scene's avatar is posed from. Rest and Demo are canned
 	// frames for tuning the rig without cameras; the VMC output always
@@ -41,15 +60,7 @@ public:
 	bool getShowElbowGizmo(int sideIndex) const { return m_bShowElbowGizmo[sideIndex]; }
 
 private:
-	void drawLoadControls();
-	void drawModelTab();
-	void drawModelSummary();
-	void drawPlacement();
-	void drawMappingTab();
 	void drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states);
-	void drawRetargetTab();
-	void drawArmControls(int sideIndex);
-	void drawHandControls(int sideIndex);
 	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> computeDotStates() const;
 
 	App* m_app;

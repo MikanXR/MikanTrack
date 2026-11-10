@@ -28,14 +28,19 @@ public:
 	// timeline's display frame while its replay view is active), whose
 	// visemes the weights block reads.
 	DrawResult draw(bool* pOpen, bool bWizardActive, const TrackingFrameResult& shownFused, bool bReplayView);
+	// The panel's contents without its window, for a host window
+	DrawResult drawBody(bool bWizardActive, const TrackingFrameResult& shownFused, bool bReplayView);
 
-private:
-	void refreshDeviceList();
+	// The panel's sections, each drawable in a host window. The controls
+	// fetch the capture device list the first time they draw.
 	void drawControls(bool bWizardActive, DrawResult& outResult);
 	void drawStatus();
 	// The shown frame's viseme weights as bars, so what the microphone is
 	// putting out can be read live and during playback
 	void drawWeights(const TrackingFrameResult& shownFused, bool bReplayView);
+
+private:
+	void refreshDeviceList();
 
 	App* m_app;
 	AppConfig* m_config;
