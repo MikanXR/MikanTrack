@@ -7,6 +7,7 @@
 #include "glm/ext/vector_double3.hpp"
 
 #include "Countdown.h"
+#include "ImuService.h" // ImuSideStatus
 #include "NeutralCaptureControl.h"
 #include "TrackingTypes.h"
 
@@ -99,10 +100,19 @@ struct FusionReadout
 	bool bReplay= false;
 };
 
+// What the wrist IMUs reported for the shown frame
+struct ImuReadout
+{
+	bool bAvailable= false; // false: a replayed frame from a take that recorded no stage state
+	bool bReplay= false;
+	ImuSideStatus sides[2];
+};
+
 // What the Tracking panel's sections read and write. latestPreviews: the
 // newest per-camera results (image-quality and timing readouts); fusedResult:
 // the latest live fused tracking output (hold-still jitter test); fusion: the
-// shown frame's fusion readouts (the Fusion stage's diagnostics).
+// shown frame's fusion readouts (the Fusion stage's diagnostics); imu: the
+// shown frame's wrist IMU status (the IMU stage's device table).
 struct TrackingSectionContext
 {
 	AppConfig* config= nullptr;
@@ -114,6 +124,7 @@ struct TrackingSectionContext
 	const std::vector<VisionPreviewFrame>* latestPreviews= nullptr;
 	const TrackingFrameResult* fusedResult= nullptr;
 	const FusionReadout* fusion= nullptr;
+	const ImuReadout* imu= nullptr;
 };
 
 // What the OSC panel's sections read and write. fusedResult: the latest
@@ -151,7 +162,8 @@ void commitOscConfigChange(const OscSectionContext& context);
 // image quality, inference and capture timing are the Capture stage's, and
 // fusion, hand scale, the fused hands, the fusion detail, the per-camera
 // skeletons toggle and the hold-still test are the Fusion stage's; none of
-// them is in the panel.
+// them is in the panel. The wrist IMU pieces are the IMU stage's, and the
+// panel draws them only in a direct project, which has no IMU stage.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -162,7 +174,19 @@ void drawFusedPalmReadout(const TrackingSectionContext& context, bool bWithHeade
 // One row per cluster fusion assigned a side on the shown frame
 void drawFusionDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawImageQualitySection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The wrist IMU pieces composed in one section: the enable checkbox, the
+// device table, the wrist controls and the mounting calibration button
 void drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The wrist IMU pieces, no headers. The controls edit the live config and
+// all but the enable checkbox are disabled while the IMU is off. The device
+// table reads context.imu.
+void drawWristImuEnableControl(const TrackingSectionContext& context);
+void drawWristImuArmControls(const TrackingSectionContext& context);
+void drawWristImuDeviceTable(const TrackingSectionContext& context);
+void drawMountingCalibrationControl(const TrackingSectionContext& context);
+// Each hand's wrist bend, forearm and wrist rotations and elbow in the shown
+// fused result (context.fusion->fused)
+void drawWristReadoutSection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawFaceSection(const TrackingSectionContext& context, bool bWithHeader= true);
 // The body proportions and Measure My Body; the per-camera enables are
 // drawBodyPoseCameraControls

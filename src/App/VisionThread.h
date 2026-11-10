@@ -351,6 +351,13 @@ private:
 	void solveDirectPose(IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
+	// The mounting wizard's motion recording and bias calibration requests,
+	// serviced before every IMU service update whether or not a palm is in
+	// view
+	void serviceImuRequests();
+	// A requested mounting capture, published for fetchImuMountingCapture.
+	// Needs no palm this iteration: the capture consumes averaged windows.
+	void serviceImuMountingCapture();
 	// Copies the IMU service's per-side status into the UI snapshot
 	void publishImuStatus();
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,

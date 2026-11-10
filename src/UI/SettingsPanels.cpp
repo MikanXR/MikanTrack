@@ -810,18 +810,57 @@ void SettingsPanels::drawFusionDiagnosticsSection(const TrackingSectionContext& 
 
 void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader)
 {
-	AppConfig* config= context.config;
-	VisionThread* visionThread= context.visionThread;
-
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.wristImuSection"));
 
-	bool bChanged= false;
-	ImuConfig& imu= config->imu;
-	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.enableWristImu"), &imu.enabled);
+	drawWristImuEnableControl(context);
+	drawWristImuDeviceTable(context);
+	drawWristImuArmControls(context);
+
+	// No "vision yaw anchor" slider: the value is settled, and it is still
+	// in the config file for anyone who needs to retune it
+
+	drawMountingCalibrationControl(context);
+}
+
+void SettingsPanels::drawWristImuEnableControl(const TrackingSectionContext& context)
+{
+	const bool bChanged= ImGui::Checkbox(locLabel("trackingPanel.enableWristImu"), &context.config->imu.enabled);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.enableWristImuTooltip"));
 
-	ImGui::BeginDisabled(!imu.enabled);
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawWristImuArmControls(const TrackingSectionContext& context)
+{
+	AppConfig* config= context.config;
+
+	ImGui::BeginDisabled(!config->imu.enabled);
+
+	bool bChanged= false;
+	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &config->imu.swapSides);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.swapWristsTooltip"));
+
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f, "%.2f m");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.forearmLengthTooltip"));
+
+	ImGui::EndDisabled();
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
+void SettingsPanels::drawWristImuDeviceTable(const TrackingSectionContext& context)
+{
+	const ImuReadout& imu= *context.imu;
+	if (!imu.bAvailable)
+	{
+		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
+		return;
+	}
+
+	ImGui::BeginDisabled(!context.config->imu.enabled);
 
 	// No scan button: the service rescans on its own while a wrist has no
 	// controller, so pairing one in Windows Bluetooth settings is enough
@@ -836,21 +875,23 @@ void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, 
 
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const ImuSideStatus status= visionThread->getImuSideStatus((eHandSide)sideIndex);
+			const ImuSideStatus& status= imu.sides[sideIndex];
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			ImGui::Text("%s", sideIndex == 0 ? locText("trackingPanel.left") : locText("trackingPanel.right"));
 
+			// A recording carries no device name, only that one was connected
+			const char* deviceName= imu.bReplay ? locText("trackingPanel.deviceRecorded") : status.deviceName.c_str();
 			ImGui::TableNextColumn();
 			if (!status.deviceConnected)
 				ImGui::TextDisabled("%s", locText("trackingPanel.deviceNone"));
 			else if (!status.calibrated)
 				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), locText("trackingPanel.deviceUncalibratedFmt"),
-								   status.deviceName.c_str());
+								   deviceName);
 			else if (status.orientationValid)
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", status.deviceName.c_str());
+				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", deviceName);
 			else
-				ImGui::TextDisabled(locText("trackingPanel.deviceConvergingFmt"), status.deviceName.c_str());
+				ImGui::TextDisabled(locText("trackingPanel.deviceConvergingFmt"), deviceName);
 
 			ImGui::TableNextColumn();
 			if (status.streaming)
@@ -898,23 +939,71 @@ void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, 
 		ImGui::EndTable();
 	}
 
-	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.swapWrists"), &imu.swapSides);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.swapWristsTooltip"));
+	ImGui::EndDisabled();
+}
 
-	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.forearmLength"), &config->body.forearmLengthMeters, 0.10f, 0.40f, "%.2f m");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.forearmLengthTooltip"));
-
-	// No "vision yaw anchor" slider: the value is settled, and it is still
-	// in the config file for anyone who needs to retune it
+void SettingsPanels::drawMountingCalibrationControl(const TrackingSectionContext& context)
+{
+	ImGui::BeginDisabled(!context.config->imu.enabled);
 
 	if (ImGui::Button(locLabel("trackingPanel.calibrateMounting"), ImVec2(-1, 0)))
 		context.state->bLaunchMountingWizard= true;
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateMountingTooltip"));
 
 	ImGui::EndDisabled();
+}
 
-	if (bChanged)
-		commitTrackingConfigChange(context);
+void SettingsPanels::drawWristReadoutSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	const TrackingFrameResult* fused= context.fusion->fused;
+	if (fused == nullptr)
+		return;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.wristReadoutSection"));
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused->poses[sideIndex];
+		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
+		if (!pose.tracked)
+		{
+			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
+			continue;
+		}
+
+		// Wrist bend, the rotation between the measured forearm and palm. Shown
+		// in DEGREES because it is the number that tells you whether the
+		// mounting calibration is good: the wrist rotation is measured relative
+		// to the pose you captured, so a straight wrist should read near zero.
+		// A large angle with your wrist actually straight means recalibrate (or
+		// yaw has drifted).
+		if (pose.hasForearmPose && pose.hasWorldPose)
+		{
+			const glm::quat wristRotation= pose.getWristRotation();
+			const float wristDegrees= glm::degrees(2.f * asinf(std::min(
+				glm::length(glm::vec3(wristRotation.x, wristRotation.y, wristRotation.z)), 1.f)));
+
+			const ImVec4 wristColor= wristDegrees < 25.f  ? ImVec4(0.4f, 1.f, 0.5f, 1.f)
+									 : wristDegrees < 60.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f)
+														   : ImVec4(1.f, 0.5f, 0.4f, 1.f);
+			ImGui::TextColored(wristColor, locText("oscPanel.wristBendFmt"), wristDegrees);
+			ImGui::SetItemTooltip("%s", locText("oscPanel.wristBendTooltip"));
+
+			const glm::quat& forearm= pose.forearmOrientationWorld;
+			ImGui::Text(locText("oscPanel.forearmQuatFmt"), forearm.x, forearm.y, forearm.z,
+						forearm.w);
+			ImGui::Text(locText("oscPanel.wristQuatFmt"), wristRotation.x, wristRotation.y,
+						wristRotation.z, wristRotation.w);
+
+			const glm::vec3 elbow= pose.getElbowPositionWorld(context.config->body.forearmLengthMeters);
+			ImGui::Text(locText("oscPanel.elbowFmt"), elbow.x, elbow.y, elbow.z);
+		}
+		else
+		{
+			ImGui::TextDisabled("%s", locText("oscPanel.wristNoImu"));
+		}
+	}
 }
 
 void SettingsPanels::drawFaceSection(const TrackingSectionContext& context, bool bWithHeader)
@@ -1357,11 +1446,13 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	// The live panel holds rig facts, calibration, and readouts only.
 
 	// A direct project's pipeline has no Fusion stage to host the hand
-	// calibration block (its direct mode note) and the hold-still test, so
-	// the panel keeps them in direct mode
+	// calibration block (its direct mode note) and the hold-still test, and
+	// no IMU stage to host the wrist IMU section, so the panel keeps them in
+	// direct mode
 	const bool bDirect= context.config->direct.enabled;
 
-	drawWristImuSection(context);
+	if (bDirect)
+		drawWristImuSection(context);
 	drawFaceSection(context);
 	drawBodyPoseSection(context);
 	drawDirectSection(context);
@@ -1454,9 +1545,8 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
 
-	// Solver diagnostic: the forearm and the 20 finger angles
-	// per hand as the solver measures them (shown in degrees), which the VMC
-	// retarget then turns into bones
+	// Solver diagnostic: the 20 finger angles per hand as the solver measures
+	// them (shown in degrees), which the VMC retarget then turns into bones
 	static const char* s_fingerNames[FINGER_COUNT]= {
 		"oscPanel.fingerThumb", "oscPanel.fingerIndex", "oscPanel.fingerMiddle",
 		"oscPanel.fingerRing", "oscPanel.fingerPinky"};
@@ -1480,41 +1570,6 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		{
 			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
 			continue;
-		}
-
-		const bool bWorld= pose.hasWorldPose;
-
-		// Wrist bend, the rotation between the measured forearm and palm. Shown
-		// in DEGREES because it
-		// is the number that tells you whether the mounting calibration is
-		// good: the wrist rotation is measured relative to the pose you
-		// captured, so a straight wrist should read near zero. A large angle
-		// with your wrist actually straight means recalibrate (or yaw has
-		// drifted).
-		if (pose.hasForearmPose && bWorld)
-		{
-			const glm::quat wristRotation= pose.getWristRotation();
-			const float wristDegrees= glm::degrees(2.f * asinf(std::min(
-				glm::length(glm::vec3(wristRotation.x, wristRotation.y, wristRotation.z)), 1.f)));
-
-			const ImVec4 wristColor= wristDegrees < 25.f  ? ImVec4(0.4f, 1.f, 0.5f, 1.f)
-									 : wristDegrees < 60.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f)
-														   : ImVec4(1.f, 0.5f, 0.4f, 1.f);
-			ImGui::TextColored(wristColor, locText("oscPanel.wristBendFmt"), wristDegrees);
-			ImGui::SetItemTooltip("%s", locText("oscPanel.wristBendTooltip"));
-
-			const glm::quat& forearm= pose.forearmOrientationWorld;
-			ImGui::Text(locText("oscPanel.forearmQuatFmt"), forearm.x, forearm.y, forearm.z,
-						forearm.w);
-			ImGui::Text(locText("oscPanel.wristQuatFmt"), wristRotation.x, wristRotation.y,
-						wristRotation.z, wristRotation.w);
-
-			const glm::vec3 elbow= pose.getElbowPositionWorld(context.config->body.forearmLengthMeters);
-			ImGui::Text(locText("oscPanel.elbowFmt"), elbow.x, elbow.y, elbow.z);
-		}
-		else
-		{
-			ImGui::TextDisabled("%s", locText("oscPanel.wristNoImu"));
 		}
 
 		ImGui::PushID(sideIndex);

@@ -476,11 +476,12 @@ void MainWindow::update(float deltaSeconds)
 	trackingContext.latestPreviews= &m_latestPreviews;
 	trackingContext.fusedResult= &m_latestFused;
 	trackingContext.fusion= &m_fusionReadout;
+	trackingContext.imu= &m_imuReadout;
 	// The tracking panel's countdowns, captures and readouts run whether or
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
 	// The stage sections the Inspector draws read this frame's context
-	m_stageContent->beginFrame(trackingContext, m_fusionReadout, bWizardActive);
+	m_stageContent->beginFrame(trackingContext, m_fusionReadout, m_imuReadout, bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -657,6 +658,7 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 		m_shown.config= m_app->getConfig();
 	}
 	updateFusionReadout();
+	updateImuReadout();
 }
 
 void MainWindow::updateFusionReadout()
@@ -706,6 +708,43 @@ void MainWindow::updateFusionReadout()
 		readout.autoHandScaleFactor= visionThread->getAutoHandScaleFactor();
 	}
 	m_fusionReadout= readout;
+}
+
+void MainWindow::updateImuReadout()
+{
+	ImuReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		// A recording carries the status the device table reads, but not the
+		// device name or the time since the last sample
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const RecordedImuStatus& recordedSide= recorded->imu[sideIndex];
+				ImuSideStatus& status= readout.sides[sideIndex];
+				status.deviceConnected= recordedSide.deviceConnected;
+				status.streaming= recordedSide.streaming;
+				status.calibrated= recordedSide.calibrated;
+				status.orientationValid= recordedSide.orientationValid;
+				status.sampleRateHz= recordedSide.sampleRateHz;
+				status.batteryLevel= recordedSide.batteryLevel;
+				status.gyroBiasDegreesPerSecond.z= recordedSide.yawDriftDegPerSecond;
+				status.wristAxialTwistDegrees= recordedSide.rollErrorDegrees;
+			}
+		}
+	}
+	else
+	{
+		const VisionThread* visionThread= m_app->getVisionThread();
+		readout.bAvailable= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			readout.sides[sideIndex]= visionThread->getImuSideStatus((eHandSide)sideIndex);
+	}
+	m_imuReadout= readout;
 }
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)

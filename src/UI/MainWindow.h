@@ -138,8 +138,12 @@ private:
 	// What fusion reported for the shown frame, refilled with it. The
 	// Fusion stage's sections read it in place.
 	FusionReadout m_fusionReadout;
+	// What the wrist IMUs reported for the shown frame, refilled with it. The
+	// IMU stage's sections read it in place.
+	ImuReadout m_imuReadout;
 	void updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera);
 	void updateFusionReadout();
+	void updateImuReadout();
 	// The direct solve behind the shown avatar pose, null when the shown
 	// frame is not a direct-mode frame
 	const DirectRetarget::SolveState* m_shownDirectState= nullptr;

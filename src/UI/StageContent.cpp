@@ -11,10 +11,12 @@ StageContent::StageContent(DevicePanel* devicePanel, CalibrationPanel* calibrati
 {
 }
 
-void StageContent::beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, bool bWizardActive)
+void StageContent::beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, const ImuReadout& imu,
+							  bool bWizardActive)
 {
 	m_tracking= tracking;
 	m_tracking.fusion= &fusion;
+	m_tracking.imu= &imu;
 	m_bWizardActive= bWizardActive;
 	m_calibrationAction= CalibrationPanel::DrawResult();
 }
@@ -58,6 +60,8 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The per-camera skeletons toggle is the only setting, and it needs
 		// a second camera
 		return section != eStageSection::Settings || m_tracking.config->cameraCount() > 1;
+	case ePipelineStage::Imu:
+		return true;
 	default:
 		return false;
 	}
@@ -130,6 +134,24 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 			SettingsPanels::drawFusedPalmReadout(m_tracking);
 			SettingsPanels::drawFusionDiagnosticsSection(m_tracking);
 			SettingsPanels::drawHoldStillSection(m_tracking);
+		}
+		break;
+	case ePipelineStage::Imu:
+		if (section == eStageSection::Inputs)
+		{
+			SettingsPanels::drawMountingCalibrationControl(m_tracking);
+		}
+		else if (section == eStageSection::Settings)
+		{
+			SettingsPanels::drawWristImuEnableControl(m_tracking);
+			SettingsPanels::drawWristImuArmControls(m_tracking);
+		}
+		else
+		{
+			// The device table leads without a heading, and the wrist lines
+			// keep theirs to set them apart from it
+			SettingsPanels::drawWristImuDeviceTable(m_tracking);
+			SettingsPanels::drawWristReadoutSection(m_tracking);
 		}
 		break;
 	default:

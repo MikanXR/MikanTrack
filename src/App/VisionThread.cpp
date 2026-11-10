@@ -848,8 +848,12 @@ void VisionThread::threadLoop()
 			{
 				// No world palm to anchor or fill from, but the service still
 				// drains its samples and adopts discovered devices, so the
-				// status the UI reads keeps describing the wrists
+				// status the UI reads keeps describing the wrists, and the
+				// wizard's requests (a bias calibration is taken with the
+				// hands away) are not held until a hand appears
+				serviceImuRequests();
 				m_imuService->update();
+				serviceImuMountingCapture();
 				publishImuStatus();
 				lapPhase(eVisionPhase::Imu);
 			}
@@ -1083,18 +1087,7 @@ void VisionThread::runImuStage(IterationState& iteration)
 	// orientation onto the pose.
 	TrackingFrameResult& outputResult= iteration.outputResult;
 
-	if (m_bImuMotionRecordingRequested.exchange(false))
-	{
-		const eMountingMotion motion= (eMountingMotion)m_requestedImuMotionRecording.load();
-		if (motion == eMountingMotion::None)
-			m_imuService->endMotionRecording();
-		else
-			m_imuService->beginMotionRecording(motion);
-	}
-	if (m_bImuBiasCalibrationRequested.exchange(false))
-		m_imuService->beginBiasCalibration();
-	if (m_bImuBiasCancelRequested.exchange(false))
-		m_imuService->cancelBiasCalibration();
+	serviceImuRequests();
 	m_imuService->update();
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -1159,22 +1152,42 @@ void VisionThread::runImuStage(IterationState& iteration)
 		}
 	}
 
-	// Mounting capture: needs a tracked palm AND a converged filter
-	if (m_bImuMountingCaptureRequested.exchange(false))
-	{
-		// No pose argument and no "is the hand tracked right now" test: the
-		// capture consumes the averaged window, so what matters is what was
-		// seen during the twist, not this instant
-		ImuMountingCapture capture;
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			m_imuService->captureMounting((eHandSide)sideIndex, capture.sides[sideIndex]);
-
-		std::lock_guard<std::mutex> lock(m_imuMutex);
-		m_capturedImuMounting= capture;
-		m_bImuMountingReady= true;
-	}
-
+	serviceImuMountingCapture();
 	publishImuStatus();
+}
+
+void VisionThread::serviceImuRequests()
+{
+	if (m_bImuMotionRecordingRequested.exchange(false))
+	{
+		const eMountingMotion motion= (eMountingMotion)m_requestedImuMotionRecording.load();
+		if (motion == eMountingMotion::None)
+			m_imuService->endMotionRecording();
+		else
+			m_imuService->beginMotionRecording(motion);
+	}
+	if (m_bImuBiasCalibrationRequested.exchange(false))
+		m_imuService->beginBiasCalibration();
+	if (m_bImuBiasCancelRequested.exchange(false))
+		m_imuService->cancelBiasCalibration();
+}
+
+void VisionThread::serviceImuMountingCapture()
+{
+	// Mounting capture: needs a converged filter
+	if (!m_bImuMountingCaptureRequested.exchange(false))
+		return;
+
+	// No pose argument and no "is the hand tracked right now" test: the
+	// capture consumes the averaged window, so what matters is what was
+	// seen during the twist, not this instant
+	ImuMountingCapture capture;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		m_imuService->captureMounting((eHandSide)sideIndex, capture.sides[sideIndex]);
+
+	std::lock_guard<std::mutex> lock(m_imuMutex);
+	m_capturedImuMounting= capture;
+	m_bImuMountingReady= true;
 }
 
 void VisionThread::publishImuStatus()
