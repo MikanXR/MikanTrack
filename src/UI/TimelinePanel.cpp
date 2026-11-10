@@ -160,6 +160,9 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 		std::string error;
 		if (m_replay.load(m_recordingFiles[m_selectedRecording], error))
 		{
+			// The Fusion stage's detail table reads every frame's fusion
+			// diagnostics, a few hundred bytes a frame
+			m_replay.setCaptureDiagnostics(true);
 			m_replay.runAll();
 			m_bLoaded= true;
 			m_bWhatIfSeeded= false;
@@ -529,6 +532,19 @@ void TimelinePanel::rebuildDisplayFrame()
 	m_perCameraCopies= frame.perCamera;
 	m_perCameraCopyValid.assign(frame.perCameraValid.begin(), frame.perCameraValid.end());
 	m_displayTelemetry= frame.recorded->telemetry;
+
+	// The what-if view reads the what-if pass's own diagnostics, falling back
+	// with the fused result. A frame that ran no fuse has nothing to report.
+	m_bDisplayDiagnosticsValid= true;
+	if (m_viewMode == 2 && frame.bHasWhatIf && frame.bHasWhatIfDiagnostics)
+		m_displayDiagnostics= frame.whatIfDiagnostics;
+	else if ((m_viewMode != 2 || !frame.bHasWhatIf) && frame.bHasDiagnostics)
+		m_displayDiagnostics= frame.diagnostics;
+	else if (!frame.recorded->bFused)
+		m_displayDiagnostics= FusionDiagnostics();
+	else
+		m_bDisplayDiagnosticsValid= false;
+
 	m_builtFrame= m_currentFrame;
 	m_builtViewMode= m_viewMode;
 }
@@ -575,6 +591,11 @@ std::vector<SceneCameraView> TimelinePanel::getSceneCameras() const
 const RecordedTelemetry* TimelinePanel::getDisplayTelemetry() const
 {
 	return isReplayViewActive() && m_displayTelemetry.present ? &m_displayTelemetry : nullptr;
+}
+
+const FusionDiagnostics* TimelinePanel::getDisplayFusionDiagnostics() const
+{
+	return isReplayViewActive() && m_bDisplayDiagnosticsValid ? &m_displayDiagnostics : nullptr;
 }
 
 std::vector<const TrackingFrameResult*> TimelinePanel::getPerCameraResults() const

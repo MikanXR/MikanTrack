@@ -157,7 +157,7 @@ These metrics show up in two places: the Tracking panel's per-camera table (`Set
 
 ## The hold-still jitter test
 
-Lives in the Tracking panel's Diagnostics section (`SettingsPanels.cpp`, "Hold-Still Jitter Test" button), with its transient state in `TrackingPanelState::holdStill*`.
+Lives in the Fusion stage's Diagnostics in the Inspector, and in the Tracking panel on a direct project, which has no Fusion stage (`SettingsPanels::drawHoldStillSection`, "Hold-Still Jitter Test" button), with its transient state in `TrackingPanelState::holdStill*`.
 
 Sequence: a `k_holdStillCountdownSeconds= 3` countdown (time to get the hands back into position), then a `k_holdStillSampleSeconds= 3` sampling window that accumulates every NEW fused result (deduplicated on `fusedResult.timestampMs`, since fused results arrive slower than UI frames and re-adding a held UI frame would fake stability). For each tracked, world-posed hand it rebuilds all 21 world-space joints via `HandPoseModel::buildFingerJoints` (the same forward kinematics a client rebuilds) and accumulates a sum and sum-of-squares per joint.
 

@@ -15,8 +15,10 @@ class StageContent : public IStageContent
 public:
 	StageContent(DevicePanel* devicePanel, CalibrationPanel* calibrationPanel);
 
-	// What this frame's draws read, and a clear launch request
-	void beginFrame(const TrackingSectionContext& tracking, bool bWizardActive);
+	// What this frame's draws read, and a clear launch request. fusion: the
+	// shown frame's fusion readouts, read in place when a section draws, so it
+	// must outlive the frame's draws.
+	void beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, bool bWizardActive);
 	// The launches raised by every section drawn since beginFrame
 	const CalibrationPanel::DrawResult& getCalibrationAction() const { return m_calibrationAction; }
 

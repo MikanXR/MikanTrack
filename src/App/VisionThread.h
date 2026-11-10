@@ -69,10 +69,12 @@ public:
 
 	// Copies the newest fused (world-space, smoothed) tracking result, and
 	// in direct mode the avatar pose the direct retarget solved for it (an
-	// invalid pose otherwise). Returns false if nothing new arrived since
-	// the last call.
+	// invalid pose otherwise), and the fusion diagnostics behind it (empty
+	// for a passthrough or direct frame). Returns false if nothing new
+	// arrived since the last call.
 	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr,
-						  DirectRetarget::SolveState* outDirectState= nullptr);
+						  DirectRetarget::SolveState* outDirectState= nullptr,
+						  FusionDiagnostics* outFusionDiagnostics= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
 	int getDominantCamera(eHandSide side) const { return m_dominantCamera[(int)side].load(); }
@@ -462,6 +464,9 @@ private:
 	TrackingFrameResult m_fusedResult;
 	AvatarPose m_fusedDirectPose;
 	DirectRetarget::SolveState m_fusedDirectState;
+	// A display copy of the fuse behind m_fusedResult; a face-only frame,
+	// which repeats the last output, keeps the last one
+	FusionDiagnostics m_fusedDiagnostics;
 	bool m_bFusedFresh= false;
 
 	// Direct retarget (single camera, no world calibration): the solver and

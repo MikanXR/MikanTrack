@@ -12,6 +12,7 @@
 #include "AppConfig.h"
 #include "AvatarMouthReadout.h"
 #include "FaceService.h"
+#include "HandFusion.h"
 #include "HandPoseModel.h"
 #include "HandRoiQuality.h"
 #include "LocalizationManager.h"
@@ -522,9 +523,12 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 	}
 }
 
-void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context)
+void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context, bool bWithHeader)
 {
 	TrackingPanelState& panelState= *context.state;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.holdStillSection"));
 
 	if (panelState.holdStillCountdown > 0.f)
 	{
@@ -613,29 +617,34 @@ void SettingsPanels::drawFlipHandednessSection(const TrackingSectionContext& con
 
 void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bool bWithHeader)
 {
-	AppConfig* config= context.config;
-	VisionThread* visionThread= context.visionThread;
-	if (config->cameraCount() <= 1)
+	const FusionReadout& fusion= *context.fusion;
+	if (fusion.cameraCount <= 1)
 		return;
 
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.fusionSection"));
 
-	// Which camera won each hand in the last fusion
-	const int leftCam= visionThread->getDominantCamera(eHandSide::Left);
-	const int rightCam= visionThread->getDominantCamera(eHandSide::Right);
+	if (!fusion.bAvailable)
+	{
+		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
+		return;
+	}
+
+	// Which camera won each hand in the shown frame's fusion
+	const int leftCam= fusion.dominantCamera[(int)eHandSide::Left];
+	const int rightCam= fusion.dominantCamera[(int)eHandSide::Right];
 	ImGui::Text(locText("trackingPanel.dominantCameraFmt"),
 				leftCam >= 0 ? std::to_string(leftCam + 1).c_str() : "-",
 				rightCam >= 0 ? std::to_string(rightCam + 1).c_str() : "-");
 
-	// Live per-camera confidence: the number the thresholds act on
+	// Per-camera confidence: the number the thresholds act on
 	if (ImGui::BeginTable("confidence", 3, ImGuiTableFlags_SizingStretchProp))
 	{
 		ImGui::TableSetupColumn("");
 		ImGui::TableSetupColumn(locText("trackingPanel.left"));
 		ImGui::TableSetupColumn(locText("trackingPanel.right"));
 		ImGui::TableHeadersRow();
-		for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
+		for (int cameraIndex= 0; cameraIndex < fusion.cameraCount; ++cameraIndex)
 		{
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
@@ -643,7 +652,9 @@ void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bo
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
 				ImGui::TableNextColumn();
-				const float confidence= visionThread->getObservationConfidence(cameraIndex, (eHandSide)sideIndex);
+				const float confidence= cameraIndex < FusionReadout::k_maxCameras
+					? fusion.observationConfidence[cameraIndex][sideIndex]
+					: -1.f;
 				if (confidence < 0.f)
 					ImGui::TextDisabled("-");
 				else
@@ -656,20 +667,145 @@ void SettingsPanels::drawFusionSection(const TrackingSectionContext& context, bo
 
 void SettingsPanels::drawHandScaleSection(const TrackingSectionContext& context, bool bWithHeader)
 {
-	AppConfig* config= context.config;
-	if (config->cameraCount() <= 1)
+	const AppConfig* config= context.config;
+	const FusionReadout& fusion= *context.fusion;
+	if (fusion.cameraCount <= 1)
 		return;
 
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.handScaleSection"));
+	if (!fusion.bAvailable)
+	{
+		ImGui::TextDisabled("%s", locText("stageInspector.notRecorded"));
+		return;
+	}
 	// Measured live and applied live - there is nothing to press. The
 	// wrist->knuckle bone is re-measured from stereo/depth every session,
 	// so persisting it would only save the few seconds the EMA takes to
 	// converge, at the cost of a button and a stale value to explain.
-	const float scaleFactor= context.visionThread->getAutoHandScaleFactor();
+	const float scaleFactor= fusion.autoHandScaleFactor;
 	const double autoScaleMeters= config->handScale.refLengthMeters * (double)scaleFactor;
 	ImGui::Text(locText("trackingPanel.measuredScaleFmt"), autoScaleMeters * 100.0, scaleFactor);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.measuredScaleTooltip"));
+}
+
+void SettingsPanels::drawFusedPalmReadout(const TrackingSectionContext& context, bool bWithHeader)
+{
+	const TrackingFrameResult* fused= context.fusion->fused;
+	if (fused == nullptr)
+		return;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.fusedHandsSection"));
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused->poses[sideIndex];
+		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
+		ImGui::SameLine();
+		if (!pose.tracked)
+		{
+			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
+			continue;
+		}
+		const bool bWorld= pose.hasWorldPose;
+		const glm::vec3& palmPos= bWorld ? pose.palmPositionWorld : pose.palmPositionCamera;
+		ImGui::Text(locText("oscPanel.palmFmt"), palmPos.x, palmPos.y, palmPos.z,
+					bWorld ? "" : locText("oscPanel.cameraSpaceSuffix"));
+	}
+}
+
+void SettingsPanels::drawFusionDiagnosticsSection(const TrackingSectionContext& context, bool bWithHeader)
+{
+	const FusionReadout& fusion= *context.fusion;
+
+	if (bWithHeader)
+		ImGui::SeparatorText(locText("trackingPanel.fusionDiagnosticsSection"));
+
+	if (fusion.diagnostics == nullptr)
+	{
+		ImGui::TextDisabled("%s", locText(fusion.bReplay ? "stageInspector.notRecorded"
+														 : "trackingPanel.fusionDiagnosticsNone"));
+		return;
+	}
+
+	// A cluster with no side was dropped or refused and reached no output
+	const std::vector<FusionDiagnostics::Cluster>& clusters= fusion.diagnostics->clusters;
+	const bool bAnyAssigned= std::any_of(clusters.begin(), clusters.end(),
+										 [](const FusionDiagnostics::Cluster& cluster) { return cluster.assignedSide >= 0; });
+	if (!bAnyAssigned)
+	{
+		ImGui::TextDisabled("%s", locText("trackingPanel.fusionDiagnosticsNone"));
+		return;
+	}
+
+	if (!ImGui::BeginTable("fusionDetail", 6, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return;
+
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionHandColumn"));
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionCamerasColumn"));
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionTriangulatedColumn"));
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionResidualColumn"));
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionParallaxColumn"));
+	ImGui::TableSetupColumn(locText("trackingPanel.fusionEstimatorColumn"));
+	ImGui::TableHeadersRow();
+
+	for (const FusionDiagnostics::Cluster& cluster : clusters)
+	{
+		if (cluster.assignedSide < 0)
+			continue;
+
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::Text("%s", locText(cluster.assignedSide == (int)eHandSide::Left ? "trackingPanel.left"
+																			   : "trackingPanel.right"));
+
+		ImGui::TableNextColumn();
+		ImGui::Text("%d", (int)cluster.observations.size());
+
+		ImGui::TableNextColumn();
+		if (cluster.triVetoed)
+			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", locText("trackingPanel.fusionVetoed"));
+		else
+			ImGui::Text("%s", locText(cluster.triangulated ? "common.yes" : "common.no"));
+
+		// A vetoed pairing was triangulated and measured, and its residual is
+		// why it was vetoed
+		const bool bTriMeasured= cluster.triangulated || cluster.triVetoed;
+		ImGui::TableNextColumn();
+		if (bTriMeasured)
+			ImGui::Text("%.1f px", cluster.triResidualRmsPx);
+		else
+			ImGui::TextDisabled("-");
+
+		ImGui::TableNextColumn();
+		if (bTriMeasured)
+			ImGui::Text("%.1f deg", cluster.triParallaxDeg);
+		else
+			ImGui::TextDisabled("-");
+
+		ImGui::TableNextColumn();
+		if (!cluster.estimatorUsed)
+		{
+			ImGui::TextDisabled("-");
+		}
+		else
+		{
+			ImGui::Text(locText("trackingPanel.fusionEstimatorFmt"), cluster.estimatorCameraCount,
+						cluster.estimatorResidualAfterPx);
+			if (cluster.estimatorReseeded)
+			{
+				ImGui::SameLine();
+				ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.f, 1.f), "%s", locText("trackingPanel.fusionEstimatorReseeded"));
+			}
+			if (cluster.estimatorHeldBadFit)
+			{
+				ImGui::SameLine();
+				ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", locText("trackingPanel.fusionEstimatorHeld"));
+			}
+		}
+	}
+	ImGui::EndTable();
 }
 
 void SettingsPanels::drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader)
@@ -1091,7 +1227,7 @@ void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context, b
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
 
-	drawSceneOverlayControls(context);
+	drawViewFromCameraControl(context);
 }
 
 void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& context)
@@ -1125,7 +1261,7 @@ void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& conte
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
 }
 
-void SettingsPanels::drawSceneOverlayControls(const TrackingSectionContext& context)
+void SettingsPanels::drawPerCameraSkeletonsControl(const TrackingSectionContext& context)
 {
 	Scene3dPanel* scene3dPanel= context.scene3dPanel;
 
@@ -1136,14 +1272,18 @@ void SettingsPanels::drawSceneOverlayControls(const TrackingSectionContext& cont
 			scene3dPanel->setShowPerCameraSkeletons(bShowPerCamera);
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.showPerCameraSkeletonsTooltip"));
 	}
-	{
-		ImGui::BeginDisabled(!scene3dPanel->hasCameraMatch());
-		bool bViewFromCamera= scene3dPanel->getViewFromCamera();
-		if (ImGui::Checkbox(locLabel("trackingPanel.viewFromCamera"), &bViewFromCamera))
-			scene3dPanel->setViewFromCamera(bViewFromCamera);
-		ImGui::EndDisabled();
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
-	}
+}
+
+void SettingsPanels::drawViewFromCameraControl(const TrackingSectionContext& context)
+{
+	Scene3dPanel* scene3dPanel= context.scene3dPanel;
+
+	ImGui::BeginDisabled(!scene3dPanel->hasCameraMatch());
+	bool bViewFromCamera= scene3dPanel->getViewFromCamera();
+	if (ImGui::Checkbox(locLabel("trackingPanel.viewFromCamera"), &bViewFromCamera))
+		scene3dPanel->setViewFromCamera(bViewFromCamera);
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.viewFromCameraTooltip"));
 }
 
 void SettingsPanels::drawInferenceSection(const TrackingSectionContext& context, bool bWithHeader)
@@ -1201,16 +1341,9 @@ void SettingsPanels::drawDiagnosticsSection(const TrackingSectionContext& contex
 		if (!lastDump.empty())
 			ImGui::TextWrapped(locText("trackingPanel.lastDumpFmt"), lastDump.c_str());
 	}
-
-	drawHoldStillSection(context);
 }
 
-void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThread* visionThread,
-									   VideoCaptureSystem* videoCapture, VideoPreviewPanel* previewPanel,
-									   Scene3dPanel* scene3dPanel,
-									   TrackingPanelState& panelState,
-									   const std::vector<VisionPreviewFrame>& latestPreviews,
-									   const TrackingFrameResult& fusedResult)
+void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.tracking"), pOpen))
 	{
@@ -1218,30 +1351,26 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 		return;
 	}
 
-	TrackingSectionContext context;
-	context.config= config;
-	context.visionThread= visionThread;
-	context.videoCapture= videoCapture;
-	context.previewPanel= previewPanel;
-	context.scene3dPanel= scene3dPanel;
-	context.state= &panelState;
-	context.latestPreviews= &latestPreviews;
-	context.fusedResult= &fusedResult;
-
 	// The tracking/fusion tuning values (staleness window, jitter and
 	// residual references, detector cadence) live in config.json and the
 	// Timeline what-if panel, where they can be swept against a recording.
 	// The live panel holds rig facts, calibration, and readouts only.
 
-	drawFusionSection(context);
-	drawHandScaleSection(context);
+	// A direct project's pipeline has no Fusion stage to host the hand
+	// calibration block (its direct mode note) and the hold-still test, so
+	// the panel keeps them in direct mode
+	const bool bDirect= context.config->direct.enabled;
+
 	drawWristImuSection(context);
 	drawFaceSection(context);
 	drawBodyPoseSection(context);
 	drawDirectSection(context);
-	drawHandCalibrationSection(context);
+	if (bDirect)
+		drawHandCalibrationSection(context);
 	drawOverlaySection(context);
 	drawDiagnosticsSection(context);
+	if (bDirect)
+		drawHoldStillSection(context, false);
 
 	ImGui::End();
 }
@@ -1325,7 +1454,7 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		ImGui::Separator();
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
 
-	// Solver diagnostic: the palm transform, forearm and the 20 finger angles
+	// Solver diagnostic: the forearm and the 20 finger angles
 	// per hand as the solver measures them (shown in degrees), which the VMC
 	// retarget then turns into bones
 	static const char* s_fingerNames[FINGER_COUNT]= {
@@ -1354,9 +1483,6 @@ void SettingsPanels::drawOscSolverSection(const OscSectionContext& context, bool
 		}
 
 		const bool bWorld= pose.hasWorldPose;
-		const glm::vec3& palmPos= bWorld ? pose.palmPositionWorld : pose.palmPositionCamera;
-		ImGui::Text(locText("oscPanel.palmFmt"), palmPos.x, palmPos.y, palmPos.z,
-					bWorld ? "" : locText("oscPanel.cameraSpaceSuffix"));
 
 		// Wrist bend, the rotation between the measured forearm and palm. Shown
 		// in DEGREES because it

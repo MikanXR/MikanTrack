@@ -443,7 +443,7 @@ void MainWindow::update(float deltaSeconds)
 			m_videoPreviewPanel->setFrame(cameraIndex, m_latestPreviews[cameraIndex].bgr);
 		}
 	}
-	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState);
+	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState, &m_latestFusionDiagnostics);
 
 	// Newest per-camera results, for the preview overlays and the 3D scene
 	std::vector<const TrackingFrameResult*> perCameraResults;
@@ -475,17 +475,14 @@ void MainWindow::update(float deltaSeconds)
 	trackingContext.state= &m_trackingPanelState;
 	trackingContext.latestPreviews= &m_latestPreviews;
 	trackingContext.fusedResult= &m_latestFused;
+	trackingContext.fusion= &m_fusionReadout;
 	// The tracking panel's countdowns, captures and readouts run whether or
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
 	// The stage sections the Inspector draws read this frame's context
-	m_stageContent->beginFrame(trackingContext, bWizardActive);
+	m_stageContent->beginFrame(trackingContext, m_fusionReadout, bWizardActive);
 	if (m_bShowTrackingPanel)
-	{
-		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, config, visionThread, m_app->getVideoCapture(),
-										  m_videoPreviewPanel.get(), m_scene3dPanel.get(), m_trackingPanelState,
-										  m_latestPreviews, m_latestFused);
-	}
+		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
 	{
 		m_trackingPanelState.bDumpRequested= false;
@@ -659,6 +656,56 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 		m_shown.perCamera= livePerCamera;
 		m_shown.config= m_app->getConfig();
 	}
+	updateFusionReadout();
+}
+
+void MainWindow::updateFusionReadout()
+{
+	FusionReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	readout.cameraCount= (int)m_shown.config->cameraCount();
+	readout.fused= m_shown.fused;
+	if (m_shown.bReplay)
+	{
+		// A take made before stage state was recorded has no readouts, but
+		// the replay regenerates its diagnostics
+		readout.diagnostics= m_timelinePanel->getDisplayFusionDiagnostics();
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			readout.dominantCamera[0]= recorded->dominantCamera[0];
+			readout.dominantCamera[1]= recorded->dominantCamera[1];
+			for (int cameraIndex= 0; cameraIndex < FusionReadout::k_maxCameras; ++cameraIndex)
+			{
+				const bool bRecordedSlot= cameraIndex < RecordedTelemetry::k_maxCameras;
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					readout.observationConfidence[cameraIndex][sideIndex]=
+						bRecordedSlot ? recorded->observationConfidence[cameraIndex][sideIndex] : -1.f;
+				}
+			}
+			readout.autoHandScaleFactor= recorded->autoHandScaleFactor;
+		}
+	}
+	else
+	{
+		const VisionThread* visionThread= m_app->getVisionThread();
+		readout.bAvailable= true;
+		readout.diagnostics= &m_latestFusionDiagnostics;
+		readout.dominantCamera[0]= visionThread->getDominantCamera(eHandSide::Left);
+		readout.dominantCamera[1]= visionThread->getDominantCamera(eHandSide::Right);
+		for (int cameraIndex= 0; cameraIndex < FusionReadout::k_maxCameras; ++cameraIndex)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				readout.observationConfidence[cameraIndex][sideIndex]=
+					visionThread->getObservationConfidence(cameraIndex, (eHandSide)sideIndex);
+			}
+		}
+		readout.autoHandScaleFactor= visionThread->getAutoHandScaleFactor();
+	}
+	m_fusionReadout= readout;
 }
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)

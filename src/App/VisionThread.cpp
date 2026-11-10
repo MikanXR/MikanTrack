@@ -306,7 +306,8 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 }
 
 bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose,
-									DirectRetarget::SolveState* outDirectState)
+									DirectRetarget::SolveState* outDirectState,
+									FusionDiagnostics* outFusionDiagnostics)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
 	if (!m_bFusedFresh)
@@ -317,6 +318,8 @@ bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* 
 		*outDirectPose= m_fusedDirectPose;
 	if (outDirectState != nullptr)
 		*outDirectState= m_fusedDirectState;
+	if (outFusionDiagnostics != nullptr)
+		*outFusionDiagnostics= m_fusedDiagnostics;
 	m_bFusedFresh= false;
 	return true;
 }
@@ -1256,6 +1259,15 @@ void VisionThread::runOutputStage(IterationState& iteration)
 		m_fusedResult= iteration.outputResult;
 		m_fusedDirectPose= m_directPose;
 		m_fusedDirectState= bDirectPose ? m_directRetarget.getSolveState() : DirectRetarget::SolveState();
+		// A camera frame publishes what its fuse reported, and a passthrough
+		// or direct frame, which ran no fuse, an empty report
+		if (iteration.bAnyNewResult)
+		{
+			if (iteration.bAnyWorldCandidate && !iteration.bDirect)
+				m_fusedDiagnostics= m_fusion.getLastDiagnostics();
+			else
+				m_fusedDiagnostics= FusionDiagnostics();
+		}
 		m_bFusedFresh= true;
 	}
 	m_lastOutputResult= iteration.outputResult;

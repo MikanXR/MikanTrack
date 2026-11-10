@@ -110,6 +110,8 @@ private:
 	// the UI still has data when no new frame arrived this tick)
 	std::vector<VisionPreviewFrame> m_latestPreviews;
 	TrackingFrameResult m_latestFused;
+	// The fusion diagnostics behind m_latestFused
+	FusionDiagnostics m_latestFusionDiagnostics;
 	// The direct retarget's pose for that result and the solve behind it,
 	// valid only in direct mode
 	AvatarPose m_latestDirectPose;
@@ -133,7 +135,11 @@ private:
 		const AppConfig* config= nullptr;
 	};
 	ShownFrame m_shown;
+	// What fusion reported for the shown frame, refilled with it. The
+	// Fusion stage's sections read it in place.
+	FusionReadout m_fusionReadout;
 	void updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera);
+	void updateFusionReadout();
 	// The direct solve behind the shown avatar pose, null when the shown
 	// frame is not a direct-mode frame
 	const DirectRetarget::SolveState* m_shownDirectState= nullptr;

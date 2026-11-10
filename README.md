@@ -325,7 +325,8 @@ A lost hand keeps streaming its last good pose for the **Dropout hold**
 (default 250 ms), which bridges brief losses. Past the hold its bones keep
 streaming frozen (**Freeze on loss**, default on); turning that off stops the
 messages instead, which returns that arm to the avatar's rest T-pose. Tune the
-threshold with the live per-camera confidence table in the Tracking panel.
+threshold with the live per-camera confidence table in the Inspector (select
+the Fusion stage, Diagnostics).
 
 **Palm frame and finger angles.** The OSC panel shows what the solver
 measures for each hand, the inputs the bones are built from. The palm frame
@@ -335,8 +336,8 @@ middle knuckle), **+X toward the fingers**, **+Z out of the palmar surface**,
 
 - **Zero = the rest pose.** Forward kinematics starts from the per-finger
   `neutralDirInPalm` (the flat-hand default: four fingers parallel to palm
-  +X, thumb along its own metacarpal). **Tracking panel -> Calibrate
-  Hands...** measures your bone lengths and then captures your rest pose (in
+  +X, thumb along its own metacarpal). **Fusion stage -> Calibrate
+  Hands...** in the Inspector measures your bone lengths and then captures your rest pose (in
   that order, since measured bones move the thumb's angle zero), so your rest
   pose reads zeros on all four angles and streams as the avatar's rest hand.
   Without the capture a hand hovering over a keyboard reports 20-50 degrees of

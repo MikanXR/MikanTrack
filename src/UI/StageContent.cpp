@@ -11,9 +11,10 @@ StageContent::StageContent(DevicePanel* devicePanel, CalibrationPanel* calibrati
 {
 }
 
-void StageContent::beginFrame(const TrackingSectionContext& tracking, bool bWizardActive)
+void StageContent::beginFrame(const TrackingSectionContext& tracking, const FusionReadout& fusion, bool bWizardActive)
 {
 	m_tracking= tracking;
+	m_tracking.fusion= &fusion;
 	m_bWizardActive= bWizardActive;
 	m_calibrationAction= CalibrationPanel::DrawResult();
 }
@@ -54,7 +55,9 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 	case ePipelineStage::BodyModel:
 		return section == eStageSection::Settings && isCameraInRange(stage);
 	case ePipelineStage::Fusion:
-		return section == eStageSection::Inputs;
+		// The per-camera skeletons toggle is the only setting, and it needs
+		// a second camera
+		return section != eStageSection::Settings || m_tracking.config->cameraCount() > 1;
 	default:
 		return false;
 	}
@@ -110,7 +113,24 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		mergeCalibrationAction(m_calibrationPanel->drawCameraCalibration(cameraIndex, m_bWizardActive, false));
 		break;
 	case ePipelineStage::Fusion:
-		m_calibrationPanel->drawHandScaleSection();
+		if (section == eStageSection::Inputs)
+		{
+			SettingsPanels::drawHandCalibrationSection(m_tracking);
+			m_calibrationPanel->drawHandScaleSection();
+		}
+		else if (section == eStageSection::Settings)
+		{
+			SettingsPanels::drawPerCameraSkeletonsControl(m_tracking);
+		}
+		else
+		{
+			// Five readouts share the section, so each keeps its heading
+			SettingsPanels::drawFusionSection(m_tracking);
+			SettingsPanels::drawHandScaleSection(m_tracking);
+			SettingsPanels::drawFusedPalmReadout(m_tracking);
+			SettingsPanels::drawFusionDiagnosticsSection(m_tracking);
+			SettingsPanels::drawHoldStillSection(m_tracking);
+		}
 		break;
 	default:
 		break;
