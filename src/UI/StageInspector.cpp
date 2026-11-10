@@ -13,6 +13,20 @@ namespace
 {
 constexpr float kDotRadius= 4.5f;
 
+// The sections under Status, in the template's order. Diagnostics starts
+// closed.
+struct SectionInfo
+{
+	eStageSection section;
+	const char* titleKey;
+	ImGuiTreeNodeFlags headerFlags;
+};
+const SectionInfo k_sections[]= {
+	{eStageSection::Inputs, "stageInspector.inputsSection", ImGuiTreeNodeFlags_DefaultOpen},
+	{eStageSection::Settings, "stageInspector.settingsSection", ImGuiTreeNodeFlags_DefaultOpen},
+	{eStageSection::Diagnostics, "stageInspector.diagnosticsSection", ImGuiTreeNodeFlags_None},
+};
+
 void drawRow(const char* labelKey, const char* value)
 {
 	ImGui::TableNextRow();
@@ -23,7 +37,8 @@ void drawRow(const char* labelKey, const char* value)
 }
 } // namespace
 
-PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& inputs, const PipelineStageId& selected)
+PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& inputs, const PipelineStageId& selected,
+									 IStageContent* content)
 {
 	PipelineStageId request;
 	if (!ImGui::Begin(locWindowTitle("windows.stageInspector"), pOpen))
@@ -32,14 +47,15 @@ PipelineStageId StageInspector::draw(bool* pOpen, const PipelineStatusInputs& in
 		return request;
 	}
 	if (selected.isValid())
-		drawStage(inputs, selected);
+		drawStage(inputs, selected, content);
 	else
 		request= drawProject(inputs);
 	ImGui::End();
 	return request;
 }
 
-void StageInspector::drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage)
+void StageInspector::drawStage(const PipelineStatusInputs& inputs, const PipelineStageId& stage,
+							   IStageContent* content)
 {
 	const StageStatus status= PipelineModel::computeStatus(inputs, stage);
 	const PipelineStageId topLevel= PipelineModel::getTopLevel(stage);
@@ -91,11 +107,31 @@ void StageInspector::drawStage(const PipelineStatusInputs& inputs, const Pipelin
 		ImGui::PopStyleColor();
 	}
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::PushTextWrapPos(0.f);
-	ImGui::TextDisabled("%s", locText("stageInspector.settingsElsewhere"));
-	ImGui::PopTextWrapPos();
+	// The stage's own sections, each under a header, a section the stage
+	// does not have left out
+	bool bAnySection= false;
+	if (content != nullptr)
+	{
+		for (const SectionInfo& section : k_sections)
+		{
+			if (!content->hasSection(stage, section.section))
+				continue;
+			if (!bAnySection)
+				ImGui::Spacing();
+			bAnySection= true;
+			if (ImGui::CollapsingHeader(locLabel(section.titleKey), section.headerFlags))
+				content->drawSection(stage, section.section);
+		}
+	}
+
+	if (!bAnySection)
+	{
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::PushTextWrapPos(0.f);
+		ImGui::TextDisabled("%s", locText("stageInspector.settingsElsewhere"));
+		ImGui::PopTextWrapPos();
+	}
 }
 
 PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)

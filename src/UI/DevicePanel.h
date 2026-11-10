@@ -9,26 +9,30 @@ class App;
 class AppConfig;
 class VideoCaptureSystem;
 
-// Camera selection panel: one section per configured camera (device combo,
+// Camera selection: one section per configured camera (device combo,
 // resolution/frame-rate/format combos with best-match mode selection, stream
-// start/stop), plus add/remove camera controls. Subscribes to the capture
-// system's hotplug, mode-change, and disconnect notifications so its cached
-// lists follow the devices.
+// start/stop), plus add/remove camera controls, drawn by the host window that
+// shows the Capture stage. Subscribes to the capture system's hotplug,
+// mode-change, and disconnect notifications so its cached lists follow the
+// devices.
 class DevicePanel
 {
 public:
 	DevicePanel(App* app, VideoCaptureSystem* videoCapture, AppConfig* config);
 
-	void draw(bool* pOpen);
-	// The panel's contents without its window, for a host window
-	void drawBody();
-
-	// The panel's sections, each drawable in a host window. A camera section
-	// sizes the per-camera state from the config itself, and draws nothing
-	// for a camera index the config does not have.
+	// The sections, each drawable in a host window. A camera section sizes
+	// the per-camera state from the config itself, and draws nothing for a
+	// camera index the config does not have.
 	void drawRescanControl();
-	void drawCameraSection(int cameraIndex);
-	void drawCameraSettings(int cameraIndex);
+	// bWithHeader false leaves out the "Camera N" collapsing header, for a
+	// host that names the camera; bWithSettings false leaves out the Camera
+	// Settings tree, for a host that draws it elsewhere
+	void drawCameraSection(int cameraIndex, bool bWithHeader= true, bool bWithSettings= true);
+	// bDefaultOpen opens the tree the first time it is drawn
+	void drawCameraSettings(int cameraIndex, bool bDefaultOpen= false);
+	// Whether drawCameraSettings has anything to draw: the camera's device is
+	// open and reports adjustable settings
+	bool hasCameraSettings(int cameraIndex) const;
 	void drawAddCameraControl();
 
 	// Re-reads the device list (call on hotplug events)

@@ -861,6 +861,54 @@ void SettingsPanels::drawFaceSection(const TrackingSectionContext& context, bool
 		commitTrackingConfigChange(context);
 }
 
+void SettingsPanels::drawBodyPoseIntro()
+{
+	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
+}
+
+void SettingsPanels::drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex)
+{
+	AppConfig* config= context.config;
+	if (cameraIndex < 0 || cameraIndex >= (int)config->cameraCount())
+		return;
+
+	BodyPoseCameraConfig& bodyPose= config->camera(cameraIndex).bodyPose;
+	ImGui::PushID(cameraIndex);
+
+	bool bChanged= false;
+	const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+	bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
+
+	if (bodyPose.enabled)
+	{
+		const bool bWholeBody= bodyPose.backend == "rtmw3d";
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
+		if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
+							  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
+												 : "trackingPanel.bodyBackendRtmPose")))
+		{
+			if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
+			{
+				bodyPose.backend= "rtmpose";
+				bChanged= true;
+			}
+			if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
+			{
+				bodyPose.backend= "rtmw3d";
+				bChanged= true;
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
+	}
+
+	ImGui::PopID();
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
 void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader)
 {
 	AppConfig* config= context.config;
@@ -869,43 +917,6 @@ void SettingsPanels::drawBodyPoseSection(const TrackingSectionContext& context, 
 		ImGui::SeparatorText(locText("trackingPanel.bodyPoseSection"));
 
 	bool bChanged= false;
-	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
-
-	for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
-	{
-		BodyPoseCameraConfig& bodyPose= config->camera(cameraIndex).bodyPose;
-		ImGui::PushID(cameraIndex);
-
-		const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-		bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
-
-		if (bodyPose.enabled)
-		{
-			const bool bWholeBody= bodyPose.backend == "rtmw3d";
-			ImGui::SameLine();
-			ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
-			if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
-								  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
-													 : "trackingPanel.bodyBackendRtmPose")))
-			{
-				if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
-				{
-					bodyPose.backend= "rtmpose";
-					bChanged= true;
-				}
-				if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
-				{
-					bodyPose.backend= "rtmw3d";
-					bChanged= true;
-				}
-				ImGui::EndCombo();
-			}
-			ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
-		}
-
-		ImGui::PopID();
-	}
-
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseProportionsIntro"));
 
 	if (ImGui::Button(locLabel("trackingPanel.measureMyBody"), ImVec2(-1, 0)))
@@ -1077,11 +1088,15 @@ void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& co
 
 void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context, bool bWithHeader)
 {
-	VideoPreviewPanel* previewPanel= context.previewPanel;
-	Scene3dPanel* scene3dPanel= context.scene3dPanel;
-
 	if (bWithHeader)
 		ImGui::SeparatorText(locText("trackingPanel.overlaySection"));
+
+	drawSceneOverlayControls(context);
+}
+
+void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& context)
+{
+	VideoPreviewPanel* previewPanel= context.previewPanel;
 
 	bool bShowOverlay= previewPanel->getShowOverlay();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showSkeletonOverlay"), &bShowOverlay))
@@ -1098,11 +1113,22 @@ void SettingsPanels::drawOverlaySection(const TrackingSectionContext& context, b
 			previewPanel->setShowAllHands(bShowAllHands);
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.showAllHandsTooltip"));
 	}
+}
+
+void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& context)
+{
+	VideoPreviewPanel* previewPanel= context.previewPanel;
 
 	bool bShowBodyPose= previewPanel->getShowBodyPose();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
+}
+
+void SettingsPanels::drawSceneOverlayControls(const TrackingSectionContext& context)
+{
+	Scene3dPanel* scene3dPanel= context.scene3dPanel;
+
 	if (context.config->cameraCount() > 1)
 	{
 		bool bShowPerCamera= scene3dPanel->getShowPerCameraSkeletons();
@@ -1202,8 +1228,6 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 	context.latestPreviews= &latestPreviews;
 	context.fusedResult= &fusedResult;
 
-	drawFlipHandednessSection(context);
-
 	// The tracking/fusion tuning values (staleness window, jitter and
 	// residual references, detector cadence) live in config.json and the
 	// Timeline what-if panel, where they can be swept against a recording.
@@ -1211,15 +1235,12 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, AppConfig* config, VisionThr
 
 	drawFusionSection(context);
 	drawHandScaleSection(context);
-	drawImageQualitySection(context);
 	drawWristImuSection(context);
 	drawFaceSection(context);
 	drawBodyPoseSection(context);
 	drawDirectSection(context);
 	drawHandCalibrationSection(context);
 	drawOverlaySection(context);
-	drawInferenceSection(context);
-	drawCaptureTimingSection(context);
 	drawDiagnosticsSection(context);
 
 	ImGui::End();

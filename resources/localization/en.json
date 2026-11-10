@@ -55,9 +55,7 @@
 		"viewAudioPanel": "Audio Panel",
 		"viewVideoPreviewPanel": "Video Preview Panel",
 		"viewScene3dPanel": "3D Scene Panel",
-		"viewDevicePanel": "Device Panel",
 		"viewTrackingPanel": "Tracking Panel",
-		"viewCalibrationPanel": "Calibration Panel",
 		"viewOscPanel": "OSC Output Panel",
 		"viewPipelinePanel": "Pipeline Panel",
 		"viewInspectorPanel": "Inspector Panel",
@@ -68,8 +66,6 @@
 	"windows": {
 		"avatar": "Avatar",
 		"bodyWizard": "Body Measurements",
-		"calibration": "Calibration",
-		"device": "Device",
 		"extrinsicsWizard": "Extrinsics Calibration (all cameras)",
 		"handWizard": "Hand Calibration",
 		"intrinsicsWizard": "Intrinsics Calibration",
@@ -677,7 +673,7 @@
 		"hudFmt": "Cam %d  |  %s",
 		"hudWithResultFmt": "Cam %d  |  %.0f fps  |  %.1f ms  |  %s",
 		"noStreamText": "No stream",
-		"noVideoStreamText": "No video stream - select a camera in the Device panel"
+		"noVideoStreamText": "No video stream - select a camera in the Pipeline's Capture stage"
 	},
 	"scene3dPanel": {
 		"rendererInitFailedText": "3D renderer failed to initialize (see log)"
@@ -1055,7 +1051,7 @@
 		"valProblemsFmt": "unresolved: %.0f",
 		"valAutoTargetsFmt": "Auto, targets: %.0f",
 		"valTargetsFmt": "targets: %.0f",
-		"whyNoDeviceFmt": "Camera %.0f has no device open. Pick one in the Device panel.",
+		"whyNoDeviceFmt": "Camera %.0f has no device open. Pick one in this camera's stage under Capture.",
 		"whyStreamStoppedFmt": "Camera %.0f's stream is stopped.",
 		"whyNoCameras": "The project has no cameras.",
 		"whyCameraNotStreamingFmt": "Camera %.0f is not streaming.",
@@ -1111,6 +1107,9 @@
 	},
 	"stageInspector": {
 		"statusSection": "Status",
+		"inputsSection": "Inputs and calibration",
+		"settingsSection": "Settings",
+		"diagnosticsSection": "Diagnostics",
 		"stateLabel": "State",
 		"nowLabel": "Now",
 		"shownFrameLabel": "Shown frame",

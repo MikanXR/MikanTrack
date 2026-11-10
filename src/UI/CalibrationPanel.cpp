@@ -13,45 +13,8 @@ CalibrationPanel::CalibrationPanel(AppConfig* config)
 {
 }
 
-CalibrationPanel::DrawResult CalibrationPanel::draw(bool* pOpen, bool bWizardActive)
-{
-	DrawResult result;
-
-	if (!ImGui::Begin(locWindowTitle("windows.calibration"), pOpen))
-	{
-		ImGui::End();
-		return result;
-	}
-
-	result= drawBody(bWizardActive);
-
-	ImGui::End();
-	return result;
-}
-
-CalibrationPanel::DrawResult CalibrationPanel::drawBody(bool bWizardActive)
-{
-	DrawResult result;
-
-	for (int cameraIndex= 0; cameraIndex < (int)m_config->cameraCount(); ++cameraIndex)
-	{
-		const DrawResult cameraResult= drawCameraCalibration(cameraIndex, bWizardActive);
-		if (cameraResult.bLaunchIntrinsicsWizard)
-		{
-			result.bLaunchIntrinsicsWizard= true;
-			result.cameraIndex= cameraResult.cameraIndex;
-		}
-	}
-
-	if (drawExtrinsicsSection(bWizardActive).bLaunchExtrinsicsWizard)
-		result.bLaunchExtrinsicsWizard= true;
-
-	drawHandScaleSection();
-
-	return result;
-}
-
-CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraIndex, bool bWizardActive)
+CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraIndex, bool bWizardActive,
+																	  bool bWithHeader)
 {
 	DrawResult result;
 	if (cameraIndex < 0 || cameraIndex >= (int)m_config->cameraCount())
@@ -61,8 +24,13 @@ CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraI
 
 	ImGui::PushID(cameraIndex);
 
-	const std::string headerLabel= locFormat("calibrationPanel.cameraHeaderFmt", cameraIndex + 1);
-	if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+	bool bOpen= true;
+	if (bWithHeader)
+	{
+		const std::string headerLabel= locFormat("calibrationPanel.cameraHeaderFmt", cameraIndex + 1);
+		bOpen= ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+	}
+	if (bOpen)
 	{
 		ImGui::SeparatorText(locText("calibrationPanel.intrinsicsHeader"));
 		if (profile.intrinsics.present)

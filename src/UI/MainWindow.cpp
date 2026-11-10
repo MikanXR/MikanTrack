@@ -38,6 +38,7 @@
 #include "Scene3dPanel.h"
 #include "SettingsPanels.h"
 #include "SetupFlow.h"
+#include "StageContent.h"
 #include "StageInspector.h"
 #include "TimelinePanel.h"
 #include "TrackingRecording.h"
@@ -63,6 +64,7 @@ MainWindow::MainWindow(App* app)
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
 	, m_pipelinePanel(std::make_unique<PipelinePanel>())
 	, m_stageInspector(std::make_unique<StageInspector>())
+	, m_stageContent(std::make_unique<StageContent>(m_devicePanel.get(), m_calibrationPanel.get()))
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -235,12 +237,10 @@ void MainWindow::drawDockspaceAndMenuBar()
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.pipeline"), topId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.videoPreview"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.scene3d"), centerId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.device"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.calibration"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
@@ -322,9 +322,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewInspectorPanel"), nullptr, &m_bShowInspectorPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewDevicePanel"), nullptr, &m_bShowDevicePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewCalibrationPanel"), nullptr, &m_bShowCalibrationPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
@@ -337,8 +335,8 @@ void MainWindow::drawDockspaceAndMenuBar()
 			if (ImGui::MenuItem(locLabel("mainWindow.resetLayout")))
 			{
 				m_bResetDockLayout= true;
-				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowDevicePanel= m_bShowTrackingPanel= true;
-				m_bShowCalibrationPanel= m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
+				m_bShowVideoPreviewPanel= m_bShowScene3dPanel= m_bShowTrackingPanel= true;
+				m_bShowOscPanel= m_bShowTimelinePanel= m_bShowLogPanel= true;
 				m_bShowSettingsPanel= m_bShowAvatarPanel= m_bShowAudioPanel= true;
 				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
 			}
@@ -468,22 +466,20 @@ void MainWindow::update(float deltaSeconds)
 	const bool bWizardActive= m_wizardHost->isAnyActive() || m_setupFlow->isActive();
 
 	// Panels
-	if (m_bShowDevicePanel)
-		m_devicePanel->draw(&m_bShowDevicePanel);
-	{
-		// The tracking panel's countdowns, captures and readouts run whether
-		// or not any of its sections is drawn this frame
-		TrackingSectionContext trackingContext;
-		trackingContext.config= config;
-		trackingContext.visionThread= visionThread;
-		trackingContext.videoCapture= m_app->getVideoCapture();
-		trackingContext.previewPanel= m_videoPreviewPanel.get();
-		trackingContext.scene3dPanel= m_scene3dPanel.get();
-		trackingContext.state= &m_trackingPanelState;
-		trackingContext.latestPreviews= &m_latestPreviews;
-		trackingContext.fusedResult= &m_latestFused;
-		SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
-	}
+	TrackingSectionContext trackingContext;
+	trackingContext.config= config;
+	trackingContext.visionThread= visionThread;
+	trackingContext.videoCapture= m_app->getVideoCapture();
+	trackingContext.previewPanel= m_videoPreviewPanel.get();
+	trackingContext.scene3dPanel= m_scene3dPanel.get();
+	trackingContext.state= &m_trackingPanelState;
+	trackingContext.latestPreviews= &m_latestPreviews;
+	trackingContext.fusedResult= &m_latestFused;
+	// The tracking panel's countdowns, captures and readouts run whether or
+	// not any of its sections is drawn this frame
+	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
+	// The stage sections the Inspector draws read this frame's context
+	m_stageContent->beginFrame(trackingContext, bWizardActive);
 	if (m_bShowTrackingPanel)
 	{
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, config, visionThread, m_app->getVideoCapture(),
@@ -547,13 +543,6 @@ void MainWindow::update(float deltaSeconds)
 	m_trackingPanelState.bLaunchBodyCalibrationWizard= false;
 	m_trackingPanelState.bLaunchHandCalibrationWizard= false;
 
-	CalibrationPanel::DrawResult calibrationAction;
-	if (m_bShowCalibrationPanel)
-		calibrationAction= m_calibrationPanel->draw(&m_bShowCalibrationPanel, bWizardActive);
-	if (calibrationAction.bLaunchIntrinsicsWizard)
-		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
-	if (calibrationAction.bLaunchExtrinsicsWizard)
-		launchWizard(eWizardKind::Extrinsics);
 	if (audioAction.bLaunchAudioWizard)
 		launchWizard(eWizardKind::AudioCalibration);
 
@@ -626,11 +615,17 @@ void MainWindow::update(float deltaSeconds)
 		m_pipelinePanel->draw(&m_bShowPipelinePanel, m_pipelineInputs);
 	if (m_bShowInspectorPanel)
 	{
-		const PipelineStageId requested=
-			m_stageInspector->draw(&m_bShowInspectorPanel, m_pipelineInputs, m_pipelinePanel->getSelected());
+		const PipelineStageId requested= m_stageInspector->draw(&m_bShowInspectorPanel, m_pipelineInputs,
+																m_pipelinePanel->getSelected(), m_stageContent.get());
 		if (requested.isValid())
 			m_pipelinePanel->setSelected(requested);
 	}
+	// The calibration wizards the Inspector's stage sections asked for
+	const CalibrationPanel::DrawResult& calibrationAction= m_stageContent->getCalibrationAction();
+	if (calibrationAction.bLaunchIntrinsicsWizard)
+		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
+	if (calibrationAction.bLaunchExtrinsicsWizard)
+		launchWizard(eWizardKind::Extrinsics);
 	if (m_bShowPerformancePanel)
 		PerformancePanel::draw(&m_bShowPerformancePanel, *visionThread);
 

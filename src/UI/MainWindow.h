@@ -23,6 +23,7 @@ class MainMenuScreen;
 class PipelinePanel;
 class Scene3dPanel;
 class SetupFlow;
+class StageContent;
 class StageInspector;
 class TimelinePanel;
 class VideoPreviewPanel;
@@ -98,6 +99,9 @@ private:
 	std::unique_ptr<AvatarMouthReadout> m_mouthReadout;
 	std::unique_ptr<PipelinePanel> m_pipelinePanel;
 	std::unique_ptr<StageInspector> m_stageInspector;
+	// The stage sections the Inspector hosts, drawn from the device and
+	// calibration panels and the tracking sections
+	std::unique_ptr<StageContent> m_stageContent;
 	// Guided new-project setup chain; needs the wizards above, so it is
 	// constructed last (in the constructor body)
 	std::unique_ptr<SetupFlow> m_setupFlow;
@@ -172,9 +176,7 @@ private:
 	// window. Not persisted: every panel is shown again on the next launch.
 	bool m_bShowVideoPreviewPanel= true;
 	bool m_bShowScene3dPanel= true;
-	bool m_bShowDevicePanel= true;
 	bool m_bShowTrackingPanel= true;
-	bool m_bShowCalibrationPanel= true;
 	bool m_bShowOscPanel= true;
 	bool m_bShowTimelinePanel= true;
 	bool m_bShowLogPanel= true;

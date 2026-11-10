@@ -114,7 +114,14 @@ void DevicePanel::refreshCameraSettings(int cameraIndex)
 	}
 }
 
-void DevicePanel::drawCameraSettings(int cameraIndex)
+bool DevicePanel::hasCameraSettings(int cameraIndex) const
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size() || cameraIndex >= (int)m_config->cameraCount())
+		return false;
+	return m_videoCapture->getIsDeviceOpen(cameraIndex) && !m_cameraStates[cameraIndex].settings.empty();
+}
+
+void DevicePanel::drawCameraSettings(int cameraIndex, bool bDefaultOpen)
 {
 	syncCameraStateCount();
 	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size())
@@ -124,7 +131,8 @@ void DevicePanel::drawCameraSettings(int cameraIndex)
 	if (state.settings.empty())
 		return;
 
-	if (!ImGui::TreeNode(locLabel("devicePanel.cameraSettingsHeader")))
+	const ImGuiTreeNodeFlags treeFlags= bDefaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+	if (!ImGui::TreeNodeEx(locLabel("devicePanel.cameraSettingsHeader"), treeFlags))
 		return;
 
 	IUsbVideoDevice* device= m_videoCapture->getCurrentDevice(cameraIndex);
@@ -203,7 +211,7 @@ void DevicePanel::applyModeSelection(int cameraIndex)
 	refreshModeOptions(cameraIndex);
 }
 
-void DevicePanel::drawCameraSection(int cameraIndex)
+void DevicePanel::drawCameraSection(int cameraIndex, bool bWithHeader, bool bWithSettings)
 {
 	syncCameraStateCount();
 	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size())
@@ -213,8 +221,13 @@ void DevicePanel::drawCameraSection(int cameraIndex)
 
 	ImGui::PushID(cameraIndex);
 
-	const std::string headerLabel= locFormat("devicePanel.cameraHeaderFmt", cameraIndex + 1);
-	if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+	bool bOpen= true;
+	if (bWithHeader)
+	{
+		const std::string headerLabel= locFormat("devicePanel.cameraHeaderFmt", cameraIndex + 1);
+		bOpen= ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+	}
+	if (bOpen)
 	{
 		// Device combo (devices open in another slot are disabled)
 		const char* currentDeviceLabel=
@@ -309,7 +322,8 @@ void DevicePanel::drawCameraSection(int cameraIndex)
 			if (droppedFrames > 0)
 				ImGui::TextDisabled(locText("devicePanel.droppedFramesFmt"), (unsigned long long)droppedFrames);
 
-			drawCameraSettings(cameraIndex);
+			if (bWithSettings)
+				drawCameraSettings(cameraIndex);
 		}
 
 		// Remove (never camera 0)
@@ -326,32 +340,6 @@ void DevicePanel::drawCameraSection(int cameraIndex)
 	}
 
 	ImGui::PopID();
-}
-
-void DevicePanel::draw(bool* pOpen)
-{
-	if (!ImGui::Begin(locWindowTitle("windows.device"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-
-	drawBody();
-
-	ImGui::End();
-}
-
-void DevicePanel::drawBody()
-{
-	syncCameraStateCount();
-
-	drawRescanControl();
-
-	for (int cameraIndex= 0; cameraIndex < (int)m_cameraStates.size(); ++cameraIndex)
-		drawCameraSection(cameraIndex);
-
-	ImGui::Separator();
-	drawAddCameraControl();
 }
 
 void DevicePanel::drawRescanControl()

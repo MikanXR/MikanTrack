@@ -2,7 +2,7 @@
 
 A proposal to replace most of the app's settings panels with a Pipeline strip, a stage inspector and a central view that follows the selected stage. The interactive mockup is [pipeline-panel-mockup.html](./pipeline-panel-mockup.html), a self-contained file that opens by double-click. This document records the decisions the mockup is built on and the checklist that maps every control in today's panels to its new home.
 
-Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 through M3 are in: the strip, the Inspector's Status section and the Performance panel are in the app beside the old panels, which still hold every control, every panel section is a function an inspector can host, and a recording carries the stage state a replay shows.
+Status: the mockup's three passes are built (the shell, every inspector populated, then the Retarget chain editor, the Source pose tables, pinned windows and the Performance chart). The implementation follows the order below. M0 through M4 are in: the strip, the Inspector and the Performance panel are in the app, every panel section is a function an inspector can host, a recording carries the stage state a replay shows, and the Capture stage's controls have moved into the Inspector, with the Device and Calibration panels gone. The other stages' controls are still in the old panels.
 
 ---
 
@@ -96,13 +96,13 @@ Every section of today's panels, and the stage and inspector section that receiv
 | Flip handedness | Capture | Settings |
 | Fusion: dominant camera, per-camera confidence table | Fusion | Diagnostics |
 | Hand Scale: measured length | Fusion | Diagnostics |
-| Image Quality: the eight metrics per camera | Capture, camera, Video | Diagnostics |
+| Image Quality: the eight metrics per camera | Capture, as one table across cameras | Diagnostics |
 | Wrist IMU: enable, swap wrists, forearm length | IMU | Settings |
 | Wrist IMU: device, rate, yaw drift, roll error table | IMU | Diagnostics |
 | Wrist IMU: Calibrate Mounting | IMU | Inputs and calibration |
 | Face: enable, port, phone address, align and reset alignment | Face and mouth, Phone | Settings |
 | Face: stream status, unknown names, parse failures, head rotation, alignment state | Face and mouth, Phone | Diagnostics |
-| Body Pose: per-camera enable and model | Capture, camera, and its Body model | Settings |
+| Body Pose: per-camera enable and model | Capture, camera, Body model | Settings |
 | Body Pose: Measure My Body | Body solver | Inputs and calibration |
 | Body Pose: upper arm from shoulder width, ratio, upper arm, shoulder width, head width, nose forward | Body solver | Settings |
 | Direct Retarget: enable, camera tilt | Direct solver | Settings |
@@ -115,7 +115,7 @@ Every section of today's panels, and the stage and inspector section that receiv
 | Overlay: 3D view from camera | Central view title bar | |
 | Inference: execution provider per camera, inference time | Capture | Diagnostics |
 | Inference: frame loop hitches | Bottom dock, Performance | |
-| Capture Timing: the thirteen rows per camera | Capture (all cameras), and Capture, camera, Video (its own rows) | Diagnostics |
+| Capture Timing: the thirteen rows per camera | Capture, as one table across cameras | Diagnostics |
 | Diagnostics: dump now, dump in 3 s, last dump path | Bottom dock, Timeline | |
 | Diagnostics: hold-still jitter test and its result | Fusion | Diagnostics |
 
@@ -164,9 +164,9 @@ Every section of today's panels, and the stage and inspector section that receiv
 
 | Today | Stage | Section |
 |---|---|---|
-| Per camera: intrinsics state and numbers, Calibrate Intrinsics | Capture, camera, and its Video and Lift | Inputs and calibration |
-| Per camera: extrinsics state, camera height | Capture, camera, and its Lift | Inputs and calibration |
-| Extrinsics (all cameras): note, Calibrate Extrinsics | Capture and Fusion | Inputs and calibration |
+| Per camera: intrinsics state and numbers, Calibrate Intrinsics | Capture, camera, Lift | Inputs and calibration |
+| Per camera: extrinsics state, camera height | Capture, camera, Lift | Inputs and calibration |
+| Extrinsics (all cameras): note, Calibrate Extrinsics | Capture | Inputs and calibration |
 | Hand scale seed | Fusion | Inputs and calibration |
 | Rescan Devices, Add Camera | Capture | Inputs and calibration |
 | Per camera: device, resolution, frame rate, format, start and stop stream, mode, delivery rate, dropped frames, Remove Camera | Capture, camera | Inputs and calibration |

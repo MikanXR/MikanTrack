@@ -55,9 +55,7 @@
 		"viewAudioPanel": "オーディオパネル",
 		"viewVideoPreviewPanel": "ビデオプレビューパネル",
 		"viewScene3dPanel": "3Dシーンパネル",
-		"viewDevicePanel": "デバイスパネル",
 		"viewTrackingPanel": "トラッキングパネル",
-		"viewCalibrationPanel": "キャリブレーションパネル",
 		"viewOscPanel": "OSC出力パネル",
 		"viewPipelinePanel": "パイプラインパネル",
 		"viewInspectorPanel": "インスペクターパネル",
@@ -68,8 +66,6 @@
 	"windows": {
 		"avatar": "アバター",
 		"bodyWizard": "身体の採寸",
-		"calibration": "キャリブレーション",
-		"device": "デバイス",
 		"extrinsicsWizard": "外部パラメータキャリブレーション（全カメラ）",
 		"handWizard": "ハンドキャリブレーション",
 		"intrinsicsWizard": "内部パラメータキャリブレーション",
@@ -677,7 +673,7 @@
 		"hudFmt": "カメラ %d  |  %s",
 		"hudWithResultFmt": "カメラ %d  |  %.0f fps  |  %.1f ms  |  %s",
 		"noStreamText": "ストリームなし",
-		"noVideoStreamText": "映像ストリームがありません - デバイスパネルでカメラを選択してください"
+		"noVideoStreamText": "映像ストリームがありません - パイプラインのキャプチャステージでカメラを選択してください"
 	},
 	"scene3dPanel": {
 		"rendererInitFailedText": "3Dレンダラーの初期化に失敗しました（ログを確認してください）"
@@ -1055,7 +1051,7 @@
 		"valProblemsFmt": "%.0f 未解決",
 		"valAutoTargetsFmt": "自動、ターゲット %.0f",
 		"valTargetsFmt": "ターゲット %.0f",
-		"whyNoDeviceFmt": "カメラ %.0f のデバイスが開かれていません。デバイスパネルで選択してください。",
+		"whyNoDeviceFmt": "カメラ %.0f のデバイスが開かれていません。キャプチャの下にあるこのカメラのステージで選択してください。",
 		"whyStreamStoppedFmt": "カメラ %.0f のストリームが停止しています。",
 		"whyNoCameras": "プロジェクトにカメラがありません。",
 		"whyCameraNotStreamingFmt": "カメラ %.0f が配信していません。",
@@ -1111,6 +1107,9 @@
 	},
 	"stageInspector": {
 		"statusSection": "状態",
+		"inputsSection": "入力とキャリブレーション",
+		"settingsSection": "設定",
+		"diagnosticsSection": "診断",
 		"stateLabel": "状態",
 		"nowLabel": "現在",
 		"shownFrameLabel": "表示フレーム",

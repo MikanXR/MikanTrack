@@ -118,7 +118,9 @@ void updateTrackingState(const TrackingSectionContext& context, float deltaSecon
 void commitTrackingConfigChange(const TrackingSectionContext& context);
 void commitOscConfigChange(const OscSectionContext& context);
 
-// The Tracking panel's sections, in the panel's order
+// The Tracking panel's sections, in the panel's order. Flip handedness,
+// image quality, inference and capture timing are the Capture stage's and no
+// longer in the panel.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale draw only with more than one camera
 void drawFusionSection(const TrackingSectionContext& context, bool bWithHeader= true);
@@ -126,10 +128,24 @@ void drawHandScaleSection(const TrackingSectionContext& context, bool bWithHeade
 void drawImageQualitySection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawWristImuSection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawFaceSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The body proportions and Measure My Body; the per-camera enables are
+// drawBodyPoseCameraControls
 void drawBodyPoseSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// What body tracking is for and which cameras should run it
+void drawBodyPoseIntro();
+// One camera's body pose enable and, when enabled, its model. Draws nothing
+// for a camera index the config does not have.
+void drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex);
 void drawDirectSection(const TrackingSectionContext& context, bool bWithHeader= true);
 void drawHandCalibrationSection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The 3D scene toggles under the Overlay heading
 void drawOverlaySection(const TrackingSectionContext& context, bool bWithHeader= true);
+// The view toggles, no headers. Hand: the preview's skeleton overlay,
+// detection boxes and, in direct mode, every hand slot. Body: the preview's
+// body landmarks. Scene: the 3D per-camera skeletons and the view from camera.
+void drawHandOverlayControls(const TrackingSectionContext& context);
+void drawBodyOverlayControls(const TrackingSectionContext& context);
+void drawSceneOverlayControls(const TrackingSectionContext& context);
 void drawInferenceSection(const TrackingSectionContext& context, bool bWithHeader= true);
 // Draws nothing without a camera
 void drawCaptureTimingSection(const TrackingSectionContext& context, bool bWithHeader= true);
