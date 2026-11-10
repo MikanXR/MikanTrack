@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include "imgui.h"
+#include "implot.h"
 
 #include "Logger.h"
 #include "PathUtils.h"
@@ -99,6 +100,22 @@ void applyStyle()
 	style.ItemSpacing= ImVec2(10, 10);
 	style.ItemInnerSpacing= ImVec2(6, 4);
 	style.IndentSpacing= 20.0f;
+
+	// Plots: a dark plot area set straight into the window, no frame and no
+	// border, compact padding. Every other plot color stays on auto, which
+	// follows the ImGui colors above.
+	ImPlotStyle& plotStyle= ImPlot::GetStyle();
+	plotStyle.Colors[ImPlotCol_PlotBg]= ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
+	plotStyle.Colors[ImPlotCol_FrameBg]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.Colors[ImPlotCol_LegendBg]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.Colors[ImPlotCol_LegendBorder]= ImVec4(0.f, 0.f, 0.f, 0.f);
+	plotStyle.PlotBorderSize= 0.f;
+	// Wide enough sideways for the last tick label, which centers on the edge
+	plotStyle.PlotPadding= ImVec2(12, 4);
+	plotStyle.LabelPadding= ImVec2(4, 3);
+	plotStyle.LegendPadding= ImVec2(2, 2);
+	plotStyle.LegendInnerPadding= ImVec2(2, 2);
+	plotStyle.LegendSpacing= ImVec2(12, 0);
 }
 
 const ImWchar* getJapaneseGlyphRanges()

@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
+#include "implot.h"
 
 #include "AppConfig.h"
 #include "AutomationServer.h"
@@ -180,9 +181,11 @@ bool App::startup()
 	MIKAN_LOG_INFO("App::startup") << "OpenGL " << (const char*)glGetString(GL_VERSION)
 		<< " on " << (const char*)glGetString(GL_RENDERER);
 
-	// ImGui (docking)
+	// ImGui (docking), and ImPlot's context beside it before the theme
+	// styles both
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
+	ImPlot::CreateContext();
 	ImGuiIO& io= ImGui::GetIO();
 	io.ConfigFlags|= ImGuiConfigFlags_DockingEnable;
 	io.ConfigFlags|= ImGuiConfigFlags_ViewportsEnable;
@@ -777,6 +780,7 @@ void App::shutdown()
 	{
 		ImGui_ImplOpenGL3_Shutdown();
 		ImGui_ImplSDL2_Shutdown();
+		ImPlot::DestroyContext();
 		ImGui::DestroyContext();
 	}
 

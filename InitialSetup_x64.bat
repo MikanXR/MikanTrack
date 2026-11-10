@@ -7,7 +7,7 @@ setlocal
 
 set UNZIP_EXE=%~dp0tools\7zip\7za.exe
 
-:: Make sure git submodules are present (imgui, glm, nlohmann_json, readerwriterqueue)
+:: Make sure git submodules are present (imgui, implot, glm, nlohmann_json, readerwriterqueue, cgltf)
 echo "Updating git submodules..."
 git submodule update --init --recursive
 IF %ERRORLEVEL% NEQ 0 (

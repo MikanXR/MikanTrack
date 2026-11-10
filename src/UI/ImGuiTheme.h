@@ -5,8 +5,10 @@
 // The app's ImGui look: a dark pastel palette over StyleColorsDark, rounded
 // metrics, the Mochiy Pop One UI font (with Japanese glyph coverage), and the
 // M PLUS 1 Code monospace font for expression text (with its own Japanese
-// glyphs, since a target name can be Japanese). Both are applied once in
-// App::startup, after ImGui::CreateContext and before the first frame.
+// glyphs, since a target name can be Japanese). applyStyle also sets the
+// ImPlot style every plot draws in. Both are applied once in App::startup,
+// after ImGui::CreateContext and ImPlot::CreateContext and before the first
+// frame.
 namespace ImGuiTheme
 {
 void applyStyle();

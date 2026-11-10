@@ -34,6 +34,7 @@ linked, so this app builds standalone.
 ## Third-party libraries
 
 - **Dear ImGui** (docking branch) — MIT — `thirdparty/imgui` (submodule)
+- **ImPlot** 1.1 — MIT — `thirdparty/implot` (submodule)
 - **tinyfiledialogs** 3.8.8 — zlib — `thirdparty/tinyfiledialogs` (vendored, two files)
 - **Mochiy Pop One** (UI font) — SIL OFL 1.1 — `resources/fonts/` (license text alongside as `OFL.txt`)
 - **M PLUS 1 Code** (monospace font for expression text, with Japanese glyphs) — SIL OFL 1.1 — `resources/fonts/` (license text alongside as `OFL-MPLUS1Code.txt`)
