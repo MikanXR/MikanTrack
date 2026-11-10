@@ -771,6 +771,207 @@ static int runRetargetGoldenTest(const TestArgs&)
 		checkSame(result.tally, result.restingFrames[1] > 10, "(d8) avatar swap and rig edit");
 	}
 
+	// (d9) The rest pose the preview shows, under the default rig and an
+	// edited one
+	{
+		Tally tally;
+		std::string why;
+		DirectRetargetConfig edited= directConfig;
+		edited.sides[0].restElbowOffset= glm::vec3(0.1f, 0.05f, -0.25f);
+		edited.sides[1].restWristOffset= glm::vec3(0.2f, 0.1f, -0.3f);
+		edited.sides[1].restPalmNormal= glm::vec3(0.f, -0.3f, -1.f);
+		edited.sides[0].restFingerCurlRadians= 0.5f;
+		edited.sides[0].handTrimRadians= glm::vec3(0.2f, 0.1f, -0.15f);
+		const DirectRetargetConfig* configs[2]= {&directConfig, &edited};
+		for (int index= 0; index < 2; ++index)
+		{
+			AvatarPose livePose;
+			Frozen::AvatarPose frozenPose;
+			DirectRetarget::makeRestPose(*directRig.skeleton, *configs[index], livePose);
+			Frozen::DirectRetarget::makeRestPose(*directRig.skeleton, toFrozen(*configs[index]), frozenPose);
+			tally.frames++;
+			tally.note(samePose(livePose, frozenPose, why), index, "rest pose", why);
+		}
+		checkSame(tally, true, "(d9) rest pose");
+	}
+
+	// -- The source pose's clock and group states ------------------------------
+
+	// (c1) The position source pose: the clock is the frame's, its interval
+	// runs from the last fill, a reset starts a new epoch, and a side the
+	// stream did not pass, or a lost head, reads as lost
+	{
+		AvatarRetarget retarget;
+		const BodyDimensions user= makeUserDimensions();
+		SourcePose source;
+		uint32_t firstEpoch= 0;
+		int clockWrong= 0;
+		int statesWrong= 0;
+		int confidencesWrong= 0;
+		for (int index= 0; index < 40; ++index)
+		{
+			const double timestampMs= index * kFrameMs;
+			TrackingFrameResult frame= makePositionFrame(*rig.skeleton, timestampMs, index);
+			frame.timestampMs= timestampMs;
+			const bool bLeftDropped= inRange(index, 10, 20);
+			const bool bHeadDropped= inRange(index, 15, 25);
+			if (bHeadDropped)
+				frame.head.valid= false;
+			if (index == 30)
+				retarget.reset();
+			const bool bSideValid[2]= {!bLeftDropped, true};
+			retarget.fillSource(frame.poses, bSideValid, frame.head, frame.timestampMs, user, source);
+			if (index == 0)
+				firstEpoch= source.clock.resetEpoch;
+
+			const bool bEpochStart= index == 0 || index == 30;
+			const uint32_t expectedEpoch= firstEpoch + (index >= 30 ? 1u : 0u);
+			if (source.pipeline != SourcePose::ePipeline::Position || source.clock.timestampMs != timestampMs ||
+				source.clock.frameIntervalMs != (bEpochStart ? 0.0 : kFrameMs) ||
+				source.clock.resetEpoch != expectedEpoch)
+			{
+				clockWrong++;
+			}
+
+			using eGroupState= SourcePose::eGroupState;
+			const eGroupState left= bLeftDropped ? eGroupState::Lost : eGroupState::Measured;
+			if (source.arms[0].state != left || source.hands[0].state != left ||
+				source.arms[1].state != eGroupState::Measured || source.hands[1].state != eGroupState::Measured ||
+				source.torso.state != left ||
+				source.head.state != (bHeadDropped ? eGroupState::Lost : eGroupState::Measured))
+			{
+				statesWrong++;
+			}
+
+			const SourcePose::Arm& arm= source.arms[1];
+			const SourcePose::Hand& hand= source.hands[1];
+			if (!hand.confidence.bPresent || hand.confidence.value != frame.poses[1].confidence ||
+				!arm.forearmConfidence.bPresent || arm.forearmConfidence.value != frame.poses[1].forearmConfidence ||
+				!arm.shoulderConfidence.bPresent || arm.shoulderConfidence.value != frame.poses[1].shoulderConfidence ||
+				hand.fingerZero != SourcePose::eFingerZero::CapturedRest ||
+				source.head.confidence.bPresent != !bHeadDropped)
+			{
+				confidencesWrong++;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (c1) clock wrong on " << clockWrong << ", states on " << statesWrong
+							 << ", confidences on " << confidencesWrong << " of 40 frames";
+		check(clockWrong == 0 && statesWrong == 0 && confidencesWrong == 0,
+			  "(c1) position source pose: clock, epoch, group states and confidences");
+	}
+
+	// (c2) The direct source pose: a dropped hand on a placed arm reads as
+	// held, a lost wrist holds the arm and then loses it, a gap, a
+	// regression and a reset each start a new epoch, and the phone head
+	// reads as measured with its confidence
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		DirectRetarget retarget;
+		SourcePose source;
+		using eGroupState= SourcePose::eGroupState;
+		uint32_t firstEpoch= 0;
+		uint32_t restarts= 0;
+		double timeShiftMs= 0.0;
+		double lastTimestampMs= 0.0;
+		int clockWrong= 0;
+		int steadyWrong= 0;
+		int handDropWrong= 0;
+		int shortLossWrong= 0;
+		int longLossHeld= 0;
+		int longLossLost= 0;
+		int longLossHandWrong= 0;
+		int phoneWrong= 0;
+		for (int index= 0; index < 170; ++index)
+		{
+			User user= makeMovingUser(index * kFrameMs);
+			TrackingFrameResult::HeadPose phoneHead;
+			const bool bHandDropped= inRange(index, 30, 40);
+			const bool bShortLoss= inRange(index, 50, 55);
+			const bool bLongLoss= inRange(index, 70, 101);
+			const bool bPhone= inRange(index, 150, 160);
+			if (bHandDropped)
+				user.bHandTracked[0]= false;
+			if (bShortLoss || bLongLoss)
+			{
+				user.bWristSeen[0]= false;
+				user.bHandTracked[0]= false;
+			}
+			if (bPhone)
+			{
+				phoneHead.valid= true;
+				phoneHead.orientationWorld= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
+				phoneHead.confidence= 0.75f;
+			}
+			bool bRestart= index == 0;
+			if (index == 110)
+			{
+				timeShiftMs+= 900.0;
+				bRestart= true;
+			}
+			if (index == 130)
+			{
+				timeShiftMs-= 3000.0;
+				bRestart= true;
+			}
+			if (index == 140)
+			{
+				retarget.reset();
+				bRestart= true;
+			}
+			restarts+= (bRestart && index != 0) ? 1u : 0u;
+			const double timestampMs= index * kFrameMs + timeShiftMs;
+			const TrackingFrameResult frame= makeFrame(camera, user, *directRig.skeleton, timestampMs, index);
+			retarget.measure(frame, camera.model, phoneHead, timestampMs, *directRig.skeleton, directConfig, source);
+			if (index == 0)
+				firstEpoch= source.clock.resetEpoch;
+
+			if (source.pipeline != SourcePose::ePipeline::Direct || source.clock.timestampMs != timestampMs ||
+				source.clock.frameIntervalMs != (bRestart ? 0.0 : timestampMs - lastTimestampMs) ||
+				source.clock.resetEpoch != firstEpoch + restarts)
+			{
+				clockWrong++;
+			}
+			lastTimestampMs= timestampMs;
+
+			const SourcePose::Arm& arm= source.arms[0];
+			const SourcePose::Hand& hand= source.hands[0];
+			if (inRange(index, 20, 30) &&
+				(source.torso.state != eGroupState::Measured || source.head.state != eGroupState::Measured ||
+				 source.head.confidence.bPresent || arm.state != eGroupState::Measured ||
+				 hand.state != eGroupState::Measured || !hand.confidence.bPresent ||
+				 hand.fingerZero != SourcePose::eFingerZero::Metacarpal))
+			{
+				steadyWrong++;
+			}
+			if (bHandDropped && (arm.state != eGroupState::Measured || hand.state != eGroupState::Held))
+				handDropWrong++;
+			if (bShortLoss && arm.state != eGroupState::Held)
+				shortLossWrong++;
+			if (bLongLoss)
+			{
+				longLossHeld+= arm.state == eGroupState::Held ? 1 : 0;
+				longLossLost+= arm.state == eGroupState::Lost ? 1 : 0;
+				longLossHandWrong+= (arm.state == eGroupState::Lost && hand.state != eGroupState::Lost) ? 1 : 0;
+			}
+			if (bPhone &&
+				(source.head.state != eGroupState::Measured || !source.head.confidence.bPresent ||
+				 source.head.confidence.value != phoneHead.confidence))
+			{
+				phoneWrong++;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (c2) clock wrong on " << clockWrong << " frames, " << restarts
+							 << " restarts; the long wrist loss held " << longLossHeld << " frames and lost "
+							 << longLossLost;
+		check(clockWrong == 0 && restarts == 3,
+			  "(c2) direct source pose: clock and epoch through a gap, a regression and a reset");
+		check(steadyWrong == 0, "(c2) direct source pose: every group measured in steady motion");
+		check(handDropWrong == 0, "(c2) direct source pose: a dropped hand on a placed arm reads as held");
+		check(shortLossWrong == 0 && longLossHeld > 0 && longLossLost > 0 && longLossHandWrong == 0,
+			  "(c2) direct source pose: a lost wrist holds the arm, then loses it with its hand");
+		check(phoneWrong == 0, "(c2) direct source pose: the phone head measured with its confidence");
+	}
+
 	// -- The compare is not vacuous -------------------------------------------
 
 	// (s1) A live stream configured with another elbow hint must differ

@@ -310,17 +310,23 @@ private:
 };
 
 // The position retarget on an unresolved frame, which also compares what the
-// stream does not carry: the root placement
+// stream does not carry: the root placement. Two live solvers run beside the
+// frozen one: the facade, and the split it is made of (the source pose
+// filled, then solved), so both entry points are held to the frozen bits.
 struct PositionPair
 {
 	AvatarRetarget live;
+	AvatarRetarget liveSplit;
 	Frozen::AvatarRetarget frozen;
 	AvatarPose livePose;
+	AvatarPose liveSplitPose;
+	SourcePose liveSource;
 	Frozen::AvatarPose frozenPose;
 
 	void reset()
 	{
 		live.reset();
+		liveSplit.reset();
 		frozen.reset();
 	}
 
@@ -328,22 +334,41 @@ struct PositionPair
 			   const AvatarRetargetConfig& config, std::string& outWhy)
 	{
 		live.solve(frame, user, skeleton, config, livePose);
+		const bool bSideValid[2]= {
+			frame.poses[0].tracked && frame.poses[0].hasWorldPose,
+			frame.poses[1].tracked && frame.poses[1].hasWorldPose,
+		};
+		liveSplit.fillSource(frame.poses, bSideValid, frame.head, frame.timestampMs, user, liveSource);
+		liveSplit.solve(liveSource, skeleton, config, liveSplitPose);
 		frozen.solve(frame, user, skeleton, toFrozen(config), frozenPose);
-		return samePose(livePose, frozenPose, outWhy);
+		if (!samePose(livePose, frozenPose, outWhy))
+			return false;
+		if (!samePose(liveSplitPose, frozenPose, outWhy))
+		{
+			outWhy= "fill then solve: " + outWhy;
+			return false;
+		}
+		return true;
 	}
 };
 
-// The direct retarget: the pose, the solve state, the chains and the lift scale
+// The direct retarget: the pose, the solve state, the chains and the lift
+// scale. Two live solvers run beside the frozen one: the facade, and the
+// split it is made of (measure, then place).
 struct DirectPair
 {
 	DirectRetarget live;
+	DirectRetarget liveSplit;
 	Frozen::DirectRetarget frozen;
 	AvatarPose livePose;
+	AvatarPose liveSplitPose;
+	SourcePose liveSource;
 	Frozen::AvatarPose frozenPose;
 
 	void reset()
 	{
 		live.reset();
+		liveSplit.reset();
 		frozen.reset();
 	}
 
@@ -352,24 +377,16 @@ struct DirectPair
 			   const DirectRetargetConfig& config, std::string& outWhy)
 	{
 		live.solve(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, livePose);
+		liveSplit.measure(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, liveSource);
+		liveSplit.place(liveSource, skeleton, config, liveSplitPose);
 		frozen.solve(cameraFrame, toFrozen(cameraModel), phoneHead, timestampMs, skeleton, toFrozen(config),
 					 frozenPose);
-		if (!samePose(livePose, frozenPose, outWhy) ||
-			!sameSolveState(live.getSolveState(), frozen.getSolveState(), outWhy))
-		{
+		if (!sameAsFrozen(live, livePose, skeleton, outWhy))
 			return false;
-		}
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		if (!sameAsFrozen(liveSplit, liveSplitPose, skeleton, outWhy))
 		{
-			const std::string prefix= "getArmChain(" + std::to_string(sideIndex) + ").";
-			if (!sameChain(live.getArmChain(sideIndex), frozen.getArmChain(sideIndex), prefix, outWhy))
-				return false;
-			if (!sameBits(live.getPnpScale(sideIndex).scale, frozen.getPnpScale(sideIndex).scale) ||
-				!sameBits(live.getPnpScale(sideIndex).sampleCount, frozen.getPnpScale(sideIndex).sampleCount))
-			{
-				outWhy= "getPnpScale(" + std::to_string(sideIndex) + ")";
-				return false;
-			}
+			outWhy= "measure then place: " + outWhy;
+			return false;
 		}
 		return true;
 	}
@@ -377,14 +394,50 @@ struct DirectPair
 	bool captureNeutral(DirectNeutralPose& outNeutral, std::string& outWhy)
 	{
 		Frozen::DirectNeutralPose frozenNeutral;
+		DirectNeutralPose splitNeutral;
 		const bool bLive= live.captureNeutral(outNeutral);
+		const bool bSplit= liveSplit.captureNeutral(splitNeutral);
 		const bool bFrozen= frozen.captureNeutral(frozenNeutral);
-		if (bLive != bFrozen)
+		if (bLive != bFrozen || bSplit != bFrozen)
 		{
 			outWhy= "captureNeutral result";
 			return false;
 		}
+		if (!sameNeutral(splitNeutral, frozenNeutral, outWhy))
+		{
+			outWhy= "measure then place: " + outWhy;
+			return false;
+		}
 		return sameNeutral(outNeutral, frozenNeutral, outWhy);
+	}
+
+private:
+	bool sameAsFrozen(const DirectRetarget& solver, const AvatarPose& pose, const AvatarSkeleton& skeleton,
+					  std::string& outWhy) const
+	{
+		if (!samePose(pose, frozenPose, outWhy) || !sameSolveState(solver.getSolveState(), frozen.getSolveState(), outWhy))
+			return false;
+		const glm::mat4 cameraToWorld= DirectRetarget::makeCameraToWorld(skeleton, pose, solver.getSolveState());
+		const glm::mat4 frozenCameraToWorld=
+			Frozen::DirectRetarget::makeCameraToWorld(skeleton, frozenPose, frozen.getSolveState());
+		if (!sameBits(cameraToWorld, frozenCameraToWorld))
+		{
+			outWhy= "makeCameraToWorld";
+			return false;
+		}
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const std::string prefix= "getArmChain(" + std::to_string(sideIndex) + ").";
+			if (!sameChain(solver.getArmChain(sideIndex), frozen.getArmChain(sideIndex), prefix, outWhy))
+				return false;
+			if (!sameBits(solver.getPnpScale(sideIndex).scale, frozen.getPnpScale(sideIndex).scale) ||
+				!sameBits(solver.getPnpScale(sideIndex).sampleCount, frozen.getPnpScale(sideIndex).sampleCount))
+			{
+				outWhy= "getPnpScale(" + std::to_string(sideIndex) + ")";
+				return false;
+			}
+		}
+		return true;
 	}
 };
 

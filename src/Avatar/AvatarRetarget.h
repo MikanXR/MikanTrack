@@ -9,6 +9,7 @@
 
 #include "AvatarTypes.h"
 #include "BodyPoseSolver.h" // BodyDimensions
+#include "SourcePose.h"
 #include "TrackingTypes.h"
 
 class AvatarSkeleton;
@@ -106,12 +107,28 @@ class AvatarRetarget
 {
 public:
 	// Forgets the root follow state, so the next solve snaps to its
-	// measurement instead of filtering from a stale placement
+	// measurement instead of filtering from a stale placement, and starts a
+	// new epoch on the source pose clock
 	void reset();
 
-	// bSideValid selects which hands to pose at all (the caller has applied
-	// its confidence gate and dropout hold); a side not valid leaves its arm
-	// at rest. Always produces a valid pose with a root, tracked or not.
+	// The source pose of a frame: a copy of exactly what the solve reads.
+	// bSideValid selects which sides carry an arm and a hand (the caller has
+	// applied its confidence gate and dropout hold, so a valid side reads as
+	// measured); the torso is measured while both valid sides carry a
+	// shoulder. Owns the clock: the frame time, the interval since the last
+	// fill, and the epoch reset() advances.
+	void fillSource(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
+					const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
+					SourcePose& outSource);
+
+	// Poses the avatar from a position pipeline's source pose; an arm that
+	// is lost stays at rest. Always produces a valid pose with a root,
+	// tracked or not. The root follow restarts when the source's epoch
+	// changes.
+	void solve(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
+			   AvatarPose& outPose);
+
+	// fillSource then solve
 	void solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 			   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
 			   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose);
@@ -122,8 +139,15 @@ public:
 			   const AvatarRetargetConfig& config, AvatarPose& outPose);
 
 private:
-	void resolveRoot(const std::array<HandPose, 2>& poses, const bool bSideValid[2], double timestampMs,
-					 const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose);
+	void resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
+					 AvatarPose& outPose);
+
+	// The source clock, owned by fillSource
+	uint32_t m_resetEpoch= 0;
+	bool m_bHasFillTime= false;
+	double m_lastFillTimestampMs= 0.0;
+	// The epoch the root follow state belongs to
+	uint32_t m_solveEpoch= 0;
 
 	struct RootState
 	{

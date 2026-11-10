@@ -9,6 +9,7 @@
 #include "AvatarRetarget.h"
 #include "HandPoseModel.h"
 #include "OneEuroFilter.h"
+#include "SourcePose.h"
 #include "TrackingTypes.h"
 
 class AvatarSkeleton;
@@ -107,11 +108,32 @@ public:
 	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 
+	// Forgets every filter, hold and ease, and starts a new epoch on the
+	// source pose clock
 	void reset();
 
-	// camera: the per-camera result (hands with image points and camera-space
-	// palm poses, the body observation). phoneHead: valid while the phone
-	// face stream drives the head, already in the canonical head frame.
+	// The measurement half: one camera's frame into the source pose, in the
+	// avatar's units, and the solve state (getSolveState) but for what the
+	// placement decides. camera: the per-camera result (hands with image
+	// points and camera-space palm poses, the body observation). phoneHead:
+	// valid while the phone face stream drives the head, already in the
+	// canonical head frame. Owns the clock: a timestamp regression or a gap
+	// past the hold restarts the solver and advances the epoch. Owns the
+	// holds: a torso, a head or an arm within its hold reads as held, with
+	// its last values.
+	void measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+				 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
+				 const DirectRetargetConfig& config, SourcePose& outSource);
+
+	// The placement half: a direct source pose into the avatar's bones. The
+	// head and the wrist take their joint limits and the rig's trims here. A
+	// lost arm eases into the rig's rest pose from what its bones took last
+	// frame, and its ease restarts when the source's epoch changes. Writes
+	// the solve state's head delta and each arm's rest state.
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+			   AvatarPose& outPose);
+
+	// measure then place
 	void solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
 			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
 			   const DirectRetargetConfig& config, AvatarPose& outPose);
@@ -224,6 +246,8 @@ public:
 
 private:
 	void configureFilters();
+	void resetMeasure();
+	void resetPlace();
 
 	struct ArmState
 	{
@@ -248,14 +272,6 @@ private:
 		bool bWristAccepted= false;
 		int handGateFrames= 0;
 		bool bHandAccepted= false;
-		// What the bones took last frame, and whether anything has placed
-		// them since the last reset: the ease into rest starts from here
-		bool bPlaced= false;
-		ArmPlacement lastPlacement;
-		// The ease into rest: when it began (negative while the chain
-		// places the arm) and the placement it started from
-		double easeStartMs= -1.0;
-		ArmPlacement easeFrom;
 		// The hand as last measured, held while the hand model loses it
 		bool bHandMeasured= false;
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm
@@ -297,6 +313,21 @@ private:
 		OneEuroFilter depthFilter;
 	};
 
+	// The placement's own state per arm
+	struct PlaceArmState
+	{
+		// What the bones took last frame, and whether anything has placed
+		// them in this epoch: the ease into rest starts from here
+		bool bPlaced= false;
+		ArmPlacement lastPlacement;
+		// The ease into rest: when it began (negative while the source
+		// places the arm) and the placement it started from
+		double easeStartMs= -1.0;
+		ArmPlacement easeFrom;
+	};
+
+	// The source clock, owned by measure; the epoch survives a reset
+	uint32_t m_resetEpoch= 0;
 	bool m_bHasTime= false;
 	double m_lastTimestampMs= 0.0;
 	bool m_bFiltersConfigured= false;
@@ -305,4 +336,7 @@ private:
 	HeadState m_head;
 	ArmState m_arms[2];
 	SolveState m_state;
+	// The placement's state and the epoch it belongs to
+	uint32_t m_placeEpoch= 0;
+	PlaceArmState m_placeArms[2];
 };

@@ -381,6 +381,13 @@ void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::
 
 void DirectRetarget::reset()
 {
+	resetMeasure();
+	resetPlace();
+	m_resetEpoch++;
+}
+
+void DirectRetarget::resetMeasure()
+{
 	m_state= SolveState();
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
@@ -389,6 +396,12 @@ void DirectRetarget::reset()
 	for (ArmState& arm : m_arms)
 		arm= ArmState();
 	m_bFiltersConfigured= false;
+}
+
+void DirectRetarget::resetPlace()
+{
+	for (PlaceArmState& arm : m_placeArms)
+		arm= PlaceArmState();
 }
 
 void DirectRetarget::configureFilters()
@@ -425,13 +438,27 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 						   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
 						   const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose)
 {
+	SourcePose source;
+	measure(camera, cameraModel, phoneHead, timestampMs, skeleton, config, source);
+	place(source, skeleton, config, outPose);
+}
+
+void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+							 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
+							 const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, SourcePose& outSource)
+{
+	using eGroupState= SourcePose::eGroupState;
+
 	// The frame clock. A regression (a replay scrub) or a gap past the hold
 	// starts over: nothing measured before it should shape what comes after.
 	if (m_bHasTime)
 	{
 		const double gapMs= timestampMs - m_lastTimestampMs;
 		if (gapMs < 0.0 || gapMs > kMaxHoldMs)
-			reset();
+		{
+			resetMeasure();
+			m_resetEpoch++;
+		}
 	}
 	if (!m_bFiltersConfigured)
 		configureFilters();
@@ -440,11 +467,11 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	m_bHasTime= true;
 	m_lastTimestampMs= timestampMs;
 
-	outPose.clear();
-	outPose.valid= true;
-	outPose.timestampMs= timestampMs;
-	// The root is fixed: the camera is the world and the user faces it
-	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
+	outSource= SourcePose();
+	outSource.pipeline= SourcePose::ePipeline::Direct;
+	outSource.clock.timestampMs= timestampMs;
+	outSource.clock.frameIntervalMs= frameMs;
+	outSource.clock.resetEpoch= m_resetEpoch;
 
 	m_state= SolveState();
 	m_state.camera= cameraModel;
@@ -467,6 +494,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	const float noseForward= config.noseForwardMeters * lengthScale;
 	const float torsoLength= std::max(
 		skeleton.getRestShoulderMidpointWorld().z - skeleton.getBone(B::Hips).restPositionWorld.z, 0.05f);
+	outSource.upperArmLength= config.userUpperArmLengthMeters * lengthScale;
+	outSource.forearmLength= config.userForearmLengthMeters * lengthScale;
 
 	const BodyPoseObservation& body= camera.body;
 	const bool bFrameKnown= cameraModel.width > 0 && cameraModel.height > 0;
@@ -564,10 +593,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), kSpineLimitRadians);
 	}
 	m_state.spineDelta= spineDelta;
-	placeBone(outPose, skeleton, B::Spine, spineDelta);
-	placeBone(outPose, skeleton, B::Chest, spineDelta);
-	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
-	placeBone(outPose, skeleton, B::Neck, spineDelta);
+	outSource.torso.state= bTorsoFresh ? eGroupState::Measured : bTorsoUsable ? eGroupState::Held : eGroupState::Lost;
+	outSource.torso.spineDelta= spineDelta;
 
 	// -- Head: the two ear rays plus the known head width, the nose a known
 	// distance forward of their midpoint, the same filtering as the torso --
@@ -611,27 +638,25 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			filter.reset();
 		m_head.depthFilter.reset();
 	}
+	if (phoneHead.valid)
 	{
-		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
-		if (phoneHead.valid)
-		{
-			// Already canonical: the face anchor captured at the neutral
-			// pose makes looking at the screen the identity
-			headDelta= limitRotationAngle(phoneHead.orientationWorld, kHeadLimitRadians);
-		}
-		else if (bHeadUsable)
-		{
-			const glm::quat relative=
-				config.neutral.present ? m_head.frame * glm::inverse(tilt * config.neutral.head) : m_head.frame;
-			headDelta= limitRotationAngle(relative, kHeadLimitRadians);
-		}
-		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
-		placeBone(outPose, skeleton, B::Head, headDelta);
-		m_state.headMeasured= bHeadUsable;
-		if (bHeadUsable)
-			m_state.headFrame= m_head.frame;
-		m_state.headDelta= headDelta;
+		// Already canonical: the face anchor captured at the neutral pose
+		// makes looking at the screen the identity
+		outSource.head.state= eGroupState::Measured;
+		outSource.head.confidence.bPresent= true;
+		outSource.head.confidence.value= phoneHead.confidence;
+		outSource.head.orientation= phoneHead.orientationWorld;
 	}
+	else if (bHeadUsable)
+	{
+		outSource.head.state=
+			m_head.solvedTimestampMs == timestampMs ? eGroupState::Measured : eGroupState::Held;
+		outSource.head.orientation=
+			config.neutral.present ? m_head.frame * glm::inverse(tilt * config.neutral.head) : m_head.frame;
+	}
+	m_state.headMeasured= bHeadUsable;
+	if (bHeadUsable)
+		m_state.headFrame= m_head.frame;
 
 	// -- Arms --
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -891,43 +916,22 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
 		if (!bChainUsable)
 		{
+			// Nothing places the arm: the source says so, and the placement
+			// decides what a lost arm does
 			arm.chain.valid= false;
 			arm.wristPixelFilter.reset();
 			arm.elbowPixelFilter.reset();
 			arm.depthFilter.reset();
-
-			// The ease into the rig's rest pose, from what the bones took
-			// last frame, timed from that frame so the first frame without
-			// a chain already moves; an arm nothing has placed since the
-			// last reset is at rest at once
-			if (arm.easeStartMs < 0.0)
-			{
-				arm.easeStartMs= timestampMs - frameMs;
-				arm.easeFrom= arm.lastPlacement;
-			}
-			const DirectRetarget::ArmPlacement rest= restPlacement(skeleton, sideIndex, spineDelta, sideConfig);
-			float blend= 1.f;
-			if (arm.bPlaced && config.restBlendMs > 0.f)
-				blend= smoothstep((float)((timestampMs - arm.easeStartMs) / config.restBlendMs));
-			const DirectRetarget::ArmPlacement placement=
-				blend < 1.f ? blendPlacement(arm.easeFrom, rest, blend) : rest;
-			arm.lastPlacement= placement;
-			arm.bPlaced= true;
-			armState.bResting= true;
-			armState.restBlend= blend;
-			placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
 			continue;
 		}
-		arm.easeStartMs= -1.0;
 		armState.chain= arm.chain;
 		armState.pnpScale= getPnpScale(sideIndex);
 
-		// Upper arm and forearm: swings from rest onto the chain's directions
-		DirectRetarget::ArmPlacement placement;
-		placement.upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
-		placement.forearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
-		const ChainSwing swing=
-			swingChain(skeleton, sideIndex, spineDelta, placement.upperDirection, placement.forearmDirection);
+		// The chain's directions, and the swings the placement will make onto
+		// them, which the hand is measured under
+		const glm::vec3 upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
+		const glm::vec3 chainForearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
+		const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, upperDirection, chainForearmDirection);
 		const glm::vec3 forearmDirection= swing.forearmDirection;
 
 		// The hand: the palm frame in the world, its normal's roll about the
@@ -935,7 +939,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		// measured forearm frame (the wrist). Held through a hand dropout, a
 		// slot the body disagrees with counting as one.
 		const glm::vec3 restPalmNormal= restPalmNormalUnder(skeleton, side, swing);
-		if (bHandSeen && pose.tracked && pose.hasCameraPose)
+		const bool bHandRead= bHandSeen && pose.tracked && pose.hasCameraPose;
+		if (bHandRead)
 		{
 			const glm::quat palmRaw= glm::normalize(worldFromCam * pose.palmOrientationCamera);
 			glm::vec3 palmXRaw= palmRaw * glm::vec3(1.f, 0.f, 0.f);
@@ -1041,14 +1046,115 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		armState.filteredPalm= arm.filteredPalm;
 		armState.fingers= arm.fingers;
 
-		// An arm whose hand was never seen rolls only by the rig's trim and
-		// keeps the avatar's rest wrist
+		// The source: the chain, and what places the arm's bones. An arm
+		// whose hand was never seen rolls only by the rig's trim and keeps
+		// the avatar's rest wrist.
+		SourcePose::Arm& sourceArm= outSource.arms[sideIndex];
+		sourceArm.state= arm.solvedTimestampMs == timestampMs ? eGroupState::Measured : eGroupState::Held;
+		sourceArm.bHasShoulder= true;
+		sourceArm.shoulderPosition= arm.chain.shoulder;
+		sourceArm.bHasElbow= true;
+		sourceArm.elbowPosition= arm.chain.elbow;
+		sourceArm.wristPosition= arm.chain.wrist;
+		sourceArm.upperDirection= upperDirection;
+		sourceArm.forearmDirection= chainForearmDirection;
+		SourcePose::Hand& sourceHand= outSource.hands[sideIndex];
+		sourceHand.state= bHandRead ? eGroupState::Measured
+			: arm.bHandMeasured     ? eGroupState::Held
+									: eGroupState::Lost;
+		if (bHandRead)
+		{
+			sourceHand.confidence.bPresent= true;
+			sourceHand.confidence.value= pose.confidence;
+		}
 		if (arm.bHandMeasured)
 		{
-			placement.twist= arm.twist;
-			placement.wristRotation= arm.wristRotation;
+			sourceArm.twist= arm.twist;
+			sourceHand.wristRotation= arm.wristRotation;
 		}
-		placement.fingers= arm.fingers;
+		sourceHand.fingerZero= SourcePose::eFingerZero::Metacarpal;
+		sourceHand.fingers= arm.fingers;
+	}
+}
+
+void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const DirectRetargetConfig& config, AvatarPose& outPose)
+{
+	using eGroupState= SourcePose::eGroupState;
+
+	// The ease belongs to one epoch of the source clock
+	if (source.clock.resetEpoch != m_placeEpoch)
+	{
+		resetPlace();
+		m_placeEpoch= source.clock.resetEpoch;
+	}
+	const double timestampMs= source.clock.timestampMs;
+	const double frameMs= source.clock.frameIntervalMs;
+
+	outPose.clear();
+	outPose.valid= true;
+	outPose.timestampMs= timestampMs;
+	// The root is fixed: the camera is the world and the user faces it
+	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
+
+	const glm::quat spineDelta= source.torso.spineDelta;
+	placeBone(outPose, skeleton, B::Spine, spineDelta);
+	placeBone(outPose, skeleton, B::Chest, spineDelta);
+	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
+	placeBone(outPose, skeleton, B::Neck, spineDelta);
+
+	// The head within its limit, under the rig's trim
+	{
+		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
+		if (source.head.state != eGroupState::Lost)
+			headDelta= limitRotationAngle(source.head.orientation, kHeadLimitRadians);
+		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
+		placeBone(outPose, skeleton, B::Head, headDelta);
+		m_state.headDelta= headDelta;
+	}
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		PlaceArmState& arm= m_placeArms[sideIndex];
+		const AvatarRetargetConfig::Side& sideConfig= config.sides[sideIndex];
+		const SourcePose::Arm& sourceArm= source.arms[sideIndex];
+		const SourcePose::Hand& sourceHand= source.hands[sideIndex];
+		SolveState::Arm& armState= m_state.arms[sideIndex];
+
+		if (sourceArm.state == eGroupState::Lost)
+		{
+			// The ease into the rig's rest pose, from what the bones took
+			// last frame, timed from that frame so the first frame without
+			// a chain already moves; an arm nothing has placed in this epoch
+			// is at rest at once
+			if (arm.easeStartMs < 0.0)
+			{
+				arm.easeStartMs= timestampMs - frameMs;
+				arm.easeFrom= arm.lastPlacement;
+			}
+			const ArmPlacement rest= restPlacement(skeleton, sideIndex, spineDelta, sideConfig);
+			float blend= 1.f;
+			if (arm.bPlaced && config.restBlendMs > 0.f)
+				blend= smoothstep((float)((timestampMs - arm.easeStartMs) / config.restBlendMs));
+			const ArmPlacement placement= blend < 1.f ? blendPlacement(arm.easeFrom, rest, blend) : rest;
+			arm.lastPlacement= placement;
+			arm.bPlaced= true;
+			armState.bResting= true;
+			armState.restBlend= blend;
+			placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
+			continue;
+		}
+		arm.easeStartMs= -1.0;
+
+		// Upper arm and forearm: swings from rest onto the chain's
+		// directions; the forearm's roll and the hand as the source measured
+		// them against the avatar's rest palm
+		ArmPlacement placement;
+		placement.upperDirection= sourceArm.upperDirection;
+		placement.forearmDirection= sourceArm.forearmDirection;
+		placement.twist= sourceArm.twist;
+		placement.wristRotation= sourceHand.wristRotation;
+		placement.fingers= sourceHand.fingers;
 		arm.lastPlacement= placement;
 		arm.bPlaced= true;
 		placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);

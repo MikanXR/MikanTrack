@@ -77,6 +77,80 @@ void AvatarPose::clear()
 void AvatarRetarget::reset()
 {
 	m_root= RootState();
+	m_resetEpoch++;
+	m_bHasFillTime= false;
+	m_lastFillTimestampMs= 0.0;
+}
+
+void AvatarRetarget::fillSource(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
+								const TrackingFrameResult::HeadPose& head, double timestampMs,
+								const BodyDimensions& user, SourcePose& outSource)
+{
+	using eGroupState= SourcePose::eGroupState;
+	outSource= SourcePose();
+	outSource.pipeline= SourcePose::ePipeline::Position;
+	outSource.clock.timestampMs= timestampMs;
+	outSource.clock.frameIntervalMs= m_bHasFillTime ? timestampMs - m_lastFillTimestampMs : 0.0;
+	outSource.clock.resetEpoch= m_resetEpoch;
+	m_bHasFillTime= true;
+	m_lastFillTimestampMs= timestampMs;
+	outSource.upperArmLength= user.upperArmLengthMeters;
+	outSource.forearmLength= user.forearmLengthMeters;
+
+	if (head.valid)
+	{
+		outSource.head.state= eGroupState::Measured;
+		outSource.head.confidence.bPresent= true;
+		outSource.head.confidence.value= head.confidence;
+		outSource.head.orientation= head.orientationWorld;
+	}
+
+	const bool bBothShoulders= bSideValid[0] && bSideValid[1] && poses[0].hasShoulder && poses[1].hasShoulder;
+	outSource.torso.state= bBothShoulders ? eGroupState::Measured : eGroupState::Lost;
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		if (!bSideValid[sideIndex])
+			continue;
+		const HandPose& pose= poses[sideIndex];
+
+		SourcePose::Arm& arm= outSource.arms[sideIndex];
+		arm.state= eGroupState::Measured;
+		arm.bHasShoulder= pose.hasShoulder;
+		if (pose.hasShoulder)
+		{
+			arm.shoulderPosition= pose.shoulderPositionWorld;
+			arm.shoulderConfidence.bPresent= true;
+			arm.shoulderConfidence.value= pose.shoulderConfidence;
+		}
+		arm.wristPosition= pose.getWristPositionWorld();
+		arm.bHasForearmOrientation= pose.hasForearmPose;
+		arm.bHasElbow= pose.hasForearmPose;
+		if (pose.hasForearmPose)
+		{
+			arm.forearmOrientation= pose.forearmOrientationWorld;
+			arm.forearmConfidence.bPresent= true;
+			arm.forearmConfidence.value= pose.forearmConfidence;
+			arm.elbowPosition= pose.getElbowPositionWorld(user.forearmLengthMeters);
+		}
+
+		SourcePose::Hand& hand= outSource.hands[sideIndex];
+		hand.state= eGroupState::Measured;
+		hand.confidence.bPresent= true;
+		hand.confidence.value= pose.confidence;
+		hand.palmOrientation= pose.palmOrientationWorld;
+		hand.fingerZero= SourcePose::eFingerZero::CapturedRest;
+		hand.fingers= pose.fingers;
+	}
+}
+
+void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
+						   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
+						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose)
+{
+	SourcePose source;
+	fillSource(poses, bSideValid, head, timestampMs, user, source);
+	solve(source, skeleton, config, outPose);
 }
 
 void AvatarRetarget::solve(const TrackingFrameResult& frame, const BodyDimensions& user,
@@ -89,18 +163,18 @@ void AvatarRetarget::solve(const TrackingFrameResult& frame, const BodyDimension
 	solve(frame.poses, bSideValid, frame.head, frame.timestampMs, user, skeleton, config, outPose);
 }
 
-void AvatarRetarget::resolveRoot(const std::array<HandPose, 2>& poses, const bool bSideValid[2], double timestampMs,
-								 const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
-								 AvatarPose& outPose)
+void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton,
+								 const AvatarRetargetConfig& config, AvatarPose& outPose)
 {
-	const bool bBothShoulders= bSideValid[0] && bSideValid[1] && poses[0].hasShoulder && poses[1].hasShoulder;
+	const double timestampMs= source.clock.timestampMs;
+	const bool bBothShoulders= source.torso.state != SourcePose::eGroupState::Lost;
 
 	if (config.followShoulders && bBothShoulders)
 	{
 		// The shoulder line fixes the yaw (at rest it runs along world +Y,
 		// right to left) and the midpoint fixes the translation
-		const glm::vec3 midpoint= (poses[0].shoulderPositionWorld + poses[1].shoulderPositionWorld) * 0.5f;
-		const glm::vec3 line= poses[0].shoulderPositionWorld - poses[1].shoulderPositionWorld;
+		const glm::vec3 midpoint= (source.arms[0].shoulderPosition + source.arms[1].shoulderPosition) * 0.5f;
+		const glm::vec3 line= source.arms[0].shoulderPosition - source.arms[1].shoulderPosition;
 		float yaw= m_root.valid ? m_root.yawRadians : glm::radians(config.fixedRootYawDegrees);
 		if (line.x * line.x + line.y * line.y > 1e-6f)
 			yaw= atan2f(line.y, line.x) - glm::half_pi<float>();
@@ -142,14 +216,22 @@ void AvatarRetarget::resolveRoot(const std::array<HandPose, 2>& poses, const boo
 	}
 }
 
-void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
-						   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
-						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose)
+void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const AvatarRetargetConfig& config, AvatarPose& outPose)
 {
+	using eGroupState= SourcePose::eGroupState;
+
+	// The root follow belongs to one epoch of the source clock
+	if (source.clock.resetEpoch != m_solveEpoch)
+	{
+		m_root= RootState();
+		m_solveEpoch= source.clock.resetEpoch;
+	}
+
 	outPose.clear();
 	outPose.valid= true;
-	outPose.timestampMs= timestampMs;
-	resolveRoot(poses, bSideValid, timestampMs, skeleton, config, outPose);
+	outPose.timestampMs= source.clock.timestampMs;
+	resolveRoot(source, skeleton, config, outPose);
 
 	RootedRest rest;
 	rest.skeleton= &skeleton;
@@ -164,23 +246,24 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 	// avatar's rest frame, so the measured orientation IS the posed world
 	// rotation of the canonical head frame and the delta is what remains
 	// after the root yaw
-	if (head.valid && skeleton.getBone(B::Head).present)
+	if (source.head.state != eGroupState::Lost && skeleton.getBone(B::Head).present)
 	{
 		AvatarPose::Bone& headBone= outPose.bones[(int)B::Head];
 		headBone.present= true;
 		const glm::quat headTrim= glm::quat(config.headTrimRadians);
-		headBone.deltaWorld= head.orientationWorld * glm::inverse(rest.rotation * headTrim);
+		headBone.deltaWorld= source.head.orientation * glm::inverse(rest.rotation * headTrim);
 	}
 
-	const bool bBothShoulders= bSideValid[0] && bSideValid[1] && poses[0].hasShoulder && poses[1].hasShoulder;
+	const bool bBothShoulders= source.torso.state != eGroupState::Lost;
 	const glm::vec3 measuredShoulderMidpoint=
-		bBothShoulders ? (poses[0].shoulderPositionWorld + poses[1].shoulderPositionWorld) * 0.5f : glm::vec3(0.f);
+		bBothShoulders ? (source.arms[0].shoulderPosition + source.arms[1].shoulderPosition) * 0.5f : glm::vec3(0.f);
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		if (!bSideValid[sideIndex])
+		const SourcePose::Arm& arm= source.arms[sideIndex];
+		const SourcePose::Hand& sourceHand= source.hands[sideIndex];
+		if (arm.state == eGroupState::Lost)
 			continue;
-		const HandPose& pose= poses[sideIndex];
 		const eHandSide side= (eHandSide)sideIndex;
 		const AvatarRetargetConfig::Side& sideConfig= config.sides[sideIndex];
 
@@ -198,7 +281,7 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 			const glm::vec3 clavicleBase= rest.bonePosition(shoulderBone);
 			if (bBothShoulders)
 			{
-				const glm::vec3 direction= safeNormalize(pose.shoulderPositionWorld - measuredShoulderMidpoint);
+				const glm::vec3 direction= safeNormalize(arm.shoulderPosition - measuredShoulderMidpoint);
 				if (glm::dot(direction, direction) > 0.f)
 				{
 					chainDelta= swingTo(chainDelta, rest.direction(upperArmBone), direction);
@@ -220,11 +303,11 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 		const float upperArm= skeleton.getUpperArmLength(side);
 		const float forearm= skeleton.getForearmLength(side);
 		const float avatarReach= upperArm + forearm;
-		const float userReach= user.upperArmLengthMeters + user.forearmLengthMeters;
+		const float userReach= source.upperArmLength + source.forearmLength;
 		const float ratio= userReach > 1e-3f ? avatarReach / userReach : 1.f;
 
-		const glm::vec3 userShoulder= pose.hasShoulder ? pose.shoulderPositionWorld : avatarShoulder;
-		const glm::vec3 userWrist= pose.getWristPositionWorld();
+		const glm::vec3 userShoulder= arm.bHasShoulder ? arm.shoulderPosition : avatarShoulder;
+		const glm::vec3 userWrist= arm.wristPosition;
 		glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * ratio;
 		const glm::vec3 toWrist= wrist - avatarShoulder;
 		const float reach= glm::length(toWrist);
@@ -236,12 +319,12 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 		// frame, so it turns with the body) as the forearm confidence drops
 		const glm::vec3 hintOffset= rest.rotation * sideConfig.elbowHintOffset;
 		glm::vec3 polePoint= avatarShoulder + hintOffset;
-		if (pose.hasForearmPose)
+		if (arm.bHasElbow)
 		{
-			const glm::vec3 userElbow= pose.getElbowPositionWorld(user.forearmLengthMeters);
+			const glm::vec3 userElbow= arm.elbowPosition;
 			const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * ratio;
 			const float weight= sideConfig.elbowHintConfidence > 0.f
-				? std::clamp(pose.forearmConfidence / sideConfig.elbowHintConfidence, 0.f, 1.f)
+				? std::clamp(arm.forearmConfidence.value / sideConfig.elbowHintConfidence, 0.f, 1.f)
 				: 1.f;
 			polePoint+= (measuredPole - polePoint) * weight;
 		}
@@ -270,7 +353,8 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 			chainDelta= swingTo(chainDelta, rest.direction(handBone), forearmDirection);
 
 			{
-				const glm::quat measuredForearm= pose.hasForearmPose ? pose.forearmOrientationWorld : pose.palmOrientationWorld;
+				const glm::quat measuredForearm=
+					arm.bHasForearmOrientation ? arm.forearmOrientation : sourceHand.palmOrientation;
 				const glm::vec3 measuredPalmNormal=
 					safeNormalize(projectPerpendicular(measuredForearm * glm::vec3(0.f, 0.f, 1.f), forearmDirection));
 				const glm::vec3 restPalmNormal= safeNormalize(projectPerpendicular(
@@ -293,14 +377,15 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 		// own axes: a measured palm equal to the trimmed one leaves the hand
 		// at rest
 		const glm::quat assumedRestPalmRotation= restPalmRotation * glm::quat(sideConfig.handTrimRadians);
-		const glm::quat handDelta= pose.palmOrientationWorld * glm::inverse(rest.rotation * assumedRestPalmRotation);
+		const glm::quat handDelta= sourceHand.palmOrientation * glm::inverse(rest.rotation * assumedRestPalmRotation);
 		{
 			AvatarPose::Bone& bone= outPose.bones[(int)handBone];
 			bone.present= true;
 			bone.deltaWorld= handDelta;
 		}
 
-		solveFingerBones(skeleton, sideIndex, rest.rotation, handDelta, handPosition, pose.fingers, sideConfig, outPose);
+		solveFingerBones(skeleton, sideIndex, rest.rotation, handDelta, handPosition, sourceHand.fingers, sideConfig,
+						 outPose);
 	}
 }
 

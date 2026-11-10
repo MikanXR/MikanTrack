@@ -71,6 +71,22 @@ Morph targets deform on the CPU. A primitive with targets keeps its unmorphed ve
 
 Deferred, tracked in `docs/plan.md`: outline, rim, matcap, UV animation, GPU morphing, spring bones.
 
+## The source pose (`src/Avatar/SourcePose.h`)
+
+`SourcePose` is the hand-off from a pipeline to what poses the avatar: what the pipeline has for this frame, per group (the torso, the head, each arm, each hand), with the frame's clock. It is a plain fixed-size value with no pointers into solver state.
+
+- `pipeline` says which pipeline filled it, which fixes the units and which fields carry values. The position pipeline fills world positions and orientations in meters and the user's proportions. The direct pipeline fills its arm chain in the avatar's units and the placement the bones take.
+
+- `clock` is the filler's: the frame's timestamp, the interval since the filler's previous frame (zero on the first frame of an epoch) and a reset epoch that counts the filler's restarts. A consumer that keeps state across frames drops it when the epoch changes and keeps no clock of its own.
+
+- Each group has a state: measured on this frame, held by the pipeline from an earlier one, or lost. A confidence carries a present flag, so an input that has none is never stored as zero. The position pipeline has the shoulder, forearm, hand and head confidences. The direct pipeline has the hand's and the phone head's, and none for the arm or the torso, whose landmark visibilities are presence scores.
+
+- An arm carries the shoulder, elbow and wrist positions, with the forearm orientation (position) or the chain's directions and the forearm's twist against the avatar's rest palm (direct). A hand carries the world palm (position) or the palm in the measured forearm frame (direct), and the finger angle table with `eFingerZero` naming what an angle of zero means: the captured rest pose (position) or the finger along its metacarpal (direct).
+
+`AvatarRetarget::fillSource` writes it from the inputs the position solve took, and `solve(const SourcePose&, ...)` reads it. The older `solve` signatures run the two in turn. A valid side is written as measured, since the stream's dropout hold is applied before the fill. `AvatarRetarget::reset` bumps the epoch and the solve clears its root follow on a change. A timestamp regression does not bump it, because the root only snaps on one, so the interval reads negative there.
+
+`DirectRetarget::solve` is `measure` then `place`. `measure` holds every filter, the entry gates, the depth scorer, the lift scale, the palm and finger measurement, the spine limit (the forearm's twist is measured under the limited spine), the earned arm hold and the torso and head holds, and the clock with its restart on a gap or a regression. It writes the source pose and the solve state. `place` turns the source pose into bone rotations: the hips and spine, the head's joint limit and trim, the arm placement with the wrist limit and the hand and roll trims, and the ease into rest with its own state, which it drops when the source's epoch changes. The source head is the measured one, before the limit.
+
 ## The retarget (`src/Avatar/AvatarRetarget.h`)
 
 `AvatarRetarget::solve` poses the avatar from the measured frame. The avatar keeps its own proportions: every bone keeps its rest offset from its humanoid parent and only rotates, so a pose is a root placement plus one world rotation DELTA per bone (`AvatarPose`), measured against the bone's rooted rest rotation. A bone's posed world rotation is `delta * rootRotation * restRotationWorld`, its posed position hangs off its parent's posed position by the parent's delta applied to the rest offset, and an absent bone (`present == false`) sits at identity, following its parent. `computePosedBones` composes that chain and `computePosedGlobals` turns it into node globals for the renderer, where present humanoid bones override their node and every other node (helpers, hair, clothing bones) composes from its parent as authored. The solve is pure over the frame it is given plus one filter state for the root, advanced on frame timestamps, so a replayed recording poses identically.
