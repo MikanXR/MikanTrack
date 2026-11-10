@@ -103,8 +103,8 @@ private:
 		int index= -1;
 		std::string label;
 		ImU32 color= 0;
-		// Shown in the plot as of the last draw. The plot's legend owns the
-		// toggle, and this copy is what the value range fits.
+		// Shown in the plot. Its legend entry toggles it, and the value range
+		// fits the shown series.
 		bool bOn= true;
 	};
 	struct Sample
@@ -129,6 +129,8 @@ private:
 	void drawInputs(const FaceProfile& profile, const Frame& frame);
 	bool drawFunction(FaceProfile& profile, const Frame& frame);
 	void drawTrace();
+	// The lines and the hover readout, between the plot's begin and end
+	void drawTracePlot(float yMin, float yMax);
 	void drawPalette(const FaceProfile& profile);
 	void drawPreview(const Frame& frame);
 	// A palette-style button that wraps to the next line when the row is full
@@ -176,6 +178,8 @@ private:
 	double m_lastSampleTimestampMs= -1.0;
 	std::vector<int> m_seriesInputSlots;
 	std::vector<int> m_seriesLetIndices;
+	// The series whose legend entry the mouse was over last draw, -1 for none
+	int m_legendHoveredSeries= -1;
 
 	// The preview
 	std::unique_ptr<GlFrameBuffer> m_frameBuffer;
