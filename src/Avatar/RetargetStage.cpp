@@ -33,7 +33,7 @@ void RetargetStage::solvePosition(const TrackingFrameResult& frame, RetargetResu
 	outResult.hands.poses= frame.poses;
 	m_loss.apply(m_config.positionLoss, m_config.skeleton.get(), m_config.position.sides, outResult.source,
 				 &outResult.hands);
-	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose);
+	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals);
 	outResult.bDirectState= false;
 	outResult.directState= DirectRetarget::SolveState();
 }
@@ -49,20 +49,23 @@ bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectC
 
 	m_direct.measure(camera, cameraModel, phoneHead, timestampMs, skeleton, m_config.direct, outResult.source);
 	m_loss.apply(m_config.directLoss, &skeleton, m_config.direct.sides, outResult.source, nullptr);
-	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose);
+	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals);
 	outResult.bDirectState= true;
 	outResult.directState= m_direct.getSolveState();
 	writeDirectRestReadout(outResult.source, outResult.directState);
 	return true;
 }
 
-void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose)
+void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
+								AvatarRetargetGoals* outGoals)
 {
 	outPose.clear();
+	if (outGoals != nullptr)
+		*outGoals= AvatarRetargetGoals();
 	if (m_config.skeleton == nullptr)
 		return;
 	if (armIkWeight == 1.f)
-		m_position.solve(source, *m_config.skeleton, m_config.position, outPose);
+		m_position.solve(source, *m_config.skeleton, m_config.position, outPose, outGoals);
 	else if (armIkWeight == 0.f)
 		m_direct.place(source, *m_config.skeleton, m_config.direct, outPose);
 }
@@ -71,7 +74,7 @@ void RetargetStage::resolveTarget(RetargetResult& ioResult)
 {
 	if (ioResult.source.pipeline == SourcePose::ePipeline::None)
 		return;
-	solveTarget(ioResult.source, getArmIkWeight(ioResult.source.pipeline), ioResult.pose);
+	solveTarget(ioResult.source, getArmIkWeight(ioResult.source.pipeline), ioResult.pose, &ioResult.goals);
 	// The placement writes the head's delta into the solve state
 	if (ioResult.bDirectState)
 		ioResult.directState.headDelta= m_direct.getSolveState().headDelta;

@@ -709,7 +709,9 @@
 		"noVideoStreamText": "No video stream - select a camera in the Pipeline's Capture stage"
 	},
 	"scene3dPanel": {
-		"rendererInitFailedText": "3D renderer failed to initialize (see log)"
+		"rendererInitFailedText": "3D renderer failed to initialize (see log)",
+		"sourcePoseHalfLabel": "Source pose",
+		"avatarHalfLabel": "Avatar"
 	},
 	"logPanel": {
 		"autoScrollCheckbox": "Auto-scroll",
@@ -1252,7 +1254,11 @@
 		"modeTooltip": "What the view shows. Follow selection shows the cameras for the Capture and\nDirect solver stages and the 3D scene for the others.",
 		"wizardNote": "A camera calibration wizard is running: the view shows every camera\nuntil it closes.",
 		"viewFromCamera": "View from camera",
-		"viewFromCameraTooltip": "Shows the scene through the tracking camera's own lens, framed\nthe way the video is, so the avatar's pose compares with the\ncamera's view of you. Direct mode places the camera at the\nmeasured shoulders; stereo mode uses camera 1's calibration."
+		"viewFromCameraTooltip": "Shows the scene through the tracking camera's own lens, framed\nthe way the video is, so the avatar's pose compares with the\ncamera's view of you. Direct mode places the camera at the\nmeasured shoulders; stereo mode uses camera 1's calibration.",
+		"layoutOverlay": "Overlay",
+		"layoutSideBySide": "Side by side",
+		"layoutTooltip": "Overlay draws the source pose over the avatar. Side by side draws\nthe source pose on the left and the avatar on the right, turning\ntogether.",
+		"retargetLegend": "Solid: measured. Dashed: carried over. Color: confidence, green high, amber low. Magenta cross: IK goal. Click a bone to select its chain."
 	},
 	"performancePanel": {
 		"noTelemetry": "No frame loop data yet.",

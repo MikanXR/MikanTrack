@@ -104,6 +104,16 @@ struct AvatarPose
 	void clear();
 };
 
+// Where the position solve aimed each arm's wrist, for display: the measured
+// wrist scaled from the user's reach onto the avatar's arm, before the clamp
+// to the avatar's reach. Set for every arm the solve posed. Nothing reads it
+// back into a pose or the stream.
+struct AvatarRetargetGoals
+{
+	std::array<bool, 2> bHasWristGoal{};       // by eHandSide
+	std::array<glm::vec3, 2> wristGoalWorld{}; // by eHandSide
+};
+
 class AvatarRetarget
 {
 public:
@@ -137,9 +147,9 @@ public:
 	// Poses the avatar from a position pipeline's source pose; an arm that
 	// is lost stays at rest. Always produces a valid pose with a root,
 	// tracked or not. The root follow restarts when the source's epoch
-	// changes.
+	// changes. outGoals, when given, receives each posed arm's wrist goal.
 	void solve(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
-			   AvatarPose& outPose);
+			   AvatarPose& outPose, AvatarRetargetGoals* outGoals= nullptr);
 
 	// fillSource then solve
 	void solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],

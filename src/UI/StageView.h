@@ -19,6 +19,14 @@ enum class eStageViewMode : int
 	Scene,
 };
 
+// How the Retarget view lays out the source pose and the avatar: the one
+// over the other, or each in its own half of the view turning together
+enum class eRetargetLayout : int
+{
+	Overlay,
+	SideBySide,
+};
+
 // What the Stage View shows on a frame, decided from the selection, the mode
 // and the calibration wizards
 struct StageViewContent
@@ -37,7 +45,10 @@ struct StageViewContent
 // whole scene, nothing selected), with the user's two settings on top: the
 // avatar only while it is shown in the scene, and the per-camera skeletons
 // wherever the fused skeleton is while the Fusion stage's toggle is on. The
-// direct solve's chains and the gizmos go with the stage's avatar layer.
+// direct solve's chains and the gizmos go with the stage's avatar layer, and
+// so do the IK goals. The Source pose stage draws the source pose alone and
+// the Retarget stage the source pose with the avatar, each in place of the
+// fused skeleton.
 SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvatar, bool bShowPerCameraSkeletons);
 
 // What a stage is shown with when the view follows it: the cameras for
@@ -89,12 +100,22 @@ public:
 	// Decides again on the last update's inputs, so the content follows at once
 	void setMode(eStageViewMode mode);
 
+	// The Retarget view's layout, not persisted. It applies while the view
+	// shows the Retarget stage's scene, where a click on the source pose
+	// also selects the chain under it.
+	eRetargetLayout getRetargetLayout() const { return m_retargetLayout; }
+	void setRetargetLayout(eRetargetLayout layout) { m_retargetLayout= layout; }
+	bool isRetargetView() const;
+
 	// The automation reply: "camera all", "camera <index>" or "scene <stage
-	// id or none>", then " mode follow|cameras|scene", then " wizard" while
-	// a wizard holds the view
+	// id or none>", then " mode follow|cameras|scene", then on the Retarget
+	// view " layout overlay|sidebyside", then " wizard" while a wizard holds
+	// the view
 	std::string describe() const;
 	static const char* getModeName(eStageViewMode mode);
 	static bool parseMode(const std::string& text, eStageViewMode& outMode);
+	static const char* getRetargetLayoutName(eRetargetLayout layout);
+	static bool parseRetargetLayout(const std::string& text, eRetargetLayout& outLayout);
 
 private:
 	// The content for the mode and the last update's inputs
@@ -105,6 +126,7 @@ private:
 	VideoPreviewPanel* m_previewPanel;
 	Scene3dPanel* m_scenePanel;
 	eStageViewMode m_mode= eStageViewMode::Follow;
+	eRetargetLayout m_retargetLayout= eRetargetLayout::Overlay;
 	PipelineStageId m_selected;
 	bool m_bDirect= false;
 	int m_directCameraIndex= -1;

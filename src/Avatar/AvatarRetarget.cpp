@@ -248,9 +248,11 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 }
 
 void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skeleton,
-						   const AvatarRetargetConfig& config, AvatarPose& outPose)
+						   const AvatarRetargetConfig& config, AvatarPose& outPose, AvatarRetargetGoals* outGoals)
 {
 	using eGroupState= SourcePose::eGroupState;
+	if (outGoals != nullptr)
+		*outGoals= AvatarRetargetGoals();
 
 	// The root follow belongs to one epoch of the source clock
 	if (source.clock.resetEpoch != m_solveEpoch)
@@ -340,6 +342,11 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 		const glm::vec3 userShoulder= arm.bHasShoulder ? arm.shoulderPosition : avatarShoulder;
 		const glm::vec3 userWrist= arm.wristPosition;
 		glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * ratio;
+		if (outGoals != nullptr)
+		{
+			outGoals->bHasWristGoal[sideIndex]= true;
+			outGoals->wristGoalWorld[sideIndex]= wrist;
+		}
 		const glm::vec3 toWrist= wrist - avatarShoulder;
 		const float reach= glm::length(toWrist);
 		if (reach > avatarReach && reach > 1e-6f)

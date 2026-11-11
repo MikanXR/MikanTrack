@@ -95,7 +95,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 	server->registerCommandNamespace(
 		"pipeline",
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
-		 "pipeline view [follow|cameras|scene]", "pipeline pin <stage>", "pipeline unpin <stage>|all",
+		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
+		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
@@ -601,6 +602,11 @@ void MainWindow::update(float deltaSeconds)
 	else
 		m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
 	applyGizmoDrags(gizmos);
+	// A click on the Retarget view's source pose selects that chain, for the
+	// Inspector drawn below
+	eRetargetChain pickedChain;
+	if (m_scene3dPanel->consumePickedChain(pickedChain))
+		m_avatarPanel->setSelectedChain(pickedChain);
 
 	// The pipeline, once the avatar is posed for the shown frame: the strip,
 	// the inspector on the strip's selection, and the frame loop's timings
@@ -879,6 +885,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
+	updateSceneSourcePose(nullptr, nullptr, nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
@@ -886,7 +893,10 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		// is built from. A replay runs the window's stage only to pose an
 		// avatar.
 		if (!m_shown.bReplay)
+		{
 			updateSourcePoseReadout(&m_latestRetarget);
+			updateSceneSourcePose(&m_latestRetarget, &m_shown.fused->head, nullptr);
+		}
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
 		updateSceneCameraMatch(nullptr, nullptr);
@@ -911,6 +921,8 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const DirectRetarget::SolveState* directState= nullptr;
 	// The direct Rest preview is posed from no source
 	const RetargetResult* shownResult= nullptr;
+	// The head the shown result's frame measured
+	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
 		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
@@ -932,6 +944,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			m_displayStage.solvePosition(frame, m_displayResult);
 			m_avatarPose= m_displayResult.pose;
 			shownResult= &m_displayResult;
+			shownHead= frame.head;
 		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
@@ -970,6 +983,26 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		hint.shoulderWorld= posed[(int)upperArm].positionWorld;
 		hint.hintWorld= hint.shoulderWorld + m_avatarPose.rootRotationWorld * rig.sides[sideIndex].elbowHintOffset;
 	}
+
+	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
+	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
+}
+
+void MainWindow::updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,
+									   const glm::vec3* posedHeadWorld)
+{
+	m_scene3dPanel->setSelectedChain(m_avatarPanel->getSelectedChain());
+	if (result == nullptr || result->source.pipeline == SourcePose::ePipeline::None)
+	{
+		m_scene3dPanel->setSourcePose(nullptr, nullptr);
+		return;
+	}
+	const glm::vec3* headAnchor= nullptr;
+	if (result->source.pipeline == SourcePose::ePipeline::Position)
+		headAnchor= measuredHead != nullptr && measuredHead->valid ? &measuredHead->positionWorld : nullptr;
+	else
+		headAnchor= posedHeadWorld;
+	m_scene3dPanel->setSourcePose(result, headAnchor);
 }
 
 void MainWindow::updateDirectReadout(const DirectRetarget::SolveState* state)
@@ -1363,15 +1396,21 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	}
 	if (verb == "view")
 	{
+		// A mode, or the Retarget view's layout, which is kept whatever the
+		// view shows
 		if (args.size() >= 2)
 		{
 			eStageViewMode mode;
-			if (!StageView::parseMode(args[1], mode))
+			eRetargetLayout layout;
+			if (StageView::parseMode(args[1], mode))
+				m_stageView->setMode(mode);
+			else if (StageView::parseRetargetLayout(args[1], layout))
+				m_stageView->setRetargetLayout(layout);
+			else
 			{
-				outError= "unknown view mode: " + args[1];
+				outError= "unknown view mode or layout: " + args[1];
 				return false;
 			}
-			m_stageView->setMode(mode);
 		}
 		outLines.push_back(m_stageView->describe());
 		return true;

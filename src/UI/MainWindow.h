@@ -190,6 +190,12 @@ private:
 	// Source pose and Delivery rules stages' sections read it in place.
 	SourcePoseReadout m_sourcePoseReadout;
 	void updateSourcePoseReadout(const RetargetResult* result);
+	// The scene's source pose layer on the same result, its head drawn at the
+	// head the frame measured (the position pipeline's head is a world
+	// frame) or at the posed avatar's head (the direct pipeline's is a
+	// rotation alone); null for either draws no head
+	void updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,
+							   const glm::vec3* posedHeadWorld);
 
 	// What the pipeline's status rules read, gathered once per update after
 	// the avatar is posed for the shown frame

@@ -323,8 +323,9 @@ is`, so a camera with a poor view of a hand stops polluting the fused pose.
 Set **Delivery rules stage -> Min confidence** to treat a hand below a threshold as lost.
 A lost hand keeps streaming its last good pose for the **Dropout hold**
 (default 250 ms), which bridges brief losses. Past the hold its bones keep
-streaming frozen (**Freeze on loss**, default on); turning that off stops the
-messages instead, which returns that arm to the avatar's rest T-pose. Tune the
+streaming frozen. Choosing Release instead stops the messages, which returns
+that arm to the avatar's rest T-pose. Both are per arm, under the Retarget
+stage's arm chains (**Dropout hold** and **Then**). Tune the
 threshold with the live per-camera confidence table in the Inspector (select
 the Fusion stage, Diagnostics).
 

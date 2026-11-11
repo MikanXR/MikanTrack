@@ -108,8 +108,9 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
 - `pipeline selected`: the selected stage's line, or `none`
 - `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
-- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, then `mode follow|cameras|scene`, then `wizard` while a camera calibration wizard forces the cameras
+- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, then `mode follow|cameras|scene`, then `layout overlay|sidebyside` on the Retarget view, then `wizard` while a camera calibration wizard forces the cameras
 - `pipeline view follow|cameras|scene`: sets the Stage View's mode and answers the same line
+- `pipeline view overlay|sidebyside`: sets the Retarget view's layout, whatever the view shows, and answers the same line. A synthetic `input click` on a source bone in the Retarget view selects its chain, which `pipeline chain` then answers
 - `pipeline pin <stage>`: pins the stage as a double-click on its box does and answers its window id, `pin.<stage>`, which `gui float` and `gui viewports` use
 - `pipeline unpin <stage>|all`: closes that stage's pinned window, or all of them
 - `pipeline pinned`: one pinned stage per line, or `none`

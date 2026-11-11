@@ -51,6 +51,9 @@ struct RetargetResult
 	// the source pose
 	bool bDirectState= false;
 	DirectRetarget::SolveState directState;
+	// Where the position solve aimed each arm's wrist, for display; none on a
+	// direct frame, whose placement has no goal
+	AvatarRetargetGoals goals;
 };
 
 class RetargetStage
@@ -82,8 +85,10 @@ public:
 	// The target solve over a source pose the loss stage handed on: at IK
 	// weight 1 the position solve (AvatarRetarget::solve), at 0 the direct
 	// placement (DirectRetarget::place). Nothing blends between the two yet,
-	// so any other weight leaves the pose invalid.
-	void solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose);
+	// so any other weight leaves the pose invalid. outGoals, when given,
+	// receives the position solve's wrist goals, and none otherwise.
+	void solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
+					 AvatarRetargetGoals* outGoals= nullptr);
 
 	// The target solve again over a result's source pose under the current
 	// config, so a rig edit shows on a frame that is not solved again. The

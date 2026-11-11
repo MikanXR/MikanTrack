@@ -15,6 +15,8 @@
 #include "AvatarMeshView.h"
 #include "AvatarRetarget.h"
 #include "DirectRetarget.h"
+#include "RetargetStage.h" // RetargetResult
+#include "SourceSkeleton.h"
 #include "TrackingTypes.h"
 
 class AppConfig;
@@ -61,6 +63,9 @@ struct SceneGizmos
 // What one render of the scene draws. The grid takes the marker axes with
 // it. A layer that is on still draws only what the frame holds: the avatar
 // needs a loaded model, the direct chains a direct solve, a gizmo its enable.
+// The source pose and the IK goals are off unless a host asks for them: they
+// need the result the avatar was posed from, and the IK goals a position
+// solve.
 struct SceneLayers
 {
 	bool bGrid= true;
@@ -70,6 +75,27 @@ struct SceneLayers
 	bool bAvatar= true;
 	bool bDirectSolve= true;
 	bool bGizmos= true;
+	bool bSourcePose= false;
+	bool bIkGoals= false;
+};
+
+// Side by side splits a scene's layers between two halves of the view: the
+// source half takes what was measured (the source pose, the skeletons and
+// the camera frustums), the avatar half what posed the avatar (the avatar,
+// the direct solve's chains, the gizmos and the IK goals). Both take the
+// grid.
+void splitSideBySideLayers(const SceneLayers& layers, SceneLayers& outSource, SceneLayers& outAvatar);
+
+// How a host shows the scene beyond its layers
+struct SceneViewOptions
+{
+	// The source half on the left and the avatar half on the right, through
+	// the one camera, so they turn together; the overlay while no avatar is
+	// shown
+	bool bSideBySide= false;
+	// A click on the source pose selects the chain under it, read back with
+	// consumePickedChain
+	bool bPickSourceChains= false;
 };
 
 // World is Z-up (marker plane = XY); the renderer and orbit camera are Y-up.
@@ -99,6 +125,12 @@ void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cam
 // the camera
 bool projectCameraMatched(const glm::mat4& viewProjection, const glm::vec3& world, int width, int height,
 						  glm::vec2& outPixel);
+// A world point through a view-projection and the GL viewport it was drawn
+// into (x, y, width, height from the framebuffer's bottom left) onto the
+// image item showing that framebuffer flipped, row 0 at the top, whose top
+// left is imageMin and whose height is imageHeight; false behind the camera
+bool projectToViewImage(const glm::mat4& viewProjection, const glm::ivec4& viewport, const glm::vec2& imageMin,
+						float imageHeight, const glm::vec3& world, glm::vec2& outPixel);
 
 // One view onto the scene: the framebuffer it renders into, its orbit
 // camera, and where its last draw rendered inside that framebuffer (the
@@ -115,12 +147,17 @@ struct SceneViewState
 	glm::mat4 viewProjection{1.f};
 	// x, y, width, height from the framebuffer's bottom left
 	glm::ivec4 viewport{0};
+	// Where the source pose was drawn: the same as the view's, or side by
+	// side, the source half, while the view's is the avatar half
+	glm::mat4 sourceViewProjection{1.f};
+	glm::ivec4 sourceViewport{0};
 };
 
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
 // calibrated camera, the FUSED hand/arm skeletons (full brightness), each
 // camera's unfused skeleton (dimmed, in that camera's color), the avatar,
-// the direct solve's chains and the gizmos, each as its layer says, into an
+// the direct solve's chains, the gizmos, the source pose the retarget took
+// and the IK goals it aimed the avatar's wrists at, each as its layer says, into an
 // FBO shown as an ImGui image. It owns no window: a host draws the body.
 //
 // World convention (from calibration): right-handed, meters, origin at the
@@ -135,12 +172,15 @@ public:
 	// Draws the scene into the current window's remaining content region,
 	// with the orbit camera or, while the camera view is on, the matched
 	// camera, and runs the orbit and the gizmo drags on the image. The
-	// gizmos are picked only while their layer is on.
+	// gizmos are picked only while their layer is on. Side by side, the
+	// gizmos belong to the avatar half and the source chains are picked in
+	// the source half.
 	void drawBody(const TrackingFrameResult& fusedResult,
 				  const std::vector<SceneCameraView>& cameras,
 				  const std::vector<const TrackingFrameResult*>& perCameraResults,
 				  SceneGizmos& gizmos,
-				  const SceneLayers& layers);
+				  const SceneLayers& layers,
+				  const SceneViewOptions& options= SceneViewOptions());
 
 	// Draws the scene the way drawBody does, through a view the caller
 	// holds: its own framebuffer and orbit (dragged and wheeled while the
@@ -157,6 +197,20 @@ public:
 	// Leaves target unbound. False without a GL context or a valid size.
 	bool renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height, const glm::ivec4& viewport,
 						const glm::mat4& viewProjection, const SceneLayers& layers,
+						const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+						const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos);
+
+	// One draw of the scene into a part of a target
+	struct ScenePass
+	{
+		glm::ivec4 viewport{0};
+		glm::mat4 viewProjection{1.f};
+		SceneLayers layers;
+	};
+	// The same with several passes: the target cleared whole once, then each
+	// pass drawn inside its own viewport. The passes' viewports must not
+	// overlap, since they share the depth buffer.
+	bool renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height, const std::vector<ScenePass>& passes,
 						const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 						const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos);
 
@@ -194,6 +248,21 @@ public:
 	// avatar's world. Null draws none.
 	void setDirectSolve(const DirectRetarget::SolveState* state, const glm::mat4& solveToWorld);
 
+	// The result the avatar was posed from (copied), for the source pose
+	// layer and the IK goals, and where its head is drawn (the source pose
+	// carries the head's orientation alone; null draws no head). Null, or a
+	// result no pipeline filled, draws neither. A direct result's positions
+	// are carried into the avatar's world by the direct solve's transform,
+	// so they draw only while a direct solve is set.
+	void setSourcePose(const RetargetResult* result, const glm::vec3* headAnchorWorld);
+	// The chain highlighted on the source pose
+	void setSelectedChain(eRetargetChain chain) { m_selectedChain= chain; }
+	// The source skeleton the layer draws and the picking hits
+	const SourceSkeleton& getSourceSkeleton();
+	// The chain a click on the source pose picked since the last call; false
+	// when none was
+	bool consumePickedChain(eRetargetChain& outChain);
+
 	// The camera the view-from-camera toggle and the capture look through;
 	// an invalid match disables both
 	void setCameraMatch(const SceneCameraMatch& match) { m_cameraMatch= match; }
@@ -222,10 +291,21 @@ private:
 	// window's remaining region, with the view's orbit camera or, while
 	// bCameraView, the matched camera letterboxed, and shows it as an image
 	// item. False, with a note drawn instead, when the renderer failed.
-	bool drawViewImage(SceneViewState& view, bool bCameraView, const SceneLayers& layers,
+	// Side by side, the region is split in two, each half framed the same way.
+	bool drawViewImage(SceneViewState& view, bool bCameraView, bool bSideBySide, const SceneLayers& layers,
 					   const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 					   const std::vector<const TrackingFrameResult*>& perCameraResults, const SceneGizmos& gizmos,
 					   glm::vec2& outImageMin, glm::vec2& outImageSize);
+	// Frames a part of the framebuffer: the orbit camera filling it, or the
+	// matched camera letterboxed inside it
+	void frameRegion(SceneViewState& view, bool bCameraView, const glm::ivec4& region, glm::ivec4& outViewport,
+					 glm::mat4& outViewProjection) const;
+	// A click on the source pose, told from an orbit drag by how far the
+	// mouse moved between the press and the release, picks the chain under
+	// the release. A press a gizmo took is not a click.
+	void updateSourcePick(const glm::vec2& imageMin, const glm::vec2& imageSize);
+	void drawSourceSkeleton();
+	void drawIkGoals();
 	// The orbit on the image item just drawn, while it is hovered: the left
 	// drag turns it (unless bLeftDragOrbits is off, when a gizmo holds the
 	// mouse), the middle drag pans, the wheel zooms
@@ -255,6 +335,24 @@ private:
 	bool m_bHasDirectSolve= false;
 	DirectRetarget::SolveState m_directSolve;
 	glm::mat4 m_solveToWorld{1.f};
+
+	// The source pose layer's inputs, the skeleton built from them (rebuilt
+	// when they change) and the selected chain
+	bool m_bHasSourcePose= false;
+	SourcePose m_sourcePose;
+	LossHands m_sourceHands;
+	AvatarRetargetGoals m_sourceGoals;
+	bool m_bHasHeadAnchor= false;
+	glm::vec3 m_headAnchorWorld{0.f};
+	SourceSkeleton m_sourceSkeleton;
+	bool m_bSourceSkeletonDirty= true;
+	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
+	// A left press on the image that may become a click, where it was, and
+	// the chain the last click picked
+	bool m_bPickPressArmed= false;
+	glm::vec2 m_pickPressPixel{0.f};
+	bool m_bHasPickedChain= false;
+	eRetargetChain m_pickedChain= eRetargetChain::LeftArm;
 
 	std::shared_ptr<const AvatarModel> m_avatarModel;
 	std::shared_ptr<const AvatarSkeleton> m_avatarSkeleton;

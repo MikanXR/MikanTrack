@@ -20,8 +20,22 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 			break;
 		case ePipelineStage::Imu:
 		case ePipelineStage::BodySolver:
-		case ePipelineStage::SourcePose:
 			layers.bAvatar= false;
+			break;
+		case ePipelineStage::SourcePose:
+			// The source pose alone, as the target solve takes it
+			layers.bCameraFrustums= false;
+			layers.bFusedSkeleton= false;
+			layers.bAvatar= false;
+			layers.bSourcePose= true;
+			break;
+		case ePipelineStage::Retarget:
+			// The source pose beside the avatar posed from it, and where the
+			// solve aimed the avatar's wrists
+			layers.bCameraFrustums= false;
+			layers.bFusedSkeleton= false;
+			layers.bSourcePose= true;
+			layers.bIkGoals= true;
 			break;
 		case ePipelineStage::Output:
 		case ePipelineStage::Face:
@@ -30,15 +44,16 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 			layers.bFusedSkeleton= false;
 			break;
 		default:
-			// Nothing selected and Retarget: the whole scene
+			// Nothing selected: the whole scene
 			break;
 	}
 	// The solver's chains sit beside the avatar they posed, except where the
 	// avatar stands alone
-	layers.bDirectSolve= layers.bAvatar && layers.bFusedSkeleton;
+	layers.bDirectSolve= layers.bAvatar && (layers.bFusedSkeleton || layers.bSourcePose);
 	if (!bShowAvatar)
 		layers.bAvatar= false;
 	layers.bGizmos= layers.bAvatar;
+	layers.bIkGoals= layers.bIkGoals && layers.bAvatar;
 	if (bShowPerCameraSkeletons && layers.bFusedSkeleton)
 		layers.bPerCameraSkeletons= true;
 	return layers;
@@ -160,7 +175,11 @@ void StageView::draw(bool* pOpen, const Frame& frame)
 	{
 		const SceneLayers layers= makeStageSceneLayers(m_content.sceneStage, m_scenePanel->getShowAvatar(),
 													   m_scenePanel->getShowPerCameraSkeletons());
-		m_scenePanel->drawBody(*frame.fused, *frame.sceneCameras, *frame.scenePerCamera, *frame.gizmos, layers);
+		SceneViewOptions options;
+		options.bPickSourceChains= isRetargetView();
+		options.bSideBySide= options.bPickSourceChains && m_retargetLayout == eRetargetLayout::SideBySide;
+		m_scenePanel->drawBody(*frame.fused, *frame.sceneCameras, *frame.scenePerCamera, *frame.gizmos, layers,
+							   options);
 	}
 
 	ImGui::End();
@@ -195,6 +214,25 @@ void StageView::drawHeader()
 			m_scenePanel->setViewFromCamera(bViewFromCamera);
 		ImGui::SetItemTooltip("%s", locText("stageView.viewFromCameraTooltip"));
 	}
+
+	if (isRetargetView())
+	{
+		static const char* k_layoutKeys[]= {"stageView.layoutOverlay", "stageView.layoutSideBySide"};
+		for (int layoutIndex= 0; layoutIndex < IM_ARRAYSIZE(k_layoutKeys); ++layoutIndex)
+		{
+			ImGui::SameLine();
+			if (ImGui::RadioButton(locLabel(k_layoutKeys[layoutIndex]), layoutIndex == (int)m_retargetLayout))
+				m_retargetLayout= (eRetargetLayout)layoutIndex;
+			ImGui::SetItemTooltip("%s", locText("stageView.layoutTooltip"));
+		}
+		ImGui::TextDisabled("%s", locText("stageView.retargetLegend"));
+	}
+}
+
+bool StageView::isRetargetView() const
+{
+	return !m_content.bCameras && m_content.sceneStage.isValid() &&
+		m_content.sceneStage.stage == ePipelineStage::Retarget;
 }
 
 std::string StageView::makeTitle() const
@@ -219,6 +257,8 @@ std::string StageView::describe() const
 	else
 		text= "scene " + (m_content.sceneStage.isValid() ? PipelineModel::toString(m_content.sceneStage) : "none");
 	text+= std::string(" mode ") + getModeName(m_mode);
+	if (isRetargetView())
+		text+= std::string(" layout ") + getRetargetLayoutName(m_retargetLayout);
 	if (m_content.bWizard)
 		text+= " wizard";
 	return text;
@@ -244,6 +284,24 @@ bool StageView::parseMode(const std::string& text, eStageViewMode& outMode)
 		if (text == getModeName(mode))
 		{
 			outMode= mode;
+			return true;
+		}
+	}
+	return false;
+}
+
+const char* StageView::getRetargetLayoutName(eRetargetLayout layout)
+{
+	return layout == eRetargetLayout::SideBySide ? "sidebyside" : "overlay";
+}
+
+bool StageView::parseRetargetLayout(const std::string& text, eRetargetLayout& outLayout)
+{
+	for (const eRetargetLayout layout : {eRetargetLayout::Overlay, eRetargetLayout::SideBySide})
+	{
+		if (text == getRetargetLayoutName(layout))
+		{
+			outLayout= layout;
 			return true;
 		}
 	}
