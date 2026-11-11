@@ -185,6 +185,11 @@ private:
 	// solver stages' sections read it, the sections in place.
 	DirectReadout m_directReadout;
 	void updateDirectReadout(const DirectRetarget::SolveState* state);
+	// The source pose behind the shown avatar pose (null when the shown frame
+	// has none), refilled when the avatar is posed for the shown frame. The
+	// Source pose and Delivery rules stages' sections read it in place.
+	SourcePoseReadout m_sourcePoseReadout;
+	void updateSourcePoseReadout(const RetargetResult* result);
 
 	// What the pipeline's status rules read, gathered once per update after
 	// the avatar is posed for the shown frame

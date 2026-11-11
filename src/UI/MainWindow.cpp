@@ -498,8 +498,8 @@ void MainWindow::update(float deltaSeconds)
 	oscContext.visionThread= visionThread;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
-							   m_microphoneReadout, m_oscReadout, m_directReadout, m_faceExprEditor->getTarget(),
-							   bWizardActive);
+							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
+							   m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowTrackingPanel)
 		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
@@ -877,9 +877,15 @@ void MainWindow::updateOscReadout()
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
 	updateDirectReadout(nullptr);
+	updateSourcePoseReadout(nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
+		// Live, the vision thread's stage still fills the source the stream
+		// is built from. A replay runs the window's stage only to pose an
+		// avatar.
+		if (!m_shown.bReplay)
+			updateSourcePoseReadout(&m_latestRetarget);
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
 		updateSceneCameraMatch(nullptr, nullptr);
@@ -902,6 +908,8 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	}
 
 	const DirectRetarget::SolveState* directState= nullptr;
+	// The direct Rest preview is posed from no source
+	const RetargetResult* shownResult= nullptr;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
 		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
@@ -922,6 +930,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			m_displayStage.setConfig(stageConfig);
 			m_displayStage.solvePosition(frame, m_displayResult);
 			m_avatarPose= m_displayResult.pose;
+			shownResult= &m_displayResult;
 		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
@@ -929,6 +938,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	{
 		directState= updateReplayRetarget(*config, rig, skeleton);
 		m_avatarPose= m_displayResult.pose;
+		shownResult= &m_displayResult;
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	else
@@ -937,12 +947,14 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		// stream, through the same loss rules, so the scene shows exactly
 		// what the stream carries
 		m_avatarPose= m_latestRetarget.pose;
+		shownResult= &m_latestRetarget;
 		if (m_latestRetarget.bDirectState)
 			directState= &m_latestRetarget.directState;
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
 	updateDirectReadout(directState);
+	updateSourcePoseReadout(shownResult);
 	updateSceneCameraMatch(directState, skeleton.get());
 
 	// The elbow hints where the solve put them: off the posed upper-arm
@@ -970,6 +982,15 @@ void MainWindow::updateDirectReadout(const DirectRetarget::SolveState* state)
 		readout.leanDegrees= glm::degrees(glm::angle(glm::normalize(state->spineDelta)));
 	}
 	m_directReadout= readout;
+}
+
+void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
+{
+	// A result no pipeline has filled yet carries no source
+	SourcePoseReadout readout;
+	if (result != nullptr && result->source.pipeline != SourcePose::ePipeline::None)
+		readout.source= &result->source;
+	m_sourcePoseReadout= readout;
 }
 
 void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)

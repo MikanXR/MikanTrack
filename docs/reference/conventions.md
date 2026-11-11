@@ -43,7 +43,7 @@ The avatar rig settings carry two spatial quantities. A rotation trim rotates a 
 
 ## Finger angle conventions
 
-Angles are radians everywhere inside the app. The wire carries no angles: `VmcRetarget` turns them into bone quaternions, and the Source pose stage's finger angle readout is the only place they are shown in degrees. The sign conventions are stated on `FingerAngles` in `src/Vision/TrackingTypes.h`:
+Angles are radians everywhere inside the app. The wire carries no angles: `VmcRetarget` turns them into bone quaternions, and the Inspector's readouts are the only place they are shown in degrees. The sign conventions are stated on `FingerAngles` in `src/Vision/TrackingTypes.h`:
 
 - `lateral` is splay about palm +Z, positive counter-clockwise (toward palm +Y). Purely geometric and identical for both hands; the palm frame carries the chirality, so positive is toward the pinky on a right hand and toward the thumb on a left. It is read two ways and blended by conditioning: from the base bone's palm-plane projection against the rest direction (sharp on a straight finger, landmark noise on one curled to the palm normal) and, for the four fingers, from the finger's own bend plane (the normal of the base and middle bones is the hinge, sharp on a curled finger, gone on a straight one), each weighted by the square of the length it was read from, the inverse of its angular variance. It stays within a quarter turn: a reading that points back at the wrist is a curl past 90 degrees, not a splay, so it folds by a half turn and the proximal reads past 90.
 - `proximal` is the base bone away from its neutral direction, positive curling toward the palmar side (+Z), past 90 degrees on a folded finger.

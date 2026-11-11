@@ -11,6 +11,7 @@
 #include "DirectRetarget.h" // DirectRetarget::SolveState
 #include "ImuService.h"     // ImuSideStatus
 #include "NeutralCaptureControl.h"
+#include "SourcePose.h"
 #include "TrackingTypes.h"
 
 class AppConfig;
@@ -142,13 +143,24 @@ struct DirectReadout
 	bool bNeutralPresent= false;
 };
 
+// The source pose behind the shown avatar pose, as the loss stage handed it to
+// the target solve
+struct SourcePoseReadout
+{
+	// Null when the shown frame has none: a replay with no avatar loaded, the
+	// direct Rest preview, or live before the vision thread's first frame
+	const SourcePose* source= nullptr;
+};
+
 // What the Tracking panel's sections read and write. latestPreviews: the
 // newest per-camera results (image-quality and timing readouts); fusedResult:
 // the latest live fused tracking output (hold-still jitter test); fusion: the
 // shown frame's fusion readouts (the Fusion stage's diagnostics); imu: the
 // shown frame's wrist IMU status (the IMU stage's device table); face: the
 // shown frame's phone stream status (the Phone stage's diagnostics); direct:
-// the shown frame's direct solve (the Direct solver stages' diagnostics).
+// the shown frame's direct solve (the Direct solver stages' diagnostics);
+// sourcePose: the shown frame's source pose (the Source pose stage's
+// diagnostics).
 struct TrackingSectionContext
 {
 	AppConfig* config= nullptr;
@@ -163,6 +175,7 @@ struct TrackingSectionContext
 	const ImuReadout* imu= nullptr;
 	const FaceReadout* face= nullptr;
 	const DirectReadout* direct= nullptr;
+	const SourcePoseReadout* sourcePose= nullptr;
 };
 
 // What the OSC stream reported for the shown frame
@@ -319,11 +332,18 @@ void drawOscLossControls(const OscSectionContext& context);
 // Whether the stream runs, its frame rate and the last frame's size, from
 // context.readout
 void drawOscStreamReadout(const OscSectionContext& context);
-// Each hand's confidence in fused against the live confidence gate, red
-// while the hand is withheld
-void drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused);
-// Each hand's finger angles in fused, in degrees, as the retarget reads them
-void drawFingerAngleReadout(const TrackingFrameResult& fused);
+// Each hand's confidence against the live confidence gate, red while under
+// it. With a source pose, its hand's confidence (which decays across a hold)
+// beside its arm's state after the loss stage; without one (null), fused's
+// hand confidence, red while the hand is withheld.
+void drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused,
+							const SourcePose* source);
+// The Source pose stage's diagnostics, reading the shown frame's source pose
+// (context.sourcePose), one dim line when the shown frame has none: a
+// summary (the pipeline and its units, the finger zero, the clock), one row
+// per group with its state, confidence and what it carries, and each hand's
+// finger angles in degrees as the target solve takes them
+void drawSourcePoseReadout(const TrackingSectionContext& context);
 
 // Draws the sections only; updateTrackingState runs the panel's state
 void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);

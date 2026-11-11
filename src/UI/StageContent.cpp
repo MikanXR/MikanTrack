@@ -26,7 +26,8 @@ StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel*
 void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc,
 							  const FusionReadout& fusion, const ImuReadout& imu, const FaceReadout& face,
 							  const MicrophoneReadout& microphone, const OscReadout& oscReadout,
-							  const DirectReadout& direct, const FaceExprEditTarget* activeEdit, bool bWizardActive)
+							  const DirectReadout& direct, const SourcePoseReadout& sourcePose,
+							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
 {
 	m_tracking= tracking;
 	m_osc= osc;
@@ -35,6 +36,7 @@ void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscS
 	m_tracking.imu= &imu;
 	m_tracking.face= &face;
 	m_tracking.direct= &direct;
+	m_tracking.sourcePose= &sourcePose;
 	m_microphone= &microphone;
 	m_activeEdit= activeEdit;
 	m_bWizardActive= bWizardActive;
@@ -343,14 +345,14 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		if (section == eStageSection::Settings)
 			SettingsPanels::drawOscDeliveryControls(m_osc);
 		else
-			SettingsPanels::drawOscDeliveryReadout(m_osc, *m_tracking.fusion->fused);
+			SettingsPanels::drawOscDeliveryReadout(m_osc, *m_tracking.fusion->fused, m_tracking.sourcePose->source);
 		break;
 	case ePipelineStage::VmcStream:
 		SettingsPanels::drawOscTargetControls(m_osc);
 		SettingsPanels::drawOscVmcControls(m_osc);
 		break;
 	case ePipelineStage::SourcePose:
-		SettingsPanels::drawFingerAngleReadout(*m_tracking.fusion->fused);
+		SettingsPanels::drawSourcePoseReadout(m_tracking);
 		break;
 	default:
 		break;

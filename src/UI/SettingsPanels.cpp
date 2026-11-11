@@ -1830,13 +1830,60 @@ void SettingsPanels::drawOscStreamReadout(const OscSectionContext& context)
 	ImGui::Text(locText("oscPanel.lastFrameFmt"), readout.lastPacketCount, readout.lastFrameBytes);
 }
 
-void SettingsPanels::drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused)
+static const ImVec4 k_sourceHeldColor(1.f, 0.85f, 0.3f, 1.f);
+static const ImVec4 k_sourceLostColor(1.f, 0.4f, 0.4f, 1.f);
+
+// A group state as a word: measured plain, held and frozen amber, resting dim,
+// lost red
+static void drawGroupStateText(SourcePose::eGroupState state)
+{
+	using eGroupState= SourcePose::eGroupState;
+	switch (state)
+	{
+	case eGroupState::Measured:
+		ImGui::TextUnformatted(locText("sourceStage.stateMeasured"));
+		break;
+	case eGroupState::Held:
+		ImGui::TextColored(k_sourceHeldColor, "%s", locText("sourceStage.stateHeld"));
+		break;
+	case eGroupState::Frozen:
+		ImGui::TextColored(k_sourceHeldColor, "%s", locText("sourceStage.stateFrozen"));
+		break;
+	case eGroupState::Resting:
+		ImGui::TextDisabled("%s", locText("sourceStage.stateResting"));
+		break;
+	case eGroupState::Lost:
+		ImGui::TextColored(k_sourceLostColor, "%s", locText("sourceStage.stateLost"));
+		break;
+	}
+}
+
+void SettingsPanels::drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFrameResult& fused,
+											const SourcePose* source)
 {
 	const OscConfig& osc= context.config->osc;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const HandPose& pose= fused.poses[sideIndex];
 		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
+
+		if (source != nullptr)
+		{
+			// The confidence the loss stage handed on, beside the arm's state:
+			// a hold decays it, and a hold or a freeze can carry one under the
+			// gate
+			const SourcePose::Confidence& confidence= source->hands[sideIndex].confidence;
+			if (!confidence.bPresent)
+				ImGui::TextDisabled("%s", locText("sourceStage.confidenceNone"));
+			else if (confidence.value < osc.minConfidence)
+				ImGui::TextColored(k_sourceLostColor, locText("sourceStage.confidenceBelowFmt"), confidence.value,
+								   osc.minConfidence);
+			else
+				ImGui::Text(locText("oscPanel.confidenceFmt"), confidence.value);
+			ImGui::SameLine();
+			drawGroupStateText(source->arms[sideIndex].state);
+			continue;
+		}
 
 		// Confidence vs the gate: red while the pose is being withheld
 		const bool bGated= pose.tracked && pose.confidence < osc.minConfidence;
@@ -1851,20 +1898,167 @@ void SettingsPanels::drawOscDeliveryReadout(const OscSectionContext& context, co
 	}
 }
 
-void SettingsPanels::drawFingerAngleReadout(const TrackingFrameResult& fused)
+// What a finger angle of zero means on a source: a carried hand's own
+// convention, else the one its pipeline fills
+static SourcePose::eFingerZero getSourceFingerZero(const SourcePose& source)
+{
+	for (const SourcePose::Hand& hand : source.hands)
+	{
+		if (hand.state != SourcePose::eGroupState::Lost)
+			return hand.fingerZero;
+	}
+	return source.pipeline == SourcePose::ePipeline::Direct ? SourcePose::eFingerZero::Metacarpal
+															: SourcePose::eFingerZero::CapturedRest;
+}
+
+// Appends one carried part to a list
+static void appendCarriedPart(std::string& ioText, const char* partKey)
+{
+	if (!ioText.empty())
+		ioText+= locText("sourceStage.partSeparator");
+	ioText+= locText(partKey);
+}
+
+// What an arm carries, from its flags: the parts the position pipeline
+// measured, the direct chain with the twist once its hand was measured, or
+// how far a resting arm has eased into the rest pose. Empty while lost.
+static std::string describeArmCarries(const SourcePose& source, int sideIndex)
+{
+	using eGroupState= SourcePose::eGroupState;
+	const SourcePose::Arm& arm= source.arms[sideIndex];
+	std::string text;
+	if (arm.state == eGroupState::Lost)
+		return text;
+	if (arm.state == eGroupState::Resting)
+	{
+		char buffer[64];
+		snprintf(buffer, sizeof(buffer), locText("sourceStage.restBlendFmt"), arm.restBlend * 100.f);
+		text= buffer;
+		return text;
+	}
+	if (source.pipeline == SourcePose::ePipeline::Direct)
+	{
+		appendCarriedPart(text, "sourceStage.partChain");
+		// The twist is zero while the hand was never measured, which leaves
+		// the hand lost
+		if (source.hands[sideIndex].state != eGroupState::Lost)
+			appendCarriedPart(text, "sourceStage.partTwist");
+		return text;
+	}
+	if (arm.bHasShoulder)
+		appendCarriedPart(text, "sourceStage.partShoulder");
+	if (arm.bHasElbow)
+		appendCarriedPart(text, "sourceStage.partElbow");
+	appendCarriedPart(text, "sourceStage.partWrist");
+	if (arm.bHasForearmOrientation)
+		appendCarriedPart(text, "sourceStage.partForearm");
+	return text;
+}
+
+// One group's row: its state, its confidence (a dim dash where the pipeline
+// has none) and what it carries (a dim dash for nothing)
+static void drawSourceGroupRow(const char* labelKey, SourcePose::eGroupState state,
+							   const SourcePose::Confidence* confidence, const std::string& carries)
+{
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::TextUnformatted(locText(labelKey));
+	ImGui::TableNextColumn();
+	drawGroupStateText(state);
+	ImGui::TableNextColumn();
+	if (confidence != nullptr && confidence->bPresent)
+		ImGui::Text("%.2f", confidence->value);
+	else
+		ImGui::TextDisabled("-");
+	ImGui::TableNextColumn();
+	if (carries.empty())
+		ImGui::TextDisabled("-");
+	else
+		ImGui::TextUnformatted(carries.c_str());
+}
+
+static void drawSourceSummary(const SourcePose& source)
+{
+	if (!beginDirectTable("sourceSummary", false))
+		return;
+
+	drawDirectRowLabel("stageInspector.summaryPipeline");
+	drawDirectTextCell(locText(source.pipeline == SourcePose::ePipeline::Direct ? "sourceStage.pipelineDirect"
+																				: "sourceStage.pipelinePosition"));
+	drawDirectRowLabel("sourceStage.fingerZero");
+	drawDirectTextCell(locText(getSourceFingerZero(source) == SourcePose::eFingerZero::Metacarpal
+								   ? "sourceStage.fingerZeroMetacarpal"
+								   : "sourceStage.fingerZeroCapturedRest"));
+	drawDirectRowLabel("sourceStage.frameInterval");
+	drawDirectValueCell(true, "%.1f", (float)source.clock.frameIntervalMs);
+	drawDirectRowLabel("sourceStage.resetEpoch");
+	ImGui::TableNextColumn();
+	ImGui::Text("%u", source.clock.resetEpoch);
+	ImGui::EndTable();
+}
+
+static void drawSourceGroupsTable(const SourcePose& source)
+{
+	using eGroupState= SourcePose::eGroupState;
+	if (!ImGui::BeginTable("sourceGroups", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return;
+	ImGui::TableSetupColumn("");
+	ImGui::TableSetupColumn(locText("stageInspector.stateLabel"));
+	ImGui::TableSetupColumn(locText("sourceStage.confidenceColumn"));
+	ImGui::TableSetupColumn(locText("sourceStage.carriesColumn"));
+	ImGui::TableHeadersRow();
+
+	std::string carries;
+	// The torso is the spine's rotation on the direct pipeline and the line
+	// between the shoulders on the position one, with no confidence of its own
+	if (source.torso.state != eGroupState::Lost)
+		carries= locText(source.pipeline == SourcePose::ePipeline::Direct ? "sourceStage.partSpine"
+																		  : "sourceStage.partShoulderLine");
+	drawSourceGroupRow("sourceStage.torso", source.torso.state, nullptr, carries);
+
+	carries.clear();
+	if (source.head.state != eGroupState::Lost)
+		carries= locText("sourceStage.partOrientation");
+	drawSourceGroupRow("directStage.head", source.head.state, &source.head.confidence, carries);
+
+	// An arm's confidence is its forearm's
+	static const char* s_armKeys[2]= {"avatarPanel.leftArmHeader", "avatarPanel.rightArmHeader"};
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const SourcePose::Arm& arm= source.arms[sideIndex];
+		drawSourceGroupRow(s_armKeys[sideIndex], arm.state, &arm.forearmConfidence,
+						   describeArmCarries(source, sideIndex));
+	}
+
+	static const char* s_handKeys[2]= {"avatarPanel.leftHandHeader", "avatarPanel.rightHandHeader"};
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const SourcePose::Hand& hand= source.hands[sideIndex];
+		carries.clear();
+		if (hand.state != eGroupState::Lost)
+		{
+			appendCarriedPart(carries, "sourceStage.partPalm");
+			appendCarriedPart(carries, "sourceStage.partFingers");
+		}
+		drawSourceGroupRow(s_handKeys[sideIndex], hand.state, &hand.confidence, carries);
+	}
+	ImGui::EndTable();
+}
+
+// Each hand's finger angles as the target solve takes them, in degrees, so a
+// held or frozen hand shows the angles it carries
+static void drawSourceFingerAngles(const SourcePose& source)
 {
 	ImGui::TextDisabled("%s", locText("oscPanel.readoutInfo"));
 
-	// Solver diagnostic: the 20 finger angles per hand as the solver measures
-	// them (shown in degrees), which the VMC retarget then turns into bones
 	static const char* s_fingerNames[FINGER_COUNT]= {
 		"oscPanel.fingerThumb", "oscPanel.fingerIndex", "oscPanel.fingerMiddle",
 		"oscPanel.fingerRing", "oscPanel.fingerPinky"};
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		const HandPose& pose= fused.poses[sideIndex];
+		const SourcePose::Hand& hand= source.hands[sideIndex];
 		ImGui::Text("%s", locText(sideIndex == (int)eHandSide::Left ? "oscPanel.leftHand" : "oscPanel.rightHand"));
-		if (!pose.tracked)
+		if (hand.state == SourcePose::eGroupState::Lost)
 		{
 			ImGui::TextDisabled("%s", locText("oscPanel.notTracked"));
 			continue;
@@ -1884,7 +2078,7 @@ void SettingsPanels::drawFingerAngleReadout(const TrackingFrameResult& fused)
 			constexpr float kRadToDeg= 57.29578f;
 			for (int finger= 0; finger < FINGER_COUNT; ++finger)
 			{
-				const FingerAngles& angles= pose.fingers[finger];
+				const FingerAngles& angles= hand.fingers[finger];
 				ImGui::TableNextRow();
 				ImGui::TableNextColumn();
 				ImGui::TextUnformatted(locText(s_fingerNames[finger]));
@@ -1901,6 +2095,21 @@ void SettingsPanels::drawFingerAngleReadout(const TrackingFrameResult& fused)
 		}
 		ImGui::PopID();
 	}
+}
+
+void SettingsPanels::drawSourcePoseReadout(const TrackingSectionContext& context)
+{
+	const SourcePose* source= context.sourcePose != nullptr ? context.sourcePose->source : nullptr;
+	if (source == nullptr)
+	{
+		ImGui::TextDisabled("%s", locText("sourceStage.noSource"));
+		return;
+	}
+	drawSourceSummary(*source);
+	ImGui::SeparatorText(locText("sourceStage.groupsSection"));
+	drawSourceGroupsTable(*source);
+	ImGui::SeparatorText(locText("sourceStage.fingersSection"));
+	drawSourceFingerAngles(*source);
 }
 
 void SettingsPanels::drawLanguageCombo()

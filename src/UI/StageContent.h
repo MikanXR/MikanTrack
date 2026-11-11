@@ -25,15 +25,15 @@ public:
 				 AvatarPanel* avatarPanel, AvatarFaceTab* faceTab, AvatarMouthReadout* mouthReadout);
 
 	// What this frame's draws read, and clear requests. fusion, imu, face,
-	// microphone, oscReadout and direct: the shown frame's readouts, read in
-	// place when a section draws, so they must outlive the frame's draws and be
-	// refilled for the shown frame before the Inspector draws. activeEdit: the
-	// row the expression editor is on, which the face profile rows highlight
-	// (null: none).
+	// microphone, oscReadout, direct and sourcePose: the shown frame's
+	// readouts, read in place when a section draws, so they must outlive the
+	// frame's draws and be refilled for the shown frame before the Inspector
+	// draws. activeEdit: the row the expression editor is on, which the face
+	// profile rows highlight (null: none).
 	void beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc, const FusionReadout& fusion,
 					const ImuReadout& imu, const FaceReadout& face, const MicrophoneReadout& microphone,
-					const OscReadout& oscReadout, const DirectReadout& direct, const FaceExprEditTarget* activeEdit,
-					bool bWizardActive);
+					const OscReadout& oscReadout, const DirectReadout& direct, const SourcePoseReadout& sourcePose,
+					const FaceExprEditTarget* activeEdit, bool bWizardActive);
 	// The requests raised by every section drawn since beginFrame: the
 	// calibration wizards, the audio calibration wizard, and the face profile
 	// row an Edit button asked the expression editor to open
