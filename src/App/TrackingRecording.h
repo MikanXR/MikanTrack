@@ -285,6 +285,11 @@ std::string makeAudioSidecarPath(const std::string& recordingFilePath);
 // The face sidecar likewise:
 // <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.face.jsonl
 std::string makeFaceSidecarPath(const std::string& recordingFilePath);
+// Whether a path names one of the files above that the recorder writes
+// beside a take (the face or the audio sidecar), by its name alone
+bool isRecordingSidecarFile(const std::string& path);
+// Whether a path names a take: a .jsonl file that is not a sidecar
+bool isRecordingFile(const std::string& path);
 
 nlohmann::json headerToJson(const RecordingHeader& header);
 bool headerFromJson(const nlohmann::json& j, RecordingHeader& outHeader);

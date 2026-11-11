@@ -321,6 +321,66 @@ static int runSceneViewTest(const TestArgs& args)
 			  "(m) a click near a bone or a marker picks its chain, one off it nothing");
 	}
 
+	// The cameras the scene can be looked through, from a config alone: a
+	// multi-camera project needs a camera's lens calibration and its
+	// extrinsics, a direct project the lens calibration of its direct camera
+	{
+		AppConfig config;
+		config.cameras.assign(3, CameraProfile());
+		config.camera(0).intrinsics.present= true;
+		config.camera(0).extrinsics.present= true;
+		config.camera(1).intrinsics.present= true;
+		config.camera(2).extrinsics.present= true;
+		const bool bMulti= getScenePovAvailability(config, 0) == eScenePovAvailability::Available &&
+			getScenePovAvailability(config, 1) == eScenePovAvailability::NoExtrinsics &&
+			getScenePovAvailability(config, 2) == eScenePovAvailability::NotCalibrated &&
+			getScenePovAvailability(config, 3) == eScenePovAvailability::Missing &&
+			getScenePovAvailability(config, -1) == eScenePovAvailability::Missing;
+
+		config.direct.enabled= true;
+		config.direct.cameraIndex= 1;
+		const bool bDirect= getScenePovAvailability(config, 1) == eScenePovAvailability::Available &&
+			getScenePovAvailability(config, 0) == eScenePovAvailability::NotDirectCamera &&
+			getScenePovAvailability(config, 2) == eScenePovAvailability::NotCalibrated;
+		config.camera(1).intrinsics.present= false;
+		const bool bDirectUncalibrated= getScenePovAvailability(config, 1) == eScenePovAvailability::NotCalibrated;
+		check(bMulti && bDirect && bDirectUncalibrated,
+			  "(n) a camera is looked through with its lens calibration, and its extrinsics or as the direct camera");
+
+		// The choice holds an available camera and falls back to the free
+		// camera when the camera stops being available
+		Scene3dPanel panel;
+		panel.setPovCameras({eScenePovAvailability::Available, eScenePovAvailability::NotCalibrated});
+		const bool bRefused= !panel.setPovCamera(1) && panel.getPovCamera() == -1 && !panel.setPovCamera(2);
+		const bool bChosen= panel.setPovCamera(0) && panel.getPovCamera() == 0;
+		panel.setPovCameras({eScenePovAvailability::Available});
+		const bool bHeld= panel.getPovCamera() == 0;
+		panel.setPovCameras({eScenePovAvailability::NotCalibrated});
+		const bool bFellBack= panel.getPovCamera() == -1;
+		panel.setPovCamera(0);
+		panel.setPovCameras({eScenePovAvailability::Available});
+		const bool bStayedFree= panel.getPovCamera() == -1;
+		panel.setPovCameras({eScenePovAvailability::Available});
+		panel.setPovCamera(0);
+		panel.setPovCameras({});
+		const bool bRemoved= panel.getPovCamera() == -1;
+		SceneCameraMatch otherCamera;
+		otherCamera.valid= true;
+		otherCamera.cameraIndex= 1;
+		otherCamera.camera= camera;
+		panel.setPovCameras({eScenePovAvailability::Available, eScenePovAvailability::Available});
+		panel.setPovCamera(0);
+		panel.setPovMatch(otherCamera);
+		const bool bOtherNotMatched= !panel.isPovMatched();
+		SceneCameraMatch chosenCamera= otherCamera;
+		chosenCamera.cameraIndex= 0;
+		panel.setPovMatch(chosenCamera);
+		const bool bMatched= panel.isPovMatched();
+		check(bRefused && bChosen && bHeld && bFellBack && bStayedFree && bRemoved && bOtherNotMatched && bMatched,
+			  "(o) the camera choice refuses an unavailable camera, falls back to the free camera, and matches only "
+			  "its own camera");
+	}
+
 	MIKAN_LOG_INFO("test-scene-view") << (result == 0 ? "ALL PASS" : "FAILURES");
 	return result;
 }

@@ -100,6 +100,11 @@ Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the 
 
 The commands after `edit` need the editor open and answer an error otherwise.
 
+### Performance panel (performance)
+
+- `performance source`: `live` or `recording`, the number of samples charted and the newest or playhead sample's total (`recording samples 600 total 8.22`)
+- `performance source live|recording`: sets the source, with an error when no replay is shown or the shown take carries no telemetry
+
 ### Pipeline panel (pipeline)
 
 The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `output.vmc`, `face.mic`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
@@ -108,12 +113,14 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
 - `pipeline selected`: the selected stage's line, or `none`
 - `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
-- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, then `mode follow|cameras|scene`, then `layout overlay|sidebyside` on the Retarget view, then `wizard` while a camera calibration wizard forces the cameras
+- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, then `mode follow|cameras|scene`, then on a scene `pov free` or `pov <cameraIndex>`, then `layout overlay|sidebyside` on the Retarget view, then `wizard` while a camera calibration wizard forces the cameras
 - `pipeline view follow|cameras|scene`: sets the Stage View's mode and answers the same line
 - `pipeline view overlay|sidebyside`: sets the Retarget view's layout, whatever the view shows, and answers the same line. A synthetic `input click` on a source bone in the Retarget view selects its chain, which `pipeline chain` then answers
 - `pipeline pin <stage>`: pins the stage as a double-click on its box does and answers its window id, `pin.<stage>`, which `gui float` and `gui viewports` use
 - `pipeline unpin <stage>|all`: closes that stage's pinned window, or all of them
 - `pipeline pinned`: one pinned stage per line, or `none`
+- `pipeline pov`: the scene's point of view (`pov free|<cameraIndex> matched yes|no`, the index counted from 0) and every choice with its availability (`choices free 0:available 1:noExtrinsics ...`)
+- `pipeline pov free|<cameraIndex>`: sets it, with an error naming the reason for a camera that cannot be looked through
 - `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
 - `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)

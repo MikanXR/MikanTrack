@@ -62,7 +62,7 @@ StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDire
 
 // The central view: one window that shows the camera view or the 3D scene
 // for the stage selected in the Pipeline strip, with a header row naming
-// what it shows, the mode override and the view-from-camera toggle. The two
+// what it shows, the mode override and the scene's camera choice. The two
 // bodies belong to the panels it is given, which stay the providers.
 class StageView
 {
@@ -108,12 +108,19 @@ public:
 	bool isRetargetView() const;
 
 	// The automation reply: "camera all", "camera <index>" or "scene <stage
-	// id or none>", then " mode follow|cameras|scene", then on the Retarget
-	// view " layout overlay|sidebyside", then " wizard" while a wizard holds
-	// the view
+	// id or none>", then " mode follow|cameras|scene", then on a scene
+	// " pov free|<index>" (the camera the scene is looked through, the word
+	// apart from the camera view's "camera"), then on the Retarget view
+	// " layout overlay|sidebyside", then " wizard" while a wizard holds the
+	// view
 	std::string describe() const;
 	static const char* getModeName(eStageViewMode mode);
 	static bool parseMode(const std::string& text, eStageViewMode& outMode);
+	// The scene's camera choice as automation names it: "free" for -1, else
+	// the camera's index from 0
+	static std::string describePov(int cameraIndex);
+	static bool parsePov(const std::string& text, int& outCameraIndex);
+	static const char* getPovAvailabilityName(eScenePovAvailability availability);
 	static const char* getRetargetLayoutName(eRetargetLayout layout);
 	static bool parseRetargetLayout(const std::string& text, eRetargetLayout& outLayout);
 
@@ -121,6 +128,9 @@ private:
 	// The content for the mode and the last update's inputs
 	void decide();
 	void drawHeader();
+	// The scene's camera choice: the free camera and every configured camera
+	void drawPovCombo();
+	static const char* getPovUnavailableKey(eScenePovAvailability availability);
 	std::string makeTitle() const;
 
 	VideoPreviewPanel* m_previewPanel;

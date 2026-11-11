@@ -99,7 +99,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 	server->registerCommandNamespace(
 		"pipeline",
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
-		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
+		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pov [free|<cameraIndex>]",
+		 "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
 		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
@@ -113,6 +114,45 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
+	server->registerCommandNamespace(
+		"performance", {"performance source", "performance source live|recording"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handlePerformanceAutomation(args, outLines, outError);
+		});
+}
+
+bool MainWindow::handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+											 std::string& outError)
+{
+	if (args.empty() || args[0] != "source")
+	{
+		outError= args.empty() ? "missing verb" : "unknown verb: " + args[0];
+		return false;
+	}
+	if (args.size() >= 2)
+	{
+		ePerformanceSource source;
+		if (!PerformancePanel::parseSource(args[1], source))
+		{
+			outError= "expected live or recording: " + args[1];
+			return false;
+		}
+		if (!m_performancePanel->setSource(source))
+		{
+			outError= m_shown.bReplay ? "recording is not available: the shown take carries no telemetry"
+									  : "recording is not available: no replay is shown";
+			return false;
+		}
+	}
+	// The series follows on the next frame's update
+	float markedTotalMs= 0.f;
+	const bool bMarked= m_performancePanel->getMarkedTotal(markedTotalMs);
+	char total[32];
+	snprintf(total, sizeof(total), "%.2f", markedTotalMs);
+	outLines.push_back(std::string(PerformancePanel::getSourceName(m_performancePanel->getSource())) + " samples " +
+					   std::to_string(m_performancePanel->getSeries().samples.size()) + " total " +
+					   (bMarked ? std::string(total) : std::string("none")));
+	return true;
 }
 
 bool MainWindow::restoreCameraDevice(int cameraIndex)
@@ -420,7 +460,7 @@ void MainWindow::performDiagnosticDump(const std::vector<SceneCameraView>& camer
 	// here where the GL context is, saved by the vision thread beside the
 	// frame it should match
 	cv::Mat avatarRender;
-	if (m_scene3dPanel->hasCameraMatch())
+	if (m_scene3dPanel->hasCaptureMatch())
 		m_scene3dPanel->captureFromCamera(m_latestFused, cameras, perCameraResults, avatarRender);
 	m_app->getVisionThread()->requestDiagnosticDump(m_app->getConfig()->makeDumpDirectoryPath(), avatarRender);
 }
@@ -442,8 +482,10 @@ void MainWindow::update(float deltaSeconds)
 {
 	if (m_app->getAppState() == App::eAppState::MainMenu)
 	{
-		// A closed project's pinned stages close with it
+		// A closed project's pinned stages close with it, and the scene's
+		// camera choice returns to the free camera
 		m_pinnedWindows->unpinAll();
+		m_scene3dPanel->setPovCamera(-1);
 		drawMainMenu();
 		return;
 	}
@@ -662,8 +704,20 @@ void MainWindow::update(float deltaSeconds)
 	if (m_stageContent->getFaceEditRequest().has_value())
 		m_faceExprEditor->open(*m_stageContent->getFaceEditRequest());
 	m_faceExprEditor->update(*m_shown.fused);
+	// The frame loop's timings, live or the shown take's, followed whether or
+	// not the panel is drawn
+	PerformancePanel::RecordingInput performanceRecording;
+	performanceRecording.bShown= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		performanceRecording.takeId= m_timelinePanel->getTakeId();
+		performanceRecording.frames= &m_timelinePanel->getFrameTelemetry();
+		performanceRecording.playheadFrame= m_timelinePanel->getCurrentFrameIndex();
+		performanceRecording.bHasTelemetry= m_timelinePanel->hasTelemetry();
+	}
+	m_performancePanel->update(*visionThread, performanceRecording);
 	if (m_bShowPerformancePanel)
-		m_performancePanel->draw(&m_bShowPerformancePanel, *visionThread, m_shown.bReplay);
+		m_performancePanel->draw(&m_bShowPerformancePanel, *visionThread);
 
 	// The dump, once the avatar is posed for this frame
 	const bool bCountdownDone= m_trackingPanelState.dumpCountdown.update(deltaSeconds);
@@ -1046,41 +1100,74 @@ void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
 
 void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)
 {
-	SceneCameraMatch match;
+	// The cameras and their calibration come from the config the shown frame
+	// was made under, as the frustums do
+	const AppConfig& config= *m_shown.config;
+
+	// The direct solve's camera, placed at the measured shoulders. It is the
+	// camera the dump's annotated frame shows the posed avatar over, so the
+	// capture looks through it whatever the view's choice is.
+	SceneCameraMatch directMatch;
 	if (directState != nullptr && skeleton != nullptr && directState->torsoValid && directState->camera.width > 0 &&
 		directState->camera.height > 0)
 	{
-		match.valid= true;
-		match.camera= directState->camera;
-		match.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
+		directMatch.valid= true;
+		directMatch.cameraIndex= config.direct.cameraIndex;
+		directMatch.camera= directState->camera;
+		directMatch.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
 		// The chains live in the solve's world, the camera at the origin; the
 		// camera's translation carries them to the avatar's
 		m_scene3dPanel->setDirectSolve(directState,
-									   glm::translate(glm::mat4(1.f), glm::vec3(match.cameraToWorld[3])));
+									   glm::translate(glm::mat4(1.f), glm::vec3(directMatch.cameraToWorld[3])));
 	}
 	else
 	{
 		m_scene3dPanel->setDirectSolve(nullptr, glm::mat4(1.f));
-		const AppConfig* config= m_app->getConfig();
-		if (config->cameraCount() > 0 && !m_latestPreviews.empty() && m_latestPreviews[0].valid &&
-			!m_latestPreviews[0].bgr.empty())
-		{
-			const CameraProfile& profile= config->camera(0);
-			if (profile.extrinsics.present && profile.intrinsics.present)
-			{
-				const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
-				match.valid= true;
-				match.camera.fx= (float)cameraMatrix.x0;
-				match.camera.fy= (float)cameraMatrix.y1;
-				match.camera.cx= (float)cameraMatrix.z0;
-				match.camera.cy= (float)cameraMatrix.z1;
-				match.camera.width= m_latestPreviews[0].bgr.cols;
-				match.camera.height= m_latestPreviews[0].bgr.rows;
-				match.cameraToWorld= glm::mat4(profile.extrinsics.markerFromCamera);
-			}
-		}
 	}
-	m_scene3dPanel->setCameraMatch(match);
+	m_scene3dPanel->setCaptureMatch(directMatch);
+
+	// The view's choice, checked against the shown frame's cameras first. A
+	// project loaded in place of another starts at the free camera.
+	const std::filesystem::path projectDirectory= m_app->getConfig()->getProjectDirectory();
+	if (projectDirectory != m_povProjectDirectory)
+	{
+		m_povProjectDirectory= projectDirectory;
+		m_scene3dPanel->setPovCamera(-1);
+	}
+	std::vector<eScenePovAvailability> povCameras;
+	for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
+		povCameras.push_back(getScenePovAvailability(config, cameraIndex));
+	m_scene3dPanel->setPovCameras(povCameras);
+	const int povCamera= m_scene3dPanel->getPovCamera();
+	SceneCameraMatch povMatch;
+	if (povCamera >= 0 && config.direct.enabled)
+	{
+		// Only the direct camera is available, placed by the solve
+		povMatch= directMatch;
+	}
+	else if (povCamera >= 0)
+	{
+		// Placed by its extrinsics, at the size it was calibrated at, or live
+		// at the size its frames arrive at
+		const MikanMonoIntrinsics& intrinsics= config.camera(povCamera).intrinsics.intrinsics;
+		const MikanMatrix3d& cameraMatrix= intrinsics.undistorted_camera_matrix;
+		povMatch.camera.fx= (float)cameraMatrix.x0;
+		povMatch.camera.fy= (float)cameraMatrix.y1;
+		povMatch.camera.cx= (float)cameraMatrix.z0;
+		povMatch.camera.cy= (float)cameraMatrix.z1;
+		povMatch.camera.width= (int)intrinsics.pixel_width;
+		povMatch.camera.height= (int)intrinsics.pixel_height;
+		if ((povMatch.camera.width <= 0 || povMatch.camera.height <= 0) && !m_shown.bReplay &&
+			povCamera < (int)m_latestPreviews.size() && m_latestPreviews[povCamera].valid)
+		{
+			povMatch.camera.width= m_latestPreviews[povCamera].bgr.cols;
+			povMatch.camera.height= m_latestPreviews[povCamera].bgr.rows;
+		}
+		povMatch.valid= povMatch.camera.width > 0 && povMatch.camera.height > 0;
+		povMatch.cameraIndex= povCamera;
+		povMatch.cameraToWorld= glm::mat4(config.camera(povCamera).extrinsics.markerFromCamera);
+	}
+	m_scene3dPanel->setPovMatch(povMatch);
 }
 
 const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
@@ -1430,6 +1517,38 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 			}
 		}
 		outLines.push_back(m_stageView->describe());
+		return true;
+	}
+	if (verb == "pov")
+	{
+		// The scene's camera: the free camera or a configured camera of the
+		// shown frame's config that can be looked through
+		if (args.size() >= 2)
+		{
+			int cameraIndex= -1;
+			if (!StageView::parsePov(args[1], cameraIndex))
+			{
+				outError= "expected free or a camera index: " + args[1];
+				return false;
+			}
+			if (!m_scene3dPanel->setPovCamera(cameraIndex))
+			{
+				const std::vector<eScenePovAvailability>& cameras= m_scene3dPanel->getPovCameras();
+				outError= "camera " + args[1] + " cannot be looked through: " +
+					StageView::getPovAvailabilityName(cameraIndex < (int)cameras.size()
+														  ? cameras[cameraIndex]
+														  : eScenePovAvailability::Missing);
+				return false;
+			}
+		}
+		// The match follows on the next frame's update
+		outLines.push_back("pov " + StageView::describePov(m_scene3dPanel->getPovCamera()) + " matched " +
+						   (m_scene3dPanel->isPovMatched() ? "yes" : "no"));
+		std::string choices= "choices free";
+		const std::vector<eScenePovAvailability>& cameras= m_scene3dPanel->getPovCameras();
+		for (int cameraIndex= 0; cameraIndex < (int)cameras.size(); ++cameraIndex)
+			choices+= " " + std::to_string(cameraIndex) + ":" + StageView::getPovAvailabilityName(cameras[cameraIndex]);
+		outLines.push_back(choices);
 		return true;
 	}
 	if (verb == "chain")

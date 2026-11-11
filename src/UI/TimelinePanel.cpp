@@ -116,8 +116,10 @@ void TimelinePanel::refreshRecordingList(const AppConfig* config)
 	for (const auto& entry :
 		 std::filesystem::directory_iterator(config->getRecordingsDirectoryPath(), ec))
 	{
-		if (entry.is_regular_file() && entry.path().extension() == ".jsonl")
-			m_recordingFiles.push_back(entry.path().string());
+		// The take's sidecars sit beside it in the same folder
+		const std::string path= entry.path().string();
+		if (entry.is_regular_file() && TrackingRecording::isRecordingFile(path))
+			m_recordingFiles.push_back(path);
 	}
 	std::sort(m_recordingFiles.begin(), m_recordingFiles.end());
 	if (m_selectedRecording >= (int)m_recordingFiles.size())
@@ -158,8 +160,18 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 	if (ImGui::Button(locLabel("timelinePanel.loadButton"), ImVec2(-1, 0)))
 	{
 		std::string error;
+		// The load replaces the frames these point into
+		m_frameTelemetry.clear();
+		m_bHasTelemetry= false;
+		++m_takeGeneration;
 		if (m_replay.load(m_recordingFiles[m_selectedRecording], error))
 		{
+			for (int frameIndex= 0; frameIndex < m_replay.getFrameCount(); ++frameIndex)
+			{
+				const RecordedTelemetry& telemetry= m_replay.getFrame(frameIndex).recorded->telemetry;
+				m_frameTelemetry.push_back(telemetry.present ? &telemetry : nullptr);
+				m_bHasTelemetry= m_bHasTelemetry || telemetry.present;
+			}
 			// The Fusion stage's detail table reads every frame's fusion
 			// diagnostics, a few hundred bytes a frame
 			m_replay.setCaptureDiagnostics(true);

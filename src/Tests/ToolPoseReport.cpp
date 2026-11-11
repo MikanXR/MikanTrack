@@ -335,7 +335,7 @@ int runPoseReportTool(const TestArgs& args)
 			match.valid= true;
 			match.camera= cameraModel;
 			match.cameraToWorld= cameraToWorld;
-			scene.setCameraMatch(match);
+			scene.setCaptureMatch(match);
 			if (!scene.captureFromCamera(cameraFrame, {}, {}, render))
 				MIKAN_LOG_ERROR(kTag) << "The avatar render failed; the report shows the frame alone";
 		}

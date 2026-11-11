@@ -330,8 +330,10 @@ static int runReplayPopMetricsTool(const TestArgs& args)
 	std::string priorConfigPath;
 	for (const std::string& arg : args)
 	{
-		if (arg.size() > 6 && arg.substr(arg.size() - 6) == ".jsonl")
+		if (TrackingRecording::isRecordingFile(arg))
 			recordings.push_back(arg);
+		else if (TrackingRecording::isRecordingSidecarFile(arg))
+			MIKAN_LOG_INFO("replay-popmetrics") << "Skipping " << arg << ": a take's sidecar, not a take";
 		else
 			priorConfigPath= arg;
 	}

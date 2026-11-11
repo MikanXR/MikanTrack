@@ -715,6 +715,36 @@ static int runReplayTest(const TestArgs& args)
 			result= 1;
 		}
 
+		// A recording list keeps the takes and leaves out the sidecars written
+		// beside them, by name: a take, its face and audio sidecars, and takes
+		// whose names merely contain "face"
+		{
+			const std::string take= "recordings/2026-01-01_12-00-00.jsonl";
+			const bool bTakeIsTake=
+				TrackingRecording::isRecordingFile(take) && !TrackingRecording::isRecordingSidecarFile(take);
+			const bool bFaceIsSidecar= TrackingRecording::isRecordingSidecarFile(
+										   TrackingRecording::makeFaceSidecarPath(take)) &&
+				!TrackingRecording::isRecordingFile(TrackingRecording::makeFaceSidecarPath(take));
+			const bool bAudioIsSidecar=
+				TrackingRecording::isRecordingSidecarFile(TrackingRecording::makeAudioSidecarPath(take)) &&
+				!TrackingRecording::isRecordingFile(TrackingRecording::makeAudioSidecarPath(take));
+			const bool bFaceWordIsTake= TrackingRecording::isRecordingFile("recordings/face.jsonl") &&
+				TrackingRecording::isRecordingFile("recordings/my_face_take.jsonl") &&
+				TrackingRecording::isRecordingFile("recordings/2026-01-01_face.jsonl") &&
+				!TrackingRecording::isRecordingSidecarFile("recordings/face.jsonl");
+			const bool bOtherIsNeither= !TrackingRecording::isRecordingFile("recordings/notes.txt") &&
+				!TrackingRecording::isRecordingFile("recordings/2026-01-01_12-00-00_frames");
+			MIKAN_LOG_INFO("test-replay") << "(f) sidecar rule: take " << bTakeIsTake << " face sidecar "
+										  << bFaceIsSidecar << " audio sidecar " << bAudioIsSidecar
+										  << " face in a take's name " << bFaceWordIsTake << " other " << bOtherIsNeither;
+			if (!bTakeIsTake || !bFaceIsSidecar || !bAudioIsSidecar || !bFaceWordIsTake || !bOtherIsNeither)
+			{
+				MIKAN_LOG_ERROR("test-replay")
+					<< "(f) FAILED: a take is a .jsonl file that is not a sidecar, and the sidecars are not takes";
+				result= 1;
+			}
+		}
+
 		// The recording without its sidecar file loads with no phone face
 		std::error_code removeError;
 		std::filesystem::remove(faceSidecarPath, removeError);

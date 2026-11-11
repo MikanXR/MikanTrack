@@ -206,14 +206,8 @@ void StageView::drawHeader()
 	ImGui::EndDisabled();
 	ImGui::SetItemTooltip("%s", locText(m_content.bWizard ? "stageView.wizardNote" : "stageView.modeTooltip"));
 
-	if (!m_content.bCameras && m_scenePanel->hasCameraMatch())
-	{
-		ImGui::SameLine();
-		bool bViewFromCamera= m_scenePanel->getViewFromCamera();
-		if (ImGui::Checkbox(locLabel("stageView.viewFromCamera"), &bViewFromCamera))
-			m_scenePanel->setViewFromCamera(bViewFromCamera);
-		ImGui::SetItemTooltip("%s", locText("stageView.viewFromCameraTooltip"));
-	}
+	if (!m_content.bCameras)
+		drawPovCombo();
 
 	if (isRetargetView())
 	{
@@ -226,6 +220,58 @@ void StageView::drawHeader()
 			ImGui::SetItemTooltip("%s", locText("stageView.layoutTooltip"));
 		}
 		ImGui::TextDisabled("%s", locText("stageView.retargetLegend"));
+	}
+}
+
+void StageView::drawPovCombo()
+{
+	// Every configured camera is listed, the ones that cannot be looked
+	// through disabled, so the numbers match the cameras' numbers elsewhere
+	const std::vector<eScenePovAvailability>& cameras= m_scenePanel->getPovCameras();
+	const int chosen= m_scenePanel->getPovCamera();
+	const std::string preview=
+		chosen < 0 ? std::string(locText("stageView.povFree")) : locFormat("stageView.povCameraFmt", chosen + 1);
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.f);
+	if (ImGui::BeginCombo("##stageViewPov", preview.c_str()))
+	{
+		if (ImGui::Selectable(locLabel("stageView.povFree"), chosen < 0))
+			m_scenePanel->setPovCamera(-1);
+		for (int cameraIndex= 0; cameraIndex < (int)cameras.size(); ++cameraIndex)
+		{
+			const bool bAvailable= cameras[cameraIndex] == eScenePovAvailability::Available;
+			const std::string label=
+				locFormat("stageView.povCameraFmt", cameraIndex + 1) + "##pov" + std::to_string(cameraIndex);
+			if (ImGui::Selectable(label.c_str(), cameraIndex == chosen,
+								  bAvailable ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled))
+				m_scenePanel->setPovCamera(cameraIndex);
+			if (!bAvailable)
+				ImGui::SetItemTooltip("%s", locText(getPovUnavailableKey(cameras[cameraIndex])));
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SetItemTooltip("%s", locText("stageView.povTooltip"));
+
+	// A chosen camera without a placement on this frame shows the free camera
+	if (chosen >= 0 && !m_scenePanel->isPovMatched())
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", locText("stageView.povNoPlacement"));
+	}
+}
+
+const char* StageView::getPovUnavailableKey(eScenePovAvailability availability)
+{
+	switch (availability)
+	{
+		case eScenePovAvailability::NotCalibrated:
+			return "stageView.povNotCalibrated";
+		case eScenePovAvailability::NoExtrinsics:
+			return "stageView.povNoExtrinsics";
+		case eScenePovAvailability::NotDirectCamera:
+			return "stageView.povNotDirectCamera";
+		default:
+			return "stageView.povNotCalibrated";
 	}
 }
 
@@ -257,6 +303,8 @@ std::string StageView::describe() const
 	else
 		text= "scene " + (m_content.sceneStage.isValid() ? PipelineModel::toString(m_content.sceneStage) : "none");
 	text+= std::string(" mode ") + getModeName(m_mode);
+	if (!m_content.bCameras)
+		text+= " pov " + describePov(m_scenePanel->getPovCamera());
 	if (isRetargetView())
 		text+= std::string(" layout ") + getRetargetLayoutName(m_retargetLayout);
 	if (m_content.bWizard)
@@ -288,6 +336,41 @@ bool StageView::parseMode(const std::string& text, eStageViewMode& outMode)
 		}
 	}
 	return false;
+}
+
+std::string StageView::describePov(int cameraIndex)
+{
+	return cameraIndex < 0 ? std::string("free") : std::to_string(cameraIndex);
+}
+
+bool StageView::parsePov(const std::string& text, int& outCameraIndex)
+{
+	if (text == "free")
+	{
+		outCameraIndex= -1;
+		return true;
+	}
+	if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos || text.size() > 4)
+		return false;
+	outCameraIndex= std::stoi(text);
+	return true;
+}
+
+const char* StageView::getPovAvailabilityName(eScenePovAvailability availability)
+{
+	switch (availability)
+	{
+		case eScenePovAvailability::Available:
+			return "available";
+		case eScenePovAvailability::NotCalibrated:
+			return "notCalibrated";
+		case eScenePovAvailability::NoExtrinsics:
+			return "noExtrinsics";
+		case eScenePovAvailability::NotDirectCamera:
+			return "notDirectCamera";
+		default:
+			return "missing";
+	}
 }
 
 const char* StageView::getRetargetLayoutName(eRetargetLayout layout)

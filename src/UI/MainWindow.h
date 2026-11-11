@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -120,7 +121,8 @@ private:
 	// The stages pinned into windows of their own, each its view and its
 	// inspector on the shown frame
 	std::unique_ptr<PinnedStageWindows> m_pinnedWindows;
-	// The frame loop's timings and their recent history, always live
+	// The frame loop's timings and their recent history, live or the shown
+	// take's
 	std::unique_ptr<PerformancePanel> m_performancePanel;
 	// The stage sections the Inspector hosts, drawn from the device,
 	// calibration, audio and avatar panels, the tracking and OSC sections and
@@ -203,6 +205,10 @@ private:
 	void gatherPipelineInputs();
 	bool handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 								  std::string& outError);
+	// performance source: the Performance panel's source, the samples its
+	// chart holds and the marked sample's total; with a source, sets it
+	bool handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									 std::string& outError);
 	// pipeline fx: a chain's value-or-function setting, its compile state,
 	// and what the shown frame evaluated it to; with a form, sets it
 	bool handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
@@ -240,10 +246,14 @@ private:
 	int m_avatarPoseFeed= -1;
 	// Poses the scene's avatar and fills the elbow hint gizmos from it
 	void updateDisplayAvatar(SceneGizmos& outGizmos);
-	// The camera the scene can look through: the direct solve's placement
-	// of its camera when one is shown (directState), else camera 0's
-	// calibration; and the solve's chains drawn beside the avatar
+	// The cameras the scene can look through, from the shown frame's config:
+	// the capture's, the direct solve's placement of its camera when one is
+	// shown (directState), and the view's chosen camera, the direct one
+	// placed the same way in a direct project, any other by its calibration;
+	// and the solve's chains drawn beside the avatar
 	void updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton);
+	// The project the view's camera choice was made in
+	std::filesystem::path m_povProjectDirectory;
 	// The window's stage brought to the Timeline's current frame: a
 	// direct-mode recording's frames through the direct pipeline under the
 	// recorded config (a frame it cannot solve through the position

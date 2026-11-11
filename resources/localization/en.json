@@ -1284,8 +1284,13 @@
 		"modeScene": "3D scene",
 		"modeTooltip": "What the view shows. Follow selection shows the cameras for the Capture and\nDirect solver stages and the 3D scene for the others.",
 		"wizardNote": "A camera calibration wizard is running: the view shows every camera\nuntil it closes.",
-		"viewFromCamera": "View from camera",
-		"viewFromCameraTooltip": "Shows the scene through the tracking camera's own lens, framed\nthe way the video is, so the avatar's pose compares with the\ncamera's view of you. Direct mode places the camera at the\nmeasured shoulders; stereo mode uses camera 1's calibration.",
+		"povFree": "Free cam",
+		"povCameraFmt": "Camera %d",
+		"povTooltip": "Where the scene is seen from. Free cam is the camera you turn by hand. A camera shows\nthe scene through its own lens, framed the way its video is, so the avatar's pose\ncompares with that camera's view of you. Direct mode places the direct camera at the\nmeasured shoulders.",
+		"povNotCalibrated": "This camera's lens is not calibrated yet.",
+		"povNoExtrinsics": "This camera has no placement yet. Calibrate the extrinsics.",
+		"povNotDirectCamera": "In direct mode only the direct camera has a placement, the one the solver gives it.",
+		"povNoPlacement": "No placement on this frame, so the free cam is shown.",
 		"layoutOverlay": "Overlay",
 		"layoutSideBySide": "Side by side",
 		"layoutTooltip": "Overlay draws the source pose over the avatar. Side by side draws\nthe source pose on the left and the avatar on the right, turning\ntogether.",
@@ -1302,6 +1307,16 @@
 		"iterationsAgoAxis": "iterations ago",
 		"chartTotal": "total",
 		"chartHitchLimit": "hitch limit",
-		"chartHitches": "hitches"
+		"chartHitches": "hitches",
+		"sourceLive": "Live",
+		"sourceRecording": "Recording",
+		"sourceTooltip": "Live shows the frame loop running now. Recording shows the shown take's\nframes up to the playhead, as they were recorded.",
+		"recordingUnavailable": "Available while a replay is shown whose take recorded its stage state.",
+		"frameNotRecorded": "Not recorded for this frame.",
+		"takeHitchesFmt": "Hitches in the take: %d",
+		"recordedNote": "Recorded totals are the sum of the phases, and the diagnostics time is the previous frame's.",
+		"windowNotRecorded": "No frame up to the playhead recorded its times.",
+		"framesBeforePlayheadAxis": "frames before the playhead",
+		"chartPlayhead": "playhead"
 	}
 }

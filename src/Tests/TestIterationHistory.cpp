@@ -1,13 +1,17 @@
 #include "TestCommon.h"
 
 #include "IterationHistory.h"
+#include "PerformanceSeries.h"
 
 // The frame loop history ring the Performance chart reads, without a vision
 // thread: numbering from 1, a fetch returning only what came after the
 // reader's newest, oldest first, with the values pushed; wraparound keeping
 // the newest capacity entries; a reader that fell behind getting what is
 // left and the count it lost; a reader ahead of the ring (one that started
-// over) getting nothing; and clear numbering from 1 again.
+// over) getting nothing; and clear numbering from 1 again. Then the chart's
+// series from the live history and from a take's recorded frames: the
+// window ending at the playhead at the start, the middle and the end, the
+// hitch flags, and frames without telemetry.
 static int runIterationHistoryTest(const TestArgs& args)
 {
 	const char* kTag= "test-iteration-history";
@@ -137,10 +141,96 @@ static int runIterationHistoryTest(const TestArgs& args)
 		check(history.getCapacity() == IterationHistory::k_defaultCapacity, "(m) the default capacity");
 	}
 
+	// The chart's series from the live history: x counts back from the
+	// newest, which is marked
+	{
+		IterationHistory history(4);
+		for (int pushIndex= 1; pushIndex <= 6; ++pushIndex)
+			pushNumbered(history, pushIndex);
+		std::vector<IterationHistory::Entry> entries;
+		history.fetchNewerThan(0, entries);
+		PerformanceSeries series;
+		buildLiveSeries(entries, history.getNewestSequence(), series);
+		bool bOk= series.samples.size() == 4 && series.markedIndex == 3;
+		for (int index= 0; bOk && index < (int)series.samples.size(); ++index)
+		{
+			const PerformanceSample& sample= series.samples[index];
+			const int pushIndex= 3 + index;
+			bOk= sample.x == (float)(6 - pushIndex) && sample.totalMs == (float)pushIndex * 100.f &&
+				sample.bHitch == (pushIndex % 3 == 0) && sample.phaseMs[2] == (float)(pushIndex * 10 + 2);
+		}
+		PerformanceSeries emptySeries;
+		buildLiveSeries({}, 0, emptySeries);
+		check(bOk && emptySeries.samples.empty() && emptySeries.markedIndex == -1,
+			  "(n) the live series counts back from the newest and marks it");
+	}
+
+	// The chart's series from a take: 10 synthetic frames, totals of 10 ms
+	// per frame index, every third frame over the hitch threshold, frames 4
+	// and 7 without telemetry
+	{
+		const double hitchMs= 50.0;
+		std::vector<RecordedTelemetry> telemetry(10);
+		std::vector<const RecordedTelemetry*> frames;
+		for (int frameIndex= 0; frameIndex < 10; ++frameIndex)
+		{
+			RecordedTelemetry& frame= telemetry[frameIndex];
+			frame.present= frameIndex != 4 && frameIndex != 7;
+			for (int phaseIndex= 0; phaseIndex < RecordedTelemetry::k_phaseCount; ++phaseIndex)
+				frame.phaseMs[phaseIndex]= (float)(frameIndex * 10 + phaseIndex);
+			frame.totalMs= frameIndex % 3 == 0 ? 60.f + (float)frameIndex : 10.f + (float)frameIndex;
+			frames.push_back(frame.present ? &frame : nullptr);
+		}
+		// A frame whose block is there but marked absent counts as none
+		frames[7]= &telemetry[7];
+
+		// Each sample is the frame it says it is: x back from the playhead
+		auto sampleIsFrame= [&](const PerformanceSample& sample, int playhead, int frameIndex) {
+			return sample.x == (float)(playhead - frameIndex) && sample.totalMs == telemetry[frameIndex].totalMs &&
+				sample.phaseMs[3] == (float)(frameIndex * 10 + 3) && sample.bHitch == (frameIndex % 3 == 0);
+		};
+
+		PerformanceSeries series;
+		buildRecordedSeries(frames, 0, 600, hitchMs, series);
+		check(series.samples.size() == 1 && series.markedIndex == 0 && sampleIsFrame(series.samples[0], 0, 0) &&
+				  series.samples[0].bHitch,
+			  "(o) a playhead at the start charts its own frame alone, marked, a hitch by its total");
+
+		buildRecordedSeries(frames, 5, 4, hitchMs, series);
+		check(series.samples.size() == 3 && series.markedIndex == 2 && sampleIsFrame(series.samples[0], 5, 2) &&
+				  sampleIsFrame(series.samples[1], 5, 3) && sampleIsFrame(series.samples[2], 5, 5),
+			  "(p) a playhead in the middle charts the window ending at it, skipping a frame without telemetry");
+
+		buildRecordedSeries(frames, 9, 600, hitchMs, series);
+		bool bAllFrames= series.samples.size() == 8 && series.markedIndex == 7;
+		int hitchSamples= 0;
+		const int expectedFrames[]= {0, 1, 2, 3, 5, 6, 8, 9};
+		for (int index= 0; bAllFrames && index < 8; ++index)
+		{
+			bAllFrames= sampleIsFrame(series.samples[index], 9, expectedFrames[index]);
+			hitchSamples+= series.samples[index].bHitch ? 1 : 0;
+		}
+		check(bAllFrames && hitchSamples == 4,
+			  "(q) a playhead at the end charts every frame with telemetry, the hitches flagged");
+
+		buildRecordedSeries(frames, 7, 600, hitchMs, series);
+		check(series.samples.size() == 6 && series.markedIndex == -1 && sampleIsFrame(series.samples[5], 7, 6),
+			  "(r) a playhead frame without telemetry is not marked, the frames before it still charted");
+
+		buildRecordedSeries(frames, 99, 3, hitchMs, series);
+		const bool bClamped= series.samples.size() == 2 && series.markedIndex == 1 &&
+			sampleIsFrame(series.samples[0], 9, 8) && sampleIsFrame(series.samples[1], 9, 9);
+		buildRecordedSeries({}, 0, 600, hitchMs, series);
+		check(bClamped && series.samples.empty() && series.markedIndex == -1,
+			  "(s) a playhead past the end is the last frame, and an empty take charts nothing");
+
+		check(countRecordedHitches(frames, hitchMs) == 4, "(t) the take's hitches are counted over every frame");
+	}
+
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
 	return failures == 0 ? 0 : 1;
 }
 
 MIKAN_REGISTER_TEST("--test-iteration-history",
-					"Frame loop history ring: numbering, fetch after the reader's newest, wraparound and loss",
+					"Frame loop history ring and the Performance chart's live and recorded series",
 					eTestCategory::SelfTest, runIterationHistoryTest)

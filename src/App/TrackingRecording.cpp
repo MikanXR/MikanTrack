@@ -530,20 +530,43 @@ std::string makeFrameDirectoryPath(const std::string& recordingFilePath)
 	return stem + "_frames";
 }
 
-std::string makeAudioSidecarPath(const std::string& recordingFilePath)
+// The suffixes the sidecars take in place of the recording's extension
+static const char* k_audioSidecarSuffix= ".wav";
+static const char* k_faceSidecarSuffix= ".face.jsonl";
+static const char* k_recordingExtension= ".jsonl";
+
+static std::string makeSidecarPath(const std::string& recordingFilePath, const char* suffix)
 {
 	const size_t extension= recordingFilePath.find_last_of('.');
 	const std::string stem=
 		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
-	return stem + ".wav";
+	return stem + suffix;
+}
+
+static bool endsWith(const std::string& text, const char* suffix)
+{
+	const size_t suffixLength= std::strlen(suffix);
+	return text.size() >= suffixLength && text.compare(text.size() - suffixLength, suffixLength, suffix) == 0;
+}
+
+std::string makeAudioSidecarPath(const std::string& recordingFilePath)
+{
+	return makeSidecarPath(recordingFilePath, k_audioSidecarSuffix);
 }
 
 std::string makeFaceSidecarPath(const std::string& recordingFilePath)
 {
-	const size_t extension= recordingFilePath.find_last_of('.');
-	const std::string stem=
-		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
-	return stem + ".face.jsonl";
+	return makeSidecarPath(recordingFilePath, k_faceSidecarSuffix);
+}
+
+bool isRecordingSidecarFile(const std::string& path)
+{
+	return endsWith(path, k_faceSidecarSuffix) || endsWith(path, k_audioSidecarSuffix);
+}
+
+bool isRecordingFile(const std::string& path)
+{
+	return endsWith(path, k_recordingExtension) && !isRecordingSidecarFile(path);
 }
 
 json headerToJson(const RecordingHeader& header)

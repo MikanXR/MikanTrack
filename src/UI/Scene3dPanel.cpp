@@ -270,8 +270,7 @@ void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::v
 	for (SceneGizmos::ElbowHint& hint : gizmos.elbowHints)
 		hint.bDragging= false;
 
-	const bool bCameraView= m_bViewFromCamera && m_cameraMatch.valid && m_cameraMatch.camera.width > 0 &&
-		m_cameraMatch.camera.height > 0;
+	const bool bCameraView= isPovMatched();
 	// Side by side needs an avatar for its second half
 	const bool bSideBySide= options.bSideBySide && layers.bAvatar && m_avatarModel != nullptr;
 	glm::vec2 imageMin, imageSize;
@@ -317,7 +316,7 @@ void Scene3dPanel::frameRegion(SceneViewState& view, bool bCameraView, const glm
 {
 	if (bCameraView)
 	{
-		const float frameAspect= (float)m_cameraMatch.camera.width / (float)m_cameraMatch.camera.height;
+		const float frameAspect= (float)m_povMatch.camera.width / (float)m_povMatch.camera.height;
 		int viewWidth= region.z;
 		int viewHeight= (int)((float)region.z / frameAspect);
 		if (viewHeight > region.w)
@@ -328,7 +327,7 @@ void Scene3dPanel::frameRegion(SceneViewState& view, bool bCameraView, const glm
 		outViewport= glm::ivec4(region.x + (region.z - viewWidth) / 2, region.y + (region.w - viewHeight) / 2,
 								viewWidth, viewHeight);
 		glm::mat4 viewMatrix, projection;
-		makeCameraMatchedView(m_cameraMatch.camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, viewMatrix, projection);
+		makeCameraMatchedView(m_povMatch.camera, m_povMatch.cameraToWorld, 0.01f, 100.f, viewMatrix, projection);
 		outViewProjection= projection * viewMatrix;
 	}
 	else
@@ -582,15 +581,15 @@ bool Scene3dPanel::captureFromCamera(const TrackingFrameResult& fusedResult,
 									 const std::vector<SceneCameraView>& cameras,
 									 const std::vector<const TrackingFrameResult*>& perCameraResults, cv::Mat& outBgr)
 {
-	const DirectCameraModel& camera= m_cameraMatch.camera;
-	if (!m_cameraMatch.valid || camera.width <= 0 || camera.height <= 0 || camera.width > 0xFFFF ||
+	const DirectCameraModel& camera= m_captureMatch.camera;
+	if (!m_captureMatch.valid || camera.width <= 0 || camera.height <= 0 || camera.width > 0xFFFF ||
 		camera.height > 0xFFFF || !startRenderers())
 		return false;
 	const uint16_t width= (uint16_t)camera.width;
 	const uint16_t height= (uint16_t)camera.height;
 
 	glm::mat4 view, projection;
-	makeCameraMatchedView(camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
+	makeCameraMatchedView(camera, m_captureMatch.cameraToWorld, 0.01f, 100.f, view, projection);
 
 	// What the scene drew before it had layers: everything but the gizmos,
 	// the avatar and the per-camera skeletons as their settings say
@@ -872,4 +871,42 @@ std::vector<SceneCameraView> makeSceneCameraViews(const AppConfig& config)
 		cameras.push_back(view);
 	}
 	return cameras;
+}
+
+eScenePovAvailability getScenePovAvailability(const AppConfig& config, int cameraIndex)
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount())
+		return eScenePovAvailability::Missing;
+	const CameraProfile& profile= config.camera(cameraIndex);
+	if (!profile.intrinsics.present)
+		return eScenePovAvailability::NotCalibrated;
+	if (config.direct.enabled)
+	{
+		return cameraIndex == config.direct.cameraIndex ? eScenePovAvailability::Available
+														: eScenePovAvailability::NotDirectCamera;
+	}
+	return profile.extrinsics.present ? eScenePovAvailability::Available : eScenePovAvailability::NoExtrinsics;
+}
+
+void Scene3dPanel::setPovCameras(const std::vector<eScenePovAvailability>& cameras)
+{
+	m_povCameras= cameras;
+	if (m_povCamera >= (int)m_povCameras.size() ||
+		(m_povCamera >= 0 && m_povCameras[m_povCamera] != eScenePovAvailability::Available))
+		m_povCamera= -1;
+}
+
+bool Scene3dPanel::setPovCamera(int cameraIndex)
+{
+	if (cameraIndex >= 0 &&
+		(cameraIndex >= (int)m_povCameras.size() || m_povCameras[cameraIndex] != eScenePovAvailability::Available))
+		return false;
+	m_povCamera= cameraIndex < 0 ? -1 : cameraIndex;
+	return true;
+}
+
+bool Scene3dPanel::isPovMatched() const
+{
+	return m_povCamera >= 0 && m_povMatch.valid && m_povMatch.cameraIndex == m_povCamera &&
+		m_povMatch.camera.width > 0 && m_povMatch.camera.height > 0;
 }

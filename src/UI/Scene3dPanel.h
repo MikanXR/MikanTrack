@@ -104,15 +104,35 @@ struct SceneViewOptions
 const glm::mat4& displayFromWorld();
 
 // A real camera's view of the scene: its undistorted pinhole and its pose
-// (OpenCV camera axes to world), for the view-from-camera toggle and the
+// (OpenCV camera axes to world), for the view's camera choice and the
 // avatar capture. In direct mode the pose comes from the solve (the camera
 // at the measured shoulders), in stereo mode from the extrinsics.
 struct SceneCameraMatch
 {
 	bool valid= false;
+	// The configured camera it is, -1 when not told
+	int cameraIndex= -1;
 	DirectCameraModel camera;
 	glm::mat4 cameraToWorld{1.f};
 };
+
+// Whether the scene can be looked through a configured camera, and why not
+enum class eScenePovAvailability : int
+{
+	Available,
+	// The config has no such camera
+	Missing,
+	// The camera has no lens calibration
+	NotCalibrated,
+	// A multi-camera project's camera without extrinsics has no placement
+	NoExtrinsics,
+	// In a direct project only the direct camera has a placement, the one
+	// the solve gives it
+	NotDirectCamera,
+};
+// The rule over a config alone. A direct camera that is available still
+// needs a solve with a torso on the frame to have its placement.
+eScenePovAvailability getScenePovAvailability(const AppConfig& config, int cameraIndex);
 
 // The view and projection that render the scene the way the camera's
 // undistorted frame shows it: a world point lands on the pixel the pinhole
@@ -263,16 +283,29 @@ public:
 	// when none was
 	bool consumePickedChain(eRetargetChain& outChain);
 
-	// The camera the view-from-camera toggle and the capture look through;
-	// an invalid match disables both
-	void setCameraMatch(const SceneCameraMatch& match) { m_cameraMatch= match; }
-	bool hasCameraMatch() const { return m_cameraMatch.valid; }
-	// On, the panel shows the scene from the matched camera, the frame's
-	// aspect letterboxed in the panel; the orbit camera waits untouched
-	bool getViewFromCamera() const { return m_bViewFromCamera; }
-	void setViewFromCamera(bool bOn) { m_bViewFromCamera= bOn; }
+	// The view's camera choice, not persisted: -1 is the free (orbit) camera,
+	// else the configured camera the view looks through, the frame's aspect
+	// letterboxed in the panel while the orbit camera waits untouched.
+	// setPovCameras gives the shown frame's cameras each frame, and a chosen
+	// camera that is no longer available falls back to the free camera.
+	void setPovCameras(const std::vector<eScenePovAvailability>& cameras);
+	const std::vector<eScenePovAvailability>& getPovCameras() const { return m_povCameras; }
+	int getPovCamera() const { return m_povCamera; }
+	// False, leaving the choice as it was, for a camera that is not available
+	bool setPovCamera(int cameraIndex);
+	// The chosen camera's match on this frame. The view looks through it
+	// while it is valid and for the chosen camera, and is the free camera
+	// otherwise.
+	void setPovMatch(const SceneCameraMatch& match) { m_povMatch= match; }
+	// Whether the view looks through a camera on this frame
+	bool isPovMatched() const;
 
-	// Renders the scene from the matched camera at the frame's size into a
+	// The camera the capture looks through, apart from the view's choice;
+	// an invalid match disables the capture
+	void setCaptureMatch(const SceneCameraMatch& match) { m_captureMatch= match; }
+	bool hasCaptureMatch() const { return m_captureMatch.valid; }
+
+	// Renders the scene from the capture's camera at the frame's size into a
 	// BGR image, the way the dump's annotated frame is laid out, so the two
 	// compare pixel for pixel. Every layer but the gizmos, the avatar and the
 	// per-camera skeletons as their settings say. False without a match or a
@@ -330,8 +363,10 @@ private:
 	bool m_bLineRendererInitialized= false;
 	AvatarMeshView m_meshView;
 
-	SceneCameraMatch m_cameraMatch;
-	bool m_bViewFromCamera= false;
+	std::vector<eScenePovAvailability> m_povCameras;
+	int m_povCamera= -1;
+	SceneCameraMatch m_povMatch;
+	SceneCameraMatch m_captureMatch;
 	bool m_bHasDirectSolve= false;
 	DirectRetarget::SolveState m_directSolve;
 	glm::mat4 m_solveToWorld{1.f};
