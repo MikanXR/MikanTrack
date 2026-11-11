@@ -32,7 +32,7 @@ public:
 		// on, as the live code builds them
 		const RetargetChains chains=
 			migrateRetargetChains(true, 250.f, true, config.restBlendMs,
-								  {config.sides[0].elbowHintConfidence, config.sides[1].elbowHintConfidence});
+								  {k_defaultElbowHintConfidence, k_defaultElbowHintConfidence});
 		stageConfig.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, 0.f);
 		m_stage.setConfig(stageConfig);
 		m_stage.solveDirect(camera, cameraModel, phoneHead, timestampMs, m_result);

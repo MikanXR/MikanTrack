@@ -25,6 +25,11 @@ std::string errorText(const FaceExprCompileError& error);
 // spelled out below. True when text changed.
 bool textInputWithError(const char* id, std::string& text, const FaceExprCompileError* error);
 
+// Its two halves, for a row that puts something beside the input: the input
+// at width with the error's span underlined, and the error spelled out
+bool textInputWithErrorSpan(const char* id, std::string& text, const FaceExprCompileError* error, float width);
+void drawErrorText(const FaceExprCompileError& error);
+
 // Why a binding's output has no target, in the UI's language; "" when it has one
 std::string problemText(const FaceProfileBinding& binding, size_t outputIndex);
 

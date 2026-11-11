@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 #include "imgui.h"
@@ -40,6 +42,7 @@
 #include "ProjectManager.h"
 #include "RetargetChains.h"
 #include "Scene3dPanel.h"
+#include "SourcePoseInputs.h"
 #include "SettingsPanels.h"
 #include "SetupFlow.h"
 #include "StageContent.h"
@@ -97,7 +100,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
 		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
-		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]"},
+		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
+		 "pipeline fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -886,6 +890,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
+	m_avatarPanel->setShownElbowWeights(nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
@@ -967,6 +972,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
+	m_avatarPanel->setShownElbowWeights(shownResult != nullptr ? &shownResult->elbowWeights : nullptr);
 	updateDirectReadout(directState);
 	updateSourcePoseReadout(shownResult);
 	updateSceneCameraMatch(directState, skeleton.get());
@@ -1070,13 +1076,13 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 	const AppConfig& liveConfig, const AvatarRigSettings& rig, const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
 	// The recording's lengths, direct settings and retarget chains (its loss
-	// rules and elbow hint confidences), the project's avatar placement, and
-	// the live rig. A take from before chain settings migrates its chains
-	// from its own legacy settings and the live rig.
+	// rules and elbow weights), the project's avatar placement, and the live
+	// rig. A take from before chain settings migrates its chains from its own
+	// legacy settings and the live rig.
 	const AppConfig& recordedConfig= m_timelinePanel->getRecordedConfig();
 	const RetargetChains recordedChains= resolveRetargetChains(recordedConfig, rig);
 	RetargetStageConfig stageConfig= makeRetargetStageConfig(recordedConfig, rig, recordedChains, skeleton);
-	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig, recordedChains);
+	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig);
 	m_displayStage.setConfig(stageConfig);
 
 	// A direct-mode recording's camera and its undistorted pinhole, the
@@ -1436,6 +1442,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		outLines.push_back(AvatarPanel::getChainId(m_avatarPanel->getSelectedChain()));
 		return true;
 	}
+	if (verb == "fx")
+		return handleFxAutomation(args, outLines, outError);
 	if (verb == "pinned")
 	{
 		const std::vector<PipelineStageId> pinned= m_pinnedWindows->getPinned();
@@ -1502,4 +1510,106 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	}
 	outError= "unknown verb: " + verb;
 	return false;
+}
+
+bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									std::string& outError)
+{
+	// fx <arm> <parameter> [value <number> | expr <text...>]
+	if (args.size() < 3)
+	{
+		outError= "usage: fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]";
+		return false;
+	}
+	int sideIndex= -1;
+	if (args[1] == "leftArm")
+		sideIndex= 0;
+	else if (args[1] == "rightArm")
+		sideIndex= 1;
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+	if (args[2] != "elbowWeight")
+	{
+		outError= "unknown parameter: " + args[2];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	ExprParameter& weight= chains.arms[sideIndex].elbowWeight;
+	if (args.size() >= 4)
+	{
+		const std::string& form= args[3];
+		if (form == "value")
+		{
+			if (args.size() != 5)
+			{
+				outError= "value takes one number";
+				return false;
+			}
+			char* end= nullptr;
+			const double parsed= std::strtod(args[4].c_str(), &end);
+			if (end == args[4].c_str() || *end != '\0' || !(parsed >= 0.0 && parsed <= 1.0))
+			{
+				outError= "not a number in [0, 1]: " + args[4];
+				return false;
+			}
+			weight.value= (float)parsed;
+			weight.bUseExpression= false;
+		}
+		else if (form == "expr")
+		{
+			if (args.size() < 5)
+			{
+				outError= "missing expression text";
+				return false;
+			}
+			// The rest of the line is the text
+			std::string text= args[4];
+			for (size_t index= 5; index < args.size(); ++index)
+				text+= " " + args[index];
+			weight.expression= text;
+			weight.bUseExpression= true;
+		}
+		else
+		{
+			outError= "unknown form: " + form;
+			return false;
+		}
+		m_app->setRetargetChains(chains);
+	}
+
+	auto format= [](float value) {
+		char text[32];
+		std::snprintf(text, sizeof(text), "%.6g", value);
+		return std::string(text);
+	};
+	outLines.push_back(std::string("setting ") + (weight.bUseExpression ? "function" : "value") + " value " +
+					   format(weight.value) + " expr " + weight.expression);
+	const FaceExprCompileResult compiled= compileExprParameter(weight.expression, SourcePoseInputs::table());
+	if (compiled.errors.empty())
+	{
+		outLines.push_back("compile ok");
+	}
+	else
+	{
+		const FaceExprCompileError& error= compiled.errors.front();
+		outLines.push_back("compile error at " + std::to_string(error.span.begin) + ".." +
+						   std::to_string(error.span.end) + ": " + error.message);
+	}
+	// The frame the scene shows, solved before this setting reached it
+	const RetargetElbowWeight& shown= m_avatarPanel->getShownElbowWeights()[sideIndex];
+	if (!shown.bEvaluated)
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		outLines.push_back("shown weight " + format(shown.weight) + " raw " + format(shown.rawValue) + " from " +
+						   (shown.bExpression && shown.bCompiled ? "function" : "value") + " compiled " +
+						   (shown.bCompiled ? "yes" : "no"));
+	}
+	return true;
 }

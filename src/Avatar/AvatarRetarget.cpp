@@ -74,6 +74,11 @@ void AvatarPose::clear()
 	bones= {};
 }
 
+float elbowWeightFromConfidence(float forearmConfidence, float elbowHintConfidence)
+{
+	return elbowHintConfidence > 0.f ? std::clamp(forearmConfidence / elbowHintConfidence, 0.f, 1.f) : 1.f;
+}
+
 void AvatarRetarget::reset()
 {
 	m_root= RootState();
@@ -177,21 +182,30 @@ void AvatarRetarget::resetRootFollow()
 
 void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 						   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
-						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose)
+						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose,
+						   const std::array<float, 2>& elbowHintConfidence)
 {
 	SourcePose source;
 	fillSource(poses, bSideValid, head, timestampMs, user, source);
-	solve(source, skeleton, config, outPose);
+	std::array<float, 2> elbowWeights;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		elbowWeights[sideIndex]=
+			elbowWeightFromConfidence(source.arms[sideIndex].forearmConfidence.value, elbowHintConfidence[sideIndex]);
+	}
+	solve(source, skeleton, config, elbowWeights, outPose);
 }
 
 void AvatarRetarget::solve(const TrackingFrameResult& frame, const BodyDimensions& user,
-						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose)
+						   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose,
+						   const std::array<float, 2>& elbowHintConfidence)
 {
 	const bool bSideValid[2]= {
 		frame.poses[0].tracked && frame.poses[0].hasWorldPose,
 		frame.poses[1].tracked && frame.poses[1].hasWorldPose,
 	};
-	solve(frame.poses, bSideValid, frame.head, frame.timestampMs, user, skeleton, config, outPose);
+	solve(frame.poses, bSideValid, frame.head, frame.timestampMs, user, skeleton, config, outPose,
+		  elbowHintConfidence);
 }
 
 void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton,
@@ -248,7 +262,8 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 }
 
 void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skeleton,
-						   const AvatarRetargetConfig& config, AvatarPose& outPose, AvatarRetargetGoals* outGoals)
+						   const AvatarRetargetConfig& config, const std::array<float, 2>& elbowWeights,
+						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
 {
 	using eGroupState= SourcePose::eGroupState;
 	if (outGoals != nullptr)
@@ -354,17 +369,14 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 
 		// Elbow: the measured elbow, scaled the same way, hints which way the
 		// arm bends, giving way to the rig's hint point (in the rooted torso
-		// frame, so it turns with the body) as the forearm confidence drops
+		// frame, so it turns with the body) by the arm's elbow weight
 		const glm::vec3 hintOffset= rest.rotation * sideConfig.elbowHintOffset;
 		glm::vec3 polePoint= avatarShoulder + hintOffset;
 		if (arm.bHasElbow)
 		{
 			const glm::vec3 userElbow= arm.elbowPosition;
 			const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * ratio;
-			const float weight= sideConfig.elbowHintConfidence > 0.f
-				? std::clamp(arm.forearmConfidence.value / sideConfig.elbowHintConfidence, 0.f, 1.f)
-				: 1.f;
-			polePoint+= (measuredPole - polePoint) * weight;
+			polePoint+= (measuredPole - polePoint) * elbowWeights[sideIndex];
 		}
 		const glm::vec3 elbow= solveElbow(avatarShoulder, wrist, upperArm, forearm, polePoint, safeNormalize(hintOffset),
 										  rest.direction(lowerArmBone));

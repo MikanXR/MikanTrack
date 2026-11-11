@@ -147,8 +147,8 @@
 		"browseDialogTitle": "Load VRM Avatar",
 		"contentsFmt": "%d nodes, %d skins, %d triangles, %d images",
 		"curlGainSlider": "Curl gain",
-		"elbowHintConfidenceSlider": "Measured elbow confidence",
-		"elbowHintConfidenceTooltip": "Forearm confidence at which the measured elbow alone decides the bend.\nBelow it the bend blends toward the hint.",
+		"elbowWeightField": "Measured elbow weight",
+		"elbowWeightTooltip": "How far the bend follows the measured elbow rather than the hint:\nat 1 the measured elbow alone decides the bend, at 0 the hint alone.\nThe default function follows the forearm's confidence.",
 		"elbowHintDrag": "Elbow hint",
 		"elbowHintTooltip": "The point the elbow bends toward when the forearm is not measured:\nmeters from the shoulder in the avatar's torso frame\n(+X forward, +Y the avatar's left, +Z up).",
 		"restPoseLabel": "Rest pose",
@@ -222,7 +222,7 @@
 		"chainColumn": "Chain",
 		"chainsHeading": "Chains",
 		"copyToOtherArmButton": "Copy to the other arm",
-		"copyToOtherArmTooltip": "Copies this arm onto the other one, mirrored: the elbow hint, the measured\nelbow confidence, the forearm roll trim, the loss policy, the rest pose,\nand the stored mapping, IK weight, reach scale and goal offset.\nPoints and directions reflect across the body's midline, and the roll\ntrim changes sign. The hand's settings are not copied.",
+		"mirrorToOtherArmTooltip": "Copies this arm onto the other one, mirrored: the elbow hint, the measured\nelbow weight (its function reading the other side), the forearm roll trim,\nthe loss policy, the rest pose, and the stored mapping, IK weight,\nreach scale and goal offset.\nPoints and directions reflect across the body's midline, and the roll\ntrim changes sign. The hand's settings are not copied.",
 		"directArmLossNote": "The arm holds for as long as its tracking has earned, then eases into its rest pose.",
 		"elbowHeading": "Elbow",
 		"fixedByPipelineNote": "The mapping and the IK weight follow the pipeline for now. They become editable in a later version.",
@@ -342,6 +342,17 @@
 		"op.or": "Either side true (above 0.5): 1, else 0",
 		"op.and": "Both sides true (above 0.5): 1, else 0",
 		"op.not": "1 when the value is false (0.5 or less), else 0"
+	},
+	"exprField": {
+		"fallbackLabel": "(fallback)",
+		"fallbackTooltip": "The function does not compile, so the fixed value is used.",
+		"fxOffTooltip": "Use a function instead of a fixed value",
+		"fxOnTooltip": "Use the fixed value. The function's text is kept.",
+		"helpText": "A function in the face expression language, over these inputs:",
+		"noValueLabel": "(none)",
+		"noValueTooltip": "The shown frame did not evaluate this setting.",
+		"rawFmt": "(before clamp %.2f)",
+		"rawTooltip": "The function's value before it is clamped to the setting's range."
 	},
 	"audioPanel": {
 		"enableCheckbox": "Enable microphone mouth",

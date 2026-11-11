@@ -352,12 +352,6 @@ RetargetChains resolveRetargetChains(const RetargetChains* block, const AppConfi
 
 AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
 {
-	return makeAvatarRetargetConfig(config, rig, resolveRetargetChains(config, rig));
-}
-
-AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig,
-											  const RetargetChains& chains)
-{
 	using B= eHumanoidBone;
 	AvatarRetargetConfig retarget;
 	retarget.followShoulders= config.avatar.followShoulders;
@@ -384,7 +378,6 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		side.restPalmNormal= rigSide.restPalmNormal;
 		side.restFingerCurlRadians= glm::radians(rigSide.restFingerCurlDegrees);
 	}
-	applyRetargetChains(chains, retarget.sides);
 	return retarget;
 }
 
@@ -416,7 +409,7 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
 	direct.userForearmLengthMeters= dimensions.forearmLengthMeters;
 	// The rig adjustments are the position retarget's, one mapping
-	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig, chains);
+	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
 	direct.headTrimRadians= retarget.headTrimRadians;
 	direct.restBlendMs= chains.arms[0].loss.restBlendMs;
 	direct.sides= retarget.sides;
@@ -439,11 +432,13 @@ RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const Avata
 {
 	RetargetStageConfig stage;
 	stage.skeleton= std::move(skeleton);
-	stage.position= makeAvatarRetargetConfig(config, rig, chains);
+	stage.position= makeAvatarRetargetConfig(config, rig);
 	stage.user= makeBodyDimensions(config);
 	stage.direct= makeDirectRetargetConfig(config, rig, chains);
 	stage.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence);
 	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		stage.elbowWeight[sideIndex]= chains.arms[sideIndex].elbowWeight;
 	return stage;
 }
 

@@ -144,7 +144,8 @@ AvatarPose solveScenario(const Scenario& scenario)
 	AvatarRetarget retarget;
 	AvatarPose pose;
 	retarget.solve(scenario.poses, scenario.bSideValid, scenario.head, 0.0, scenario.user, *scenario.skeleton,
-				   makeAvatarRetargetConfig(config, scenario.rig), pose);
+				   makeAvatarRetargetConfig(config, scenario.rig), pose,
+				   {scenario.rig.sides[0].elbowHintConfidence, scenario.rig.sides[1].elbowHintConfidence});
 	return pose;
 }
 

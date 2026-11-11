@@ -4,6 +4,8 @@
 #include <string>
 
 #include "AvatarMapFigure.h"
+#include "ExprParameterField.h" // ExprParameterLiveValue
+#include "RetargetStage.h"      // RetargetElbowWeight
 
 class App;
 class AppConfig;
@@ -85,6 +87,13 @@ public:
 	// Whether an arm's elbow hint is shown as a draggable gizmo in the scene
 	bool getShowElbowGizmo(int sideIndex) const { return m_bShowElbowGizmo[sideIndex]; }
 
+	// What each arm's elbow weight evaluated to on the frame the scene shows,
+	// or null when nothing was solved; the elbow weight fields draw it
+	void setShownElbowWeights(const std::array<RetargetElbowWeight, 2>* weights);
+	// The setting's live value as the field draws it
+	static ExprParameterLiveValue toLiveValue(const RetargetElbowWeight& weight);
+	const std::array<RetargetElbowWeight, 2>& getShownElbowWeights() const { return m_shownElbowWeights; }
+
 private:
 	void drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states);
 	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> computeDotStates() const;
@@ -114,4 +123,5 @@ private:
 	ePreviewPose m_previewPose= ePreviewPose::Live;
 	bool m_bShowElbowGizmo[2]= {false, false};
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
+	std::array<RetargetElbowWeight, 2> m_shownElbowWeights{};
 };

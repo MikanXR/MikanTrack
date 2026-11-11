@@ -1,10 +1,13 @@
 #include "TestCommon.h"
 
+#include <cstring>
+
 #include "AvatarRig.h"
 #include "DirectRetarget.h"
 #include "LossStage.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
+#include "SourcePoseInputs.h"
 
 // The retarget chain settings: their JSON round trip and tolerant loading,
 // the migration of a project without them from its legacy settings and the
@@ -33,7 +36,7 @@ bool sameChains(const RetargetChains& a, const RetargetChains& b)
 		const RetargetChains::Arm& y= b.arms[sideIndex];
 		bSame&= x.mapping == y.mapping && sameParameter(x.ikWeight, y.ikWeight) &&
 			sameParameter(x.reachScale, y.reachScale) && x.goalOffset == y.goalOffset &&
-			x.elbowHintConfidence == y.elbowHintConfidence && sameLoss(x.loss, y.loss);
+			sameParameter(x.elbowWeight, y.elbowWeight) && sameLoss(x.loss, y.loss);
 	}
 	return bSame;
 }
@@ -84,11 +87,11 @@ RetargetChains makeEditedChains()
 	left.ikWeight= ExprParameter{0.6f, "clamp(source.leftLowerArm.confidence / 0.5, 0, 1)", true};
 	left.reachScale= ExprParameter{1.2f};
 	left.goalOffset= glm::vec3(0.01f, -0.02f, 0.03f);
-	left.elbowHintConfidence= 0.35f;
+	left.elbowWeight= ExprParameter{0.4f, "smooth(source.leftLowerArm.confidence, 0.2)", true};
 	left.loss= {eLossHold::None, 0.f, eLossAfter::Release, 150.f};
 	RetargetChains::Arm& right= chains.arms[1];
 	right.ikWeight= ExprParameter{0.25f, "0.5", false};
-	right.elbowHintConfidence= 0.65f;
+	right.elbowWeight= ExprParameter{0.65f};
 	right.loss= {eLossHold::Timed, 333.f, eLossAfter::Freeze, 410.f};
 	return chains;
 }
@@ -122,7 +125,8 @@ static int runRetargetChainsTest(const TestArgs&)
 		check(parsed["leftArm"]["ikWeight"].is_object() &&
 				  parsed["leftArm"]["ikWeight"].value("useExpression", false) &&
 				  parsed["rightArm"]["ikWeight"].is_object() && !parsed["rightArm"]["ikWeight"].value("useExpression", true) &&
-				  parsed["leftArm"]["reachScale"].is_number() && parsed["rightArm"]["reachScale"].is_number(),
+				  parsed["leftArm"]["reachScale"].is_number() && parsed["rightArm"]["reachScale"].is_number() &&
+				  parsed["leftArm"]["elbowWeight"].is_object() && parsed["rightArm"]["elbowWeight"].is_number(),
 			  "(a) a parameter with text is an object, a plain one a bare number");
 		check(parsed["leftArm"].value("mapping", std::string()) == "boneAngles" &&
 				  parsed["rightArm"].value("mapping", std::string()) == "boneAnglesThenIk" &&
@@ -167,7 +171,7 @@ static int runRetargetChainsTest(const TestArgs&)
 			  "(b) an unknown enum, a wrong type and a missing field each take their default");
 		check(loaded.arms[0].loss.after == edited.arms[0].loss.after &&
 				  loaded.arms[0].loss.restBlendMs == edited.arms[0].loss.restBlendMs &&
-				  loaded.arms[0].elbowHintConfidence == edited.arms[0].elbowHintConfidence &&
+				  sameParameter(loaded.arms[0].elbowWeight, edited.arms[0].elbowWeight) &&
 				  sameParameter(loaded.arms[0].reachScale, edited.arms[0].reachScale) &&
 				  loaded.head.loss.hold == edited.head.loss.hold && sameLoss(loaded.torso.loss, edited.torso.loss),
 			  "(b) the readable fields beside them are read");
@@ -198,12 +202,13 @@ static int runRetargetChainsTest(const TestArgs&)
 			const RetargetChains::Arm& arm= chains.arms[sideIndex];
 			bArms&= arm.mapping == eArmMapping::BoneAnglesThenIk && sameParameter(arm.ikWeight, ExprParameter{1.f}) &&
 				sameParameter(arm.reachScale, ExprParameter{1.f}) && arm.goalOffset == glm::vec3(0.f) &&
-				arm.elbowHintConfidence == rig.sides[sideIndex].elbowHintConfidence &&
+				sameParameter(arm.elbowWeight,
+							  makeDefaultElbowWeight(sideIndex, rig.sides[sideIndex].elbowHintConfidence)) &&
 				arm.loss.hold == eLossHold::Timed && arm.loss.holdMs == 400.f &&
 				arm.loss.after == eLossAfter::Release && arm.loss.restBlendMs == 500.f;
 		}
 		check(bArms, "(c) multi-camera: the arms take bone angles then IK at weight 1, the timed hold, the release, "
-					 "the rest blend and each side's elbow hint confidence");
+					 "the rest blend and the elbow weight function of each side's elbow hint confidence");
 		check(chains.head.loss.hold == eLossHold::None && chains.head.loss.after == eLossAfter::Release &&
 				  chains.torso.loss.hold == eLossHold::None && chains.torso.loss.after == eLossAfter::Release,
 			  "(c) multi-camera: the head and the torso take the position policy's");
@@ -211,10 +216,12 @@ static int runRetargetChainsTest(const TestArgs&)
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 400.f, false)) &&
 				  samePolicy(stage.directLoss, makeDirectLossPolicy(500.f)),
 			  "(c) multi-camera: both pipelines' loss rules are the ones the legacy settings built");
-		check(stage.position.sides[0].elbowHintConfidence == 0.3f && stage.position.sides[1].elbowHintConfidence == 0.7f &&
-				  stage.direct.sides[0].elbowHintConfidence == 0.3f && stage.direct.sides[1].elbowHintConfidence == 0.7f &&
+		check(sameParameter(stage.elbowWeight[0], makeDefaultElbowWeight(0, 0.3f)) &&
+				  sameParameter(stage.elbowWeight[1], makeDefaultElbowWeight(1, 0.7f)) &&
+				  stage.elbowWeight[0].expression == "clamp(source.leftLowerArm.confidence / 0.3, 0, 1)" &&
+				  stage.elbowWeight[1].expression == "clamp(source.rightLowerArm.confidence / 0.7, 0, 1)" &&
 				  stage.direct.restBlendMs == 500.f,
-			  "(c) multi-camera: each arm's elbow hint confidence reaches both solvers");
+			  "(c) multi-camera: each arm's elbow weight function reaches the stage");
 	}
 
 	// (d) The migration of a direct project without chains, from the same
@@ -230,12 +237,13 @@ static int runRetargetChainsTest(const TestArgs&)
 			const RetargetChains::Arm& arm= chains.arms[sideIndex];
 			bArms&= arm.mapping == eArmMapping::BoneAngles && sameParameter(arm.ikWeight, ExprParameter{0.f}) &&
 				sameParameter(arm.reachScale, ExprParameter{1.f}) &&
-				arm.elbowHintConfidence == rig.sides[sideIndex].elbowHintConfidence &&
+				sameParameter(arm.elbowWeight,
+							  makeDefaultElbowWeight(sideIndex, rig.sides[sideIndex].elbowHintConfidence)) &&
 				arm.loss.hold == eLossHold::Pipeline && arm.loss.holdMs == 400.f &&
 				arm.loss.after == eLossAfter::EaseToRest && arm.loss.restBlendMs == 500.f;
 		}
 		check(bArms, "(d) direct: the arms take bone angles at IK weight 0, the pipeline's hold, the ease to rest over "
-					 "the sidecar's blend, and each side's elbow hint confidence");
+					 "the sidecar's blend, and the elbow weight function of each side's elbow hint confidence");
 		check(chains.head.loss.hold == eLossHold::Pipeline && chains.head.loss.after == eLossAfter::EaseToRest &&
 				  chains.torso.loss.hold == eLossHold::Pipeline && chains.torso.loss.after == eLossAfter::EaseToRest,
 			  "(d) direct: the head and the torso take the direct policy's");
@@ -259,14 +267,14 @@ static int runRetargetChainsTest(const TestArgs&)
 		RetargetChains block= makeDefaultRetargetChains(false);
 		block.arms[0].loss.holdMs= 100.f;
 		block.arms[1].loss.holdMs= 100.f;
-		block.arms[0].elbowHintConfidence= 0.9f;
+		block.arms[0].elbowWeight= makeDefaultElbowWeight(0, 0.9f);
 		config.retargetChains= std::make_shared<const RetargetChains>(block);
 		check(sameChains(resolveRetargetChains(config, rig), block), "(e) the block decides over the legacy settings");
 		const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 100.f, true)) &&
-				  stage.position.sides[0].elbowHintConfidence == 0.9f &&
-				  stage.position.sides[1].elbowHintConfidence == 0.5f,
-			  "(e) the stage takes the block's hold, freeze and elbow hint confidences");
+				  sameParameter(stage.elbowWeight[0], makeDefaultElbowWeight(0, 0.9f)) &&
+				  sameParameter(stage.elbowWeight[1], makeDefaultElbowWeight(1, 0.5f)),
+			  "(e) the stage takes the block's hold, freeze and elbow weights");
 
 		nlohmann::json written= nlohmann::json::parse(config.toJsonString());
 		check(written.contains("retarget") && written["retarget"].contains("chains") &&
@@ -385,11 +393,108 @@ static int runRetargetChainsTest(const TestArgs&)
 			  "(g) a sidecar saved beside a project with a chain block is byte-identical to one saved without");
 	}
 
+	// (h) The elbow weight: a block written before it migrates each arm's
+	// elbowHintConfidence to the default function with the same threshold,
+	// written so it reads back as the same float, the zero edge to a plain 1;
+	// the old key is no longer written; and the copy to the other arm swaps
+	// the side in the function's source names
+	{
+		const float thresholds[]= {0.5f, 0.3f, 0.7f, 0.123456789f, 1.f / 3.f, 1e-5f, 0.999999f, 1.f, 2.5f};
+		bool bMigrated= true;
+		bool bExact= true;
+		bool bDefaulted= false;
+		for (float threshold : thresholds)
+		{
+			nlohmann::json j= retargetChainsToJson(makeDefaultRetargetChains(false));
+			for (const char* key : {"leftArm", "rightArm"})
+			{
+				j[key].erase("elbowWeight");
+				j[key]["elbowHintConfidence"]= threshold;
+			}
+			std::vector<std::string> defaulted;
+			const RetargetChains loaded= retargetChainsFromJson(j, RetargetChains(), &defaulted);
+			bDefaulted|= !defaulted.empty();
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const ExprParameter& weight= loaded.arms[sideIndex].elbowWeight;
+				bMigrated&= sameParameter(weight, makeDefaultElbowWeight(sideIndex, threshold)) && weight.bUseExpression;
+				// The threshold the text holds is the same float, bit for bit
+				float readBack= 0.f;
+				bExact&= findElbowHintConfidence(weight, sideIndex, readBack) &&
+					std::memcmp(&readBack, &threshold, sizeof(float)) == 0;
+			}
+			MIKAN_LOG_INFO("test-retarget-chains") << "  (h) " << threshold << " -> "
+												   << loaded.arms[0].elbowWeight.expression;
+		}
+		check(bMigrated && !bDefaulted, "(h) an arm with elbowHintConfidence and no elbowWeight takes the default function "
+										"of that threshold, with nothing defaulted");
+		check(bExact, "(h) the migrated text holds a threshold that reads back as the same float");
+		check(makeDefaultElbowWeight(0, 0.123456789f).expression == "clamp(source.leftLowerArm.confidence / 0.12345679, 0, 1)",
+			  "(h) a threshold needing more digits is written in full (0.12345679)");
+
+		// The zero edge: the rule gives 1 where the language would divide
+		// to 0, so a threshold of zero or less is the plain weight 1
+		nlohmann::json zero= retargetChainsToJson(makeDefaultRetargetChains(false));
+		zero["leftArm"].erase("elbowWeight");
+		zero["leftArm"]["elbowHintConfidence"]= 0.f;
+		zero["rightArm"].erase("elbowWeight");
+		zero["rightArm"]["elbowHintConfidence"]= -0.2f;
+		const RetargetChains fromZero= retargetChainsFromJson(zero, RetargetChains());
+		float zeroThreshold= -1.f;
+		check(sameParameter(fromZero.arms[0].elbowWeight, ExprParameter{1.f}) &&
+				  sameParameter(fromZero.arms[1].elbowWeight, ExprParameter{1.f}) &&
+				  retargetChainsToJson(fromZero)["leftArm"]["elbowWeight"].is_number() &&
+				  findElbowHintConfidence(fromZero.arms[0].elbowWeight, 0, zeroThreshold) && zeroThreshold == 0.f,
+			  "(h) a threshold of zero or below migrates to the plain weight 1, a bare number");
+
+		// Written: the weight, never the old key; a block with both reads the
+		// weight
+		const nlohmann::json written= retargetChainsToJson(makeEditedChains());
+		check(written["leftArm"].contains("elbowWeight") && !written["leftArm"].contains("elbowHintConfidence") &&
+				  written["rightArm"].contains("elbowWeight") && !written["rightArm"].contains("elbowHintConfidence") &&
+				  written["leftArm"]["elbowWeight"].value("expression", std::string()) ==
+					  "smooth(source.leftLowerArm.confidence, 0.2)",
+			  "(h) the chain block writes elbowWeight and no longer elbowHintConfidence");
+		nlohmann::json both= written;
+		both["leftArm"]["elbowHintConfidence"]= 0.9f;
+		check(sameParameter(retargetChainsFromJson(both, RetargetChains()).arms[0].elbowWeight,
+							makeEditedChains().arms[0].elbowWeight),
+			  "(h) a block with both keys reads elbowWeight");
+		// A project saved and reloaded keeps the weight
+		AppConfig withWeight;
+		withWeight.retargetChains= std::make_shared<const RetargetChains>(makeEditedChains());
+		AppConfig reloaded;
+		check(reloaded.loadFromJsonString(withWeight.toJsonString()) && reloaded.retargetChains != nullptr &&
+				  sameChains(*reloaded.retargetChains, makeEditedChains()),
+			  "(h) the elbow weight round-trips through the project file");
+
+		// The copy to the other arm: the side swapped in the source names
+		// alone, case kept, numbers and other names untouched
+		const RetargetChains defaults= makeDefaultRetargetChains(false);
+		check(sameParameter(mirrorArm(defaults.arms[0]).elbowWeight, defaults.arms[1].elbowWeight) &&
+				  sameParameter(mirrorArm(defaults.arms[1]).elbowWeight, defaults.arms[0].elbowWeight),
+			  "(h) the default function copied to the other arm is that arm's default function");
+		RetargetChains::Arm custom;
+		custom.goalOffset= glm::vec3(0.1f, 0.2f, 0.3f);
+		custom.elbowWeight= ExprParameter{0.2f,
+										  "max(source.LeftHand.confidence, source.leftLowerArm.confidence) * "
+										  "source.rightArm.carried + smooth(source.head.confidence, 0.5e1) - leftover",
+										  true};
+		const RetargetChains::Arm mirrored= mirrorArm(custom);
+		check(mirrored.elbowWeight.expression ==
+					  "max(source.RightHand.confidence, source.rightLowerArm.confidence) * "
+					  "source.leftArm.carried + smooth(source.head.confidence, 0.5e1) - leftover" &&
+				  mirrored.elbowWeight.value == 0.2f && mirrored.elbowWeight.bUseExpression &&
+				  mirrored.goalOffset == glm::vec3(0.1f, -0.2f, 0.3f) &&
+				  SourcePoseInputs::swapSides(mirrored.elbowWeight.expression) == custom.elbowWeight.expression,
+			  "(h) a copy swaps left and right in the source names only, and swapping back restores the text");
+	}
+
 	MIKAN_LOG_INFO("test-retarget-chains") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures
 										   << " failed)";
 	return failures == 0 ? 0 : 1;
 }
 MIKAN_REGISTER_TEST("--test-retarget-chains",
 					"Retarget chains: JSON round trip, tolerant loading, migration, precedence over the legacy keys, "
-					"the stage config per pipeline, the sidecar untouched",
+					"the stage config per pipeline, the sidecar untouched, the elbow weight's migration and side swap",
 					eTestCategory::SelfTest, runRetargetChainsTest);

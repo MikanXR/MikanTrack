@@ -203,6 +203,10 @@ private:
 	void gatherPipelineInputs();
 	bool handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 								  std::string& outError);
+	// pipeline fx: a chain's value-or-function setting, its compile state,
+	// and what the shown frame evaluated it to; with a form, sets it
+	bool handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							std::string& outError);
 
 	TrackingPanelState m_trackingPanelState;
 

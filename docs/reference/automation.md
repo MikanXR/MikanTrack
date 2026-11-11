@@ -116,6 +116,9 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pinned`: one pinned stage per line, or `none`
 - `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
+- `pipeline fx <leftArm|rightArm> elbowWeight`: three lines: the setting (`setting function|value value <v> expr <text>`), the text's compile state (`compile ok` or `compile error at <begin>..<end>: <message>`), and what the shown frame's solve took (`shown weight <w> raw <r> from function|value compiled yes|no`, or `shown none`)
+- `pipeline fx <arm> elbowWeight value <number>`: sets a plain weight in 0 to 1
+- `pipeline fx <arm> elbowWeight expr <text...>`: sets the function to the rest of the line. The answer's `shown` line is the frame shown before the edit lands
 
 ## Client helper
 

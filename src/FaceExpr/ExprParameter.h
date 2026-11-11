@@ -30,6 +30,11 @@ nlohmann::json exprParameterToJson(const ExprParameter& parameter);
 // a plain value.
 ExprParameter exprParameterFromJson(const nlohmann::json& j, float defaultValue);
 
+// Compiles a parameter's text against a table as the runner does, one
+// expression as a profile with one output, so an editor shows the error the
+// runner will have before any runner adopts the text
+FaceExprCompileResult compileExprParameter(const std::string& expression, const ExprInputTable& table);
+
 // One evaluation site for an ExprParameter: the compiled text, the evaluator
 // and its state, over a stream of frames.
 //

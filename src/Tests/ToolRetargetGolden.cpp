@@ -134,7 +134,27 @@ StreamConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& 
 	oscConfig.vmcHeadOffsetMeters= config.osc.vmcHeadOffsetMeters;
 	oscConfig.vmcFreezeOnLoss= armLoss.after == eLossAfter::Freeze;
 	oscConfig.bodyDimensions= bodyDimensions;
-	oscConfig.avatarRetarget= makeAvatarRetargetConfig(config, rig, chains);
+	oscConfig.avatarRetarget= makeAvatarRetargetConfig(config, rig);
+	// The frozen retarget took a threshold where the chains hold an elbow
+	// weight: the threshold its default function was made with. A weight of
+	// another form has no frozen counterpart, so the sidecar's threshold
+	// stands in on both sides and the project's weight is not compared.
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		float threshold= 0.f;
+		if (findElbowHintConfidence(chains.arms[sideIndex].elbowWeight, sideIndex, threshold))
+		{
+			oscConfig.elbowHintConfidence[sideIndex]= threshold;
+		}
+		else
+		{
+			oscConfig.elbowHintConfidence[sideIndex]= rig.sides[sideIndex].elbowHintConfidence;
+			MIKAN_LOG_WARNING(kTag) << (sideIndex == 0 ? "leftArm" : "rightArm")
+									<< ": the elbow weight is not the default function of a threshold, so the "
+									   "comparison runs the sidecar's threshold "
+									<< rig.sides[sideIndex].elbowHintConfidence << " on both sides";
+		}
+	}
 	oscConfig.avatarSkeleton= skeleton;
 	return oscConfig;
 }
@@ -261,7 +281,8 @@ int runPosition(const TrackingReplay& replay, const AppConfig& config, const Ava
 		lengthStream.retarget(frame);
 		noteStream(lengthTally, lengthExpected, lengthStream, lengthStream.encode(frame, why));
 		retargetTally.frames++;
-		const bool bSame= position.solve(frame, streamConfig.bodyDimensions, *skeleton, streamConfig.avatarRetarget, why);
+		const bool bSame= position.solve(frame, streamConfig.bodyDimensions, *skeleton, streamConfig.avatarRetarget,
+										 streamConfig.elbowHintConfidence, why);
 		if (bSame || !backward.bAfterSmall)
 		{
 			retargetTally.note(bSame, frameIndex, "retarget", why);

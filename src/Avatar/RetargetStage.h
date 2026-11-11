@@ -1,12 +1,16 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
 #include "AvatarRetarget.h"
 #include "BodyPoseSolver.h" // BodyDimensions
 #include "DirectRetarget.h"
+#include "ExprParameter.h"
 #include "LossStage.h"
+#include "RetargetChains.h" // makeDefaultElbowWeight
 #include "SourcePose.h"
 #include "TrackingTypes.h"
 
@@ -34,6 +38,53 @@ struct RetargetStageConfig
 	// Each pipeline's loss rules
 	LossPolicy positionLoss;
 	LossPolicy directLoss;
+	// Each arm's weight toward the measured elbow (by eHandSide), from its
+	// chain, evaluated on every position solve over the source pose the loss
+	// stage handed on. The direct placement does not read it.
+	std::array<ExprParameter, 2> elbowWeight{
+		makeDefaultElbowWeight(0, k_defaultElbowHintConfidence),
+		makeDefaultElbowWeight(1, k_defaultElbowHintConfidence),
+	};
+};
+
+// What one arm's elbow weight evaluated to on a frame, for display
+struct RetargetElbowWeight
+{
+	// The position solve ran and took the weight; false on a direct frame
+	// and without a skeleton, with the rest zero
+	bool bEvaluated= false;
+	// What the solve took, clamped to [0, 1]
+	float weight= 0.f;
+	// The function's value before the clamp, 0 while the plain value is in
+	// force
+	float rawValue= 0.f;
+	// The setting is a function, and its text compiled; the function decides
+	// the weight when both hold, and the plain value otherwise
+	bool bExpression= false;
+	bool bCompiled= false;
+};
+
+// Each arm's elbow weight evaluated at one site over a stream of source
+// poses: one runner per arm, its stateful calls stepping on the source
+// clock's step time, its state starting over on a reset and when the
+// source's epoch changes. A new text recompiles; the same text keeps its
+// state.
+class ElbowWeightEvaluator
+{
+public:
+	ElbowWeightEvaluator();
+
+	void setWeights(const std::array<ExprParameter, 2>& weights);
+	void reset();
+
+	// Both arms' weights over a source pose, and what each evaluated to
+	void evaluate(const SourcePose& source, std::array<float, 2>& outWeights,
+				  std::array<RetargetElbowWeight, 2>& outReadout);
+
+private:
+	std::array<ExprParameterRunner, 2> m_runners;
+	bool m_bHasEpoch= false;
+	uint32_t m_epoch= 0;
 };
 
 // One frame through the stage
@@ -54,6 +105,9 @@ struct RetargetResult
 	// Where the position solve aimed each arm's wrist, for display; none on a
 	// direct frame, whose placement has no goal
 	AvatarRetargetGoals goals;
+	// What each arm's elbow weight evaluated to for the position solve, by
+	// eHandSide; not evaluated on a direct frame
+	std::array<RetargetElbowWeight, 2> elbowWeights{};
 };
 
 class RetargetStage
@@ -83,12 +137,15 @@ public:
 	static float getArmIkWeight(SourcePose::ePipeline pipeline);
 
 	// The target solve over a source pose the loss stage handed on: at IK
-	// weight 1 the position solve (AvatarRetarget::solve), at 0 the direct
-	// placement (DirectRetarget::place). Nothing blends between the two yet,
-	// so any other weight leaves the pose invalid. outGoals, when given,
-	// receives the position solve's wrist goals, and none otherwise.
+	// weight 1 the position solve (AvatarRetarget::solve) with each arm's
+	// elbow weight evaluated over the source, at 0 the direct placement
+	// (DirectRetarget::place). Nothing blends between the two yet, so any
+	// other weight leaves the pose invalid. outGoals and outElbowWeights,
+	// when given, receive the position solve's wrist goals and elbow weights,
+	// and none otherwise.
 	void solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
-					 AvatarRetargetGoals* outGoals= nullptr);
+					 AvatarRetargetGoals* outGoals= nullptr,
+					 std::array<RetargetElbowWeight, 2>* outElbowWeights= nullptr);
 
 	// The target solve again over a result's source pose under the current
 	// config, so a rig edit shows on a frame that is not solved again. The
@@ -109,6 +166,9 @@ private:
 	AvatarRetarget m_position;
 	DirectRetarget m_direct;
 	LossStage m_loss;
+	// This stage's own evaluation of the elbow weights, so every stage (the
+	// vision thread's, the window's, a tool's) keeps its own stateful calls
+	ElbowWeightEvaluator m_elbowWeights;
 };
 
 // Brings a stage to a frame of a replayed timeline. A forward step over at

@@ -420,12 +420,10 @@ RetargetChains resolveRetargetChains(const RetargetChains* block, const class Ap
 
 // And for the avatar retarget: the OSC streamer and the 3D view both solve
 // from this one mapping of the project's avatar settings, the loaded
-// avatar's rig settings and the chains. The forms without chains resolve
-// them from the config.
+// avatar's rig settings. The chains' elbow weights reach the solve through
+// the retarget stage, which evaluates them per frame.
 struct AvatarRetargetConfig;
 AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
-AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig,
-											  const RetargetChains& chains);
 
 // And for the direct retarget: the vision thread, the 3D view's replay feed
 // and the gate tool all solve from this one mapping
@@ -435,8 +433,9 @@ DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, con
 											  const RetargetChains& chains);
 
 // And for the retarget stage: both pipelines' solves through the mappings
-// above, and each pipeline's loss rules from the chains (makeChainLossPolicy)
-// with the delivery rules' minimum confidence
+// above, each pipeline's loss rules from the chains (makeChainLossPolicy)
+// with the delivery rules' minimum confidence, and each arm's elbow weight
+// from its chain
 struct RetargetStageConfig;
 class AvatarSkeleton;
 RetargetStageConfig makeRetargetStageConfig(const class AppConfig& config, const AvatarRigSettings& rig,

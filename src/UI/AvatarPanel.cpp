@@ -17,6 +17,7 @@
 #include "PathUtils.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
+#include "SourcePoseInputs.h"
 #include "VrmLoader.h"
 
 #include "tinyfiledialogs.h"
@@ -121,6 +122,21 @@ bool AvatarPanel::setSelectedChain(eRetargetChain chain)
 		return false;
 	m_selectedChain= chain;
 	return true;
+}
+
+void AvatarPanel::setShownElbowWeights(const std::array<RetargetElbowWeight, 2>* weights)
+{
+	m_shownElbowWeights= weights != nullptr ? *weights : std::array<RetargetElbowWeight, 2>{};
+}
+
+ExprParameterLiveValue AvatarPanel::toLiveValue(const RetargetElbowWeight& weight)
+{
+	ExprParameterLiveValue live;
+	live.bValid= weight.bEvaluated;
+	live.value= weight.weight;
+	live.rawValue= weight.rawValue;
+	live.bFromExpression= weight.bExpression && weight.bCompiled;
+	return live;
 }
 
 const char* AvatarPanel::getChainId(eRetargetChain chain)
@@ -643,12 +659,13 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.elbowHintDrag"), &side.elbowHintOffset.x, 0.005f, -1.f, 1.f,
 									"%.3f m");
 	ImGui::SetItemTooltip("%s", locText("avatarPanel.elbowHintTooltip"));
-	// The elbow hint confidence is the arm chain's, the project's rather than
-	// the rig's
-	float& elbowHintConfidence= chains.arms[sideIndex].elbowHintConfidence;
-	bChainChanged|= ImGui::SliderFloat(locLabel("avatarPanel.elbowHintConfidenceSlider"), &elbowHintConfidence, 0.f,
-									   1.f, "%.2f");
-	ImGui::SetItemTooltip("%s", locText("avatarPanel.elbowHintConfidenceTooltip"));
+	// The elbow weight is the arm chain's, the project's rather than the
+	// rig's
+	ExprParameter& elbowWeight= chains.arms[sideIndex].elbowWeight;
+	bChainChanged|= drawExprParameterField(sideIndex == 0 ? "leftElbowWeight" : "rightElbowWeight",
+										   locText("avatarPanel.elbowWeightField"), elbowWeight, 0.f, 1.f, "%.2f",
+										   locText("avatarPanel.elbowWeightTooltip"), SourcePoseInputs::table(),
+										   toLiveValue(m_shownElbowWeights[sideIndex]));
 	ImGui::Checkbox(locLabel("avatarPanel.showGizmoCheckbox"), &m_bShowElbowGizmo[sideIndex]);
 
 	drawSubHeading("chains.forearmHeading");
@@ -686,7 +703,7 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		side.restPalmNormal= defaults.restPalmNormal;
 		side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 		bRigChanged= true;
-		elbowHintConfidence= RetargetChains::Arm().elbowHintConfidence;
+		elbowWeight= makeDefaultElbowWeight(sideIndex, k_defaultElbowHintConfidence);
 		bChainChanged= true;
 	}
 	ImGui::SameLine();
@@ -695,7 +712,8 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		// The other arm becomes this one's mirror image: the points and
 		// directions in the torso frame reflected across the body's midplane,
 		// the forearm roll reversed (it turns about the forearm, which points
-		// the other way), every other value as it is
+		// the other way), the elbow weight's source names spelled for the
+		// other side, every other value as it is
 		const int otherIndex= 1 - sideIndex;
 		AvatarRigSettings::Side& other= rig.sides[otherIndex];
 		other.elbowHintOffset= mirrorAcrossSagittal(side.elbowHintOffset);
@@ -707,12 +725,10 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		rig.rotationTrimDegrees[(int)otherLowerArmBone].x= -rig.rotationTrimDegrees[(int)lowerArmBone].x;
 		bRigChanged= true;
 
-		RetargetChains::Arm mirrored= chains.arms[sideIndex];
-		mirrored.goalOffset= mirrorAcrossSagittal(mirrored.goalOffset);
-		chains.arms[otherIndex]= mirrored;
+		chains.arms[otherIndex]= mirrorArm(chains.arms[sideIndex]);
 		bChainChanged= true;
 	}
-	ImGui::SetItemTooltip("%s", locText("chains.copyToOtherArmTooltip"));
+	ImGui::SetItemTooltip("%s", locText("chains.mirrorToOtherArmTooltip"));
 
 	if (bRigChanged)
 		m_app->setAvatarRig(rig);

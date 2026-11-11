@@ -40,8 +40,8 @@ struct AvatarRetargetConfig
 	float rootFollowTimeConstantS= 0.3f;
 
 	// Per arm and hand, left then right (copied from the avatar's rig
-	// settings, see AvatarRig.h, but for the elbow hint confidence, which is
-	// the arm chain's, see RetargetChains.h)
+	// settings, see AvatarRig.h). The weight toward the measured elbow is
+	// not here: it is evaluated per frame and handed to the solve.
 	struct Side
 	{
 		// The point the elbow bends toward when nothing measured it, meters,
@@ -49,9 +49,6 @@ struct AvatarRetargetConfig
 		// so it turns with the root yaw. Down and back, the way a resting arm
 		// hangs.
 		glm::vec3 elbowHintOffset{-0.15f, 0.f, -0.30f};
-		// Forearm confidence at and above which the measured elbow alone
-		// decides the bend; below it the pole blends toward the hint
-		float elbowHintConfidence= 0.5f;
 		// Trims on the rest frames the retarget assumes, radians: the palm
 		// frame in its own axes (XYZ Euler), and a roll about the forearm
 		glm::vec3 handTrimRadians{0.f};
@@ -114,6 +111,17 @@ struct AvatarRetargetGoals
 	std::array<glm::vec3, 2> wristGoalWorld{}; // by eHandSide
 };
 
+// The forearm confidence at and above which the elbow rule the avatar's rig
+// has always defaulted to lets the measured elbow alone decide the bend
+constexpr float k_defaultElbowHintConfidence= 0.5f;
+
+// The elbow rule the solve applied before the weight was a setting: the
+// weight toward the measured elbow is the forearm confidence over the
+// threshold, clamped to [0, 1], and 1 for a threshold of zero or less. What
+// the default elbow weight function computes, and what the solve entry
+// points that take a threshold apply.
+float elbowWeightFromConfidence(float forearmConfidence, float elbowHintConfidence);
+
 class AvatarRetarget
 {
 public:
@@ -147,19 +155,27 @@ public:
 	// Poses the avatar from a position pipeline's source pose; an arm that
 	// is lost stays at rest. Always produces a valid pose with a root,
 	// tracked or not. The root follow restarts when the source's epoch
-	// changes. outGoals, when given, receives each posed arm's wrist goal.
+	// changes. elbowWeights (by eHandSide, [0, 1]) is how far each arm's
+	// pole moves from the rig's hint toward the measured elbow: 1 lets the
+	// measured elbow alone decide the bend, 0 the hint alone. outGoals, when
+	// given, receives each posed arm's wrist goal.
 	void solve(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
-			   AvatarPose& outPose, AvatarRetargetGoals* outGoals= nullptr);
+			   const std::array<float, 2>& elbowWeights, AvatarPose& outPose, AvatarRetargetGoals* outGoals= nullptr);
 
-	// fillSource then solve
+	// fillSource then solve, each arm's elbow weight from its forearm
+	// confidence by elbowWeightFromConfidence over the threshold given
 	void solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 			   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
-			   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose);
+			   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose,
+			   const std::array<float, 2>& elbowHintConfidence= {k_defaultElbowHintConfidence,
+																 k_defaultElbowHintConfidence});
 
 	// Convenience over a fused frame: a side is valid when it is tracked
 	// with a world pose
 	void solve(const TrackingFrameResult& frame, const BodyDimensions& user, const AvatarSkeleton& skeleton,
-			   const AvatarRetargetConfig& config, AvatarPose& outPose);
+			   const AvatarRetargetConfig& config, AvatarPose& outPose,
+			   const std::array<float, 2>& elbowHintConfidence= {k_defaultElbowHintConfidence,
+																 k_defaultElbowHintConfidence});
 
 private:
 	void resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,

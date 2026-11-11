@@ -1,17 +1,21 @@
 #include "TestCommon.h"
 
+#include <cstring>
 #include <functional>
 
 #include "AvatarSkeleton.h"
 #include "LossStage.h"
 #include "OscStreamer.h"
+#include "RetargetChains.h"
 #include "RetargetStage.h"
+#include "SourcePoseInputs.h"
 #include "SyntheticAvatar.h"
 #include "SyntheticDirectUser.h"
 
 // The retarget stage: the loss stage's hold and freeze, the display stage
 // against the stream stage, a scrub's pre-roll against a straight
-// play-through, and the step clock across interleaved face-only frames.
+// play-through, the step clock across interleaved face-only frames, and the
+// elbow weight evaluated over the source pose's inputs.
 
 namespace
 {
@@ -606,11 +610,186 @@ static int runRetargetStageTest(const TestArgs&)
 		}
 	}
 
+	// (f) The elbow weight. The source table's names and its fill; the
+	// default function equal to the rule the solve applied before, bit for
+	// bit, over a sweep of confidences and thresholds; a plain value and
+	// another function changing the weight the solve takes; a text that does
+	// not compile falling back on the plain value; and a stateful function
+	// keeping its state across frames and across an unchanged edit, and
+	// losing it on a reset.
+	{
+		using namespace SourcePoseInputs;
+		const ExprInputTable& inputs= SourcePoseInputs::table();
+		const char* const expectedNames[]= {
+			"source.head.confidence",
+			"source.leftUpperArm.confidence",
+			"source.rightUpperArm.confidence",
+			"source.leftLowerArm.confidence",
+			"source.rightLowerArm.confidence",
+			"source.leftHand.confidence",
+			"source.rightHand.confidence",
+			"source.torso.measured",
+			"source.torso.carried",
+			"source.head.measured",
+			"source.head.carried",
+			"source.leftArm.measured",
+			"source.leftArm.carried",
+			"source.rightArm.measured",
+			"source.rightArm.carried",
+			"source.leftHand.measured",
+			"source.leftHand.carried",
+			"source.rightHand.measured",
+			"source.rightHand.carried",
+		};
+		bool bNames= inputs.getCount() == k_count && k_count == (int)(sizeof(expectedNames) / sizeof(expectedNames[0]));
+		for (int slot= 0; bNames && slot < k_count; ++slot)
+			bNames&= inputs.getName(slot) == expectedNames[slot] && inputs.findSlot(expectedNames[slot]) == slot;
+		bNames&= inputs.findSlot("SOURCE.LeftLowerArm.Confidence") == k_lowerArmConfidence &&
+			inputs.findSlot("source.leftLowerArm") == -1;
+		check(bNames, "(f) the source table holds its 19 names in slot order, found without case");
+
+		SourcePose source;
+		source.head.state= eGroupState::Held;
+		source.head.confidence= {true, 0.4f};
+		source.torso.state= eGroupState::Measured;
+		source.arms[0].state= eGroupState::Measured;
+		source.arms[0].shoulderConfidence= {true, 0.8f};
+		source.arms[0].forearmConfidence= {true, 0.6f};
+		source.arms[1].state= eGroupState::Frozen;
+		source.arms[1].shoulderConfidence= {false, 0.7f};
+		source.arms[1].forearmConfidence= {true, 0.2f};
+		source.hands[0].state= eGroupState::Resting;
+		source.hands[0].confidence= {true, 0.9f};
+		source.hands[1].state= eGroupState::Lost;
+		source.hands[1].confidence= {false, 0.5f};
+		float values[k_count];
+		fill(source, values);
+		const float expectedValues[k_count]= {0.4f, 0.8f, 0.f, 0.6f, 0.2f, 0.9f, 0.f, 1.f, 1.f, 0.f, 1.f,
+											  1.f,  1.f,  0.f, 1.f, 0.f,  1.f,  0.f, 0.f};
+		check(std::memcmp(values, expectedValues, sizeof(values)) == 0,
+			  "(f) the fill: confidences as present, an absent one 0, measured only when measured, carried unless lost");
+
+		// The sweep: the runner over the default function against the rule
+		const float thresholds[]= {0.5f, 0.3f, 0.7f, 0.123456789f, 1.f / 3.f, 1e-5f, 0.999999f, 1.f, 2.5f, 0.f, -0.5f};
+		int compared= 0;
+		int differing= 0;
+		for (float threshold : thresholds)
+		{
+			ExprParameterRunner runner;
+			runner.setParameter(makeDefaultElbowWeight(0, threshold), inputs);
+			for (int step= 0; step <= 1000; ++step)
+			{
+				SourcePose probe;
+				probe.arms[0].forearmConfidence= {true, (float)step / 1000.f};
+				if (step == 1000)
+					probe.arms[0].forearmConfidence.value= 1e-7f;
+				fill(probe, values);
+				const float weight= runner.evaluate(values, k_count, step * 0.01, 0.f, 1.f);
+				const float expected= elbowWeightFromConfidence(probe.arms[0].forearmConfidence.value, threshold);
+				compared++;
+				differing+= std::memcmp(&weight, &expected, sizeof(float)) == 0 ? 0 : 1;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (f) the default function against the rule: " << differing << " of " << compared
+							 << " weights differ";
+		check(differing == 0, "(f) the default function equals the rule bit for bit over the sweep");
+
+		// Through the stage: the same position frames under four settings
+		auto runWeights= [&](const ExprParameter& left, int frameCount, std::vector<RetargetElbowWeight>& outWeights,
+							 std::vector<AvatarPose>& outPoses) {
+			RetargetStageConfig config= positionConfig;
+			config.elbowWeight[0]= left;
+			RetargetStage stage;
+			stage.setConfig(config);
+			RetargetResult result;
+			for (int index= 0; index < frameCount; ++index)
+			{
+				stage.solvePosition(makePositionFrame(*skeleton, index, 1000, 1000), result);
+				outWeights.push_back(result.elbowWeights[0]);
+				outPoses.push_back(result.pose);
+			}
+		};
+		std::vector<RetargetElbowWeight> defaultWeights, plainWeights, constantWeights, brokenWeights;
+		std::vector<AvatarPose> defaultPoses, plainPoses, constantPoses, brokenPoses;
+		runWeights(makeDefaultElbowWeight(0, k_defaultElbowHintConfidence), 20, defaultWeights, defaultPoses);
+		runWeights(ExprParameter{0.f}, 20, plainWeights, plainPoses);
+		runWeights(ExprParameter{0.3f, "2 * 0.125 + 1", true}, 20, constantWeights, constantPoses);
+		runWeights(ExprParameter{0.3f, "clamp(source.leftLowerArm.confidence", true}, 20, brokenWeights, brokenPoses);
+		bool bDefault= true;
+		bool bPlain= true;
+		bool bConstant= true;
+		bool bBroken= true;
+		bool bPosesMoved= false;
+		for (int index= 0; index < 20; ++index)
+		{
+			const float confidence= makeMovingHand(*skeleton, eHandSide::Left, index * kFrameMs).forearmConfidence;
+			const RetargetElbowWeight& d= defaultWeights[index];
+			bDefault&= d.bEvaluated && d.bExpression && d.bCompiled &&
+				d.weight == elbowWeightFromConfidence(confidence, k_defaultElbowHintConfidence) &&
+				d.rawValue == d.weight; // the function clamps itself
+			const RetargetElbowWeight& p= plainWeights[index];
+			bPlain&= p.bEvaluated && !p.bExpression && p.weight == 0.f && p.rawValue == 0.f;
+			const RetargetElbowWeight& c= constantWeights[index];
+			bConstant&= c.bExpression && c.bCompiled && c.rawValue == 1.25f && c.weight == 1.f;
+			const RetargetElbowWeight& b= brokenWeights[index];
+			bBroken&= b.bExpression && !b.bCompiled && b.weight == 0.3f;
+			bPosesMoved|= !samePoseBits(defaultPoses[index], plainPoses[index]) && d.weight > 0.f;
+		}
+		check(bDefault, "(f) the stage evaluates the default function on every frame over the source after the loss stage");
+		check(bPlain && bPosesMoved, "(f) a plain weight of 0 is what the solve takes, and the pose follows the hint");
+		check(bConstant, "(f) another function decides the weight, its raw value clamped to [0, 1]");
+		check(bBroken && samePoseBits(brokenPoses[5], [&] {
+				  std::vector<RetargetElbowWeight> weights;
+				  std::vector<AvatarPose> poses;
+				  runWeights(ExprParameter{0.3f}, 6, weights, poses);
+				  return poses[5];
+			  }()),
+			  "(f) a text that does not compile falls back on the plain value, as if no function were set");
+
+		// A stateful function: smoothing lags the confidence; an unchanged
+		// edit keeps the state, a reset starts it over from the input
+		const ExprParameter smoothed{0.f, "smooth(source.leftLowerArm.confidence, 0.5)", true};
+		RetargetStageConfig smoothConfig= positionConfig;
+		smoothConfig.elbowWeight[0]= smoothed;
+		RetargetStage straight;
+		RetargetStage edited;
+		straight.setConfig(smoothConfig);
+		edited.setConfig(smoothConfig);
+		RetargetResult straightResult;
+		RetargetResult editedResult;
+		bool bKept= true;
+		bool bLagged= false;
+		for (int index= 0; index < 40; ++index)
+		{
+			const TrackingFrameResult frame= makePositionFrame(*skeleton, index, 1000, 1000);
+			if (index == 20)
+			{
+				// The same text through an edit of another field
+				RetargetStageConfig reEdited= smoothConfig;
+				reEdited.elbowWeight[0].value= 0.9f;
+				edited.setConfig(reEdited);
+			}
+			straight.solvePosition(frame, straightResult);
+			edited.solvePosition(frame, editedResult);
+			bKept&= std::memcmp(&straightResult.elbowWeights[0].weight, &editedResult.elbowWeights[0].weight,
+								sizeof(float)) == 0;
+			bLagged|= index > 0 && straightResult.elbowWeights[0].weight != frame.poses[0].forearmConfidence;
+		}
+		check(bKept && bLagged, "(f) a stateful function keeps its state across frames and across an unchanged edit");
+		edited.reset();
+		const TrackingFrameResult next= makePositionFrame(*skeleton, 40, 1000, 1000);
+		straight.solvePosition(next, straightResult);
+		edited.solvePosition(next, editedResult);
+		check(editedResult.elbowWeights[0].weight == next.poses[0].forearmConfidence &&
+				  straightResult.elbowWeights[0].weight != next.poses[0].forearmConfidence,
+			  "(f) a reset starts the stateful function over from its input");
+	}
+
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
 	return failures == 0 ? 0 : 1;
 }
 
 MIKAN_REGISTER_TEST("--test-retarget-stage",
 					"Retarget stage: the loss stage's hold and freeze, the display stage against the stream stage, "
-					"a scrub's pre-roll against a straight play-through",
+					"a scrub's pre-roll against a straight play-through, the elbow weight over the source inputs",
 					eTestCategory::SelfTest, runRetargetStageTest)

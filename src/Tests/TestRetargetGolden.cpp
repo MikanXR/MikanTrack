@@ -265,7 +265,7 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConf
 		if (step.config.avatarSkeleton != nullptr)
 		{
 			const bool bSame= position.solve(step.frame, step.config.bodyDimensions, *step.config.avatarSkeleton,
-											 step.config.avatarRetarget, why);
+											 step.config.avatarRetarget, step.config.elbowHintConfidence, why);
 			result.tally.note(bSame, index, "retarget", why);
 			result.retargetMismatches+= bSame ? 0 : 1;
 		}
@@ -759,7 +759,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 					AvatarRetargetConfig& retarget= step.config.avatarRetarget;
 					retarget.headTrimRadians= glm::vec3(0.1f, -0.05f, 0.2f);
 					retarget.sides[0].elbowHintOffset= glm::vec3(-0.05f, 0.1f, -0.35f);
-					retarget.sides[0].elbowHintConfidence= 0.8f;
+					step.config.elbowHintConfidence[0]= 0.8f;
 					retarget.sides[0].handTrimRadians= glm::vec3(0.2f, 0.1f, -0.15f);
 					retarget.sides[0].forearmRollTrimRadians= 0.3f;
 					retarget.sides[1].curlGain= 1.4f;
@@ -1162,6 +1162,19 @@ static int runRetargetGoldenTest(const TestArgs&)
 			[](PositionStep& step) { step.frame.poses[0].hasForearmPose= false; },
 			[&](StreamPair& stream) { stream.live.setConfig(skewed); });
 		check(result.tally.mismatches > 0, "(s1) a skewed live elbow hint is detected in the stream");
+	}
+
+	// (s3) A live stream whose elbow weight is not the default function of
+	// the frozen threshold must differ: the forearm confidence runs from 0.25
+	// to 0.95, below the threshold of 0.5 for part of the run, where the
+	// plain weight 1 (the threshold of zero's) bends toward the measured
+	// elbow alone
+	{
+		StreamConfig skewed= baseConfig;
+		skewed.elbowHintConfidence= {0.f, 0.f};
+		const PositionResult result= runPositionSequence(rig, baseConfig, 120, kFrameMs, false, nullptr,
+														 [&](StreamPair& stream) { stream.live.setConfig(skewed); });
+		check(result.tally.mismatches > 0, "(s3) a skewed live elbow weight is detected in the stream");
 	}
 
 	// (s2) A live direct solver configured with another rest blend must differ

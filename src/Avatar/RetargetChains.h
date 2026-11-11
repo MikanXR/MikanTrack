@@ -8,7 +8,7 @@
 #include "glm/ext/vector_float3.hpp"
 #include "nlohmann/json_fwd.hpp"
 
-#include "AvatarRetarget.h" // AvatarRetargetConfig::Side
+#include "AvatarRetarget.h" // k_defaultElbowHintConfidence
 #include "ExprParameter.h"
 #include "LossStage.h"
 #include "SourcePose.h"
@@ -55,9 +55,12 @@ struct RetargetChains
 		// Added to the goal, meters, in the rooted torso frame (+X facing, +Y
 		// the avatar's left, +Z up)
 		glm::vec3 goalOffset{0.f};
-		// The forearm confidence at and above which the measured elbow fully
-		// decides the bend; below it the bend blends toward the rig's hint
-		float elbowHintConfidence= 0.5f;
+		// The weight toward the measured elbow, 0 to 1: at 1 the measured
+		// elbow alone decides the bend, at 0 the rig's hint alone. A function
+		// reads the source pose's inputs (SourcePoseInputs). A chain set's
+		// arms default to the function of the rule the solve always applied
+		// (makeDefaultElbowWeight); an Arm constructed alone holds a plain 1.
+		ExprParameter elbowWeight{1.f};
 		Loss loss{eLossHold::Timed, 250.f, eLossAfter::Freeze, 300.f};
 	};
 
@@ -72,17 +75,36 @@ struct RetargetChains
 		Loss loss;
 	};
 
+	// An arm with its side's default elbow weight
+	static Arm makeDefaultArm(int sideIndex);
+
 	// Default-constructed: a multi-camera project's defaults
 	Group torso;
 	Group head;
-	std::array<Arm, 2> arms{};   // by eHandSide
-	std::array<Hand, 2> hands{}; // by eHandSide
+	std::array<Arm, 2> arms{makeDefaultArm(0), makeDefaultArm(1)}; // by eHandSide
+	std::array<Hand, 2> hands{};                                   // by eHandSide
 };
+
+// The elbow weight that reproduces the rule the solve applied before the
+// weight was a setting (elbowWeightFromConfidence) for one side and one
+// threshold: the function
+//   clamp(source.<side>LowerArm.confidence / elbowHintConfidence, 0, 1)
+// with the threshold written so it reads back as the same float, and a
+// plain 1 behind it. The expression language divides by zero to 0 where the
+// rule gives 1, so a threshold of zero or less (or not a number) is the
+// plain weight 1, and an infinite one the plain weight 0.
+ExprParameter makeDefaultElbowWeight(int sideIndex, float elbowHintConfidence);
+
+// The threshold an elbow weight of makeDefaultElbowWeight's form was made
+// with: false for any other weight. The plain weight 1 reads as a threshold
+// of 0.
+bool findElbowHintConfidence(const ExprParameter& elbowWeight, int sideIndex, float& outElbowHintConfidence);
 
 // The chains of a project from before chain settings existed. The arms take
 // the shape's mapping (bone angles for a direct project, bone angles then IK
 // otherwise) and its IK weight (0 direct, 1 otherwise), a reach scale of 1,
-// no goal offset, and the sidecar's elbow hint confidence. A multi-camera
+// no goal offset, and the elbow weight of the sidecar's elbow hint
+// confidence (makeDefaultElbowWeight). A multi-camera
 // arm holds for holdOnDropoutMs and then freezes or releases, a direct arm
 // takes the pipeline's hold and then eases to rest; both keep the other
 // shape's numbers (the hold length, the rest blend) so a change of shape
@@ -104,17 +126,21 @@ RetargetChains makeDefaultRetargetChains(bool bDirect);
 // its own rest blend.
 LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence);
 
-// The solver's per-side fields that are chain settings: the elbow hint
-// confidence
-void applyRetargetChains(const RetargetChains& chains, std::array<AvatarRetargetConfig::Side, 2>& ioSides);
+// The other arm's copy of an arm: the goal offset reflected across the body's
+// midplane, the elbow weight's text with each source name of one side
+// spelled for the other (SourcePoseInputs::swapSides), every other value as
+// it is
+RetargetChains::Arm mirrorArm(const RetargetChains::Arm& arm);
 
 // JSON: an object of the six chains, "torso", "head", "leftArm", "rightArm",
-// "leftHand" and "rightHand"
+// "leftHand" and "rightHand". An arm's elbowWeight is an ExprParameter.
 nlohmann::json retargetChainsToJson(const RetargetChains& chains);
 // Tolerant: a missing chain or field, a value of the wrong type and an
 // unknown enum string each take the value in defaults, and the load logs one
 // warning naming them (also appended to outDefaulted when given). Unknown
-// keys are ignored.
+// keys are ignored. An arm written before the elbow weight, with an
+// elbowHintConfidence and no elbowWeight, takes makeDefaultElbowWeight of
+// that threshold.
 RetargetChains retargetChainsFromJson(const nlohmann::json& j, const RetargetChains& defaults,
 									  std::vector<std::string>* outDefaulted= nullptr);
 

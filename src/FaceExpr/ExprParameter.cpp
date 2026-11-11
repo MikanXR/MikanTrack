@@ -49,20 +49,25 @@ ExprParameter exprParameterFromJson(const json& j, float defaultValue)
 	return parameter;
 }
 
+FaceExprCompileResult compileExprParameter(const std::string& expression, const ExprInputTable& table)
+{
+	// One expression is a profile with one output, so the parameter shares
+	// the profile compiler and its state slot keys
+	FaceProfile profile;
+	FaceProfileOutput output;
+	output.target= "parameter";
+	output.vrmExpressionFunction= expression;
+	profile.outputs.push_back(output);
+	return compileFaceProfile(profile, table);
+}
+
 void ExprParameterRunner::setParameter(const ExprParameter& parameter, const ExprInputTable& table)
 {
 	m_parameter= parameter;
 	if (m_compiledTable == &table && m_compiledText == parameter.expression)
 		return;
 
-	// One expression is a profile with one output, so the parameter shares
-	// the profile compiler and its state slot keys
-	FaceProfile profile;
-	FaceProfileOutput output;
-	output.target= "parameter";
-	output.vrmExpressionFunction= parameter.expression;
-	profile.outputs.push_back(output);
-	FaceExprCompileResult result= compileFaceProfile(profile, table);
+	FaceExprCompileResult result= compileExprParameter(parameter.expression, table);
 
 	m_compiledTable= &table;
 	m_compiledText= parameter.expression;

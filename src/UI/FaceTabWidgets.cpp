@@ -99,9 +99,9 @@ std::string errorText(const FaceExprCompileError& error)
 	return locFormat(key, args[0].c_str(), args[1].c_str(), args[2].c_str(), args[3].c_str());
 }
 
-bool textInputWithError(const char* id, std::string& text, const FaceExprCompileError* error)
+bool textInputWithErrorSpan(const char* id, std::string& text, const FaceExprCompileError* error, float width)
 {
-	ImGui::SetNextItemWidth(-FLT_MIN);
+	ImGui::SetNextItemWidth(width);
 	const bool bChanged= ImGui::InputText(id, &text);
 	if (error != nullptr)
 	{
@@ -117,10 +117,22 @@ bool textInputWithError(const char* id, std::string& text, const FaceExprCompile
 		const ImU32 color= ImGui::GetColorU32(k_errorColor);
 		ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, rectMax.y - 2.f), ImVec2(std::min(x1, rectMax.x), rectMax.y - 2.f),
 											color, 2.f);
-		ImGui::PushStyleColor(ImGuiCol_Text, k_errorColor);
-		ImGui::TextWrapped("%s", errorText(*error).c_str());
-		ImGui::PopStyleColor();
 	}
+	return bChanged;
+}
+
+void drawErrorText(const FaceExprCompileError& error)
+{
+	ImGui::PushStyleColor(ImGuiCol_Text, k_errorColor);
+	ImGui::TextWrapped("%s", errorText(error).c_str());
+	ImGui::PopStyleColor();
+}
+
+bool textInputWithError(const char* id, std::string& text, const FaceExprCompileError* error)
+{
+	const bool bChanged= textInputWithErrorSpan(id, text, error, -FLT_MIN);
+	if (error != nullptr)
+		drawErrorText(*error);
 	return bChanged;
 }
 

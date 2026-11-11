@@ -49,6 +49,10 @@ struct StreamConfig
 	bool vmcFreezeOnLoss= true;
 	std::shared_ptr<const AvatarSkeleton> avatarSkeleton;
 	AvatarRetargetConfig avatarRetarget;
+	// The threshold of each arm's elbow rule, which the frozen retarget took
+	// in its config and the live stage runs as the default elbow weight
+	// function the chains migrate it to
+	std::array<float, 2> elbowHintConfidence{k_defaultElbowHintConfidence, k_defaultElbowHintConfidence};
 	BodyDimensions bodyDimensions;
 	std::string avatarPath;
 	std::string avatarTitle;
@@ -77,26 +81,27 @@ inline OscStreamerConfig toLiveStream(const StreamConfig& config)
 }
 
 // The retarget chains a multi-camera project with these stream settings and
-// these per-side solver fields runs on: what the live code reads its loss
-// rules and elbow hint confidences from
+// these elbow thresholds runs on: what the live code reads its loss rules
+// and elbow weights from, each elbow weight the default function of its
+// threshold as the migration writes it
 inline RetargetChains toLiveChains(const StreamConfig& config)
 {
 	return migrateRetargetChains(false, config.holdOnDropoutMs, config.vmcFreezeOnLoss, 300.f,
-								 {config.avatarRetarget.sides[0].elbowHintConfidence,
-								  config.avatarRetarget.sides[1].elbowHintConfidence});
+								 config.elbowHintConfidence);
 }
 
 // The live retarget stage's share of a stream config: the position
-// pipeline's solve and its loss rules, through the chains
+// pipeline's solve, its loss rules and its elbow weights, through the chains
 inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 {
 	const RetargetChains chains= toLiveChains(config);
 	RetargetStageConfig out;
 	out.skeleton= config.avatarSkeleton;
 	out.position= config.avatarRetarget;
-	applyRetargetChains(chains, out.position.sides);
 	out.user= config.bodyDimensions;
 	out.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.minConfidence);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		out.elbowWeight[sideIndex]= chains.arms[sideIndex].elbowWeight;
 	return out;
 }
 // Bitwise equality of one padding-free value (a float, a bool, a glm vector
@@ -114,11 +119,13 @@ bool sameBits(const T& a, const T& b)
 		return false;                  \
 	}
 
-inline Frozen::AvatarRetargetConfig::Side toFrozen(const AvatarRetargetConfig::Side& side)
+// The live side has no threshold: it runs the elbow weight its threshold
+// migrates to, so the frozen side takes the threshold beside the config
+inline Frozen::AvatarRetargetConfig::Side toFrozen(const AvatarRetargetConfig::Side& side, float elbowHintConfidence)
 {
 	Frozen::AvatarRetargetConfig::Side out;
 	out.elbowHintOffset= side.elbowHintOffset;
-	out.elbowHintConfidence= side.elbowHintConfidence;
+	out.elbowHintConfidence= elbowHintConfidence;
 	out.handTrimRadians= side.handTrimRadians;
 	out.forearmRollTrimRadians= side.forearmRollTrimRadians;
 	out.curlGain= side.curlGain;
@@ -133,15 +140,16 @@ inline Frozen::AvatarRetargetConfig::Side toFrozen(const AvatarRetargetConfig::S
 	return out;
 }
 
-inline Frozen::AvatarRetargetConfig toFrozen(const AvatarRetargetConfig& config)
+inline Frozen::AvatarRetargetConfig toFrozen(const AvatarRetargetConfig& config,
+											  const std::array<float, 2>& elbowHintConfidence)
 {
 	Frozen::AvatarRetargetConfig out;
 	out.followShoulders= config.followShoulders;
 	out.fixedRootPositionWorld= config.fixedRootPositionWorld;
 	out.fixedRootYawDegrees= config.fixedRootYawDegrees;
 	out.rootFollowTimeConstantS= config.rootFollowTimeConstantS;
-	out.sides[0]= toFrozen(config.sides[0]);
-	out.sides[1]= toFrozen(config.sides[1]);
+	out.sides[0]= toFrozen(config.sides[0], elbowHintConfidence[0]);
+	out.sides[1]= toFrozen(config.sides[1], elbowHintConfidence[1]);
 	out.headTrimRadians= config.headTrimRadians;
 	return out;
 }
@@ -179,8 +187,9 @@ inline Frozen::DirectRetargetConfig toFrozen(const DirectRetargetConfig& config)
 	out.userUpperArmLengthMeters= config.userUpperArmLengthMeters;
 	out.userForearmLengthMeters= config.userForearmLengthMeters;
 	out.headTrimRadians= config.headTrimRadians;
-	out.sides[0]= toFrozen(config.sides[0]);
-	out.sides[1]= toFrozen(config.sides[1]);
+	// The direct solve never read the elbow threshold
+	out.sides[0]= toFrozen(config.sides[0], k_defaultElbowHintConfidence);
+	out.sides[1]= toFrozen(config.sides[1], k_defaultElbowHintConfidence);
 	out.restBlendMs= config.restBlendMs;
 	return out;
 }
@@ -200,7 +209,7 @@ inline Frozen::OscStreamerConfig toFrozen(const StreamConfig& config)
 	out.vmcHeadOffsetMeters= config.vmcHeadOffsetMeters;
 	out.vmcFreezeOnLoss= config.vmcFreezeOnLoss;
 	out.avatarSkeleton= config.avatarSkeleton;
-	out.avatarRetarget= toFrozen(config.avatarRetarget);
+	out.avatarRetarget= toFrozen(config.avatarRetarget, config.elbowHintConfidence);
 	out.bodyDimensions= config.bodyDimensions;
 	out.avatarPath= config.avatarPath;
 	out.avatarTitle= config.avatarTitle;
@@ -635,7 +644,7 @@ struct FrozenResolve
 		if (config.avatarSkeleton != nullptr)
 		{
 			retarget.solve(streamed, bSideValid, frame.head, frame.timestampMs, config.bodyDimensions,
-						   *config.avatarSkeleton, toFrozen(config.avatarRetarget), pose);
+						   *config.avatarSkeleton, toFrozen(config.avatarRetarget, config.elbowHintConfidence), pose);
 		}
 	}
 };
@@ -755,36 +764,46 @@ struct StreamPair
 
 // The position retarget on an unresolved frame, which also compares what the
 // stream does not carry: the root placement. Two live solvers run beside the
-// frozen one: the facade, and the split it is made of (the source pose
-// filled, then solved), so both entry points are held to the frozen bits.
+// frozen one: the facade, which applies the elbow rule to its threshold, and
+// the split it is made of (the source pose filled, each arm's elbow weight
+// evaluated through the default function the threshold migrates to, then
+// solved), so both entry points are held to the frozen bits.
 struct PositionPair
 {
 	AvatarRetarget live;
 	AvatarRetarget liveSplit;
+	ElbowWeightEvaluator liveSplitElbow;
 	Frozen::AvatarRetarget frozen;
 	AvatarPose livePose;
 	AvatarPose liveSplitPose;
 	SourcePose liveSource;
+	std::array<RetargetElbowWeight, 2> liveSplitElbowReadout{};
 	Frozen::AvatarPose frozenPose;
 
 	void reset()
 	{
 		live.reset();
 		liveSplit.reset();
+		liveSplitElbow.reset();
 		frozen.reset();
 	}
 
 	bool solve(const TrackingFrameResult& frame, const BodyDimensions& user, const AvatarSkeleton& skeleton,
-			   const AvatarRetargetConfig& config, std::string& outWhy)
+			   const AvatarRetargetConfig& config, const std::array<float, 2>& elbowHintConfidence,
+			   std::string& outWhy)
 	{
-		live.solve(frame, user, skeleton, config, livePose);
+		live.solve(frame, user, skeleton, config, livePose, elbowHintConfidence);
 		const bool bSideValid[2]= {
 			frame.poses[0].tracked && frame.poses[0].hasWorldPose,
 			frame.poses[1].tracked && frame.poses[1].hasWorldPose,
 		};
 		liveSplit.fillSource(frame.poses, bSideValid, frame.head, frame.timestampMs, user, liveSource);
-		liveSplit.solve(liveSource, skeleton, config, liveSplitPose);
-		frozen.solve(frame, user, skeleton, toFrozen(config), frozenPose);
+		liveSplitElbow.setWeights({makeDefaultElbowWeight(0, elbowHintConfidence[0]),
+								   makeDefaultElbowWeight(1, elbowHintConfidence[1])});
+		std::array<float, 2> elbowWeights;
+		liveSplitElbow.evaluate(liveSource, elbowWeights, liveSplitElbowReadout);
+		liveSplit.solve(liveSource, skeleton, config, elbowWeights, liveSplitPose);
+		frozen.solve(frame, user, skeleton, toFrozen(config, elbowHintConfidence), frozenPose);
 		if (!samePose(livePose, frozenPose, outWhy))
 			return false;
 		if (!samePose(liveSplitPose, frozenPose, outWhy))

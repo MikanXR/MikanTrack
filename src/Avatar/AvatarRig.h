@@ -39,7 +39,9 @@ struct AvatarRigSettings
 		// relative to the avatar's upper-arm joint
 		glm::vec3 elbowHintOffset{-0.15f, 0.f, -0.30f};
 		// The forearm confidence at and above which the measured elbow fully
-		// decides the bend; below it the bend blends toward the hint
+		// decides the bend; below it the bend blends toward the hint. A
+		// project without chain settings migrates it to its arms' elbow
+		// weight function.
 		float elbowHintConfidence= 0.5f;
 
 		// The thumb's flexion hinge pronation. Auto reads its sign from which

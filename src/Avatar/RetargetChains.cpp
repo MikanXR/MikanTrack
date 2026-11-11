@@ -1,15 +1,45 @@
 #include "RetargetChains.h"
 
+#include <charconv>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <sstream>
 
 #include "nlohmann/json.hpp"
 
 #include "Logger.h"
+#include "SourcePoseInputs.h"
 
 using json= nlohmann::json;
 
 namespace
 {
+// A float as the expression language reads it back to the same float: the
+// lexer reads a number as a double and narrows it, so the shortest form is
+// checked through that same path, and the double's full digits, which read
+// back exactly, stand in should it ever differ
+std::string formatExactFloat(float value)
+{
+	char buffer[64];
+	const std::to_chars_result result= std::to_chars(buffer, buffer + sizeof(buffer), value);
+	std::string text(buffer, result.ptr);
+	if ((float)std::strtod(text.c_str(), nullptr) != value)
+	{
+		std::snprintf(buffer, sizeof(buffer), "%.17g", (double)value);
+		text= buffer;
+	}
+	return text;
+}
+
+// The default elbow weight's text around its threshold
+std::string defaultElbowWeightPrefix(int sideIndex)
+{
+	return "clamp(" + SourcePoseInputs::table().getName(SourcePoseInputs::k_lowerArmConfidence + sideIndex) + " / ";
+}
+
+const char* const k_defaultElbowWeightSuffix= ", 0, 1)";
+
 const char* k_logLabel= "RetargetChains";
 const char* k_armKeys[2]= {"leftArm", "rightArm"};
 const char* k_handKeys[2]= {"leftHand", "rightHand"};
@@ -197,6 +227,65 @@ const char* lossAfterName(eLossAfter after)
 	return "";
 }
 
+RetargetChains::Arm RetargetChains::makeDefaultArm(int sideIndex)
+{
+	Arm arm;
+	arm.elbowWeight= makeDefaultElbowWeight(sideIndex, k_defaultElbowHintConfidence);
+	return arm;
+}
+
+ExprParameter makeDefaultElbowWeight(int sideIndex, float elbowHintConfidence)
+{
+	// The rule gives 1 for a threshold of zero or less, and the expression
+	// language's division by zero gives 0, so those are a plain weight
+	if (!(elbowHintConfidence > 0.f))
+		return ExprParameter{1.f};
+	// A finite confidence over an infinite threshold is 0
+	if (std::isinf(elbowHintConfidence))
+		return ExprParameter{0.f};
+	return ExprParameter{1.f,
+						 defaultElbowWeightPrefix(sideIndex) + formatExactFloat(elbowHintConfidence) +
+							 k_defaultElbowWeightSuffix,
+						 true};
+}
+
+bool findElbowHintConfidence(const ExprParameter& elbowWeight, int sideIndex, float& outElbowHintConfidence)
+{
+	if (!elbowWeight.bUseExpression)
+	{
+		if (elbowWeight.expression.empty() && elbowWeight.value == 1.f)
+		{
+			outElbowHintConfidence= 0.f;
+			return true;
+		}
+		return false;
+	}
+	const std::string prefix= defaultElbowWeightPrefix(sideIndex);
+	const std::string suffix= k_defaultElbowWeightSuffix;
+	const std::string& text= elbowWeight.expression;
+	if (text.size() <= prefix.size() + suffix.size() || text.compare(0, prefix.size(), prefix) != 0 ||
+		text.compare(text.size() - suffix.size(), suffix.size(), suffix) != 0)
+	{
+		return false;
+	}
+	const std::string number= text.substr(prefix.size(), text.size() - prefix.size() - suffix.size());
+	const float threshold= (float)std::strtod(number.c_str(), nullptr);
+	// Only the exact text the default writes, so the function is the rule
+	const ExprParameter remade= makeDefaultElbowWeight(sideIndex, threshold);
+	if (remade.expression != text || remade.value != elbowWeight.value)
+		return false;
+	outElbowHintConfidence= threshold;
+	return true;
+}
+
+RetargetChains::Arm mirrorArm(const RetargetChains::Arm& arm)
+{
+	RetargetChains::Arm mirrored= arm;
+	mirrored.goalOffset= glm::vec3(arm.goalOffset.x, -arm.goalOffset.y, arm.goalOffset.z);
+	mirrored.elbowWeight.expression= SourcePoseInputs::swapSides(arm.elbowWeight.expression);
+	return mirrored;
+}
+
 RetargetChains migrateRetargetChains(bool bDirect, float holdOnDropoutMs, bool bFreezeOnLoss, float restBlendMs,
 									 const std::array<float, 2>& elbowHintConfidence)
 {
@@ -210,7 +299,7 @@ RetargetChains migrateRetargetChains(bool bDirect, float holdOnDropoutMs, bool b
 		arm.ikWeight= ExprParameter{bDirect ? 0.f : 1.f};
 		arm.reachScale= ExprParameter{1.f};
 		arm.goalOffset= glm::vec3(0.f);
-		arm.elbowHintConfidence= elbowHintConfidence[sideIndex];
+		arm.elbowWeight= makeDefaultElbowWeight(sideIndex, elbowHintConfidence[sideIndex]);
 		arm.loss.hold= bDirect ? eLossHold::Pipeline : eLossHold::Timed;
 		arm.loss.holdMs= holdOnDropoutMs;
 		arm.loss.after= bDirect ? eLossAfter::EaseToRest : (bFreezeOnLoss ? eLossAfter::Freeze : eLossAfter::Release);
@@ -221,7 +310,8 @@ RetargetChains migrateRetargetChains(bool bDirect, float holdOnDropoutMs, bool b
 
 RetargetChains makeDefaultRetargetChains(bool bDirect)
 {
-	return migrateRetargetChains(bDirect, 250.f, true, 300.f, {0.5f, 0.5f});
+	return migrateRetargetChains(bDirect, 250.f, true, 300.f,
+								 {k_defaultElbowHintConfidence, k_defaultElbowHintConfidence});
 }
 
 LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence)
@@ -246,12 +336,6 @@ LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeli
 	return policy;
 }
 
-void applyRetargetChains(const RetargetChains& chains, std::array<AvatarRetargetConfig::Side, 2>& ioSides)
-{
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		ioSides[sideIndex].elbowHintConfidence= chains.arms[sideIndex].elbowHintConfidence;
-}
-
 json retargetChainsToJson(const RetargetChains& chains)
 {
 	json j= json::object();
@@ -265,7 +349,7 @@ json retargetChainsToJson(const RetargetChains& chains)
 			{"ikWeight", exprParameterToJson(arm.ikWeight)},
 			{"reachScale", exprParameterToJson(arm.reachScale)},
 			{"goalOffset", json::array({arm.goalOffset.x, arm.goalOffset.y, arm.goalOffset.z})},
-			{"elbowHintConfidence", arm.elbowHintConfidence},
+			{"elbowWeight", exprParameterToJson(arm.elbowWeight)},
 			{"loss", lossToJson(arm.loss)},
 		};
 		j[k_handKeys[sideIndex]]= json::object();
@@ -300,7 +384,13 @@ RetargetChains retargetChainsFromJson(const json& j, const RetargetChains& defau
 			arm.ikWeight= reader.readParameter("ikWeight", fallback.ikWeight);
 			arm.reachScale= reader.readParameter("reachScale", fallback.reachScale);
 			arm.goalOffset= reader.readVec3("goalOffset", fallback.goalOffset);
-			arm.elbowHintConfidence= reader.readFloat("elbowHintConfidence", fallback.elbowHintConfidence);
+			// A block written before the elbow weight holds the threshold of
+			// the rule the weight's default function reproduces
+			const json* legacyElbow= reader.find("elbowHintConfidence");
+			if (reader.find("elbowWeight") == nullptr && legacyElbow != nullptr && legacyElbow->is_number())
+				arm.elbowWeight= makeDefaultElbowWeight(sideIndex, legacyElbow->get<float>());
+			else
+				arm.elbowWeight= reader.readParameter("elbowWeight", fallback.elbowWeight);
 			arm.loss= lossFromJson(reader, fallback.loss, defaulted);
 		}
 		// A hand holds nothing yet; the object is there for what it will hold
