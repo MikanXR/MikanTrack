@@ -116,11 +116,13 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pinned`: one pinned stage per line, or `none`
 - `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
+- `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note on a direct project, which does not use it) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)
+- `pipeline goal <arm> <x> <y> <z>`: sets the goal offset, meters in the rooted torso frame
 - `pipeline limit <head|spine|leftWrist|rightWrist>`: that joint limit of the loaded avatar's rig in degrees, with a note when the project's pipeline applies none
 - `pipeline limit <name> <degrees>`: sets it, 0 to 180, through the rig's edit path, which writes the avatar's sidecar file about three seconds later
-- `pipeline fx <leftArm|rightArm> elbowWeight`: three lines: the setting (`setting function|value value <v> expr <text>`), the text's compile state (`compile ok` or `compile error at <begin>..<end>: <message>`), and what the shown frame's solve took (`shown weight <w> raw <r> from function|value compiled yes|no`, or `shown none`)
-- `pipeline fx <arm> elbowWeight value <number>`: sets a plain weight in 0 to 1
-- `pipeline fx <arm> elbowWeight expr <text...>`: sets the function to the rest of the line. The answer's `shown` line is the frame shown before the edit lands
+- `pipeline fx <leftArm|rightArm> <elbowWeight|reachScale>`: three lines: the setting (`setting function|value value <v> expr <text>`), the text's compile state (`compile ok` or `compile error at <begin>..<end>: <message>`), and what the shown frame's solve took (`shown weight <w> raw <r> from function|value compiled yes|no`, or `shown none`)
+- `pipeline fx <arm> <parameter> value <number>`: sets a plain value in 0 to 1
+- `pipeline fx <arm> <parameter> expr <text...>`: sets the function to the rest of the line. A plain value with no text answers its `compile` line as an error on the empty text, which is not in force. The answer's `shown` line is the frame shown before the edit lands
 
 ## Client helper
 

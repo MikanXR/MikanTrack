@@ -282,6 +282,8 @@ RetargetChains::Arm mirrorArm(const RetargetChains::Arm& arm)
 {
 	RetargetChains::Arm mirrored= arm;
 	mirrored.goalOffset= glm::vec3(arm.goalOffset.x, -arm.goalOffset.y, arm.goalOffset.z);
+	mirrored.ikWeight.expression= SourcePoseInputs::swapSides(arm.ikWeight.expression);
+	mirrored.reachScale.expression= SourcePoseInputs::swapSides(arm.reachScale.expression);
 	mirrored.elbowWeight.expression= SourcePoseInputs::swapSides(arm.elbowWeight.expression);
 	return mirrored;
 }

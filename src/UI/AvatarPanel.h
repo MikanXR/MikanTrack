@@ -5,7 +5,7 @@
 
 #include "AvatarMapFigure.h"
 #include "ExprParameterField.h" // ExprParameterLiveValue
-#include "RetargetStage.h"      // RetargetElbowWeight
+#include "RetargetStage.h"      // RetargetResult
 
 class App;
 class AppConfig;
@@ -87,12 +87,14 @@ public:
 	// Whether an arm's elbow hint is shown as a draggable gizmo in the scene
 	bool getShowElbowGizmo(int sideIndex) const { return m_bShowElbowGizmo[sideIndex]; }
 
-	// What each arm's elbow weight evaluated to on the frame the scene shows,
-	// or null when nothing was solved; the elbow weight fields draw it
-	void setShownElbowWeights(const std::array<RetargetElbowWeight, 2>* weights);
-	// The setting's live value as the field draws it
-	static ExprParameterLiveValue toLiveValue(const RetargetElbowWeight& weight);
-	const std::array<RetargetElbowWeight, 2>& getShownElbowWeights() const { return m_shownElbowWeights; }
+	// The result the scene shows, or null when nothing was solved: what each
+	// arm's parameters evaluated to, which the parameter fields draw, and the
+	// position solve's wrist goals
+	void setShownResult(const RetargetResult* result);
+	// A parameter's live value as the field draws it
+	static ExprParameterLiveValue toLiveValue(const RetargetParameterReadout& readout);
+	const std::array<RetargetArmReadout, 2>& getShownArmParameters() const { return m_shownArmParameters; }
+	const AvatarRetargetGoals& getShownGoals() const { return m_shownGoals; }
 
 private:
 	void drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states);
@@ -123,5 +125,6 @@ private:
 	ePreviewPose m_previewPose= ePreviewPose::Live;
 	bool m_bShowElbowGizmo[2]= {false, false};
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
-	std::array<RetargetElbowWeight, 2> m_shownElbowWeights{};
+	std::array<RetargetArmReadout, 2> m_shownArmParameters{};
+	AvatarRetargetGoals m_shownGoals;
 };

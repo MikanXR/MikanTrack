@@ -136,18 +136,19 @@ bool AvatarPanel::setSelectedChain(eRetargetChain chain)
 	return true;
 }
 
-void AvatarPanel::setShownElbowWeights(const std::array<RetargetElbowWeight, 2>* weights)
+void AvatarPanel::setShownResult(const RetargetResult* result)
 {
-	m_shownElbowWeights= weights != nullptr ? *weights : std::array<RetargetElbowWeight, 2>{};
+	m_shownArmParameters= result != nullptr ? result->armParameters : std::array<RetargetArmReadout, 2>{};
+	m_shownGoals= result != nullptr ? result->goals : AvatarRetargetGoals();
 }
 
-ExprParameterLiveValue AvatarPanel::toLiveValue(const RetargetElbowWeight& weight)
+ExprParameterLiveValue AvatarPanel::toLiveValue(const RetargetParameterReadout& readout)
 {
 	ExprParameterLiveValue live;
-	live.bValid= weight.bEvaluated;
-	live.value= weight.weight;
-	live.rawValue= weight.rawValue;
-	live.bFromExpression= weight.bExpression && weight.bCompiled;
+	live.bValid= readout.bEvaluated;
+	live.value= readout.value;
+	live.rawValue= readout.rawValue;
+	live.bFromExpression= readout.bExpression && readout.bCompiled;
 	return live;
 }
 
@@ -674,6 +675,19 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 					 locText(bDirect ? "chains.mappingBoneAngles" : "chains.mappingBoneAnglesThenIk"));
 	ImGui::LabelText(locLabel("chains.ikWeightLabel"), "%.2f", RetargetStage::getArmIkWeight(pipeline));
 	drawNote("chains.fixedByPipelineNote");
+	// The goal the IK pulls the wrist toward; the direct pipeline places the
+	// arm by bone angles alone and has none
+	RetargetChains::Arm& arm= chains.arms[sideIndex];
+	if (!bDirect)
+	{
+		bChainChanged|= drawExprParameterField(sideIndex == 0 ? "leftReachScale" : "rightReachScale",
+											   locText("chains.reachScaleField"), arm.reachScale, 0.f, 1.f, "%.2f",
+											   locText("chains.reachScaleTooltip"), SourcePoseInputs::table(),
+											   toLiveValue(m_shownArmParameters[sideIndex].reachScale));
+		bChainChanged|= ImGui::DragFloat3(locLabel("chains.goalOffsetDrag"), &arm.goalOffset.x, 0.005f, -1.f, 1.f,
+										  "%.3f m");
+		ImGui::SetItemTooltip("%s", locText("chains.goalOffsetTooltip"));
+	}
 
 	drawSubHeading("chains.elbowHeading");
 	bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.elbowHintDrag"), &side.elbowHintOffset.x, 0.005f, -1.f, 1.f,
@@ -681,11 +695,10 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	ImGui::SetItemTooltip("%s", locText("avatarPanel.elbowHintTooltip"));
 	// The elbow weight is the arm chain's, the project's rather than the
 	// rig's
-	ExprParameter& elbowWeight= chains.arms[sideIndex].elbowWeight;
 	bChainChanged|= drawExprParameterField(sideIndex == 0 ? "leftElbowWeight" : "rightElbowWeight",
-										   locText("avatarPanel.elbowWeightField"), elbowWeight, 0.f, 1.f, "%.2f",
+										   locText("avatarPanel.elbowWeightField"), arm.elbowWeight, 0.f, 1.f, "%.2f",
 										   locText("avatarPanel.elbowWeightTooltip"), SourcePoseInputs::table(),
-										   toLiveValue(m_shownElbowWeights[sideIndex]));
+										   toLiveValue(m_shownArmParameters[sideIndex].elbowWeight));
 	ImGui::Checkbox(locLabel("avatarPanel.showGizmoCheckbox"), &m_bShowElbowGizmo[sideIndex]);
 
 	drawSubHeading("chains.forearmHeading");
@@ -723,7 +736,11 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		side.restPalmNormal= defaults.restPalmNormal;
 		side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 		bRigChanged= true;
-		elbowWeight= makeDefaultElbowWeight(sideIndex, k_defaultElbowHintConfidence);
+		// The chain's solve settings; its mapping, IK weight and loss stay
+		const RetargetChains::Arm armDefaults= RetargetChains::makeDefaultArm(sideIndex);
+		arm.elbowWeight= armDefaults.elbowWeight;
+		arm.reachScale= armDefaults.reachScale;
+		arm.goalOffset= armDefaults.goalOffset;
 		bChainChanged= true;
 	}
 	ImGui::SameLine();

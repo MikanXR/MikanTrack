@@ -91,7 +91,7 @@ inline RetargetChains toLiveChains(const StreamConfig& config)
 }
 
 // The live retarget stage's share of a stream config: the position
-// pipeline's solve, its loss rules and its elbow weights, through the chains
+// pipeline's solve, its loss rules and its arm settings, through the chains
 inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 {
 	const RetargetChains chains= toLiveChains(config);
@@ -101,7 +101,12 @@ inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 	out.user= config.bodyDimensions;
 	out.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.minConfidence);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		out.elbowWeight[sideIndex]= chains.arms[sideIndex].elbowWeight;
+	{
+		const RetargetChains::Arm& arm= chains.arms[sideIndex];
+		out.arms[sideIndex].elbowWeight= arm.elbowWeight;
+		out.arms[sideIndex].reachScale= arm.reachScale;
+		out.arms[sideIndex].goalOffset= arm.goalOffset;
+	}
 	return out;
 }
 // Bitwise equality of one padding-free value (a float, a bool, a glm vector
@@ -765,26 +770,27 @@ struct StreamPair
 // The position retarget on an unresolved frame, which also compares what the
 // stream does not carry: the root placement. Two live solvers run beside the
 // frozen one: the facade, which applies the elbow rule to its threshold, and
-// the split it is made of (the source pose filled, each arm's elbow weight
-// evaluated through the default function the threshold migrates to, then
-// solved), so both entry points are held to the frozen bits.
+// the split it is made of (the source pose filled, each arm's parameters
+// evaluated, the elbow weight through the default function the threshold
+// migrates to, then solved), so both entry points are held to the frozen
+// bits.
 struct PositionPair
 {
 	AvatarRetarget live;
 	AvatarRetarget liveSplit;
-	ElbowWeightEvaluator liveSplitElbow;
+	ArmParameterEvaluator liveSplitArms;
 	Frozen::AvatarRetarget frozen;
 	AvatarPose livePose;
 	AvatarPose liveSplitPose;
 	SourcePose liveSource;
-	std::array<RetargetElbowWeight, 2> liveSplitElbowReadout{};
+	std::array<RetargetArmReadout, 2> liveSplitArmReadout{};
 	Frozen::AvatarPose frozenPose;
 
 	void reset()
 	{
 		live.reset();
 		liveSplit.reset();
-		liveSplitElbow.reset();
+		liveSplitArms.reset();
 		frozen.reset();
 	}
 
@@ -798,11 +804,13 @@ struct PositionPair
 			frame.poses[1].tracked && frame.poses[1].hasWorldPose,
 		};
 		liveSplit.fillSource(frame.poses, bSideValid, frame.head, frame.timestampMs, user, liveSource);
-		liveSplitElbow.setWeights({makeDefaultElbowWeight(0, elbowHintConfidence[0]),
-								   makeDefaultElbowWeight(1, elbowHintConfidence[1])});
-		std::array<float, 2> elbowWeights;
-		liveSplitElbow.evaluate(liveSource, elbowWeights, liveSplitElbowReadout);
-		liveSplit.solve(liveSource, skeleton, config, elbowWeights, liveSplitPose);
+		// The chain's other defaults beside the elbow weight: a reach scale of
+		// 1 and no goal offset
+		liveSplitArms.setArms({RetargetArmSettings{makeDefaultElbowWeight(0, elbowHintConfidence[0])},
+							   RetargetArmSettings{makeDefaultElbowWeight(1, elbowHintConfidence[1])}});
+		std::array<AvatarRetargetArm, 2> arms;
+		liveSplitArms.evaluate(liveSource, arms, liveSplitArmReadout);
+		liveSplit.solve(liveSource, skeleton, config, arms, liveSplitPose);
 		frozen.solve(frame, user, skeleton, toFrozen(config, elbowHintConfidence), frozenPose);
 		if (!samePose(livePose, frozenPose, outWhy))
 			return false;

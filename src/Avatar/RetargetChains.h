@@ -50,9 +50,13 @@ struct RetargetChains
 		// How far the chain's end is pulled toward the goal after the angle
 		// mapping, 0 to 1
 		ExprParameter ikWeight{1.f};
-		// The scale on the source's reach before the goal is placed
+		// The scale on the source's reach before the goal is placed, 0 to 1:
+		// at 1 the user's reach is scaled onto the avatar's arm, at 0 the
+		// measured shoulder-to-wrist offset is kept in meters. A function
+		// reads the source pose's inputs, as the elbow weight's does.
 		ExprParameter reachScale{1.f};
-		// Added to the goal, meters, in the rooted torso frame (+X facing, +Y
+		// Added to the goal after the scaling and before the clamp to the
+		// avatar's reach, meters, in the rooted torso frame (+X facing, +Y
 		// the avatar's left, +Z up)
 		glm::vec3 goalOffset{0.f};
 		// The weight toward the measured elbow, 0 to 1: at 1 the measured
@@ -127,9 +131,10 @@ RetargetChains makeDefaultRetargetChains(bool bDirect);
 LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence);
 
 // The other arm's copy of an arm: the goal offset reflected across the body's
-// midplane, the elbow weight's text with each source name of one side
-// spelled for the other (SourcePoseInputs::swapSides), every other value as
-// it is
+// midplane, the text of each parameter that can be a function (the IK
+// weight, the reach scale, the elbow weight) with each source name of one
+// side spelled for the other (SourcePoseInputs::swapSides), every other value
+// as it is
 RetargetChains::Arm mirrorArm(const RetargetChains::Arm& arm);
 
 // JSON: an object of the six chains, "torso", "head", "leftArm", "rightArm",

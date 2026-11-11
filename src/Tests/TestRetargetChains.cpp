@@ -216,10 +216,10 @@ static int runRetargetChainsTest(const TestArgs&)
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 400.f, false)) &&
 				  samePolicy(stage.directLoss, makeDirectLossPolicy(500.f)),
 			  "(c) multi-camera: both pipelines' loss rules are the ones the legacy settings built");
-		check(sameParameter(stage.elbowWeight[0], makeDefaultElbowWeight(0, 0.3f)) &&
-				  sameParameter(stage.elbowWeight[1], makeDefaultElbowWeight(1, 0.7f)) &&
-				  stage.elbowWeight[0].expression == "clamp(source.leftLowerArm.confidence / 0.3, 0, 1)" &&
-				  stage.elbowWeight[1].expression == "clamp(source.rightLowerArm.confidence / 0.7, 0, 1)" &&
+		check(sameParameter(stage.arms[0].elbowWeight, makeDefaultElbowWeight(0, 0.3f)) &&
+				  sameParameter(stage.arms[1].elbowWeight, makeDefaultElbowWeight(1, 0.7f)) &&
+				  stage.arms[0].elbowWeight.expression == "clamp(source.leftLowerArm.confidence / 0.3, 0, 1)" &&
+				  stage.arms[1].elbowWeight.expression == "clamp(source.rightLowerArm.confidence / 0.7, 0, 1)" &&
 				  stage.direct.restBlendMs == 500.f,
 			  "(c) multi-camera: each arm's elbow weight function reaches the stage");
 	}
@@ -272,9 +272,22 @@ static int runRetargetChainsTest(const TestArgs&)
 		check(sameChains(resolveRetargetChains(config, rig), block), "(e) the block decides over the legacy settings");
 		const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 100.f, true)) &&
-				  sameParameter(stage.elbowWeight[0], makeDefaultElbowWeight(0, 0.9f)) &&
-				  sameParameter(stage.elbowWeight[1], makeDefaultElbowWeight(1, 0.5f)),
+				  sameParameter(stage.arms[0].elbowWeight, makeDefaultElbowWeight(0, 0.9f)) &&
+				  sameParameter(stage.arms[1].elbowWeight, makeDefaultElbowWeight(1, 0.5f)),
 			  "(e) the stage takes the block's hold, freeze and elbow weights");
+		// The reach scale and the goal offset reach the stage as stored, a
+		// function's text included
+		RetargetChains reached= block;
+		reached.arms[0].reachScale= ExprParameter{0.25f, "source.leftLowerArm.confidence", true};
+		reached.arms[1].reachScale= ExprParameter{0.75f};
+		reached.arms[0].goalOffset= glm::vec3(0.01f, 0.02f, -0.03f);
+		reached.arms[1].goalOffset= glm::vec3(-0.04f, 0.f, 0.05f);
+		const RetargetStageConfig reachedStage= makeRetargetStageConfig(config, rig, reached, nullptr);
+		check(sameParameter(reachedStage.arms[0].reachScale, reached.arms[0].reachScale) &&
+				  sameParameter(reachedStage.arms[1].reachScale, reached.arms[1].reachScale) &&
+				  reachedStage.arms[0].goalOffset == reached.arms[0].goalOffset &&
+				  reachedStage.arms[1].goalOffset == reached.arms[1].goalOffset,
+			  "(e) the stage takes each arm's reach scale and goal offset from its chain");
 
 		nlohmann::json written= nlohmann::json::parse(config.toJsonString());
 		check(written.contains("retarget") && written["retarget"].contains("chains") &&
@@ -488,6 +501,26 @@ static int runRetargetChainsTest(const TestArgs&)
 				  mirrored.goalOffset == glm::vec3(0.1f, -0.2f, 0.3f) &&
 				  SourcePoseInputs::swapSides(mirrored.elbowWeight.expression) == custom.elbowWeight.expression,
 			  "(h) a copy swaps left and right in the source names only, and swapping back restores the text");
+		RetargetChains::Arm functions;
+		functions.reachScale= ExprParameter{0.4f, "source.leftLowerArm.confidence * source.rightHand.measured", true};
+		functions.ikWeight= ExprParameter{0.5f, "source.LeftArm.carried", false};
+		const RetargetChains::Arm mirroredFunctions= mirrorArm(functions);
+		check(mirroredFunctions.reachScale.expression ==
+					  "source.rightLowerArm.confidence * source.leftHand.measured" &&
+				  mirroredFunctions.reachScale.value == 0.4f && mirroredFunctions.reachScale.bUseExpression &&
+				  mirroredFunctions.ikWeight.expression == "source.RightArm.carried" &&
+				  mirroredFunctions.ikWeight.value == 0.5f && !mirroredFunctions.ikWeight.bUseExpression,
+			  "(h) a copy swaps the sides in the reach scale's and the IK weight's text too");
+
+		// A reach scale written as a function round-trips in object form
+		RetargetChains withReach= makeEditedChains();
+		withReach.arms[1].reachScale= ExprParameter{0.3f, "smooth(source.rightLowerArm.confidence, 0.2)", true};
+		const nlohmann::json reachJson= nlohmann::json::parse(retargetChainsToJson(withReach).dump());
+		std::vector<std::string> reachDefaulted;
+		check(reachJson["rightArm"]["reachScale"].is_object() &&
+				  sameChains(retargetChainsFromJson(reachJson, RetargetChains(), &reachDefaulted), withReach) &&
+				  reachDefaulted.empty(),
+			  "(h) a reach scale function round-trips as an object");
 	}
 
 	MIKAN_LOG_INFO("test-retarget-chains") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures

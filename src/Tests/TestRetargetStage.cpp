@@ -1,7 +1,10 @@
 #include "TestCommon.h"
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
+
+#include "glm/gtc/quaternion.hpp"
 
 #include "AvatarSkeleton.h"
 #include "LossStage.h"
@@ -14,8 +17,9 @@
 
 // The retarget stage: the loss stage's hold and freeze, the display stage
 // against the stream stage, a scrub's pre-roll against a straight
-// play-through, the step clock across interleaved face-only frames, and the
-// elbow weight evaluated over the source pose's inputs.
+// play-through, the step clock across interleaved face-only frames, the
+// elbow weight evaluated over the source pose's inputs, and the reach scale
+// and the goal offset placing the wrist goal.
 
 namespace
 {
@@ -695,21 +699,21 @@ static int runRetargetStageTest(const TestArgs&)
 		check(differing == 0, "(f) the default function equals the rule bit for bit over the sweep");
 
 		// Through the stage: the same position frames under four settings
-		auto runWeights= [&](const ExprParameter& left, int frameCount, std::vector<RetargetElbowWeight>& outWeights,
-							 std::vector<AvatarPose>& outPoses) {
+		auto runWeights= [&](const ExprParameter& left, int frameCount,
+							 std::vector<RetargetParameterReadout>& outWeights, std::vector<AvatarPose>& outPoses) {
 			RetargetStageConfig config= positionConfig;
-			config.elbowWeight[0]= left;
+			config.arms[0].elbowWeight= left;
 			RetargetStage stage;
 			stage.setConfig(config);
 			RetargetResult result;
 			for (int index= 0; index < frameCount; ++index)
 			{
 				stage.solvePosition(makePositionFrame(*skeleton, index, 1000, 1000), result);
-				outWeights.push_back(result.elbowWeights[0]);
+				outWeights.push_back(result.armParameters[0].elbowWeight);
 				outPoses.push_back(result.pose);
 			}
 		};
-		std::vector<RetargetElbowWeight> defaultWeights, plainWeights, constantWeights, brokenWeights;
+		std::vector<RetargetParameterReadout> defaultWeights, plainWeights, constantWeights, brokenWeights;
 		std::vector<AvatarPose> defaultPoses, plainPoses, constantPoses, brokenPoses;
 		runWeights(makeDefaultElbowWeight(0, k_defaultElbowHintConfidence), 20, defaultWeights, defaultPoses);
 		runWeights(ExprParameter{0.f}, 20, plainWeights, plainPoses);
@@ -723,23 +727,23 @@ static int runRetargetStageTest(const TestArgs&)
 		for (int index= 0; index < 20; ++index)
 		{
 			const float confidence= makeMovingHand(*skeleton, eHandSide::Left, index * kFrameMs).forearmConfidence;
-			const RetargetElbowWeight& d= defaultWeights[index];
+			const RetargetParameterReadout& d= defaultWeights[index];
 			bDefault&= d.bEvaluated && d.bExpression && d.bCompiled &&
-				d.weight == elbowWeightFromConfidence(confidence, k_defaultElbowHintConfidence) &&
-				d.rawValue == d.weight; // the function clamps itself
-			const RetargetElbowWeight& p= plainWeights[index];
-			bPlain&= p.bEvaluated && !p.bExpression && p.weight == 0.f && p.rawValue == 0.f;
-			const RetargetElbowWeight& c= constantWeights[index];
-			bConstant&= c.bExpression && c.bCompiled && c.rawValue == 1.25f && c.weight == 1.f;
-			const RetargetElbowWeight& b= brokenWeights[index];
-			bBroken&= b.bExpression && !b.bCompiled && b.weight == 0.3f;
-			bPosesMoved|= !samePoseBits(defaultPoses[index], plainPoses[index]) && d.weight > 0.f;
+				d.value == elbowWeightFromConfidence(confidence, k_defaultElbowHintConfidence) &&
+				d.rawValue == d.value; // the function clamps itself
+			const RetargetParameterReadout& p= plainWeights[index];
+			bPlain&= p.bEvaluated && !p.bExpression && p.value == 0.f && p.rawValue == 0.f;
+			const RetargetParameterReadout& c= constantWeights[index];
+			bConstant&= c.bExpression && c.bCompiled && c.rawValue == 1.25f && c.value == 1.f;
+			const RetargetParameterReadout& b= brokenWeights[index];
+			bBroken&= b.bExpression && !b.bCompiled && b.value == 0.3f;
+			bPosesMoved|= !samePoseBits(defaultPoses[index], plainPoses[index]) && d.value > 0.f;
 		}
 		check(bDefault, "(f) the stage evaluates the default function on every frame over the source after the loss stage");
 		check(bPlain && bPosesMoved, "(f) a plain weight of 0 is what the solve takes, and the pose follows the hint");
 		check(bConstant, "(f) another function decides the weight, its raw value clamped to [0, 1]");
 		check(bBroken && samePoseBits(brokenPoses[5], [&] {
-				  std::vector<RetargetElbowWeight> weights;
+				  std::vector<RetargetParameterReadout> weights;
 				  std::vector<AvatarPose> poses;
 				  runWeights(ExprParameter{0.3f}, 6, weights, poses);
 				  return poses[5];
@@ -750,7 +754,7 @@ static int runRetargetStageTest(const TestArgs&)
 		// edit keeps the state, a reset starts it over from the input
 		const ExprParameter smoothed{0.f, "smooth(source.leftLowerArm.confidence, 0.5)", true};
 		RetargetStageConfig smoothConfig= positionConfig;
-		smoothConfig.elbowWeight[0]= smoothed;
+		smoothConfig.arms[0].elbowWeight= smoothed;
 		RetargetStage straight;
 		RetargetStage edited;
 		straight.setConfig(smoothConfig);
@@ -766,23 +770,253 @@ static int runRetargetStageTest(const TestArgs&)
 			{
 				// The same text through an edit of another field
 				RetargetStageConfig reEdited= smoothConfig;
-				reEdited.elbowWeight[0].value= 0.9f;
+				reEdited.arms[0].elbowWeight.value= 0.9f;
 				edited.setConfig(reEdited);
 			}
 			straight.solvePosition(frame, straightResult);
 			edited.solvePosition(frame, editedResult);
-			bKept&= std::memcmp(&straightResult.elbowWeights[0].weight, &editedResult.elbowWeights[0].weight,
-								sizeof(float)) == 0;
-			bLagged|= index > 0 && straightResult.elbowWeights[0].weight != frame.poses[0].forearmConfidence;
+			bKept&= std::memcmp(&straightResult.armParameters[0].elbowWeight.value,
+								&editedResult.armParameters[0].elbowWeight.value, sizeof(float)) == 0;
+			bLagged|= index > 0 && straightResult.armParameters[0].elbowWeight.value != frame.poses[0].forearmConfidence;
 		}
 		check(bKept && bLagged, "(f) a stateful function keeps its state across frames and across an unchanged edit");
 		edited.reset();
 		const TrackingFrameResult next= makePositionFrame(*skeleton, 40, 1000, 1000);
 		straight.solvePosition(next, straightResult);
 		edited.solvePosition(next, editedResult);
-		check(editedResult.elbowWeights[0].weight == next.poses[0].forearmConfidence &&
-				  straightResult.elbowWeights[0].weight != next.poses[0].forearmConfidence,
+		check(editedResult.armParameters[0].elbowWeight.value == next.poses[0].forearmConfidence &&
+				  straightResult.armParameters[0].elbowWeight.value != next.poses[0].forearmConfidence,
 			  "(f) a reset starts the stateful function over from its input");
+	}
+
+	// (g) The reach scale and the goal offset. A reach scale of 1 and no
+	// offset, written out, pose as the defaults do bit for bit; at 0 the goal
+	// is the avatar's shoulder plus the measured offset unscaled, the posed
+	// wrist reaching it inside the avatar's reach and clamped to the reach
+	// beyond it; at 0.5 the factor is the midpoint of 1 and the ratio; an
+	// offset moves the goal by itself turned by the root's yaw; a function of
+	// a source input follows the input; and a text that does not compile
+	// falls back on the plain value.
+	{
+		const B upperArmBone= B::LeftUpperArm;
+		const B handBone= B::LeftHand;
+		const float avatarReach=
+			skeleton->getUpperArmLength(eHandSide::Left) + skeleton->getForearmLength(eHandSide::Left);
+		const float ratio= avatarReach / (user.upperArmLengthMeters + user.forearmLengthMeters);
+		MIKAN_LOG_INFO(kTag) << "  (g) avatar reach " << avatarReach << " m, arm length ratio " << ratio;
+
+		// One left arm setting over a run of frames, each frame's result kept;
+		// frame shifts the left wrist by a fixed vector, and yaw fixes the root
+		struct Run
+		{
+			std::vector<RetargetResult> results;
+		};
+		auto runArm= [&](const RetargetArmSettings& left, int frameCount, const glm::vec3& wristShift,
+						 float fixedYawDegrees) {
+			RetargetStageConfig config= positionConfig;
+			config.arms[0]= left;
+			if (fixedYawDegrees != 0.f)
+			{
+				config.position.followShoulders= false;
+				config.position.fixedRootPositionWorld= glm::vec3(0.1f, -0.05f, 0.f);
+				config.position.fixedRootYawDegrees= fixedYawDegrees;
+			}
+			RetargetStage stage;
+			stage.setConfig(config);
+			Run run;
+			for (int index= 0; index < frameCount; ++index)
+			{
+				TrackingFrameResult frame= makePositionFrame(*skeleton, index, 1000, 1000);
+				frame.poses[0].palmPositionWorld+= wristShift;
+				RetargetResult result;
+				stage.solvePosition(frame, result);
+				run.results.push_back(result);
+			}
+			return run;
+		};
+		auto avatarShoulder= [&](const RetargetResult& result) {
+			std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
+			computePosedBones(*skeleton, result.pose, posed);
+			return posed[(int)upperArmBone].positionWorld;
+		};
+		auto posedWrist= [&](const RetargetResult& result) {
+			std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
+			computePosedBones(*skeleton, result.pose, posed);
+			return posed[(int)handBone].positionWorld;
+		};
+		auto measuredOffset= [](const RetargetResult& result) {
+			return result.source.arms[0].wristPosition - result.source.arms[0].shoulderPosition;
+		};
+		const RetargetArmSettings defaults= positionConfig.arms[0];
+		auto withReach= [&](const ExprParameter& reachScale) {
+			RetargetArmSettings settings= defaults;
+			settings.reachScale= reachScale;
+			return settings;
+		};
+		constexpr int kFrames= 20;
+		const glm::vec3 noShift(0.f);
+
+		// Written out at the defaults: a plain 1, a function evaluating to
+		// exactly 1, and a zero offset
+		const Run defaultRun= runArm(defaults, kFrames, noShift, 0.f);
+		RetargetArmSettings explicitOne= withReach(ExprParameter{0.3f, "0.5 + 0.5", true});
+		explicitOne.goalOffset= glm::vec3(0.f);
+		const Run oneRun= runArm(explicitOne, kFrames, noShift, 0.f);
+		bool bSame= true;
+		bool bGoalsSame= true;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			bSame&= samePoseBits(defaultRun.results[index].pose, oneRun.results[index].pose);
+			bGoalsSame&= defaultRun.results[index].goals.bHasWristGoal[0] &&
+				std::memcmp(&defaultRun.results[index].goals.wristGoalWorld[0],
+							&oneRun.results[index].goals.wristGoalWorld[0], sizeof(glm::vec3)) == 0;
+		}
+		check(bSame && bGoalsSame && oneRun.results[0].armParameters[0].reachScale.value == 1.f &&
+				  reachFactor(1.f, ratio) == ratio && reachFactor(0.f, ratio) == 1.f,
+			  "(g) a reach scale of exactly 1 and a zero offset pose as the defaults do, bit for bit");
+
+		// At 0, inside the avatar's reach: the measured offset off the
+		// avatar's shoulder, and the posed wrist on it
+		const Run zeroRun= runArm(withReach(ExprParameter{0.f}), kFrames, noShift, 0.f);
+		float goalError= 0.f;
+		float wristError= 0.f;
+		float largestReach= 0.f;
+		for (const RetargetResult& result : zeroRun.results)
+		{
+			const glm::vec3 shoulder= avatarShoulder(result);
+			const glm::vec3 expected= shoulder + measuredOffset(result);
+			goalError= std::max(goalError, glm::length(result.goals.wristGoalWorld[0] - expected));
+			wristError= std::max(wristError, glm::length(posedWrist(result) - result.goals.wristGoalWorld[0]));
+			largestReach= std::max(largestReach, glm::length(measuredOffset(result)));
+		}
+		MIKAN_LOG_INFO(kTag) << "  (g) reach scale 0: goal error " << goalError << " m, posed wrist from the goal "
+							 << wristError << " m, longest measured reach " << largestReach << " m";
+		check(largestReach < avatarReach * 0.98f && goalError < 1e-5f && wristError < 1e-4f &&
+				  zeroRun.results[0].armParameters[0].reachScale.bEvaluated &&
+				  zeroRun.results[0].armParameters[0].reachScale.value == 0.f,
+			  "(g) at reach scale 0 the goal is the avatar's shoulder plus the measured offset, and the wrist reaches it");
+
+		// At 0, beyond the avatar's reach: the wrist pushed out along the arm
+		const glm::vec3 farShift(0.f, avatarReach * 1.5f, 0.f);
+		const Run farRun= runArm(withReach(ExprParameter{0.f}), kFrames, farShift, 0.f);
+		float clampError= 0.f;
+		float shortestReach= 1e9f;
+		for (const RetargetResult& result : farRun.results)
+		{
+			const glm::vec3 shoulder= avatarShoulder(result);
+			const glm::vec3 goal= result.goals.wristGoalWorld[0];
+			const glm::vec3 clamped= shoulder + glm::normalize(goal - shoulder) * avatarReach;
+			clampError= std::max(clampError, glm::length(posedWrist(result) - clamped));
+			clampError= std::max(clampError, glm::length(goal - (shoulder + measuredOffset(result))));
+			shortestReach= std::min(shortestReach, glm::length(goal - shoulder));
+		}
+		MIKAN_LOG_INFO(kTag) << "  (g) reach scale 0 beyond reach: shortest goal reach " << shortestReach
+							 << " m, posed wrist from the clamped goal " << clampError << " m";
+		check(shortestReach > avatarReach * 1.05f && clampError < 1e-4f,
+			  "(g) at reach scale 0 a goal beyond the avatar's reach is clamped to it");
+
+		// At 0.5 the factor is the midpoint of 1 and the ratio
+		const Run fullRun= defaultRun;
+		const Run halfRun= runArm(withReach(ExprParameter{0.5f}), kFrames, noShift, 0.f);
+		float midError= 0.f;
+		float fullError= 0.f;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			const RetargetResult& half= halfRun.results[index];
+			const glm::vec3 shoulder= avatarShoulder(half);
+			const glm::vec3 offset= measuredOffset(half);
+			midError= std::max(midError, glm::length(half.goals.wristGoalWorld[0] -
+													 (shoulder + offset * (0.5f * (1.f + ratio)))));
+			const RetargetResult& full= fullRun.results[index];
+			fullError= std::max(fullError, glm::length(full.goals.wristGoalWorld[0] -
+													   (avatarShoulder(full) + measuredOffset(full) * ratio)));
+		}
+		MIKAN_LOG_INFO(kTag) << "  (g) reach scale 0.5: goal from the midpoint factor " << midError
+							 << " m; reach scale 1 from the ratio " << fullError << " m";
+		check(std::fabs(ratio - 1.f) > 0.05f && midError < 1e-5f && fullError < 1e-5f &&
+				  reachFactor(0.5f, ratio) == 1.f + (ratio - 1.f) * 0.5f,
+			  "(g) at reach scale 0.5 the factor is the midpoint of 1 and the ratio");
+
+		// The goal offset, under a root yawed 40 degrees: the goal moves by
+		// the offset turned with the root, and the default goal is unchanged
+		const glm::vec3 goalOffset(0.04f, 0.03f, -0.05f);
+		RetargetArmSettings offsetSettings= defaults;
+		offsetSettings.goalOffset= goalOffset;
+		const Run yawedRun= runArm(defaults, kFrames, noShift, 40.f);
+		const Run offsetRun= runArm(offsetSettings, kFrames, noShift, 40.f);
+		float offsetError= 0.f;
+		float yawError= 0.f;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			const RetargetResult& plain= yawedRun.results[index];
+			const RetargetResult& moved= offsetRun.results[index];
+			const glm::quat root= moved.pose.rootRotationWorld;
+			offsetError= std::max(offsetError, glm::length(moved.goals.wristGoalWorld[0] -
+														   plain.goals.wristGoalWorld[0] - root * goalOffset));
+			yawError= std::max(yawError, std::fabs(glm::angle(root) - glm::radians(40.f)));
+		}
+		MIKAN_LOG_INFO(kTag) << "  (g) goal offset under a 40 degree root: goal moved off the turned offset by "
+							 << offsetError << " m";
+		check(yawError < 1e-5f && offsetError < 1e-5f &&
+				  !samePoseBits(yawedRun.results[5].pose, offsetRun.results[5].pose),
+			  "(g) a goal offset moves the goal by itself turned with the root, and the pose follows");
+
+		// A function of a source input: the reach scale follows the forearm's
+		// confidence frame by frame, and the goal its factor
+		const Run inputRun= runArm(withReach(ExprParameter{1.f, "source.leftLowerArm.confidence", true}), kFrames,
+								   noShift, 0.f);
+		bool bFollows= true;
+		float inputError= 0.f;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			const RetargetResult& result= inputRun.results[index];
+			const float confidence= result.source.arms[0].forearmConfidence.value;
+			const RetargetParameterReadout& readout= result.armParameters[0].reachScale;
+			bFollows&= readout.bEvaluated && readout.bExpression && readout.bCompiled && readout.value == confidence &&
+				readout.rawValue == confidence;
+			const glm::vec3 expected=
+				avatarShoulder(result) + measuredOffset(result) * reachFactor(confidence, ratio);
+			inputError= std::max(inputError, glm::length(result.goals.wristGoalWorld[0] - expected));
+		}
+		check(bFollows && inputError < 1e-5f &&
+				  inputRun.results[0].armParameters[0].reachScale.value !=
+					  inputRun.results[kFrames - 1].armParameters[0].reachScale.value,
+			  "(g) a reach scale written as a function of a source input follows the input");
+
+		// A text that does not compile: the plain value decides, as if no
+		// function were set
+		const Run brokenRun=
+			runArm(withReach(ExprParameter{0.f, "clamp(source.leftLowerArm.confidence", true}), kFrames, noShift, 0.f);
+		bool bFallback= true;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			const RetargetParameterReadout& readout= brokenRun.results[index].armParameters[0].reachScale;
+			bFallback&= readout.bExpression && !readout.bCompiled && readout.value == 0.f &&
+				samePoseBits(brokenRun.results[index].pose, zeroRun.results[index].pose);
+		}
+		check(bFallback, "(g) a reach scale text that does not compile falls back on the plain value");
+
+		// The direct pipeline reads neither setting
+		RetargetStageConfig directSettings= directConfig;
+		directSettings.arms[0].reachScale= ExprParameter{0.f};
+		directSettings.arms[0].goalOffset= goalOffset;
+		RetargetStage directDefault;
+		RetargetStage directEdited;
+		directDefault.setConfig(directConfig);
+		directEdited.setConfig(directSettings);
+		bool bDirectSame= true;
+		for (int index= 0; index < kFrames; ++index)
+		{
+			const TrackingFrameResult cameraFrame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
+			const TrackingFrameResult::HeadPose noPhone;
+			RetargetResult a;
+			RetargetResult b;
+			directDefault.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, a);
+			directEdited.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, b);
+			bDirectSame&= a.pose.valid && samePoseBits(a.pose, b.pose) && !a.goals.bHasWristGoal[0] &&
+				!a.armParameters[0].reachScale.bEvaluated;
+		}
+		check(bDirectSame, "(g) the direct pipeline reads neither the reach scale nor the goal offset");
 	}
 
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
@@ -791,5 +1025,6 @@ static int runRetargetStageTest(const TestArgs&)
 
 MIKAN_REGISTER_TEST("--test-retarget-stage",
 					"Retarget stage: the loss stage's hold and freeze, the display stage against the stream stage, "
-					"a scrub's pre-roll against a straight play-through, the elbow weight over the source inputs",
+					"a scrub's pre-roll against a straight play-through, the elbow weight over the source inputs, "
+					"the reach scale and the goal offset",
 					eTestCategory::SelfTest, runRetargetStageTest)

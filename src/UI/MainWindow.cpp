@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -101,7 +102,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
-		 "pipeline fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]",
+		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale> [value <number>|expr <text...>]",
+		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
 		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
@@ -891,7 +893,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
-	m_avatarPanel->setShownElbowWeights(nullptr);
+	m_avatarPanel->setShownResult(nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
@@ -973,7 +975,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
-	m_avatarPanel->setShownElbowWeights(shownResult != nullptr ? &shownResult->elbowWeights : nullptr);
+	m_avatarPanel->setShownResult(shownResult);
 	updateDirectReadout(directState);
 	updateSourcePoseReadout(shownResult);
 	updateSceneCameraMatch(directState, skeleton.get());
@@ -1445,6 +1447,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	}
 	if (verb == "fx")
 		return handleFxAutomation(args, outLines, outError);
+	if (verb == "goal")
+		return handleGoalAutomation(args, outLines, outError);
 	if (verb == "limit")
 		return handleLimitAutomation(args, outLines, outError);
 	if (verb == "pinned")
@@ -1571,33 +1575,41 @@ bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std
 	return true;
 }
 
+// The side index of an arm chain's id, -1 for anything else
+static int parseArmSide(const std::string& id)
+{
+	if (id == "leftArm")
+		return 0;
+	if (id == "rightArm")
+		return 1;
+	return -1;
+}
+
 bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 									std::string& outError)
 {
 	// fx <arm> <parameter> [value <number> | expr <text...>]
 	if (args.size() < 3)
 	{
-		outError= "usage: fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]";
+		outError= "usage: fx <leftArm|rightArm> <elbowWeight|reachScale> [value <number>|expr <text...>]";
 		return false;
 	}
-	int sideIndex= -1;
-	if (args[1] == "leftArm")
-		sideIndex= 0;
-	else if (args[1] == "rightArm")
-		sideIndex= 1;
+	const int sideIndex= parseArmSide(args[1]);
 	if (sideIndex < 0)
 	{
 		outError= "unknown arm: " + args[1];
 		return false;
 	}
-	if (args[2] != "elbowWeight")
+	const bool bElbowWeight= args[2] == "elbowWeight";
+	if (!bElbowWeight && args[2] != "reachScale")
 	{
 		outError= "unknown parameter: " + args[2];
 		return false;
 	}
 
 	RetargetChains chains= m_app->getRetargetChains();
-	ExprParameter& weight= chains.arms[sideIndex].elbowWeight;
+	ExprParameter& weight=
+		bElbowWeight ? chains.arms[sideIndex].elbowWeight : chains.arms[sideIndex].reachScale;
 	if (args.size() >= 4)
 	{
 		const std::string& form= args[3];
@@ -1659,16 +1671,76 @@ bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::v
 						   std::to_string(error.span.end) + ": " + error.message);
 	}
 	// The frame the scene shows, solved before this setting reached it
-	const RetargetElbowWeight& shown= m_avatarPanel->getShownElbowWeights()[sideIndex];
+	const RetargetArmReadout& shownArm= m_avatarPanel->getShownArmParameters()[sideIndex];
+	const RetargetParameterReadout& shown= bElbowWeight ? shownArm.elbowWeight : shownArm.reachScale;
 	if (!shown.bEvaluated)
 	{
 		outLines.push_back("shown none");
 	}
 	else
 	{
-		outLines.push_back("shown weight " + format(shown.weight) + " raw " + format(shown.rawValue) + " from " +
+		outLines.push_back("shown weight " + format(shown.value) + " raw " + format(shown.rawValue) + " from " +
 						   (shown.bExpression && shown.bCompiled ? "function" : "value") + " compiled " +
 						   (shown.bCompiled ? "yes" : "no"));
+	}
+	return true;
+}
+
+bool MainWindow::handleGoalAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									  std::string& outError)
+{
+	// goal <arm> [<x> <y> <z>]
+	if (args.size() != 2 && args.size() != 5)
+	{
+		outError= "usage: goal <leftArm|rightArm> [<x> <y> <z>]";
+		return false;
+	}
+	const int sideIndex= parseArmSide(args[1]);
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	glm::vec3& offset= chains.arms[sideIndex].goalOffset;
+	if (args.size() == 5)
+	{
+		glm::vec3 parsed;
+		for (int axis= 0; axis < 3; ++axis)
+		{
+			const std::string& text= args[2 + axis];
+			char* end= nullptr;
+			const double value= std::strtod(text.c_str(), &end);
+			if (end == text.c_str() || *end != '\0' || !std::isfinite(value))
+			{
+				outError= "not a number of meters: " + text;
+				return false;
+			}
+			parsed[axis]= (float)value;
+		}
+		offset= parsed;
+		m_app->setRetargetChains(chains);
+	}
+
+	char text[128];
+	std::snprintf(text, sizeof(text), "offset %.6g %.6g %.6g", offset.x, offset.y, offset.z);
+	std::string line= text;
+	// Only the position pipeline's IK places a goal
+	if (m_pipelineInputs.bDirect)
+		line+= " (unused: the direct pipeline places the arm by bone angles)";
+	outLines.push_back(line);
+	// The frame the scene shows, solved before this setting reached it
+	const AvatarRetargetGoals& goals= m_avatarPanel->getShownGoals();
+	if (!goals.bHasWristGoal[sideIndex])
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		const glm::vec3& goal= goals.wristGoalWorld[sideIndex];
+		std::snprintf(text, sizeof(text), "shown goal %.6g %.6g %.6g", goal.x, goal.y, goal.z);
+		outLines.push_back(text);
 	}
 	return true;
 }

@@ -3,32 +3,56 @@
 #include "AvatarSkeleton.h"
 #include "SourcePoseInputs.h"
 
-ElbowWeightEvaluator::ElbowWeightEvaluator()
+namespace
 {
-	setWeights(RetargetStageConfig().elbowWeight);
+// One parameter at its site over the filled inputs, clamped to [minValue,
+// maxValue], and what it evaluated to
+float evaluateParameter(ExprParameterRunner& runner, const float* inputs, double timeSeconds, float minValue,
+						float maxValue, RetargetParameterReadout& outReadout)
+{
+	const float value= runner.evaluate(inputs, SourcePoseInputs::k_count, timeSeconds, minValue, maxValue);
+	outReadout.bEvaluated= true;
+	outReadout.value= value;
+	outReadout.bExpression= runner.getParameter().bUseExpression;
+	outReadout.bCompiled= runner.getCompileError() == nullptr;
+	outReadout.rawValue= runner.getLastUsedExpression() ? runner.getLastRawValue() : 0.f;
+	return value;
+}
+} // namespace
+
+ArmParameterEvaluator::ArmParameterEvaluator()
+{
+	setArms(RetargetStageConfig().arms);
 }
 
-void ElbowWeightEvaluator::setWeights(const std::array<ExprParameter, 2>& weights)
+void ArmParameterEvaluator::setArms(const std::array<RetargetArmSettings, 2>& arms)
 {
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		m_runners[sideIndex].setParameter(weights[sideIndex], SourcePoseInputs::table());
+	{
+		Arm& arm= m_arms[sideIndex];
+		arm.elbowWeight.setParameter(arms[sideIndex].elbowWeight, SourcePoseInputs::table());
+		arm.reachScale.setParameter(arms[sideIndex].reachScale, SourcePoseInputs::table());
+		arm.goalOffset= arms[sideIndex].goalOffset;
+	}
 }
 
-void ElbowWeightEvaluator::reset()
+void ArmParameterEvaluator::reset()
 {
-	for (ExprParameterRunner& runner : m_runners)
-		runner.reset();
+	for (Arm& arm : m_arms)
+	{
+		arm.elbowWeight.reset();
+		arm.reachScale.reset();
+	}
 	m_bHasEpoch= false;
 }
 
-void ElbowWeightEvaluator::evaluate(const SourcePose& source, std::array<float, 2>& outWeights,
-									std::array<RetargetElbowWeight, 2>& outReadout)
+void ArmParameterEvaluator::evaluate(const SourcePose& source, std::array<AvatarRetargetArm, 2>& outArms,
+									 std::array<RetargetArmReadout, 2>& outReadout)
 {
 	// The state belongs to one epoch of the source clock
 	if (!m_bHasEpoch || source.clock.resetEpoch != m_epoch)
 	{
-		for (ExprParameterRunner& runner : m_runners)
-			runner.reset();
+		reset();
 		m_bHasEpoch= true;
 		m_epoch= source.clock.resetEpoch;
 	}
@@ -38,14 +62,12 @@ void ElbowWeightEvaluator::evaluate(const SourcePose& source, std::array<float, 
 	const double timeSeconds= source.clock.stepMs * 0.001;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		ExprParameterRunner& runner= m_runners[sideIndex];
-		outWeights[sideIndex]= runner.evaluate(inputs, SourcePoseInputs::k_count, timeSeconds, 0.f, 1.f);
-		RetargetElbowWeight& readout= outReadout[sideIndex];
-		readout.bEvaluated= true;
-		readout.weight= outWeights[sideIndex];
-		readout.bExpression= runner.getParameter().bUseExpression;
-		readout.bCompiled= runner.getCompileError() == nullptr;
-		readout.rawValue= runner.getLastUsedExpression() ? runner.getLastRawValue() : 0.f;
+		Arm& arm= m_arms[sideIndex];
+		RetargetArmReadout& readout= outReadout[sideIndex];
+		AvatarRetargetArm& out= outArms[sideIndex];
+		out.elbowWeight= evaluateParameter(arm.elbowWeight, inputs, timeSeconds, 0.f, 1.f, readout.elbowWeight);
+		out.reachScale= evaluateParameter(arm.reachScale, inputs, timeSeconds, 0.f, 1.f, readout.reachScale);
+		out.goalOffset= arm.goalOffset;
 	}
 }
 
@@ -61,7 +83,7 @@ void RetargetStage::setConfig(const RetargetStageConfig& config)
 	}
 	m_config= config;
 	// A changed text recompiles; an unchanged one keeps its state
-	m_elbowWeights.setWeights(m_config.elbowWeight);
+	m_armParameters.setArms(m_config.arms);
 }
 
 void RetargetStage::reset()
@@ -69,7 +91,7 @@ void RetargetStage::reset()
 	m_position.reset();
 	m_direct.reset();
 	m_loss.reset();
-	m_elbowWeights.reset();
+	m_armParameters.reset();
 }
 
 float RetargetStage::getArmIkWeight(SourcePose::ePipeline pipeline)
@@ -84,7 +106,7 @@ void RetargetStage::solvePosition(const TrackingFrameResult& frame, RetargetResu
 	m_loss.apply(m_config.positionLoss, m_config.skeleton.get(), m_config.position.sides, outResult.source,
 				 &outResult.hands);
 	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals,
-				&outResult.elbowWeights);
+				&outResult.armParameters);
 	outResult.bDirectState= false;
 	outResult.directState= DirectRetarget::SolveState();
 }
@@ -101,7 +123,7 @@ bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectC
 	m_direct.measure(camera, cameraModel, phoneHead, timestampMs, skeleton, m_config.direct, outResult.source);
 	m_loss.apply(m_config.directLoss, &skeleton, m_config.direct.sides, outResult.source, nullptr);
 	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals,
-				&outResult.elbowWeights);
+				&outResult.armParameters);
 	outResult.bDirectState= true;
 	outResult.directState= m_direct.getSolveState();
 	writeDirectRestReadout(outResult.source, outResult.directState);
@@ -109,23 +131,23 @@ bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectC
 }
 
 void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
-								AvatarRetargetGoals* outGoals, std::array<RetargetElbowWeight, 2>* outElbowWeights)
+								AvatarRetargetGoals* outGoals, std::array<RetargetArmReadout, 2>* outArmParameters)
 {
 	outPose.clear();
 	if (outGoals != nullptr)
 		*outGoals= AvatarRetargetGoals();
-	if (outElbowWeights != nullptr)
-		*outElbowWeights= {};
+	if (outArmParameters != nullptr)
+		*outArmParameters= {};
 	if (m_config.skeleton == nullptr)
 		return;
 	if (armIkWeight == 1.f)
 	{
-		std::array<float, 2> elbowWeights;
-		std::array<RetargetElbowWeight, 2> readout;
-		m_elbowWeights.evaluate(source, elbowWeights, readout);
-		if (outElbowWeights != nullptr)
-			*outElbowWeights= readout;
-		m_position.solve(source, *m_config.skeleton, m_config.position, elbowWeights, outPose, outGoals);
+		std::array<AvatarRetargetArm, 2> arms;
+		std::array<RetargetArmReadout, 2> readout;
+		m_armParameters.evaluate(source, arms, readout);
+		if (outArmParameters != nullptr)
+			*outArmParameters= readout;
+		m_position.solve(source, *m_config.skeleton, m_config.position, arms, outPose, outGoals);
 	}
 	else if (armIkWeight == 0.f)
 		m_direct.place(source, *m_config.skeleton, m_config.direct, outPose);
@@ -136,7 +158,7 @@ void RetargetStage::resolveTarget(RetargetResult& ioResult)
 	if (ioResult.source.pipeline == SourcePose::ePipeline::None)
 		return;
 	solveTarget(ioResult.source, getArmIkWeight(ioResult.source.pipeline), ioResult.pose, &ioResult.goals,
-				&ioResult.elbowWeights);
+				&ioResult.armParameters);
 	// The placement writes the head's delta into the solve state
 	if (ioResult.bDirectState)
 		ioResult.directState.headDelta= m_direct.getSolveState().headDelta;

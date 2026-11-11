@@ -438,7 +438,12 @@ RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const Avata
 	stage.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence);
 	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		stage.elbowWeight[sideIndex]= chains.arms[sideIndex].elbowWeight;
+	{
+		const RetargetChains::Arm& arm= chains.arms[sideIndex];
+		stage.arms[sideIndex].elbowWeight= arm.elbowWeight;
+		stage.arms[sideIndex].reachScale= arm.reachScale;
+		stage.arms[sideIndex].goalOffset= arm.goalOffset;
+	}
 	return stage;
 }
 

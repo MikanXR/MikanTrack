@@ -79,6 +79,18 @@ float elbowWeightFromConfidence(float forearmConfidence, float elbowHintConfiden
 	return elbowHintConfidence > 0.f ? std::clamp(forearmConfidence / elbowHintConfidence, 0.f, 1.f) : 1.f;
 }
 
+float reachFactor(float reachScale, float armLengthRatio)
+{
+	// The endpoints are returned as they are, so a reach scale of 1 places
+	// the goal exactly as the plain ratio does, with no rounding from the
+	// blend
+	if (!(reachScale < 1.f))
+		return armLengthRatio;
+	if (!(reachScale > 0.f))
+		return 1.f;
+	return 1.f + (armLengthRatio - 1.f) * reachScale;
+}
+
 void AvatarRetarget::reset()
 {
 	m_root= RootState();
@@ -187,13 +199,13 @@ void AvatarRetarget::solve(const std::array<HandPose, 2>& poses, const bool bSid
 {
 	SourcePose source;
 	fillSource(poses, bSideValid, head, timestampMs, user, source);
-	std::array<float, 2> elbowWeights;
+	std::array<AvatarRetargetArm, 2> arms;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		elbowWeights[sideIndex]=
+		arms[sideIndex].elbowWeight=
 			elbowWeightFromConfidence(source.arms[sideIndex].forearmConfidence.value, elbowHintConfidence[sideIndex]);
 	}
-	solve(source, skeleton, config, elbowWeights, outPose);
+	solve(source, skeleton, config, arms, outPose);
 }
 
 void AvatarRetarget::solve(const TrackingFrameResult& frame, const BodyDimensions& user,
@@ -262,7 +274,7 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 }
 
 void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skeleton,
-						   const AvatarRetargetConfig& config, const std::array<float, 2>& elbowWeights,
+						   const AvatarRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
 						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
 {
 	using eGroupState= SourcePose::eGroupState;
@@ -346,17 +358,25 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 		}
 
 		// The wrist target: the user's reach from their shoulder, scaled onto
-		// the avatar's arm. Without a measured shoulder the avatar's own
-		// stands in, which keeps the hand where it was seen.
+		// the avatar's arm by the arm's reach scale (at 1 by the arm length
+		// ratio, at 0 kept in meters), then moved by the arm's goal offset in
+		// the rooted torso frame. Without a measured shoulder the avatar's own
+		// stands in, which at a reach scale of 0 keeps the hand where it was
+		// seen.
+		const AvatarRetargetArm& armSettings= arms[sideIndex];
 		const float upperArm= skeleton.getUpperArmLength(side);
 		const float forearm= skeleton.getForearmLength(side);
 		const float avatarReach= upperArm + forearm;
 		const float userReach= source.upperArmLength + source.forearmLength;
 		const float ratio= userReach > 1e-3f ? avatarReach / userReach : 1.f;
+		const float factor= reachFactor(armSettings.reachScale, ratio);
 
 		const glm::vec3 userShoulder= arm.bHasShoulder ? arm.shoulderPosition : avatarShoulder;
 		const glm::vec3 userWrist= arm.wristPosition;
-		glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * ratio;
+		glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * factor;
+		// Skipped when zero, so a zero offset leaves every bit of the goal
+		if (armSettings.goalOffset != glm::vec3(0.f))
+			wrist+= rest.rotation * armSettings.goalOffset;
 		if (outGoals != nullptr)
 		{
 			outGoals->bHasWristGoal[sideIndex]= true;
@@ -367,16 +387,16 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 		if (reach > avatarReach && reach > 1e-6f)
 			wrist= avatarShoulder + toWrist * (avatarReach / reach);
 
-		// Elbow: the measured elbow, scaled the same way, hints which way the
-		// arm bends, giving way to the rig's hint point (in the rooted torso
-		// frame, so it turns with the body) by the arm's elbow weight
+		// Elbow: the measured elbow, scaled by the wrist's factor, hints which
+		// way the arm bends, giving way to the rig's hint point (in the rooted
+		// torso frame, so it turns with the body) by the arm's elbow weight
 		const glm::vec3 hintOffset= rest.rotation * sideConfig.elbowHintOffset;
 		glm::vec3 polePoint= avatarShoulder + hintOffset;
 		if (arm.bHasElbow)
 		{
 			const glm::vec3 userElbow= arm.elbowPosition;
-			const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * ratio;
-			polePoint+= (measuredPole - polePoint) * elbowWeights[sideIndex];
+			const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * factor;
+			polePoint+= (measuredPole - polePoint) * armSettings.elbowWeight;
 		}
 		const glm::vec3 elbow= solveElbow(avatarShoulder, wrist, upperArm, forearm, polePoint, safeNormalize(hintOffset),
 										  rest.direction(lowerArmBone));

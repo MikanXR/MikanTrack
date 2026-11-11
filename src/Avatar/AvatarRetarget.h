@@ -17,7 +17,8 @@ class AvatarSkeleton;
 // Retargets the measured world-space pose onto a loaded avatar's humanoid
 // skeleton. The avatar keeps its own proportions: every bone keeps its rest
 // offset from its parent and only rotates, so the measured wrist is first
-// scaled from the user's arm onto the avatar's, the elbow comes from a
+// scaled from the user's arm onto the avatar's (by the arm's reach scale),
+// the elbow comes from a
 // two-bone solve over the avatar's arm lengths hinted by the measured elbow,
 // and the fingers are rebuilt through the shipping forward kinematics on the
 // avatar's own hand skeleton. Pure math over the frame it is given plus a
@@ -102,14 +103,37 @@ struct AvatarPose
 };
 
 // Where the position solve aimed each arm's wrist, for display: the measured
-// wrist scaled from the user's reach onto the avatar's arm, before the clamp
-// to the avatar's reach. Set for every arm the solve posed. Nothing reads it
-// back into a pose or the stream.
+// wrist placed off the avatar's shoulder by the arm's reach scale, plus the
+// arm's goal offset, before the clamp to the avatar's reach. Set for every
+// arm the solve posed. Nothing reads it back into a pose or the stream.
 struct AvatarRetargetGoals
 {
 	std::array<bool, 2> bHasWristGoal{};       // by eHandSide
 	std::array<glm::vec3, 2> wristGoalWorld{}; // by eHandSide
 };
+
+// One arm's settings from its chain that the position solve takes per frame
+struct AvatarRetargetArm
+{
+	// How far the pole moves from the rig's hint toward the measured elbow,
+	// [0, 1]: at 1 the measured elbow alone decides the bend, at 0 the hint
+	// alone
+	float elbowWeight= 1.f;
+	// The factor on the measured shoulder-to-wrist offset, [0, 1]: at 1 the
+	// user's reach is scaled onto the avatar's arm (the avatar-to-user arm
+	// length ratio), at 0 the offset is kept in meters, and between them the
+	// factor blends linearly from 1 to the ratio
+	float reachScale= 1.f;
+	// Added to the wrist goal after the scaling and before the clamp to the
+	// avatar's reach, meters, in the rooted torso frame (+X facing, +Y the
+	// avatar's left, +Z up), so it turns with the root yaw
+	glm::vec3 goalOffset{0.f};
+};
+
+// The factor the solve puts on the measured shoulder-to-wrist offset for a
+// reach scale (clamped to [0, 1]) and the avatar-to-user arm length ratio:
+// exactly the ratio at 1 and exactly 1 at 0
+float reachFactor(float reachScale, float armLengthRatio);
 
 // The forearm confidence at and above which the elbow rule the avatar's rig
 // has always defaulted to lets the measured elbow alone decide the bend
@@ -155,15 +179,16 @@ public:
 	// Poses the avatar from a position pipeline's source pose; an arm that
 	// is lost stays at rest. Always produces a valid pose with a root,
 	// tracked or not. The root follow restarts when the source's epoch
-	// changes. elbowWeights (by eHandSide, [0, 1]) is how far each arm's
-	// pole moves from the rig's hint toward the measured elbow: 1 lets the
-	// measured elbow alone decide the bend, 0 the hint alone. outGoals, when
-	// given, receives each posed arm's wrist goal.
+	// changes. arms (by eHandSide) holds each arm's elbow weight, reach scale
+	// and goal offset for this frame. outGoals, when given, receives each
+	// posed arm's wrist goal.
 	void solve(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
-			   const std::array<float, 2>& elbowWeights, AvatarPose& outPose, AvatarRetargetGoals* outGoals= nullptr);
+			   const std::array<AvatarRetargetArm, 2>& arms, AvatarPose& outPose,
+			   AvatarRetargetGoals* outGoals= nullptr);
 
 	// fillSource then solve, each arm's elbow weight from its forearm
-	// confidence by elbowWeightFromConfidence over the threshold given
+	// confidence by elbowWeightFromConfidence over the threshold given, at a
+	// reach scale of 1 and no goal offset
 	void solve(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 			   const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
 			   const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config, AvatarPose& outPose,

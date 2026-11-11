@@ -434,8 +434,8 @@ DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, con
 
 // And for the retarget stage: both pipelines' solves through the mappings
 // above, each pipeline's loss rules from the chains (makeChainLossPolicy)
-// with the delivery rules' minimum confidence, and each arm's elbow weight
-// from its chain
+// with the delivery rules' minimum confidence, and each arm's elbow weight,
+// reach scale and goal offset from its chain
 struct RetargetStageConfig;
 class AvatarSkeleton;
 RetargetStageConfig makeRetargetStageConfig(const class AppConfig& config, const AvatarRigSettings& rig,
