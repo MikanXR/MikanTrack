@@ -107,6 +107,8 @@ inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 		out.arms[sideIndex].elbowWeight= arm.elbowWeight;
 		out.arms[sideIndex].reachScale= arm.reachScale;
 		out.arms[sideIndex].goalOffset= arm.goalOffset;
+		out.arms[sideIndex].mapping= arm.mapping;
+		out.arms[sideIndex].ikWeight= arm.ikWeight;
 	}
 	return out;
 }

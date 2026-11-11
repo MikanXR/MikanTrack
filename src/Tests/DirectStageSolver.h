@@ -34,6 +34,12 @@ public:
 			migrateRetargetChains(true, 250.f, true, config.restBlendMs,
 								  {k_defaultElbowHintConfidence, k_defaultElbowHintConfidence});
 		stageConfig.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, 0.f, true);
+		// and its arms' mapping, bone angles
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			stageConfig.arms[sideIndex].mapping= chains.arms[sideIndex].mapping;
+			stageConfig.arms[sideIndex].ikWeight= chains.arms[sideIndex].ikWeight;
+		}
 		m_stage.setConfig(stageConfig);
 		m_stage.solveDirect(camera, cameraModel, phoneHead, timestampMs, m_result);
 		outPose= m_result.pose;

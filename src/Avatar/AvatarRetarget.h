@@ -102,19 +102,28 @@ struct AvatarPose
 	void clear();
 };
 
-// Where the position solve aimed each arm's wrist, for display: the measured
-// wrist placed off the avatar's shoulder by the arm's reach scale, plus the
-// arm's goal offset, before the clamp to the avatar's reach. Set for every
-// arm the solve posed. Nothing reads it back into a pose or the stream.
+// Where an arm solve aimed each arm's wrist, for display: the source's
+// shoulder-to-wrist offset placed off the avatar's shoulder by the arm's
+// reach scale, plus the arm's goal offset, before the clamp to the avatar's
+// reach, in the world the pose is posed in. Set for every arm solved at an
+// IK weight above 0, in either pipeline. Beside it, the IK weight each posed
+// arm was solved at. Nothing reads it back into a pose or the stream.
 struct AvatarRetargetGoals
 {
 	std::array<bool, 2> bHasWristGoal{};       // by eHandSide
 	std::array<glm::vec3, 2> wristGoalWorld{}; // by eHandSide
+	std::array<bool, 2> bPosed{};              // by eHandSide
+	std::array<float, 2> ikWeight{};           // by eHandSide
 };
 
-// One arm's settings from its chain that the position solve takes per frame
+// One arm's settings from its chain that an arm solve takes per frame
 struct AvatarRetargetArm
 {
+	// How far the wrist is pulled from the angle-mapped arm toward the goal,
+	// [0, 1]: 0 is the angle mapping alone (the avatar's bones take the
+	// source bones' directions), 1 the IK solve alone. Zero for an arm mapped
+	// by bone angles.
+	float ikWeight= 1.f;
 	// How far the pole moves from the rig's hint toward the measured elbow,
 	// [0, 1]: at 1 the measured elbow alone decides the bend, at 0 the hint
 	// alone
@@ -179,9 +188,16 @@ public:
 	// Poses the avatar from a position pipeline's source pose; an arm that
 	// is lost stays at rest. Always produces a valid pose with a root,
 	// tracked or not. The root follow restarts when the source's epoch
-	// changes. arms (by eHandSide) holds each arm's elbow weight, reach scale
-	// and goal offset for this frame. outGoals, when given, receives each
-	// posed arm's wrist goal.
+	// changes. arms (by eHandSide) holds each arm's IK weight, elbow weight,
+	// reach scale and goal offset for this frame. At an IK weight of exactly
+	// 1 an arm is the IK solve alone. Below it the arm starts from its angle
+	// mapping, the avatar's upper arm and forearm along the source's shoulder
+	// to elbow and elbow to wrist, which needs a measured shoulder and elbow:
+	// an arm without them takes the IK, eased in and out over
+	// kAngleMappingRampMs on the source's step clock from the directions it
+	// last had, so an elbow that drops out for a frame does not snap the arm.
+	// outGoals, when given, receives each posed arm's wrist goal and the
+	// weight it was solved at.
 	void solve(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
 			   const std::array<AvatarRetargetArm, 2>& arms, AvatarPose& outPose,
 			   AvatarRetargetGoals* outGoals= nullptr);
@@ -202,9 +218,21 @@ public:
 			   const std::array<float, 2>& elbowHintConfidence= {k_defaultElbowHintConfidence,
 																 k_defaultElbowHintConfidence});
 
+	// How long an arm that cannot be angle mapped takes to hand its pose
+	// over to the IK, and to take it back once it can, milliseconds
+	static constexpr double kAngleMappingRampMs= 250.0;
+
 private:
 	void resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton, const AvatarRetargetConfig& config,
 					 AvatarPose& outPose);
+
+	// Advances one arm's angle mapping state over a carried arm and returns
+	// the IK weight the arm is solved at: the chain's weight while the arm is
+	// angle mapped, moving to 1 while it cannot be. outUpper and outForearm
+	// receive the directions the angle mapping takes, world, unit, valid
+	// whenever the returned weight is below 1.
+	float advanceAngleMapping(int sideIndex, const SourcePose::Arm& arm, const glm::quat& rootRotation, double stepMs,
+							  float ikWeight, glm::vec3& outUpper, glm::vec3& outForearm);
 
 	// The source clock, owned by fillSource
 	uint32_t m_resetEpoch= 0;
@@ -221,6 +249,21 @@ private:
 		double stepMs= 0.0;
 	};
 	RootState m_root;
+
+	// Per arm, what its angle mapping last had: the source's directions in
+	// the rooted frame, so held ones turn with the root, and how far the arm
+	// is angle mapped, 1 with a measured shoulder and elbow and easing to 0
+	// without. Belongs to the root follow's epoch.
+	struct AngleMappingState
+	{
+		bool bValid= false;
+		bool bHasDirections= false;
+		glm::vec3 upperRooted{0.f};
+		glm::vec3 forearmRooted{0.f};
+		float availability= 0.f;
+		double stepMs= 0.0;
+	};
+	std::array<AngleMappingState, 2> m_angleMapping{};
 };
 
 // One humanoid bone's posed world transform

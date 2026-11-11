@@ -27,42 +27,6 @@ struct RootedRest
 	glm::vec3 offset(B bone) const { return rotation * skeleton->getBone(bone).restOffsetFromParentWorld; }
 	glm::vec3 direction(B bone) const { return safeNormalize(offset(bone)); }
 };
-
-// Elbow on the circle where the upper-arm sphere about the shoulder meets
-// the forearm sphere about the wrist, at the point nearest the pole. A wrist
-// beyond reach straightens the arm; the caller clamps reach beforehand.
-glm::vec3 solveElbow(const glm::vec3& shoulder, const glm::vec3& wrist, float upperArm, float forearm,
-					 const glm::vec3& polePoint, const glm::vec3& fallbackPoleDirection, const glm::vec3& restDirection)
-{
-	const glm::vec3 toWrist= wrist - shoulder;
-	const float reach= glm::length(toWrist);
-	const glm::vec3 axis= reach > 1e-6f ? toWrist / reach : restDirection;
-
-	// At (or within rounding of) full reach the arm is straight; the bend
-	// direction is meaningless there and would only jitter
-	if (reach >= (upperArm + forearm) * (1.f - 1e-5f))
-		return shoulder + axis * upperArm;
-
-	// Law of cosines: distance along the axis from the shoulder to the
-	// elbow circle's center, then the circle's radius
-	float along= (upperArm * upperArm - forearm * forearm + reach * reach) / std::max(2.f * reach, 1e-6f);
-	along= std::clamp(along, -upperArm, upperArm);
-	const float radius= std::sqrt(std::max(upperArm * upperArm - along * along, 0.f));
-	const glm::vec3 center= shoulder + axis * along;
-
-	glm::vec3 bend= projectPerpendicular(polePoint - center, axis);
-	if (glm::dot(bend, bend) < 1e-8f)
-		bend= projectPerpendicular(fallbackPoleDirection, axis);
-	if (glm::dot(bend, bend) < 1e-8f)
-	{
-		// The pole sits on the arm axis: any perpendicular will do, chosen
-		// deterministically
-		bend= glm::cross(axis, glm::vec3(0.f, 0.f, 1.f));
-		if (glm::dot(bend, bend) < 1e-8f)
-			bend= glm::cross(axis, glm::vec3(1.f, 0.f, 0.f));
-	}
-	return center + safeNormalize(bend) * radius;
-}
 } // namespace
 
 void AvatarPose::clear()
@@ -94,6 +58,7 @@ float reachFactor(float reachScale, float armLengthRatio)
 void AvatarRetarget::reset()
 {
 	m_root= RootState();
+	m_angleMapping= {};
 	m_resetEpoch++;
 	m_bHasFillTime= false;
 	m_lastFillStepMs= 0.0;
@@ -273,6 +238,57 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 	}
 }
 
+float AvatarRetarget::advanceAngleMapping(int sideIndex, const SourcePose::Arm& arm, const glm::quat& rootRotation,
+										  double stepMs, float ikWeight, glm::vec3& outUpper, glm::vec3& outForearm)
+{
+	AngleMappingState& state= m_angleMapping[sideIndex];
+
+	// The source's bones: shoulder to elbow and elbow to wrist, which need
+	// both joints measured
+	glm::vec3 upper(0.f);
+	glm::vec3 forearm(0.f);
+	if (arm.bHasShoulder && arm.bHasElbow)
+	{
+		upper= safeNormalize(arm.elbowPosition - arm.shoulderPosition);
+		forearm= safeNormalize(arm.wristPosition - arm.elbowPosition);
+	}
+	const bool bMappable= glm::dot(upper, upper) > 0.f && glm::dot(forearm, forearm) > 0.f;
+	if (bMappable)
+	{
+		const glm::quat inverseRoot= glm::inverse(rootRotation);
+		state.upperRooted= inverseRoot * upper;
+		state.forearmRooted= inverseRoot * forearm;
+		state.bHasDirections= true;
+	}
+
+	// The share of the angle mapping steps toward 1 while the arm can be
+	// mapped and toward 0 while it cannot, on the step clock. The first frame
+	// of an arm takes its end at once, since there is nothing to ease from.
+	if (!state.bValid)
+	{
+		state.availability= bMappable ? 1.f : 0.f;
+	}
+	else
+	{
+		const float step= (float)(std::max(stepMs - state.stepMs, 0.0) / kAngleMappingRampMs);
+		state.availability=
+			bMappable ? std::min(state.availability + step, 1.f) : std::max(state.availability - step, 0.f);
+	}
+	state.bValid= true;
+	state.stepMs= stepMs;
+	if (!(state.availability > 0.f))
+		state.bHasDirections= false;
+
+	if (!(ikWeight < 1.f) || !state.bHasDirections)
+		return 1.f;
+	outUpper= rootRotation * state.upperRooted;
+	outForearm= rootRotation * state.forearmRooted;
+	// The angle mapping's missing share goes to the IK
+	if (!(state.availability < 1.f))
+		return ikWeight;
+	return ikWeight + (1.f - ikWeight) * (1.f - state.availability);
+}
+
 void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skeleton,
 						   const AvatarRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
 						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
@@ -285,6 +301,7 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 	if (source.clock.resetEpoch != m_solveEpoch)
 	{
 		m_root= RootState();
+		m_angleMapping= {};
 		m_solveEpoch= source.clock.resetEpoch;
 	}
 
@@ -323,7 +340,11 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 		const SourcePose::Arm& arm= source.arms[sideIndex];
 		const SourcePose::Hand& sourceHand= source.hands[sideIndex];
 		if (arm.state == eGroupState::Lost)
+		{
+			// An arm that returns has nothing to ease from
+			m_angleMapping[sideIndex]= AngleMappingState();
 			continue;
+		}
 		const eHandSide side= (eHandSide)sideIndex;
 		const AvatarRetargetConfig::Side& sideConfig= config.sides[sideIndex];
 
@@ -371,35 +392,83 @@ void AvatarRetarget::solve(const SourcePose& source, const AvatarSkeleton& skele
 		const float ratio= userReach > 1e-3f ? avatarReach / userReach : 1.f;
 		const float factor= reachFactor(armSettings.reachScale, ratio);
 
-		const glm::vec3 userShoulder= arm.bHasShoulder ? arm.shoulderPosition : avatarShoulder;
-		const glm::vec3 userWrist= arm.wristPosition;
-		glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * factor;
-		// Skipped when zero, so a zero offset leaves every bit of the goal
-		if (armSettings.goalOffset != glm::vec3(0.f))
-			wrist+= rest.rotation * armSettings.goalOffset;
+		// The IK weight the arm is solved at, and the source's bone directions
+		// when it starts from the angle mapping
+		glm::vec3 angleUpper(0.f);
+		glm::vec3 angleForearm(0.f);
+		const float ikWeight= advanceAngleMapping(sideIndex, arm, rest.rotation, source.clock.stepMs,
+												  armSettings.ikWeight, angleUpper, angleForearm);
 		if (outGoals != nullptr)
 		{
-			outGoals->bHasWristGoal[sideIndex]= true;
-			outGoals->wristGoalWorld[sideIndex]= wrist;
+			outGoals->bPosed[sideIndex]= true;
+			outGoals->ikWeight[sideIndex]= ikWeight;
 		}
-		const glm::vec3 toWrist= wrist - avatarShoulder;
-		const float reach= glm::length(toWrist);
-		if (reach > avatarReach && reach > 1e-6f)
-			wrist= avatarShoulder + toWrist * (avatarReach / reach);
 
-		// Elbow: the measured elbow, scaled by the wrist's factor, hints which
-		// way the arm bends, giving way to the rig's hint point (in the rooted
-		// torso frame, so it turns with the body) by the arm's elbow weight
+		// The goal (written to the diagnostic before the clamp to the avatar's
+		// reach, then clamped) and the IK's pole
+		const glm::vec3 userShoulder= arm.bHasShoulder ? arm.shoulderPosition : avatarShoulder;
 		const glm::vec3 hintOffset= rest.rotation * sideConfig.elbowHintOffset;
-		glm::vec3 polePoint= avatarShoulder + hintOffset;
-		if (arm.bHasElbow)
+		auto aimIk= [&](glm::vec3& outGoal, glm::vec3& outPolePoint) {
+			const glm::vec3 userWrist= arm.wristPosition;
+			glm::vec3 wrist= avatarShoulder + (userWrist - userShoulder) * factor;
+			// Skipped when zero, so a zero offset leaves every bit of the goal
+			if (armSettings.goalOffset != glm::vec3(0.f))
+				wrist+= rest.rotation * armSettings.goalOffset;
+			if (outGoals != nullptr)
+			{
+				outGoals->bHasWristGoal[sideIndex]= true;
+				outGoals->wristGoalWorld[sideIndex]= wrist;
+			}
+			const glm::vec3 toWrist= wrist - avatarShoulder;
+			const float reach= glm::length(toWrist);
+			if (reach > avatarReach && reach > 1e-6f)
+				wrist= avatarShoulder + toWrist * (avatarReach / reach);
+			outGoal= wrist;
+
+			// Elbow: the measured elbow, scaled by the wrist's factor, hints
+			// which way the arm bends, giving way to the rig's hint point (in
+			// the rooted torso frame, so it turns with the body) by the arm's
+			// elbow weight
+			glm::vec3 polePoint= avatarShoulder + hintOffset;
+			if (arm.bHasElbow)
+			{
+				const glm::vec3 userElbow= arm.elbowPosition;
+				const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * factor;
+				polePoint+= (measuredPole - polePoint) * armSettings.elbowWeight;
+			}
+			outPolePoint= polePoint;
+		};
+
+		glm::vec3 wrist;
+		glm::vec3 elbow;
+		if (ikWeight == 1.f)
 		{
-			const glm::vec3 userElbow= arm.elbowPosition;
-			const glm::vec3 measuredPole= avatarShoulder + (userElbow - userShoulder) * factor;
-			polePoint+= (measuredPole - polePoint) * armSettings.elbowWeight;
+			// The IK alone
+			glm::vec3 polePoint;
+			aimIk(wrist, polePoint);
+			elbow= solveTwoBoneElbow(avatarShoulder, wrist, upperArm, forearm, polePoint, safeNormalize(hintOffset),
+									 rest.direction(lowerArmBone));
 		}
-		const glm::vec3 elbow= solveElbow(avatarShoulder, wrist, upperArm, forearm, polePoint, safeNormalize(hintOffset),
-										  rest.direction(lowerArmBone));
+		else
+		{
+			// The angle mapping: the avatar's own bones along the source's,
+			// its wrist where its lengths put it
+			const glm::vec3 angleElbow= avatarShoulder + angleUpper * upperArm;
+			const glm::vec3 angleWrist= angleElbow + angleForearm * forearm;
+			if (ikWeight == 0.f)
+			{
+				elbow= angleElbow;
+				wrist= angleWrist;
+			}
+			else
+			{
+				glm::vec3 goal;
+				glm::vec3 polePoint;
+				aimIk(goal, polePoint);
+				pullArmTowardGoal(avatarShoulder, angleElbow, angleWrist, goal, polePoint, ikWeight, upperArm, forearm,
+								  safeNormalize(hintOffset), rest.direction(lowerArmBone), elbow, wrist);
+			}
+		}
 
 		// Upper arm: direction only
 		const glm::vec3 upperDirection= safeNormalize(elbow - avatarShoulder);

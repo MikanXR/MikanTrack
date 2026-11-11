@@ -447,6 +447,9 @@ RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const Avata
 		stage.arms[sideIndex].elbowWeight= arm.elbowWeight;
 		stage.arms[sideIndex].reachScale= arm.reachScale;
 		stage.arms[sideIndex].goalOffset= arm.goalOffset;
+		// As stored, in either pipeline
+		stage.arms[sideIndex].mapping= arm.mapping;
+		stage.arms[sideIndex].ikWeight= arm.ikWeight;
 	}
 	return stage;
 }

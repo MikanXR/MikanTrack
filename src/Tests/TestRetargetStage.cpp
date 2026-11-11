@@ -21,7 +21,9 @@
 // elbow weight evaluated over the source pose's inputs, the reach scale and
 // the goal offset placing the wrist goal, and the loss policies: a position
 // arm's ease to rest, the position head's freeze, ease and timed hold, and
-// the direct pipeline's freeze, release and ease after the solver's hold.
+// the direct pipeline's freeze, release and ease after the solver's hold,
+// and the arm's mapping and IK weight from bone angles to the IK in both
+// pipelines.
 
 namespace
 {
@@ -530,6 +532,15 @@ static int runRetargetStageTest(const TestArgs&)
 	directConfig.direct.userUpperArmLengthMeters= kUpperArmLength;
 	directConfig.direct.userForearmLengthMeters= kForearmLength;
 	directConfig.directLoss= makeDirectLossPolicy(directConfig.direct.restBlendMs);
+	// A direct project's arms: bone angles
+	{
+		const RetargetChains directChains= makeDefaultRetargetChains(true);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			directConfig.arms[sideIndex].mapping= directChains.arms[sideIndex].mapping;
+			directConfig.arms[sideIndex].ikWeight= directChains.arms[sideIndex].ikWeight;
+		}
+	}
 
 	// (c) The display stage beside the stream stage: the stream's stage runs
 	// every output frame (camera and face-only) and feeds the streamer only
@@ -1086,7 +1097,7 @@ static int runRetargetStageTest(const TestArgs&)
 		}
 		check(bFallback, "(g) a reach scale text that does not compile falls back on the plain value");
 
-		// The direct pipeline reads neither setting
+		// A direct arm by bone angles reads neither setting
 		RetargetStageConfig directSettings= directConfig;
 		directSettings.arms[0].reachScale= ExprParameter{0.f};
 		directSettings.arms[0].goalOffset= goalOffset;
@@ -1104,9 +1115,9 @@ static int runRetargetStageTest(const TestArgs&)
 			directDefault.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, a);
 			directEdited.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, b);
 			bDirectSame&= a.pose.valid && samePoseBits(a.pose, b.pose) && !a.goals.bHasWristGoal[0] &&
-				!a.armParameters[0].reachScale.bEvaluated;
+				a.armParameters[0].bPosed && a.armParameters[0].effectiveIkWeight == 0.f;
 		}
-		check(bDirectSame, "(g) the direct pipeline reads neither the reach scale nor the goal offset");
+		check(bDirectSame, "(g) a direct arm by bone angles reads neither the reach scale nor the goal offset");
 	}
 
 	// (h) A position arm that eases to rest. Both hands are lost from frame
@@ -1633,6 +1644,453 @@ static int runRetargetStageTest(const TestArgs&)
 		}
 	}
 
+	// (k) The arm's mapping and IK weight in both pipelines, on the left arm.
+	// Each pipeline's default end is its old solve bit for bit, written as a
+	// value or as a function; the other end does what it says (a position arm
+	// at 0 takes the source's bone directions, a direct arm at 1 puts its
+	// wrist on the goal or as near as its reach allows); weights just inside
+	// either end pose within a small bound of that end; at 0.5 the wrist is
+	// midway; the wrist nears the goal as the weight rises; a position arm
+	// without a measured elbow or shoulder takes the IK, and an elbow that
+	// drops out for a frame moves the arm by the ramp's share; a function of
+	// a source input drives the weight; and the goal is shown above 0 only.
+	{
+		constexpr int kArmFrames= 30;
+		const B upperArmBone= B::LeftUpperArm;
+		const B lowerArmBone= B::LeftLowerArm;
+		const B handBone= B::LeftHand;
+		const std::vector<B> leftArmBones= makeArmBones(0);
+		const float upperArm= skeleton->getUpperArmLength(eHandSide::Left);
+		const float avatarReach= upperArm + skeleton->getForearmLength(eHandSide::Left);
+		struct Joints
+		{
+			glm::vec3 shoulder;
+			glm::vec3 elbow;
+			glm::vec3 wrist;
+		};
+		auto joints= [&](const AvatarPose& pose) {
+			std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
+			computePosedBones(*skeleton, pose, posed);
+			return Joints{posed[(int)upperArmBone].positionWorld, posed[(int)lowerArmBone].positionWorld,
+						  posed[(int)handBone].positionWorld};
+		};
+		auto clampToReach= [&](const glm::vec3& shoulder, const glm::vec3& goal) {
+			const glm::vec3 offset= goal - shoulder;
+			const float length= glm::length(offset);
+			return length > avatarReach ? shoulder + offset * (avatarReach / length) : goal;
+		};
+		auto withIk= [](const RetargetArmSettings& base, eArmMapping mapping, const ExprParameter& weight) {
+			RetargetArmSettings settings= base;
+			settings.mapping= mapping;
+			settings.ikWeight= weight;
+			return settings;
+		};
+		auto angleBetween= [](const glm::vec3& a, const glm::vec3& b) {
+			return acosf(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.f, 1.f));
+		};
+		using FrameEdit= std::function<void(int, TrackingFrameResult&)>;
+		using Results= std::vector<RetargetResult>;
+		auto runPosition= [&](const RetargetArmSettings& left, const FrameEdit& edit) {
+			RetargetStageConfig config= positionConfig;
+			config.arms[0]= left;
+			RetargetStage stage;
+			stage.setConfig(config);
+			Results results;
+			for (int index= 0; index < kArmFrames; ++index)
+			{
+				TrackingFrameResult frame= makePositionFrame(*skeleton, index, 1000, 1000);
+				if (edit)
+					edit(index, frame);
+				RetargetResult result;
+				stage.solvePosition(frame, result);
+				results.push_back(result);
+			}
+			return results;
+		};
+		// The synthetic user has the avatar's proportions, which the direct
+		// solve's source keeps, so its bone angles already reach the goal. A
+		// user with a longer upper arm and a shorter forearm, in the solve's
+		// lengths, sets the two ends apart and the arm ratio off 1.
+		RetargetStageConfig directArmConfig= directConfig;
+		directArmConfig.direct.userUpperArmLengthMeters*= 1.25f;
+		directArmConfig.direct.userForearmLengthMeters*= 0.85f;
+		auto runDirectArm= [&](const RetargetArmSettings& left) {
+			RetargetStageConfig config= directArmConfig;
+			config.arms[0]= left;
+			RetargetStage stage;
+			stage.setConfig(config);
+			Results results;
+			const TrackingFrameResult::HeadPose noPhone;
+			for (int index= 0; index < kArmFrames; ++index)
+			{
+				const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
+				RetargetResult result;
+				stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, result);
+				results.push_back(result);
+			}
+			return results;
+		};
+		auto sameRuns= [&](const Results& a, const Results& b) {
+			bool bSame= a.size() == b.size();
+			for (size_t index= 0; bSame && index < a.size(); ++index)
+			{
+				bSame&= samePoseBits(a[index].pose, b[index].pose) &&
+					a[index].goals.bHasWristGoal[0] == b[index].goals.bHasWristGoal[0] &&
+					std::memcmp(&a[index].goals.wristGoalWorld[0], &b[index].goals.wristGoalWorld[0],
+								sizeof(glm::vec3)) == 0;
+			}
+			return bSame;
+		};
+		// A frame whose left arm the solve posed with a chain
+		auto armPosed= [](const RetargetResult& result) {
+			const SourcePose::Arm& arm= result.source.arms[0];
+			return result.armParameters[0].bPosed && arm.bHasShoulder && arm.bHasElbow;
+		};
+		// Over the frames both runs posed: the largest move of the elbow and
+		// the wrist, and the largest turn of an arm bone, from one to the other
+		struct Gap
+		{
+			float position= 0.f;
+			float turn= 0.f;
+			int frames= 0;
+		};
+		auto gapBetween= [&](const Results& a, const Results& b) {
+			Gap gap;
+			for (size_t index= 0; index < a.size(); ++index)
+			{
+				if (!armPosed(a[index]) || !armPosed(b[index]))
+					continue;
+				const Joints x= joints(a[index].pose);
+				const Joints y= joints(b[index].pose);
+				gap.position= std::max(gap.position, glm::length(x.elbow - y.elbow));
+				gap.position= std::max(gap.position, glm::length(x.wrist - y.wrist));
+				gap.turn= std::max(gap.turn, largestTurn(a[index].pose, b[index].pose, leftArmBones));
+				gap.frames++;
+			}
+			return gap;
+		};
+		// The wrist at 0.5 against the midpoint of the two ends' wrists, and
+		// over a sweep whether the wrist's distance to the goal falls as the
+		// weight rises
+		auto midpointError= [&](const Results& angle, const Results& half, const Results& ik) {
+			float error= 0.f;
+			for (size_t index= 0; index < half.size(); ++index)
+			{
+				if (!armPosed(half[index]))
+					continue;
+				const glm::vec3 midpoint= 0.5f * (joints(angle[index].pose).wrist + joints(ik[index].pose).wrist);
+				error= std::max(error, glm::length(joints(half[index].pose).wrist - midpoint));
+			}
+			return error;
+		};
+		auto sweepFalls= [&](const std::function<Results(float)>& run, float& outEndDistance) {
+			std::vector<Results> runs;
+			for (int step= 0; step <= 10; ++step)
+				runs.push_back(run(0.1f * (float)step));
+			bool bFalls= true;
+			outEndDistance= 0.f;
+			for (int index= 0; index < kArmFrames; ++index)
+			{
+				if (!armPosed(runs[10][index]))
+					continue;
+				const glm::vec3 goal= clampToReach(joints(runs[10][index].pose).shoulder,
+												   runs[10][index].goals.wristGoalWorld[0]);
+				float last= 1e9f;
+				for (const Results& results : runs)
+				{
+					const float distance= glm::length(joints(results[index].pose).wrist - goal);
+					bFalls&= distance <= last + 1e-6f;
+					last= distance;
+				}
+				outEndDistance= std::max(outEndDistance, last);
+			}
+			return bFalls;
+		};
+		auto goalShownAbove= [](const Results& results, bool bExpected) {
+			bool bAll= true;
+			for (const RetargetResult& result : results)
+			{
+				if (result.armParameters[0].bPosed)
+					bAll&= result.goals.bHasWristGoal[0] == bExpected;
+			}
+			return bAll;
+		};
+
+		// -- The position pipeline --
+		const RetargetArmSettings positionDefaults= positionConfig.arms[0];
+		auto positionAt= [&](float weight) {
+			return runPosition(withIk(positionDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{weight}), nullptr);
+		};
+		const Results ikRun= runPosition(positionDefaults, nullptr);
+		const Results ikFunctionRun= runPosition(
+			withIk(positionDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{0.3f, "0.5 + 0.5", true}), nullptr);
+		bool bIkReadout= true;
+		for (const RetargetResult& result : ikFunctionRun)
+		{
+			const RetargetArmReadout& readout= result.armParameters[0];
+			bIkReadout&= readout.bPosed && readout.effectiveIkWeight == 1.f && readout.ikWeight.bExpression &&
+				readout.ikWeight.bCompiled && readout.ikWeight.value == 1.f && result.goals.bHasWristGoal[0];
+		}
+		check(positionDefaults.mapping == eArmMapping::BoneAnglesThenIk && positionDefaults.ikWeight.value == 1.f &&
+				  !positionDefaults.ikWeight.bUseExpression && sameRuns(ikRun, ikFunctionRun) && bIkReadout,
+			  "(k) position: IK at 1, as a value or a function evaluating to 1, poses as the IK did, bit for bit");
+
+		// At 0: the avatar's upper arm and forearm along the source's
+		auto positionMapped= [&](eArmMapping mapping, const ExprParameter& weight, const FrameEdit& edit) {
+			return runPosition(withIk(positionDefaults, mapping, weight), edit);
+		};
+		const Results angleRun= positionMapped(eArmMapping::BoneAngles, ExprParameter{1.f}, nullptr);
+		const Results zeroWeightRun= positionAt(0.f);
+		float upperError= 0.f;
+		float forearmError= 0.f;
+		float lengthError= 0.f;
+		bool bAngleReadout= true;
+		for (const RetargetResult& result : angleRun)
+		{
+			const SourcePose::Arm& arm= result.source.arms[0];
+			const Joints posed= joints(result.pose);
+			upperError=
+				std::max(upperError, angleBetween(posed.elbow - posed.shoulder, arm.elbowPosition - arm.shoulderPosition));
+			forearmError=
+				std::max(forearmError, angleBetween(posed.wrist - posed.elbow, arm.wristPosition - arm.elbowPosition));
+			lengthError= std::max(lengthError, std::fabs(glm::length(posed.elbow - posed.shoulder) - upperArm));
+			bAngleReadout&= result.armParameters[0].bPosed && result.armParameters[0].effectiveIkWeight == 0.f;
+		}
+		MIKAN_LOG_INFO(kTag) << "  (k) position at 0: upper arm off the source's by " << glm::degrees(upperError)
+							 << " deg, forearm by " << glm::degrees(forearmError) << " deg, upper arm length off by "
+							 << lengthError << " m, over " << angleRun.size() << " frames";
+		check(upperError < 1e-3f && forearmError < 1e-3f && lengthError < 1e-5f && bAngleReadout &&
+				  sameRuns(angleRun, zeroWeightRun) && goalShownAbove(angleRun, false),
+			  "(k) position: bone angles (or IK at 0) put the avatar's upper arm and forearm along the source's, "
+			  "within a milliradian, with no goal shown");
+
+		// Just inside each end, and midway
+		const Gap positionNearAngle= gapBetween(positionAt(0.001f), angleRun);
+		const Gap positionNearIk= gapBetween(positionAt(0.999f), ikRun);
+		const Results positionHalf= positionAt(0.5f);
+		const float positionMidError= midpointError(angleRun, positionHalf, ikRun);
+		const Gap positionEnds= gapBetween(angleRun, ikRun);
+		MIKAN_LOG_INFO(kTag) << "  (k) position: 0.001 from bone angles " << positionNearAngle.position * 1000.f
+							 << " mm, " << glm::degrees(positionNearAngle.turn) << " deg; 0.999 from the IK "
+							 << positionNearIk.position * 1000.f << " mm, " << glm::degrees(positionNearIk.turn)
+							 << " deg; the two ends " << positionEnds.position * 1000.f << " mm, "
+							 << glm::degrees(positionEnds.turn) << " deg apart; wrist at 0.5 from the midpoint "
+							 << positionMidError * 1000.f << " mm";
+		check(positionNearAngle.frames == kArmFrames && positionNearIk.frames == kArmFrames &&
+				  positionNearAngle.position < 1e-3f && positionNearAngle.turn < glm::radians(0.2f) &&
+				  positionNearIk.position < 1e-3f && positionNearIk.turn < glm::radians(0.2f) &&
+				  positionEnds.position > 0.01f && positionMidError < 1e-4f && goalShownAbove(positionHalf, true) &&
+				  sameRuns(ikRun, positionHalf) == false,
+			  "(k) position: weights of 0.001 and 0.999 pose within 1 mm and 0.2 deg of their ends, and the wrist "
+			  "at 0.5 is midway between the ends' wrists with the goal shown");
+		float positionEndDistance= 0.f;
+		const bool bPositionFalls= sweepFalls(positionAt, positionEndDistance);
+		check(bPositionFalls && positionEndDistance < 1e-4f,
+			  "(k) position: over weights 0 to 1 in tenths the wrist's distance to the goal falls, to the goal at 1");
+
+		// Without a measured elbow or shoulder the arm cannot be angle
+		// mapped and takes the IK, bit for bit
+		const FrameEdit noElbow= [](int, TrackingFrameResult& frame) { frame.poses[0].hasForearmPose= false; };
+		const FrameEdit noShoulder= [](int, TrackingFrameResult& frame) { frame.poses[0].hasShoulder= false; };
+		bool bFallbackReadout= true;
+		const Results noElbowAngle= positionMapped(eArmMapping::BoneAngles, ExprParameter{0.f}, noElbow);
+		for (const RetargetResult& result : noElbowAngle)
+			bFallbackReadout&= result.armParameters[0].effectiveIkWeight == 1.f && result.goals.bHasWristGoal[0];
+		check(sameRuns(noElbowAngle, runPosition(positionDefaults, noElbow)) &&
+				  sameRuns(positionMapped(eArmMapping::BoneAngles, ExprParameter{0.f}, noShoulder),
+						   runPosition(positionDefaults, noShoulder)) &&
+				  bFallbackReadout,
+			  "(k) position: an arm with no measured elbow, or no measured shoulder, takes the IK at 1 bit for bit");
+
+		// An elbow that drops out for single frames: on each such frame the
+		// arm moves toward the IK by the ramp's share of the gap between the
+		// two, plus the frame's own motion, where an unramped switch would
+		// take the whole gap
+		const FrameEdit flicker= [](int index, TrackingFrameResult& frame) {
+			if (index % 7 == 3)
+				frame.poses[0].hasForearmPose= false;
+		};
+		const Results flickerAngle= positionMapped(eArmMapping::BoneAngles, ExprParameter{0.f}, flicker);
+		const Results flickerIk= runPosition(positionDefaults, flicker);
+		const float rampShare= (float)(kFrameMs / AvatarRetarget::kAngleMappingRampMs);
+		bool bFlickerBounded= true;
+		float largestWristMove= 0.f;
+		float largestElbowMove= 0.f;
+		float largestWristGap= 0.f;
+		float largestElbowGap= 0.f;
+		int flickerFrames= 0;
+		for (int index= 1; index < kArmFrames; ++index)
+		{
+			const Joints flickered= joints(flickerAngle[index].pose);
+			const Joints steady= joints(angleRun[index].pose);
+			const Joints ik= joints(flickerIk[index].pose);
+			const float wristMove= glm::length(flickered.wrist - steady.wrist);
+			const float elbowMove= glm::length(flickered.elbow - steady.elbow);
+			const float wristGap= glm::length(ik.wrist - steady.wrist);
+			const float motion= glm::length(steady.wrist - joints(angleRun[index - 1].pose).wrist);
+			largestWristMove= std::max(largestWristMove, wristMove);
+			largestElbowMove= std::max(largestElbowMove, elbowMove);
+			if (index % 7 == 3)
+			{
+				flickerFrames++;
+				largestWristGap= std::max(largestWristGap, wristGap);
+				largestElbowGap= std::max(largestElbowGap, glm::length(ik.elbow - steady.elbow));
+				bFlickerBounded&= wristMove <= rampShare * wristGap + motion + 1e-4f &&
+					std::fabs(flickerAngle[index].armParameters[0].effectiveIkWeight - rampShare) < 1e-3f;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (k) position elbow flicker on " << flickerFrames << " frames: the wrist moved at most "
+							 << largestWristMove * 1000.f << " mm and the elbow " << largestElbowMove * 1000.f
+							 << " mm from the steady arm, where the IK sits up to " << largestWristGap * 1000.f
+							 << " mm (wrist) and " << largestElbowGap * 1000.f << " mm (elbow) away; ramp share "
+							 << rampShare;
+		check(flickerFrames > 2 && bFlickerBounded && largestWristMove < 0.25f * largestWristGap &&
+				  largestElbowMove < 0.25f * largestElbowGap,
+			  "(k) position: an elbow that drops out for a frame moves the arm by at most the ramp's share toward "
+			  "the IK, under a quarter of the gap an unramped switch would snap across");
+
+		// A function of a source input: the weight follows the forearm's
+		// confidence and the wrist sits that far from the angle-mapped one
+		const Results inputRun= positionMapped(eArmMapping::BoneAnglesThenIk,
+											   ExprParameter{0.f, "source.leftLowerArm.confidence", true}, nullptr);
+		bool bInputFollows= true;
+		float inputError= 0.f;
+		for (int index= 0; index < kArmFrames; ++index)
+		{
+			const RetargetResult& result= inputRun[index];
+			const float confidence= result.source.arms[0].forearmConfidence.value;
+			const RetargetArmReadout& readout= result.armParameters[0];
+			bInputFollows&= readout.ikWeight.value == confidence && readout.effectiveIkWeight == confidence;
+			const glm::vec3 angleWrist= joints(angleRun[index].pose).wrist;
+			const glm::vec3 expected= angleWrist + (joints(ikRun[index].pose).wrist - angleWrist) * confidence;
+			inputError= std::max(inputError, glm::length(joints(result.pose).wrist - expected));
+		}
+		check(bInputFollows && inputError < 1e-4f &&
+				  inputRun[0].armParameters[0].effectiveIkWeight !=
+					  inputRun[kArmFrames - 1].armParameters[0].effectiveIkWeight,
+			  "(k) position: an IK weight written as a function of a source input follows the input");
+
+		// -- The direct pipeline --
+		const RetargetArmSettings directDefaults= directConfig.arms[0];
+		auto directAt= [&](float weight) {
+			return runDirectArm(withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{weight}));
+		};
+		const Results boneAnglesRun= runDirectArm(directDefaults);
+		bool bPlacedAsBefore= true;
+		int directPosedFrames= 0;
+		for (const RetargetResult& result : boneAnglesRun)
+		{
+			// The bone-angle placement on its own over the same source
+			DirectRetarget placement;
+			AvatarPose placed;
+			placement.place(result.source, *skeleton, directArmConfig.direct, placed);
+			bPlacedAsBefore&= samePoseBits(result.pose, placed) && !result.goals.bHasWristGoal[0];
+			directPosedFrames+= armPosed(result) ? 1 : 0;
+		}
+		check(directDefaults.mapping == eArmMapping::BoneAngles && directDefaults.ikWeight.value == 0.f &&
+				  directPosedFrames > kArmFrames / 2 && bPlacedAsBefore &&
+				  sameRuns(boneAnglesRun,
+						   runDirectArm(withIk(directDefaults, eArmMapping::BoneAnglesThenIk,
+											   ExprParameter{0.7f, "0.5 - 0.5", true}))) &&
+				  sameRuns(boneAnglesRun,
+						   runDirectArm(withIk(directDefaults, eArmMapping::BoneAngles, ExprParameter{1.f}))),
+			  "(k) direct: bone angles, or IK at a function evaluating to 0, place the arm as the bone angles did, "
+			  "bit for bit, with no goal shown");
+
+		// At 1: the goal is the avatar's shoulder plus the chain's offset
+		// scaled by the arm ratio, and the wrist reaches it, bending toward
+		// the chain's elbow
+		const Results directIk= directAt(1.f);
+		float directGoalError= 0.f;
+		float directWristError= 0.f;
+		float directLargestReach= 0.f;
+		float directRatio= 0.f;
+		bool bBendsTowardElbow= true;
+		for (const RetargetResult& result : directIk)
+		{
+			if (!armPosed(result))
+				continue;
+			const SourcePose::Arm& arm= result.source.arms[0];
+			const Joints posed= joints(result.pose);
+			directRatio= avatarReach / (result.source.upperArmLength + result.source.forearmLength);
+			const glm::vec3 expected= posed.shoulder + (arm.wristPosition - arm.shoulderPosition) * directRatio;
+			directGoalError= std::max(directGoalError, glm::length(result.goals.wristGoalWorld[0] - expected));
+			directWristError= std::max(directWristError, glm::length(posed.wrist - result.goals.wristGoalWorld[0]));
+			directLargestReach= std::max(directLargestReach, glm::length(expected - posed.shoulder) / avatarReach);
+			const glm::vec3 axis= glm::normalize(posed.wrist - posed.shoulder);
+			const glm::vec3 bend= posed.elbow - posed.shoulder;
+			const glm::vec3 sourceBend= arm.elbowPosition - arm.shoulderPosition;
+			const glm::vec3 bendAcross= bend - axis * glm::dot(bend, axis);
+			bBendsTowardElbow&= glm::dot(bendAcross, sourceBend - axis * glm::dot(sourceBend, axis)) > 0.f;
+		}
+		MIKAN_LOG_INFO(kTag) << "  (k) direct at 1: arm ratio " << directRatio << ", goal off the expected by "
+							 << directGoalError << " m, posed wrist from the goal " << directWristError
+							 << " m, longest goal " << directLargestReach << " of the avatar's reach";
+		check(std::fabs(directRatio - 1.f) > 0.01f && directGoalError < 1e-5f && directWristError < 1e-4f &&
+				  directLargestReach < 0.99f && bBendsTowardElbow && goalShownAbove(directIk, true),
+			  "(k) direct: IK at 1 puts the wrist on the goal, the avatar's shoulder plus the chain's offset scaled "
+			  "by the arm ratio, bending toward the chain's elbow");
+
+		// Beyond the reach, pushed out by a goal offset: clamped to it
+		RetargetArmSettings farSettings= withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
+		farSettings.goalOffset= glm::vec3(avatarReach * 1.5f, 0.f, 0.f);
+		const Results directFar= runDirectArm(farSettings);
+		float directClampError= 0.f;
+		float directShortestReach= 1e9f;
+		for (const RetargetResult& result : directFar)
+		{
+			if (!armPosed(result))
+				continue;
+			const Joints posed= joints(result.pose);
+			const glm::vec3 goal= result.goals.wristGoalWorld[0];
+			directClampError= std::max(directClampError, glm::length(posed.wrist - clampToReach(posed.shoulder, goal)));
+			directShortestReach= std::min(directShortestReach, glm::length(goal - posed.shoulder));
+		}
+		MIKAN_LOG_INFO(kTag) << "  (k) direct at 1 beyond reach: shortest goal reach " << directShortestReach
+							 << " m, posed wrist from the clamped goal " << directClampError << " m";
+		check(directShortestReach > avatarReach * 1.05f && directClampError < 1e-4f,
+			  "(k) direct: a goal beyond the avatar's reach is clamped to it");
+
+		// The reach scale at 0 keeps the chain's offset as it is
+		RetargetArmSettings unscaledSettings= withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
+		unscaledSettings.reachScale= ExprParameter{0.f};
+		float unscaledError= 0.f;
+		int unscaledFrames= 0;
+		for (const RetargetResult& result : runDirectArm(unscaledSettings))
+		{
+			if (!armPosed(result))
+				continue;
+			const SourcePose::Arm& arm= result.source.arms[0];
+			const glm::vec3 expected= joints(result.pose).shoulder + (arm.wristPosition - arm.shoulderPosition);
+			unscaledError= std::max(unscaledError, glm::length(result.goals.wristGoalWorld[0] - expected));
+			unscaledFrames++;
+		}
+		check(unscaledFrames == directPosedFrames && unscaledError < 1e-5f,
+			  "(k) direct: at a reach scale of 0 the goal is the avatar's shoulder plus the chain's offset unscaled");
+
+		const Gap directNearAngle= gapBetween(directAt(0.001f), boneAnglesRun);
+		const Gap directNearIk= gapBetween(directAt(0.999f), directIk);
+		const Results directHalf= directAt(0.5f);
+		const float directMidError= midpointError(boneAnglesRun, directHalf, directIk);
+		const Gap directEnds= gapBetween(boneAnglesRun, directIk);
+		MIKAN_LOG_INFO(kTag) << "  (k) direct: 0.001 from bone angles " << directNearAngle.position * 1000.f << " mm, "
+							 << glm::degrees(directNearAngle.turn) << " deg; 0.999 from the IK "
+							 << directNearIk.position * 1000.f << " mm, " << glm::degrees(directNearIk.turn)
+							 << " deg; the two ends " << directEnds.position * 1000.f << " mm, "
+							 << glm::degrees(directEnds.turn) << " deg apart; wrist at 0.5 from the midpoint "
+							 << directMidError * 1000.f << " mm";
+		check(directNearAngle.frames == directPosedFrames && directNearIk.frames == directPosedFrames &&
+				  directNearAngle.position < 1e-3f && directNearAngle.turn < glm::radians(0.2f) &&
+				  directNearIk.position < 1e-3f && directNearIk.turn < glm::radians(0.2f) &&
+				  directEnds.position > 0.01f && directMidError < 1e-4f && goalShownAbove(directHalf, true),
+			  "(k) direct: weights of 0.001 and 0.999 pose within 1 mm and 0.2 deg of their ends, and the wrist at "
+			  "0.5 is midway between the ends' wrists with the goal shown");
+		float directEndDistance= 0.f;
+		const bool bDirectFalls= sweepFalls(directAt, directEndDistance);
+		check(bDirectFalls && directEndDistance < 1e-4f,
+			  "(k) direct: over weights 0 to 1 in tenths the wrist's distance to the goal falls, to the goal at 1");
+	}
+
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
 	return failures == 0 ? 0 : 1;
 }
@@ -1640,5 +2098,6 @@ static int runRetargetStageTest(const TestArgs&)
 MIKAN_REGISTER_TEST("--test-retarget-stage",
 					"Retarget stage: the loss stage's hold and freeze, the display stage against the stream stage, "
 					"a scrub's pre-roll against a straight play-through, the elbow weight over the source inputs, "
-					"the reach scale and the goal offset, the loss policies of both pipelines",
+					"the reach scale and the goal offset, the loss policies of both pipelines, the arm's mapping and IK "
+					"weight in both pipelines",
 					eTestCategory::SelfTest, runRetargetStageTest)

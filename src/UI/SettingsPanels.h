@@ -20,6 +20,7 @@ class VideoCaptureSystem;
 class VideoPreviewPanel;
 class Scene3dPanel;
 struct FusionDiagnostics;
+struct RetargetArmReadout;
 struct VisionPreviewFrame;
 
 // Frame-to-frame state for the tracking panel (owned by MainWindow, since the
@@ -150,6 +151,9 @@ struct SourcePoseReadout
 	// Null when the shown frame has none: a replay with no avatar loaded, the
 	// direct Rest preview, or live before the vision thread's first frame
 	const SourcePose* source= nullptr;
+	// What the target solve made of each arm (by eHandSide) on the same frame,
+	// null with the source
+	const std::array<RetargetArmReadout, 2>* armParameters= nullptr;
 };
 
 // What the Tracking panel's sections read and write. latestPreviews: the
@@ -343,8 +347,9 @@ void drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFram
 void drawSourcePoseReadout(const TrackingSectionContext& context);
 // The Retarget stage's diagnostics: one row per chain with its state after
 // the loss stage, from the shown frame's source pose (context.sourcePose),
-// and for the arms the IK weight the target solve runs at, shown only with
-// an avatar (bAvatar). One dim line when the shown frame has no source pose.
+// and for the arms the IK weight the target solve ran each at on that frame,
+// shown only with an avatar (bAvatar). One dim line when the shown frame has
+// no source pose.
 void drawRetargetChainReadout(const TrackingSectionContext& context, bool bAvatar);
 
 // Draws the sections only; updateTrackingState runs the panel's state

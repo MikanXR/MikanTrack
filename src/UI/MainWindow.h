@@ -211,6 +211,10 @@ private:
 	// goal in world space; with three numbers, sets the offset
 	bool handleGoalAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 							  std::string& outError);
+	// pipeline mapping: an arm chain's stored mapping and the IK weight the
+	// shown frame solved the arm at; with a mapping, sets it
+	bool handleMappingAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+								 std::string& outError);
 	// pipeline limit: a joint limit of the rig in degrees; with a value,
 	// sets it through the rig's edit path
 	bool handleLimitAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,

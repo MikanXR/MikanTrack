@@ -144,8 +144,26 @@ public:
 	// there the rotation the source carries. A lost torso leaves the spine
 	// bones out and a lost head the head bone, each then at the avatar's
 	// rest. Writes the solve state's head delta. Holds no state across frames.
+	// Every arm by its bone angles alone.
 	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
 			   AvatarPose& outPose);
+
+	// The same with each arm's IK weight, reach scale and goal offset (by
+	// eHandSide; the elbow weight is not read, the source's elbow is the
+	// pole). An arm at an IK weight of exactly 0 is placed by its bone angles
+	// as above. Above it, the arm's wrist is pulled from where its bone
+	// angles put it toward a goal in the posed avatar's world: the avatar's
+	// shoulder plus the source's shoulder-to-wrist offset (the chain's, or
+	// for a resting arm its directions at the source's bone lengths) scaled
+	// by the reach scale's factor on the avatar-to-source arm length ratio,
+	// plus the goal offset, clamped to the avatar's reach, the arm bending
+	// toward the source's elbow scaled the same way. The forearm's twist, the
+	// wrist and the fingers ride on the posed forearm as the bone angles
+	// place them. outGoals, when given, receives each arm's goal (above
+	// weight 0) and the weight it was solved at.
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+			   const std::array<AvatarRetargetArm, 2>& arms, AvatarPose& outPose,
+			   AvatarRetargetGoals* outGoals= nullptr);
 
 	// The current filtered measurements as a neutral pose. False when no
 	// torso has been solved yet.

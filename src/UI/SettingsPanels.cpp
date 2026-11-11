@@ -2124,27 +2124,29 @@ void SettingsPanels::drawRetargetChainReadout(const TrackingSectionContext& cont
 	ImGui::TableSetupColumn(locText("chains.ikWeightLabel"));
 	ImGui::TableHeadersRow();
 
-	// A chain's row: its state, and the arms' IK weight, which only a solve
-	// onto an avatar uses
-	const float armIkWeight= RetargetStage::getArmIkWeight(source->pipeline);
-	auto drawRow= [&](const char* labelKey, SourcePose::eGroupState state, bool bArm) {
+	// A chain's row: its state, and for an arm the IK weight the solve onto
+	// the avatar ran it at on the shown frame
+	const std::array<RetargetArmReadout, 2>* arms= context.sourcePose->armParameters;
+	auto drawRow= [&](const char* labelKey, SourcePose::eGroupState state, int armIndex) {
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
 		ImGui::TextUnformatted(locText(labelKey));
 		ImGui::TableNextColumn();
 		drawGroupStateText(state);
 		ImGui::TableNextColumn();
-		if (bArm && bAvatar)
-			ImGui::Text("%.2f", armIkWeight);
+		if (armIndex >= 0 && bAvatar && arms != nullptr && (*arms)[armIndex].bPosed)
+			ImGui::Text("%.2f", (*arms)[armIndex].effectiveIkWeight);
 		else
 			ImGui::TextDisabled("-");
+		if (armIndex >= 0)
+			ImGui::SetItemTooltip("%s", locText("chains.effectiveIkWeightTooltip"));
 	};
-	drawRow("sourceStage.torso", source->torso.state, false);
-	drawRow("directStage.head", source->head.state, false);
-	drawRow("avatarPanel.leftArmHeader", source->arms[0].state, true);
-	drawRow("avatarPanel.rightArmHeader", source->arms[1].state, true);
-	drawRow("avatarPanel.leftHandHeader", source->hands[0].state, false);
-	drawRow("avatarPanel.rightHandHeader", source->hands[1].state, false);
+	drawRow("sourceStage.torso", source->torso.state, -1);
+	drawRow("directStage.head", source->head.state, -1);
+	drawRow("avatarPanel.leftArmHeader", source->arms[0].state, 0);
+	drawRow("avatarPanel.rightArmHeader", source->arms[1].state, 1);
+	drawRow("avatarPanel.leftHandHeader", source->hands[0].state, -1);
+	drawRow("avatarPanel.rightHandHeader", source->hands[1].state, -1);
 	ImGui::EndTable();
 }
 

@@ -259,6 +259,79 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 					 skeleton.getBone(handBone).restPositionWorld, placement.fingers, sideConfig, outPose);
 }
 
+// An arm's placement with its chain's directions pulled from its bone angles
+// toward a goal by the arm's IK weight, the twist, the wrist and the fingers
+// kept, so they ride on the posed forearm as the bone angles place them. The
+// world is the posed avatar's, whose axes are the solve's (the two differ by
+// a translation), so the source's offsets carry across as they are, and in
+// the avatar's units. avatarShoulder is the posed upper-arm joint.
+void pullPlacementTowardGoal(const SourcePose& source, const AvatarSkeleton& skeleton, int sideIndex,
+							 const glm::quat& spineDelta, const glm::vec3& avatarShoulder,
+							 const AvatarRetargetArm& armSettings, const AvatarRetargetConfig::Side& sideConfig,
+							 DirectRetarget::ArmPlacement& ioPlacement, AvatarRetargetGoals* outGoals)
+{
+	const eHandSide side= (eHandSide)sideIndex;
+	const SourcePose::Arm& sourceArm= source.arms[sideIndex];
+	const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
+	const float upperArm= skeleton.getUpperArmLength(side);
+	const float forearm= skeleton.getForearmLength(side);
+	const float avatarReach= upperArm + forearm;
+
+	// The arm as its bone angles place it: the directions the swings take
+	const ChainSwing swing=
+		swingChain(skeleton, sideIndex, spineDelta, ioPlacement.upperDirection, ioPlacement.forearmDirection);
+	const glm::vec3 angleUpper= swing.upperDelta * restDirection(skeleton, lowerArmBone);
+	const glm::vec3 angleElbow= avatarShoulder + angleUpper * upperArm;
+	const glm::vec3 angleWrist= angleElbow + swing.forearmDirection * forearm;
+
+	// The source's offsets from its shoulder: the chain's, or for an arm with
+	// no chain (one easing to rest) its directions at the source's lengths
+	glm::vec3 wristOffset;
+	glm::vec3 elbowOffset;
+	if (sourceArm.bHasShoulder && sourceArm.bHasElbow)
+	{
+		wristOffset= sourceArm.wristPosition - sourceArm.shoulderPosition;
+		elbowOffset= sourceArm.elbowPosition - sourceArm.shoulderPosition;
+	}
+	else
+	{
+		elbowOffset= angleUpper * source.upperArmLength;
+		wristOffset= elbowOffset + swing.forearmDirection * source.forearmLength;
+	}
+
+	// The source's arm is the user's proportions in the avatar's units, so
+	// the reach scale's ratio is the avatar's arm over the source's
+	const float sourceReach= source.upperArmLength + source.forearmLength;
+	const float ratio= sourceReach > 1e-3f ? avatarReach / sourceReach : 1.f;
+	const float factor= reachFactor(armSettings.reachScale, ratio);
+	glm::vec3 goal= avatarShoulder + wristOffset * factor;
+	// The root is the identity, so the rooted torso frame is the world's
+	if (armSettings.goalOffset != glm::vec3(0.f))
+		goal+= armSettings.goalOffset;
+	if (outGoals != nullptr)
+	{
+		outGoals->bHasWristGoal[sideIndex]= true;
+		outGoals->wristGoalWorld[sideIndex]= goal;
+	}
+	const glm::vec3 toGoal= goal - avatarShoulder;
+	const float reach= glm::length(toGoal);
+	if (reach > avatarReach && reach > 1e-6f)
+		goal= avatarShoulder + toGoal * (avatarReach / reach);
+	const glm::vec3 polePoint= avatarShoulder + elbowOffset * factor;
+
+	const float ikWeight= std::min(armSettings.ikWeight, 1.f);
+	glm::vec3 elbow;
+	glm::vec3 wrist;
+	pullArmTowardGoal(avatarShoulder, angleElbow, angleWrist, goal, polePoint, ikWeight, upperArm, forearm,
+					  safeNormalize(sideConfig.elbowHintOffset), angleUpper, elbow, wrist);
+	const glm::vec3 upperDirection= safeNormalize(elbow - avatarShoulder);
+	const glm::vec3 forearmDirection= safeNormalize(wrist - elbow);
+	if (glm::dot(upperDirection, upperDirection) > 0.f)
+		ioPlacement.upperDirection= upperDirection;
+	if (glm::dot(forearmDirection, forearmDirection) > 0.f)
+		ioPlacement.forearmDirection= forearmDirection;
+}
+
 // A unit direction between two, falling to the target where they cancel
 glm::vec3 mixDirection(const glm::vec3& from, const glm::vec3& to, float t)
 {
@@ -1051,7 +1124,19 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
 						   const DirectRetargetConfig& config, AvatarPose& outPose)
 {
+	std::array<AvatarRetargetArm, 2> boneAngles;
+	for (AvatarRetargetArm& arm : boneAngles)
+		arm.ikWeight= 0.f;
+	place(source, skeleton, config, boneAngles, outPose);
+}
+
+void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const DirectRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
+						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
+{
 	using eGroupState= SourcePose::eGroupState;
+	if (outGoals != nullptr)
+		*outGoals= AvatarRetargetGoals();
 
 	outPose.clear();
 	outPose.valid= true;
@@ -1085,6 +1170,11 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 		m_state.headDelta= headDelta;
 	}
 
+	// The avatar's shoulders under the placed spine, which an arm pulled
+	// toward a goal reaches from; the arms do not move them
+	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posedTorso;
+	bool bTorsoPosed= false;
+
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const SourcePose::Arm& sourceArm= source.arms[sideIndex];
@@ -1101,6 +1191,23 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 		placement.twist= sourceArm.twist;
 		placement.wristRotation= sourceHand.wristRotation;
 		placement.fingers= sourceHand.fingers;
+		const AvatarRetargetArm& armSettings= arms[sideIndex];
+		if (outGoals != nullptr)
+		{
+			outGoals->bPosed[sideIndex]= true;
+			outGoals->ikWeight[sideIndex]= armSettings.ikWeight > 0.f ? armSettings.ikWeight : 0.f;
+		}
+		if (armSettings.ikWeight > 0.f)
+		{
+			if (!bTorsoPosed)
+			{
+				computePosedBones(skeleton, outPose, posedTorso);
+				bTorsoPosed= true;
+			}
+			pullPlacementTowardGoal(source, skeleton, sideIndex, spineDelta,
+									posedTorso[(int)sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm)].positionWorld,
+									armSettings, config.sides[sideIndex], placement, outGoals);
+		}
 		placeArm(skeleton, sideIndex, spineDelta, placement, config.sides[sideIndex],
 				 config.wristLimitRadians[sideIndex], outPose);
 	}

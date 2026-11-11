@@ -713,21 +713,48 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	bool bRigChanged= false;
 	const eHumanoidBone lowerArmBone= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
 
-	// What the pipeline runs, whatever the chain stores
-	const SourcePose::ePipeline pipeline= bDirect ? SourcePose::ePipeline::Direct : SourcePose::ePipeline::Position;
-	ImGui::LabelText(locLabel("chains.mappingLabel"), "%s",
-					 locText(bDirect ? "chains.mappingBoneAngles" : "chains.mappingBoneAnglesThenIk"));
-	ImGui::LabelText(locLabel("chains.ikWeightLabel"), "%.2f", RetargetStage::getArmIkWeight(pipeline));
-	drawNote("chains.fixedByPipelineNote");
-	// The goal the IK pulls the wrist toward; the direct pipeline places the
-	// arm by bone angles alone and has none
+	// The mapping as stored, which both pipelines run: bone angles alone, or
+	// then the pull toward the goal by the IK weight, with the goal's reach
+	// scale and offset
 	RetargetChains::Arm& arm= chains.arms[sideIndex];
-	if (!bDirect)
+	struct MappingChoice
 	{
-		bChainChanged|= drawExprParameterField(sideIndex == 0 ? "leftReachScale" : "rightReachScale",
-											   locText("chains.reachScaleField"), arm.reachScale, 0.f, 1.f, "%.2f",
-											   locText("chains.reachScaleTooltip"), SourcePoseInputs::table(),
-											   toLiveValue(m_shownArmParameters[sideIndex].reachScale));
+		eArmMapping mapping;
+		const char* labelKey;
+		const char* tooltipKey;
+	};
+	static const MappingChoice k_mappingChoices[]= {
+		{eArmMapping::BoneAngles, "chains.mappingBoneAngles", "chains.mappingBoneAnglesTooltip"},
+		{eArmMapping::BoneAnglesThenIk, "chains.mappingBoneAnglesThenIk", "chains.mappingBoneAnglesThenIkTooltip"},
+	};
+	ImGui::TextUnformatted(locText("chains.mappingLabel"));
+	for (const MappingChoice& choice : k_mappingChoices)
+	{
+		if (ImGui::RadioButton(locLabel(choice.labelKey), arm.mapping == choice.mapping) && arm.mapping != choice.mapping)
+		{
+			arm.mapping= choice.mapping;
+			bChainChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText(choice.tooltipKey));
+	}
+	if (arm.mapping == eArmMapping::BoneAngles)
+	{
+		drawNote("chains.boneAnglesNote");
+	}
+	else
+	{
+		bChainChanged|= drawExprParameterField(sideIndex == 0 ? "leftIkWeight" : "rightIkWeight",
+											   locText("chains.ikWeightLabel"), arm.ikWeight, 0.f, 1.f, "%.2f",
+											   locText("chains.ikWeightTooltip"), SourcePoseInputs::table(),
+											   toLiveValue(m_shownArmParameters[sideIndex].ikWeight));
+		// The source's reach is in meters on a multi-camera project and in
+		// the avatar's units with the user's proportions on a direct one; the
+		// scale has an effect on both, since the source's arm is not the
+		// avatar's
+		bChainChanged|= drawExprParameterField(
+			sideIndex == 0 ? "leftReachScale" : "rightReachScale", locText("chains.reachScaleField"), arm.reachScale, 0.f,
+			1.f, "%.2f", locText(bDirect ? "chains.reachScaleDirectTooltip" : "chains.reachScaleTooltip"),
+			SourcePoseInputs::table(), toLiveValue(m_shownArmParameters[sideIndex].reachScale));
 		bChainChanged|= ImGui::DragFloat3(locLabel("chains.goalOffsetDrag"), &arm.goalOffset.x, 0.005f, -1.f, 1.f,
 										  "%.3f m");
 		ImGui::SetItemTooltip("%s", locText("chains.goalOffsetTooltip"));
@@ -780,13 +807,18 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		side.restPalmNormal= defaults.restPalmNormal;
 		side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 		bRigChanged= true;
-		// The chain's solve settings; its mapping, IK weight and loss stay
+		// The chain's solve settings, the mapping and the IK weight the
+		// project's shape defaults to; its loss stays
 		const RetargetChains::Arm armDefaults= RetargetChains::makeDefaultArm(sideIndex);
 		arm.elbowWeight= armDefaults.elbowWeight;
 		arm.reachScale= armDefaults.reachScale;
 		arm.goalOffset= armDefaults.goalOffset;
+		const RetargetChains::Arm shapeDefaults= makeDefaultRetargetChains(m_config->direct.enabled).arms[sideIndex];
+		arm.mapping= shapeDefaults.mapping;
+		arm.ikWeight= shapeDefaults.ikWeight;
 		bChainChanged= true;
 	}
+	ImGui::SetItemTooltip("%s", locText("chains.resetArmTooltip"));
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("chains.copyToOtherArmButton")))
 	{

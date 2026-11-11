@@ -60,6 +60,11 @@ float evaluateParameter(ExprParameterRunner& runner, const float* inputs, double
 }
 } // namespace
 
+float effectiveArmIkWeight(eArmMapping mapping, float ikWeight)
+{
+	return mapping == eArmMapping::BoneAngles ? 0.f : ikWeight;
+}
+
 ArmParameterEvaluator::ArmParameterEvaluator()
 {
 	setArms(RetargetStageConfig().arms);
@@ -72,6 +77,8 @@ void ArmParameterEvaluator::setArms(const std::array<RetargetArmSettings, 2>& ar
 		Arm& arm= m_arms[sideIndex];
 		arm.elbowWeight.setParameter(arms[sideIndex].elbowWeight, SourcePoseInputs::table());
 		arm.reachScale.setParameter(arms[sideIndex].reachScale, SourcePoseInputs::table());
+		arm.ikWeight.setParameter(arms[sideIndex].ikWeight, SourcePoseInputs::table());
+		arm.mapping= arms[sideIndex].mapping;
 		arm.goalOffset= arms[sideIndex].goalOffset;
 	}
 }
@@ -82,6 +89,7 @@ void ArmParameterEvaluator::reset()
 	{
 		arm.elbowWeight.reset();
 		arm.reachScale.reset();
+		arm.ikWeight.reset();
 	}
 	m_bHasEpoch= false;
 }
@@ -107,6 +115,10 @@ void ArmParameterEvaluator::evaluate(const SourcePose& source, std::array<Avatar
 		AvatarRetargetArm& out= outArms[sideIndex];
 		out.elbowWeight= evaluateParameter(arm.elbowWeight, inputs, timeSeconds, 0.f, 1.f, readout.elbowWeight);
 		out.reachScale= evaluateParameter(arm.reachScale, inputs, timeSeconds, 0.f, 1.f, readout.reachScale);
+		// Evaluated whatever the mapping, so a function keeps its state and
+		// the field shows its value
+		const float ikWeight= evaluateParameter(arm.ikWeight, inputs, timeSeconds, 0.f, 1.f, readout.ikWeight);
+		out.ikWeight= effectiveArmIkWeight(arm.mapping, ikWeight);
 		out.goalOffset= arm.goalOffset;
 	}
 }
@@ -134,19 +146,13 @@ void RetargetStage::reset()
 	m_armParameters.reset();
 }
 
-float RetargetStage::getArmIkWeight(SourcePose::ePipeline pipeline)
-{
-	return pipeline == SourcePose::ePipeline::Direct ? 0.f : 1.f;
-}
-
 void RetargetStage::solvePosition(const TrackingFrameResult& frame, RetargetResult& outResult)
 {
 	m_position.fillSource(frame, m_config.user, outResult.source);
 	outResult.hands.poses= frame.poses;
 	m_loss.apply(m_config.positionLoss, m_config.skeleton.get(), m_config.position.sides, outResult.source,
 				 &outResult.hands);
-	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals,
-				&outResult.armParameters);
+	solveTarget(outResult.source, outResult.pose, &outResult.goals, &outResult.armParameters);
 	outResult.bDirectState= false;
 	outResult.directState= DirectRetarget::SolveState();
 }
@@ -162,32 +168,34 @@ bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectC
 
 	m_direct.measure(camera, cameraModel, phoneHead, timestampMs, skeleton, m_config.direct, outResult.source);
 	m_loss.apply(m_config.directLoss, &skeleton, m_config.direct.sides, outResult.source, nullptr);
-	solveTarget(outResult.source, getArmIkWeight(outResult.source.pipeline), outResult.pose, &outResult.goals,
-				&outResult.armParameters);
+	solveTarget(outResult.source, outResult.pose, &outResult.goals, &outResult.armParameters);
 	outResult.bDirectState= true;
 	outResult.directState= m_direct.getSolveState();
 	writeDirectRestReadout(outResult.source, outResult.directState);
 	return true;
 }
 
-void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
-								AvatarRetargetGoals* outGoals, std::array<RetargetArmReadout, 2>* outArmParameters)
+void RetargetStage::solveTarget(const SourcePose& source, AvatarPose& outPose, AvatarRetargetGoals* outGoals,
+								std::array<RetargetArmReadout, 2>* outArmParameters)
 {
 	outPose.clear();
 	if (outGoals != nullptr)
 		*outGoals= AvatarRetargetGoals();
 	if (outArmParameters != nullptr)
 		*outArmParameters= {};
-	if (m_config.skeleton == nullptr)
+	if (m_config.skeleton == nullptr || source.pipeline == SourcePose::ePipeline::None)
 		return;
-	if (armIkWeight == 1.f)
+	std::array<AvatarRetargetArm, 2> arms;
+	std::array<RetargetArmReadout, 2> readout;
+	m_armParameters.evaluate(source, arms, readout);
+	AvatarRetargetGoals goals;
+	if (source.pipeline == SourcePose::ePipeline::Direct)
 	{
-		std::array<AvatarRetargetArm, 2> arms;
-		std::array<RetargetArmReadout, 2> readout;
-		m_armParameters.evaluate(source, arms, readout);
-		if (outArmParameters != nullptr)
-			*outArmParameters= readout;
-		m_position.solve(source, *m_config.skeleton, m_config.position, arms, outPose, outGoals);
+		m_direct.place(source, *m_config.skeleton, m_config.direct, arms, outPose, &goals);
+	}
+	else
+	{
+		m_position.solve(source, *m_config.skeleton, m_config.position, arms, outPose, &goals);
 
 		// A resting arm, posed from its last carried values, eases into the
 		// rest pose the direct pipeline eases its arms into; the rest pose,
@@ -204,20 +212,26 @@ void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, Ava
 				bRestPosed= true;
 			}
 			easeArmToRest(restPose, sideIndex, source.arms[sideIndex].restBlend, outPose);
-			if (outGoals != nullptr)
-				outGoals->bHasWristGoal[sideIndex]= false;
+			goals.bHasWristGoal[sideIndex]= false;
 		}
 	}
-	else if (armIkWeight == 0.f)
-		m_direct.place(source, *m_config.skeleton, m_config.direct, outPose);
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		readout[sideIndex].bPosed= goals.bPosed[sideIndex];
+		readout[sideIndex].effectiveIkWeight= goals.ikWeight[sideIndex];
+	}
+	if (outGoals != nullptr)
+		*outGoals= goals;
+	if (outArmParameters != nullptr)
+		*outArmParameters= readout;
 }
 
 void RetargetStage::resolveTarget(RetargetResult& ioResult)
 {
 	if (ioResult.source.pipeline == SourcePose::ePipeline::None)
 		return;
-	solveTarget(ioResult.source, getArmIkWeight(ioResult.source.pipeline), ioResult.pose, &ioResult.goals,
-				&ioResult.armParameters);
+	solveTarget(ioResult.source, ioResult.pose, &ioResult.goals, &ioResult.armParameters);
 	// The placement writes the head's delta into the solve state
 	if (ioResult.bDirectState)
 		ioResult.directState.headDelta= m_direct.getSolveState().headDelta;

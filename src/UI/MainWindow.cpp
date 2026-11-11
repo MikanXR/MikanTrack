@@ -102,7 +102,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
-		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale> [value <number>|expr <text...>]",
+		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
+		 "pipeline mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]",
 		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
 		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]",
 		 "pipeline loss <torso|head|leftArm|rightArm>",
@@ -1036,7 +1037,10 @@ void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
 	// A result no pipeline has filled yet carries no source
 	SourcePoseReadout readout;
 	if (result != nullptr && result->source.pipeline != SourcePose::ePipeline::None)
+	{
 		readout.source= &result->source;
+		readout.armParameters= &result->armParameters;
+	}
 	m_sourcePoseReadout= readout;
 }
 
@@ -1453,6 +1457,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		return handleFxAutomation(args, outLines, outError);
 	if (verb == "goal")
 		return handleGoalAutomation(args, outLines, outError);
+	if (verb == "mapping")
+		return handleMappingAutomation(args, outLines, outError);
 	if (verb == "limit")
 		return handleLimitAutomation(args, outLines, outError);
 	if (verb == "loss")
@@ -1758,7 +1764,7 @@ bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::v
 	// fx <arm> <parameter> [value <number> | expr <text...>]
 	if (args.size() < 3)
 	{
-		outError= "usage: fx <leftArm|rightArm> <elbowWeight|reachScale> [value <number>|expr <text...>]";
+		outError= "usage: fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]";
 		return false;
 	}
 	const int sideIndex= parseArmSide(args[1]);
@@ -1767,16 +1773,30 @@ bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::v
 		outError= "unknown arm: " + args[1];
 		return false;
 	}
-	const bool bElbowWeight= args[2] == "elbowWeight";
-	if (!bElbowWeight && args[2] != "reachScale")
+	enum class eParameter
+	{
+		ElbowWeight,
+		ReachScale,
+		IkWeight,
+	};
+	eParameter parameter;
+	if (args[2] == "elbowWeight")
+		parameter= eParameter::ElbowWeight;
+	else if (args[2] == "reachScale")
+		parameter= eParameter::ReachScale;
+	else if (args[2] == "ikWeight")
+		parameter= eParameter::IkWeight;
+	else
 	{
 		outError= "unknown parameter: " + args[2];
 		return false;
 	}
 
 	RetargetChains chains= m_app->getRetargetChains();
-	ExprParameter& weight=
-		bElbowWeight ? chains.arms[sideIndex].elbowWeight : chains.arms[sideIndex].reachScale;
+	RetargetChains::Arm& chainArm= chains.arms[sideIndex];
+	ExprParameter& weight= parameter == eParameter::ElbowWeight ? chainArm.elbowWeight
+		: parameter == eParameter::ReachScale                  ? chainArm.reachScale
+															   : chainArm.ikWeight;
 	if (args.size() >= 4)
 	{
 		const std::string& form= args[3];
@@ -1824,8 +1844,12 @@ bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::v
 		std::snprintf(text, sizeof(text), "%.6g", value);
 		return std::string(text);
 	};
-	outLines.push_back(std::string("setting ") + (weight.bUseExpression ? "function" : "value") + " value " +
-					   format(weight.value) + " expr " + weight.expression);
+	std::string settingLine= std::string("setting ") + (weight.bUseExpression ? "function" : "value") + " value " +
+		format(weight.value) + " expr " + weight.expression;
+	// Only an arm that pulls toward its goal reads its weight
+	if (parameter == eParameter::IkWeight && chainArm.mapping == eArmMapping::BoneAngles)
+		settingLine+= " (unused: the arm maps by bone angles)";
+	outLines.push_back(settingLine);
 	const FaceExprCompileResult compiled= compileExprParameter(weight.expression, SourcePoseInputs::table());
 	if (compiled.errors.empty())
 	{
@@ -1839,7 +1863,9 @@ bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::v
 	}
 	// The frame the scene shows, solved before this setting reached it
 	const RetargetArmReadout& shownArm= m_avatarPanel->getShownArmParameters()[sideIndex];
-	const RetargetParameterReadout& shown= bElbowWeight ? shownArm.elbowWeight : shownArm.reachScale;
+	const RetargetParameterReadout& shown= parameter == eParameter::ElbowWeight ? shownArm.elbowWeight
+		: parameter == eParameter::ReachScale                                    ? shownArm.reachScale
+																				 : shownArm.ikWeight;
 	if (!shown.bEvaluated)
 	{
 		outLines.push_back("shown none");
@@ -1893,9 +1919,9 @@ bool MainWindow::handleGoalAutomation(const std::vector<std::string>& args, std:
 	char text[128];
 	std::snprintf(text, sizeof(text), "offset %.6g %.6g %.6g", offset.x, offset.y, offset.z);
 	std::string line= text;
-	// Only the position pipeline's IK places a goal
-	if (m_pipelineInputs.bDirect)
-		line+= " (unused: the direct pipeline places the arm by bone angles)";
+	// Only an arm that pulls toward its goal places one
+	if (chains.arms[sideIndex].mapping == eArmMapping::BoneAngles)
+		line+= " (unused: the arm maps by bone angles)";
 	outLines.push_back(line);
 	// The frame the scene shows, solved before this setting reached it
 	const AvatarRetargetGoals& goals= m_avatarPanel->getShownGoals();
@@ -1907,6 +1933,54 @@ bool MainWindow::handleGoalAutomation(const std::vector<std::string>& args, std:
 	{
 		const glm::vec3& goal= goals.wristGoalWorld[sideIndex];
 		std::snprintf(text, sizeof(text), "shown goal %.6g %.6g %.6g", goal.x, goal.y, goal.z);
+		outLines.push_back(text);
+	}
+	return true;
+}
+
+bool MainWindow::handleMappingAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+										 std::string& outError)
+{
+	// mapping <arm> [boneAngles|boneAnglesThenIk]
+	if (args.size() != 2 && args.size() != 3)
+	{
+		outError= "usage: mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]";
+		return false;
+	}
+	const int sideIndex= parseArmSide(args[1]);
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	eArmMapping& mapping= chains.arms[sideIndex].mapping;
+	if (args.size() == 3)
+	{
+		if (args[2] == armMappingName(eArmMapping::BoneAngles))
+			mapping= eArmMapping::BoneAngles;
+		else if (args[2] == armMappingName(eArmMapping::BoneAnglesThenIk))
+			mapping= eArmMapping::BoneAnglesThenIk;
+		else
+		{
+			outError= "unknown mapping: " + args[2];
+			return false;
+		}
+		m_app->setRetargetChains(chains);
+	}
+
+	outLines.push_back(std::string("mapping ") + armMappingName(mapping));
+	// The frame the scene shows, solved before this setting reached it
+	const RetargetArmReadout& shownArm= m_avatarPanel->getShownArmParameters()[sideIndex];
+	if (!shownArm.bPosed)
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		char text[64];
+		std::snprintf(text, sizeof(text), "shown ikWeight %.6g", shownArm.effectiveIkWeight);
 		outLines.push_back(text);
 	}
 	return true;

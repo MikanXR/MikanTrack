@@ -48,12 +48,14 @@ struct RetargetChains
 	{
 		eArmMapping mapping= eArmMapping::BoneAnglesThenIk;
 		// How far the chain's end is pulled toward the goal after the angle
-		// mapping, 0 to 1
+		// mapping, 0 to 1, read only by BoneAnglesThenIk. Both pipelines run
+		// the mapping and the weight as stored.
 		ExprParameter ikWeight{1.f};
 		// The scale on the source's reach before the goal is placed, 0 to 1:
 		// at 1 the user's reach is scaled onto the avatar's arm, at 0 the
-		// measured shoulder-to-wrist offset is kept in meters. A function
-		// reads the source pose's inputs, as the elbow weight's does.
+		// measured shoulder-to-wrist offset is kept as measured (meters, or
+		// the direct source's avatar units). A function reads the source
+		// pose's inputs, as the elbow weight's does.
 		ExprParameter reachScale{1.f};
 		// Added to the goal after the scaling and before the clamp to the
 		// avatar's reach, meters, in the rooted torso frame (+X facing, +Y

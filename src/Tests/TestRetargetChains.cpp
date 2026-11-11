@@ -381,10 +381,50 @@ static int runRetargetChainsTest(const TestArgs&)
 			expectedPosition.head.after= eLossAfter::Freeze;
 			check(samePolicy(stage.positionLoss, expectedPosition),
 				  "(f) the position pipeline performs a stored timed hold and freeze, on the head too");
-			check(RetargetStage::getArmIkWeight(SourcePose::ePipeline::Position) == 1.f &&
-					  RetargetStage::getArmIkWeight(SourcePose::ePipeline::Direct) == 0.f &&
-					  block.arms[0].ikWeight.value == 1.f,
-				  "(f) the target solve's IK weight stays fixed by the pipeline whatever the block stores");
+			check(stage.arms[0].mapping == eArmMapping::BoneAnglesThenIk &&
+					  stage.arms[1].mapping == eArmMapping::BoneAnglesThenIk &&
+					  sameParameter(stage.arms[0].ikWeight, ExprParameter{1.f}) &&
+					  sameParameter(stage.arms[1].ikWeight, ExprParameter{1.f}),
+				  "(f) a multi-camera block under the direct pipeline: the arms run IK at weight 1 as stored");
+		}
+		{
+			// The mapping and the IK weight reach the stage as stored under
+			// either shape: one arm by bone angles with a weight it does not
+			// use, the other then IK with a function for its weight
+			RetargetChains block= makeDefaultRetargetChains(false);
+			block.arms[0].mapping= eArmMapping::BoneAngles;
+			block.arms[0].ikWeight= ExprParameter{0.4f};
+			block.arms[1].mapping= eArmMapping::BoneAnglesThenIk;
+			block.arms[1].ikWeight= ExprParameter{0.6f, "source.rightLowerArm.confidence", true};
+			bool bReached= true;
+			for (const bool bDirect : {false, true})
+			{
+				AppConfig config= makeLegacyConfig(bDirect);
+				config.retargetChains= std::make_shared<const RetargetChains>(block);
+				const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					bReached&= stage.arms[sideIndex].mapping == block.arms[sideIndex].mapping &&
+						sameParameter(stage.arms[sideIndex].ikWeight, block.arms[sideIndex].ikWeight);
+				}
+			}
+			check(bReached && effectiveArmIkWeight(eArmMapping::BoneAngles, 0.4f) == 0.f &&
+					  effectiveArmIkWeight(eArmMapping::BoneAnglesThenIk, 0.6f) == 0.6f,
+				  "(f) each arm's mapping and IK weight reach the stage as stored under either pipeline, and bone "
+				  "angles run at weight 0 whatever the weight stores");
+			// The defaults each shape's stage runs on: IK at 1, and bone angles
+			bool bDefaults= true;
+			for (const bool bDirect : {false, true})
+			{
+				const RetargetStageConfig stage= makeRetargetStageConfig(makeLegacyConfig(bDirect), rig, nullptr);
+				for (const RetargetArmSettings& arm : stage.arms)
+				{
+					bDefaults&= arm.mapping == (bDirect ? eArmMapping::BoneAngles : eArmMapping::BoneAnglesThenIk) &&
+						sameParameter(arm.ikWeight, ExprParameter{bDirect ? 0.f : 1.f});
+				}
+			}
+			check(bDefaults, "(f) a project without a block runs its shape's mapping: IK at 1 multi-camera, bone angles "
+							 "direct");
 		}
 	}
 
