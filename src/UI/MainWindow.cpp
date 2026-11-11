@@ -96,7 +96,7 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		"pipeline",
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
 		 "pipeline view [follow|cameras|scene]", "pipeline pin <stage>", "pipeline unpin <stage>|all",
-		 "pipeline pinned"},
+		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -497,7 +497,6 @@ void MainWindow::update(float deltaSeconds)
 	OscSectionContext oscContext;
 	oscContext.config= config;
 	oscContext.visionThread= visionThread;
-	oscContext.app= m_app;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
 							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
@@ -1375,6 +1374,27 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 			m_stageView->setMode(mode);
 		}
 		outLines.push_back(m_stageView->describe());
+		return true;
+	}
+	if (verb == "chain")
+	{
+		// The Retarget stage's selected chain, by the id of its block in the
+		// project's chain settings. Without an avatar only an arm selects.
+		if (args.size() >= 2)
+		{
+			eRetargetChain chain;
+			if (!AvatarPanel::parseChainId(args[1], chain))
+			{
+				outError= "unknown chain: " + args[1];
+				return false;
+			}
+			if (!m_avatarPanel->setSelectedChain(chain))
+			{
+				outError= "no avatar loaded, only leftArm and rightArm select: " + args[1];
+				return false;
+			}
+		}
+		outLines.push_back(AvatarPanel::getChainId(m_avatarPanel->getSelectedChain()));
 		return true;
 	}
 	if (verb == "pinned")

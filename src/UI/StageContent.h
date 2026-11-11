@@ -48,8 +48,8 @@ private:
 	// A per-camera stage's camera exists in the config
 	bool isCameraInRange(const PipelineStageId& stage) const;
 	void mergeCalibrationAction(const CalibrationPanel::DrawResult& result);
-	// The Retarget stage's settings: placement, mapping and retarget with a
-	// loaded model, and the loss rules always
+	// The Retarget stage's settings: placement, mapping and the preview pose
+	// with a loaded model, then the chains
 	void drawRetargetSettings();
 
 	App* m_app;

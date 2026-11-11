@@ -14,7 +14,6 @@
 #include "SourcePose.h"
 #include "TrackingTypes.h"
 
-class App;
 class AppConfig;
 class VisionThread;
 class VideoCaptureSystem;
@@ -192,13 +191,11 @@ struct OscReadout
 };
 
 // What the OSC sections read and write. readout: the shown frame's stream
-// status (the Output stage's diagnostics). app: what the loss controls write
-// the retarget chain settings through.
+// status (the Output stage's diagnostics).
 struct OscSectionContext
 {
 	AppConfig* config= nullptr;
 	VisionThread* visionThread= nullptr;
-	App* app= nullptr;
 	const OscReadout* readout= nullptr;
 };
 
@@ -329,10 +326,6 @@ void drawOscTargetControls(const OscSectionContext& context);
 // The head offset and the notes on the streamed bones
 void drawOscVmcControls(const OscSectionContext& context);
 void drawOscDeliveryControls(const OscSectionContext& context);
-// What the stream does with a lost hand: the dropout hold and freeze on
-// loss. The Retarget stage's, written to both arm chains' loss policies,
-// which reach the vision thread without a config refresh.
-void drawOscLossControls(const OscSectionContext& context);
 // Whether the stream runs, its frame rate and the last frame's size, from
 // context.readout
 void drawOscStreamReadout(const OscSectionContext& context);
@@ -348,6 +341,11 @@ void drawOscDeliveryReadout(const OscSectionContext& context, const TrackingFram
 // per group with its state, confidence and what it carries, and each hand's
 // finger angles in degrees as the target solve takes them
 void drawSourcePoseReadout(const TrackingSectionContext& context);
+// The Retarget stage's diagnostics: one row per chain with its state after
+// the loss stage, from the shown frame's source pose (context.sourcePose),
+// and for the arms the IK weight the target solve runs at, shown only with
+// an avatar (bAvatar). One dim line when the shown frame has no source pose.
+void drawRetargetChainReadout(const TrackingSectionContext& context, bool bAvatar);
 
 // Draws the sections only; updateTrackingState runs the panel's state
 void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);

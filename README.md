@@ -59,8 +59,8 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   toon-shaded in the 3D scene, posed from the tracked hands, elbows and head
   with the avatar's own proportions (reach scaled onto its arms, elbows from a
   two-bone solve hinted by the measured elbow, fingers on its own hand rig).
-  The VMC stream then carries that avatar's bones. The panel's Mapping
-  and Retarget tabs fix a rig's bone mapping, trim its rest pose, place the
+  The VMC stream then carries that avatar's bones. The Retarget stage's
+  Mapping group and its chains fix a rig's bone mapping, trim its rest pose, place the
   elbow hints (draggable in the 3D scene) and tune the fingers, saved in a
   `<name>.mikanrig.json` beside the VRM.
 - Live preview with landmark overlay; alternate 3D scene view rendering the

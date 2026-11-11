@@ -95,9 +95,7 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 	case ePipelineStage::Palm:
 		return section == eStageSection::Diagnostics;
 	case ePipelineStage::HoldRest:
-		// The rest blend belongs to the loaded avatar's rig
-		return section == eStageSection::Diagnostics ||
-			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+		return section == eStageSection::Diagnostics;
 	case ePipelineStage::Phone:
 		// The stream status shows only while the shown frame's stream is
 		// enabled, or to say the take did not record it
@@ -108,9 +106,9 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
 	case ePipelineStage::Retarget:
-		// The loss rules apply with or without an avatar, so the settings
-		// always show
-		return section != eStageSection::Diagnostics;
+		// The arms' loss rules apply with or without an avatar, so the
+		// settings always show, and the chains' states read the shown frame
+		return true;
 	case ePipelineStage::Output:
 	case ePipelineStage::DeliveryRules:
 		return section != eStageSection::Inputs;
@@ -263,12 +261,7 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		SettingsPanels::drawDirectPalmReadout(m_tracking);
 		break;
 	case ePipelineStage::HoldRest:
-		// The interim home of the rest blend, the same control as the
-		// Retarget stage's Loss tab
-		if (section == eStageSection::Settings)
-			m_avatarPanel->drawRestBlendControl();
-		else
-			SettingsPanels::drawDirectHoldRestReadout(m_tracking);
+		SettingsPanels::drawDirectHoldRestReadout(m_tracking);
 		break;
 	case ePipelineStage::Phone:
 		if (section == eStageSection::Settings)
@@ -330,9 +323,13 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 				m_avatarPanel->drawModelSummary();
 			}
 		}
-		else
+		else if (section == eStageSection::Settings)
 		{
 			drawRetargetSettings();
+		}
+		else
+		{
+			SettingsPanels::drawRetargetChainReadout(m_tracking, m_app->getAvatarModel() != nullptr);
 		}
 		break;
 	case ePipelineStage::Output:
@@ -361,37 +358,22 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 
 void StageContent::drawRetargetSettings()
 {
-	if (!ImGui::BeginTabBar("avatarTabs"))
-		return;
-
-	// Placement, Mapping and Retarget need a loaded model, read as the tabs
-	// draw since the inputs above can unload it this frame
+	// Placement, Mapping and the preview pose need a loaded model, read as
+	// they draw since the inputs above can unload it this frame. Placement
+	// and Mapping start closed.
 	if (m_app->getAvatarModel() != nullptr)
 	{
-		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabPlacement")))
+		if (ImGui::TreeNode(locLabel("avatarPanel.tabPlacement")))
 		{
 			m_avatarPanel->drawPlacement();
-			ImGui::EndTabItem();
+			ImGui::TreePop();
 		}
-		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabMapping")))
+		if (ImGui::TreeNode(locLabel("avatarPanel.tabMapping")))
 		{
-			m_avatarPanel->drawMappingTab();
-			ImGui::EndTabItem();
+			m_avatarPanel->drawMapping();
+			ImGui::TreePop();
 		}
-		if (ImGui::BeginTabItem(locLabel("avatarPanel.tabRetarget")))
-		{
-			m_avatarPanel->drawRetargetTab();
-			ImGui::EndTabItem();
-		}
+		m_avatarPanel->drawPreviewPose();
 	}
-	if (ImGui::BeginTabItem(locLabel("avatarPanel.tabLoss")))
-	{
-		// The stream's loss rules apply with or without an avatar, and the
-		// rest blend eases the avatar's arms
-		SettingsPanels::drawOscLossControls(m_osc);
-		if (m_app->getAvatarModel() != nullptr)
-			m_avatarPanel->drawRestBlendControl();
-		ImGui::EndTabItem();
-	}
-	ImGui::EndTabBar();
+	m_avatarPanel->drawChains();
 }

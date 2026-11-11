@@ -113,6 +113,8 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pin <stage>`: pins the stage as a double-click on its box does and answers its window id, `pin.<stage>`, which `gui float` and `gui viewports` use
 - `pipeline unpin <stage>|all`: closes that stage's pinned window, or all of them
 - `pipeline pinned`: one pinned stage per line, or `none`
+- `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
+- `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
 
 ## Client helper
 

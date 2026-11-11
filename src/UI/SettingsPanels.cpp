@@ -17,7 +17,7 @@
 #include "HandRoiQuality.h"
 #include "LocalizationManager.h"
 #include "LocText.h"
-#include "RetargetChains.h"
+#include "RetargetStage.h"
 #include "Scene3dPanel.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
@@ -1783,35 +1783,6 @@ void SettingsPanels::drawOscDeliveryControls(const OscSectionContext& context)
 		commitOscConfigChange(context);
 }
 
-void SettingsPanels::drawOscLossControls(const OscSectionContext& context)
-{
-	// Until the controls are per chain, both arms take the one value: the
-	// left arm's shows, and the freeze as the position pipeline performs it
-	RetargetChains chains= context.app->getRetargetChains();
-	float holdMs= chains.arms[0].loss.holdMs;
-	bool bFreeze= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, 0.f).arms[0].after == eLossAfter::Freeze;
-
-	bool bChanged= false;
-	if (ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &holdMs, 0.f, 1000.f, "%.0f ms"))
-	{
-		for (RetargetChains::Arm& arm : chains.arms)
-			arm.loss.holdMs= holdMs;
-		bChanged= true;
-	}
-	ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
-
-	if (ImGui::Checkbox(locLabel("oscPanel.freezeOnLoss"), &bFreeze))
-	{
-		for (RetargetChains::Arm& arm : chains.arms)
-			arm.loss.after= bFreeze ? eLossAfter::Freeze : eLossAfter::Release;
-		bChanged= true;
-	}
-	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
-
-	if (bChanged)
-		context.app->setRetargetChains(chains);
-}
-
 void SettingsPanels::drawOscVmcControls(const OscSectionContext& context)
 {
 	bool bChanged= false;
@@ -2125,6 +2096,45 @@ void SettingsPanels::drawSourcePoseReadout(const TrackingSectionContext& context
 	drawSourceGroupsTable(*source);
 	ImGui::SeparatorText(locText("sourceStage.fingersSection"));
 	drawSourceFingerAngles(*source);
+}
+
+void SettingsPanels::drawRetargetChainReadout(const TrackingSectionContext& context, bool bAvatar)
+{
+	const SourcePose* source= context.sourcePose != nullptr ? context.sourcePose->source : nullptr;
+	if (source == nullptr)
+	{
+		ImGui::TextDisabled("%s", locText("sourceStage.noSource"));
+		return;
+	}
+	if (!ImGui::BeginTable("retargetChains", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		return;
+	ImGui::TableSetupColumn(locText("chains.chainColumn"));
+	ImGui::TableSetupColumn(locText("stageInspector.stateLabel"));
+	ImGui::TableSetupColumn(locText("chains.ikWeightLabel"));
+	ImGui::TableHeadersRow();
+
+	// A chain's row: its state, and the arms' IK weight, which only a solve
+	// onto an avatar uses
+	const float armIkWeight= RetargetStage::getArmIkWeight(source->pipeline);
+	auto drawRow= [&](const char* labelKey, SourcePose::eGroupState state, bool bArm) {
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(locText(labelKey));
+		ImGui::TableNextColumn();
+		drawGroupStateText(state);
+		ImGui::TableNextColumn();
+		if (bArm && bAvatar)
+			ImGui::Text("%.2f", armIkWeight);
+		else
+			ImGui::TextDisabled("-");
+	};
+	drawRow("sourceStage.torso", source->torso.state, false);
+	drawRow("directStage.head", source->head.state, false);
+	drawRow("avatarPanel.leftArmHeader", source->arms[0].state, true);
+	drawRow("avatarPanel.rightArmHeader", source->arms[1].state, true);
+	drawRow("avatarPanel.leftHandHeader", source->hands[0].state, false);
+	drawRow("avatarPanel.rightHandHeader", source->hands[1].state, false);
+	ImGui::EndTable();
 }
 
 void SettingsPanels::drawLanguageCombo()
