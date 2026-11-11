@@ -14,8 +14,9 @@ class AvatarSkeleton;
 // target solve that poses the avatar from it, it decides per group what the
 // target gets on a frame the group is not measured. Whether a group is
 // measured is the pipeline's call; what happens after a loss is this
-// stage's, one policy per chain. It keeps no clock of its own: it reads the
-// source pose's, and drops its state when the source's epoch changes.
+// stage's, one policy per chain. It keeps no clock of its own: it steps on
+// the source pose's step clock, and drops its state when the source's epoch
+// changes.
 
 // How long a group's last values carry it once the pipeline stops measuring
 // it
@@ -30,7 +31,8 @@ enum class eLossHold : uint8_t
 	// measurement continues across those frames.
 	Pipeline,
 	// The last measured values for holdMs, their confidences decaying
-	// linearly to zero across it. A timestamp regression ends the hold.
+	// linearly to zero across it, timed on the source's step clock. The
+	// step clock going backward (a discontinuity) ends the hold.
 	Timed,
 };
 

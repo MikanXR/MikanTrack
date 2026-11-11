@@ -79,7 +79,7 @@ void AvatarRetarget::reset()
 	m_root= RootState();
 	m_resetEpoch++;
 	m_bHasFillTime= false;
-	m_lastFillTimestampMs= 0.0;
+	m_lastFillStepMs= 0.0;
 }
 
 void AvatarRetarget::fillSource(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
@@ -89,11 +89,19 @@ void AvatarRetarget::fillSource(const std::array<HandPose, 2>& poses, const bool
 	using eGroupState= SourcePose::eGroupState;
 	outSource= SourcePose();
 	outSource.pipeline= SourcePose::ePipeline::Position;
+	// A small backward step holds the step clock at its high-water mark
+	double stepMs= timestampMs;
+	if (m_bHasFillTime && timestampMs < m_lastFillStepMs &&
+		m_lastFillStepMs - timestampMs <= SourcePose::Clock::kMaxBackwardStepMs)
+	{
+		stepMs= m_lastFillStepMs;
+	}
 	outSource.clock.timestampMs= timestampMs;
-	outSource.clock.frameIntervalMs= m_bHasFillTime ? timestampMs - m_lastFillTimestampMs : 0.0;
+	outSource.clock.stepMs= stepMs;
+	outSource.clock.frameIntervalMs= m_bHasFillTime ? stepMs - m_lastFillStepMs : 0.0;
 	outSource.clock.resetEpoch= m_resetEpoch;
 	m_bHasFillTime= true;
-	m_lastFillTimestampMs= timestampMs;
+	m_lastFillStepMs= stepMs;
 	outSource.upperArmLength= user.upperArmLengthMeters;
 	outSource.forearmLength= user.forearmLengthMeters;
 
@@ -189,7 +197,7 @@ void AvatarRetarget::solve(const TrackingFrameResult& frame, const BodyDimension
 void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton& skeleton,
 								 const AvatarRetargetConfig& config, AvatarPose& outPose)
 {
-	const double timestampMs= source.clock.timestampMs;
+	const double stepMs= source.clock.stepMs;
 	const bool bBothShoulders= source.torso.state != SourcePose::eGroupState::Lost;
 
 	if (config.followShoulders && bBothShoulders)
@@ -205,9 +213,9 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 		const glm::quat rotation= glm::angleAxis(yaw, glm::vec3(0.f, 0.f, 1.f));
 		const glm::vec3 position= midpoint - rotation * skeleton.getRestShoulderMidpointWorld();
 
-		// First-order follow on the frame clock; a timestamp regression (a
-		// replay scrub) snaps rather than filtering across the jump
-		const double dtSeconds= m_root.valid ? (timestampMs - m_root.timestampMs) * 0.001 : -1.0;
+		// First-order follow on the step clock; a discontinuity (the clock
+		// going backward) snaps rather than filtering across the jump
+		const double dtSeconds= m_root.valid ? (stepMs - m_root.stepMs) * 0.001 : -1.0;
 		if (dtSeconds < 0.0 || config.rootFollowTimeConstantS <= 0.f)
 		{
 			m_root.position= position;
@@ -220,7 +228,7 @@ void AvatarRetarget::resolveRoot(const SourcePose& source, const AvatarSkeleton&
 			m_root.yawRadians= wrapAngle(m_root.yawRadians + wrapAngle(yaw - m_root.yawRadians) * alpha);
 		}
 		m_root.valid= true;
-		m_root.timestampMs= timestampMs;
+		m_root.stepMs= stepMs;
 	}
 	else if (!config.followShoulders)
 	{

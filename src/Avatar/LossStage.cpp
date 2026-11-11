@@ -50,7 +50,7 @@ DirectRetarget::ArmPlacement placementOf(const SourcePose::Arm& arm, const Sourc
 
 // The Timed hold's weight on a frame the group is not seen: the linear decay
 // of its confidences while the hold lasts, or a negative value once it is
-// over (past its length, or a timestamp regression)
+// over (past its length, or the step clock going backward)
 float timedHoldDecay(const ChainLossPolicy& policy, bool bHeld, double heldMs, double timestampMs)
 {
 	if (policy.holdMs <= 0.f || !bHeld)
@@ -190,7 +190,7 @@ void LossStage::apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 		memory.bStarted= true;
 		memory.epoch= ioSource.clock.resetEpoch;
 	}
-	const double timestampMs= ioSource.clock.timestampMs;
+	const double timestampMs= ioSource.clock.stepMs;
 
 	// A torso with a loss of its own resolves first, so an arm's rest pose
 	// hangs off the lean the torso hands on
@@ -229,7 +229,7 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 							const AvatarRetargetConfig::Side& rigSide, PipelineMemory& memory, SourcePose& ioSource,
 							LossHands* ioHands)
 {
-	const double timestampMs= ioSource.clock.timestampMs;
+	const double timestampMs= ioSource.clock.stepMs;
 	SourcePose::Arm& arm= ioSource.arms[sideIndex];
 	SourcePose::Hand& hand= ioSource.hands[sideIndex];
 	HandPose* pose= ioHands != nullptr ? &ioHands->poses[sideIndex] : nullptr;

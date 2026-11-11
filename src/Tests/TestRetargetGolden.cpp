@@ -14,7 +14,9 @@
 // it over synthetic sequences that walk every loss, hold and restart branch
 // of both pipelines. Every frame must agree bit for bit: the avatar pose, the
 // direct solve state, and the encoded VMC packets. A case that is expected to
-// differ after a deliberate change states the difference here.
+// differ after a deliberate change states the difference here: (p7), where
+// the live stage steps on the source's step clock across the backward steps
+// face-only frames make.
 
 namespace
 {
@@ -183,10 +185,31 @@ struct PositionStep
 	double faceFrameAheadMs= -1.0;
 };
 
+// One encoded output frame (camera or face-only) as the live stage and the
+// frozen streamer each made it, for a sequence that states a difference
+struct OutputRecord
+{
+	int index= 0;
+	bool bFaceFrame= false;
+	double timestampMs= 0.0;
+	SourcePose::Clock clock;
+	SourcePose::eGroupState leftArm= SourcePose::eGroupState::Lost;
+	// Bit-identical to the frozen side, the pose and the packets
+	bool bSame= false;
+	double livePoseTimestampMs= 0.0;
+	glm::vec3 liveRoot{0.f};
+	glm::quat liveRootRotation{1.f, 0.f, 0.f, 0.f};
+	glm::vec3 frozenRoot{0.f};
+	glm::quat frozenRootRotation{1.f, 0.f, 0.f, 0.f};
+};
+
 struct PositionResult
 {
 	Tally tally;
 	StreamShadow shadow;
+	// The retarget alone on the camera frames, which sees no face-only frame
+	int retargetMismatches= 0;
+	std::vector<OutputRecord> outputs;
 	int encodedFrames= 0;
 	// Under a tolerance: the largest difference the compare saw in the pose
 	// and in the stream's floats, and the sent frames not bit-identical
@@ -244,13 +267,32 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConf
 			const bool bSame= position.solve(step.frame, step.config.bodyDimensions, *step.config.avatarSkeleton,
 											 step.config.avatarRetarget, why);
 			result.tally.note(bSame, index, "retarget", why);
+			result.retargetMismatches+= bSame ? 0 : 1;
 		}
+
+		auto record= [&](const TrackingFrameResult& frame, bool bFaceFrame, bool bSame) {
+			OutputRecord output;
+			output.index= index;
+			output.bFaceFrame= bFaceFrame;
+			output.timestampMs= frame.timestampMs;
+			output.clock= stream.live.result.source.clock;
+			output.leftArm= stream.live.result.source.arms[0].state;
+			output.bSame= bSame;
+			output.livePoseTimestampMs= stream.live.result.pose.timestampMs;
+			output.liveRoot= stream.live.result.pose.rootPositionWorld;
+			output.liveRootRotation= stream.live.result.pose.rootRotationWorld;
+			output.frozenRoot= stream.frozenResolve.pose.rootPositionWorld;
+			output.frozenRootRotation= stream.frozenResolve.pose.rootRotationWorld;
+			result.outputs.push_back(output);
+		};
 
 		stream.retarget(step.frame);
 		if (bDecimate && !gate.pass(step.frame.timestampMs, step.config.maxRateHz))
 			continue;
 		result.shadow.step(step.frame, step.config);
-		result.tally.note(stream.encode(step.frame, why), index, "stream", why);
+		const bool bSame= stream.encode(step.frame, why);
+		result.tally.note(bSame, index, "stream", why);
+		record(step.frame, false, bSame);
 		result.encodedFrames++;
 
 		if (step.faceFrameAheadMs >= 0.0)
@@ -259,7 +301,9 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConf
 			faceFrame.timestampMs+= step.faceFrameAheadMs;
 			result.shadow.step(faceFrame, step.config);
 			stream.retarget(faceFrame);
-			result.tally.note(stream.encode(faceFrame, why), index, "stream face frame", why);
+			const bool bFaceSame= stream.encode(faceFrame, why);
+			result.tally.note(bFaceSame, index, "stream face frame", why);
+			record(faceFrame, true, bFaceSame);
 		}
 	}
 	result.maxPoseDifference= stream.maxPoseDifference;
@@ -523,7 +567,8 @@ static int runRetargetGoldenTest(const TestArgs&)
 	}
 
 	// (p5) A timestamp regression in the middle of a hold drops the hold and
-	// snaps the root
+	// snaps the root: 2000 ms back is past the step clock's largest small
+	// backward step, a discontinuity as before
 	{
 		const PositionResult result= runPositionSequence(rig, baseConfig, 90, kFrameMs, false, [](PositionStep& step) {
 			if (inRange(step.index, 48, 60))
@@ -545,9 +590,21 @@ static int runRetargetGoldenTest(const TestArgs&)
 		checkSame(result.tally, result.shadow.count(1, eStreamed::Frozen) > 0, "(p6) gap over the hold");
 	}
 
-	// (p7) Face-only frames interleaved, stamped later than the camera frame
-	// that follows them, across a dropout. Today's stream drops the hold on
-	// the backward step, which this sequence pins.
+	// (p7) Face-only frames interleaved, stamped 45 ms after the camera frame
+	// they follow, so the next camera frame steps 12 ms back, across a
+	// dropout. This differs from the frozen path by design. The frozen stream
+	// read each backward step as a regression: it dropped the hold the frame
+	// the dropout began (held on 0 frames, frozen on 45) and snapped the root
+	// to its measurement. The live stage steps on the source's step clock,
+	// which stays where it was across a small backward step, so:
+	// - every output frame before the first backward step is bit-identical,
+	// and the retarget alone on the camera frames stays bit-identical
+	// - the hand is held for the 250 ms hold in forward time from the last
+	// frame that measured it (11 frames), then frozen (34 frames)
+	// - on a backward step no time passes: the root does not move (where the
+	// frozen root snapped), the interval is zero, and the step clock never
+	// goes back
+	// - the published pose carries the frame's own timestamp throughout
 	{
 		const PositionResult result= runPositionSequence(rig, baseConfig, 100, kFrameMs, false, [](PositionStep& step) {
 			if (inRange(step.index, 40, 70))
@@ -555,9 +612,102 @@ static int runRetargetGoldenTest(const TestArgs&)
 			if (step.index % 2 == 1)
 				step.faceFrameAheadMs= 45.0;
 		});
-		MIKAN_LOG_INFO(kTag) << "  (p7) left hand held on " << result.shadow.count(0, eStreamed::Held)
-							 << " frames, frozen on " << result.shadow.count(0, eStreamed::Frozen);
-		checkSame(result.tally, result.shadow.count(0, eStreamed::Frozen) > 0, "(p7) interleaved face-only frames");
+		using eGroupState= SourcePose::eGroupState;
+		const double holdMs= (double)baseConfig.holdOnDropoutMs;
+		int firstBackward= -1;
+		int firstDiffer= -1;
+		int differ= 0;
+		int backwardSteps= 0;
+		int rootStill= 0;
+		int frozenSnapped= 0;
+		float largestSnap= 0.f;
+		int clockWrong= 0;
+		int timestampWrong= 0;
+		int liveHeld= 0;
+		int liveFrozen= 0;
+		int liveLost= 0;
+		double holdStartMs= -1.0;
+		double lastHeldElapsedMs= -1.0;
+		double firstFrozenElapsedMs= -1.0;
+		for (size_t output= 0; output < result.outputs.size(); ++output)
+		{
+			const OutputRecord& record= result.outputs[output];
+			const bool bBackward= output > 0 && record.timestampMs < result.outputs[output - 1].timestampMs;
+			if (bBackward && firstBackward < 0)
+				firstBackward= (int)output;
+			if (!record.bSame)
+			{
+				differ++;
+				if (firstDiffer < 0)
+					firstDiffer= (int)output;
+			}
+			if (record.livePoseTimestampMs != record.timestampMs || record.clock.timestampMs != record.timestampMs)
+				timestampWrong++;
+			if (output > 0)
+			{
+				const OutputRecord& previous= result.outputs[output - 1];
+				if (record.clock.frameIntervalMs < 0.0 || record.clock.stepMs < previous.clock.stepMs ||
+					record.clock.frameIntervalMs != record.clock.stepMs - previous.clock.stepMs ||
+					(bBackward && record.clock.frameIntervalMs != 0.0))
+				{
+					clockWrong++;
+				}
+			}
+			if (bBackward)
+			{
+				backwardSteps++;
+				const OutputRecord& previous= result.outputs[output - 1];
+				if (sameBits(record.liveRoot, previous.liveRoot) &&
+					sameBits(record.liveRootRotation, previous.liveRootRotation))
+				{
+					rootStill++;
+				}
+				const float snap= glm::length(record.frozenRoot - previous.frozenRoot);
+				frozenSnapped+= snap > 0.f ? 1 : 0;
+				largestSnap= std::max(largestSnap, snap);
+			}
+			switch (record.leftArm)
+			{
+			case eGroupState::Measured:
+				holdStartMs= record.clock.stepMs;
+				break;
+			case eGroupState::Held:
+				liveHeld++;
+				lastHeldElapsedMs= record.clock.stepMs - holdStartMs;
+				break;
+			case eGroupState::Frozen:
+				if (liveFrozen == 0)
+					firstFrozenElapsedMs= record.clock.stepMs - holdStartMs;
+				liveFrozen++;
+				break;
+			default:
+				liveLost++;
+				break;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (p7) " << differ << " of " << result.outputs.size()
+							 << " output frames differ from the frozen path, the first at output " << firstDiffer
+							 << " where the first backward step is at " << firstBackward << "; " << backwardSteps
+							 << " backward steps";
+		MIKAN_LOG_INFO(kTag) << "  (p7) left hand held on " << liveHeld << " frames (frozen path "
+							 << result.shadow.count(0, eStreamed::Held) << "), frozen on " << liveFrozen
+							 << " (frozen path " << result.shadow.count(0, eStreamed::Frozen)
+							 << "); the last held frame " << lastHeldElapsedMs << " ms and the first frozen " << firstFrozenElapsedMs
+							 << " ms into the hold";
+		MIKAN_LOG_INFO(kTag) << "  (p7) the root still on " << rootStill << " of " << backwardSteps
+							 << " backward steps, where the frozen root snapped on " << frozenSnapped << " by up to "
+							 << largestSnap << " m; clock wrong on " << clockWrong << ", timestamp wrong on "
+							 << timestampWrong;
+		check(result.retargetMismatches == 0 && firstBackward > 0 && firstDiffer >= firstBackward,
+			  "(p7) interleaved face-only frames: bit-identical up to the first backward step, the retarget alone "
+			  "throughout");
+		check(result.shadow.count(0, eStreamed::Held) == 0 && result.shadow.count(0, eStreamed::Frozen) == 45 &&
+				  liveHeld == 11 && liveFrozen == 34 && liveLost == 0 && lastHeldElapsedMs >= 0.0 &&
+				  lastHeldElapsedMs <= holdMs && firstFrozenElapsedMs > holdMs,
+			  "(p7) interleaved face-only frames: the hand held for the hold in forward time, then frozen");
+		check(backwardSteps == 49 && rootStill == backwardSteps && frozenSnapped == backwardSteps && clockWrong == 0 &&
+				  timestampWrong == 0,
+			  "(p7) interleaved face-only frames: no time passes on a backward step, the root does not snap");
 	}
 
 	// (p8) Missing measurements: no shoulder, no forearm pose, a camera-space
@@ -855,7 +1005,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 			const bool bEpochStart= index == 0 || index == 30;
 			const uint32_t expectedEpoch= firstEpoch + (index >= 30 ? 1u : 0u);
 			if (source.pipeline != SourcePose::ePipeline::Position || source.clock.timestampMs != timestampMs ||
-				source.clock.frameIntervalMs != (bEpochStart ? 0.0 : kFrameMs) ||
+				source.clock.stepMs != timestampMs || source.clock.frameIntervalMs != (bEpochStart ? 0.0 : kFrameMs) ||
 				source.clock.resetEpoch != expectedEpoch)
 			{
 				clockWrong++;
@@ -954,6 +1104,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 				firstEpoch= source.clock.resetEpoch;
 
 			if (source.pipeline != SourcePose::ePipeline::Direct || source.clock.timestampMs != timestampMs ||
+				source.clock.stepMs != timestampMs ||
 				source.clock.frameIntervalMs != (bRestart ? 0.0 : timestampMs - lastTimestampMs) ||
 				source.clock.resetEpoch != firstEpoch + restarts)
 			{

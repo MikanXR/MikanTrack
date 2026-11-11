@@ -114,8 +114,9 @@ public:
 	// The source pose of a frame: a copy of exactly what the solve reads.
 	// bSideValid selects which sides carry an arm and a hand, each written as
 	// measured; the torso is measured while both valid sides carry a
-	// shoulder. Owns the clock: the frame time, the interval since the last
-	// fill, and the epoch reset() advances.
+	// shoulder. Owns the clock: the frame time, the step clock that holds
+	// across a small backward step, the interval since the last fill, and
+	// the epoch reset() advances.
 	void fillSource(const std::array<HandPose, 2>& poses, const bool bSideValid[2],
 					const TrackingFrameResult::HeadPose& head, double timestampMs, const BodyDimensions& user,
 					SourcePose& outSource);
@@ -156,7 +157,7 @@ private:
 	// The source clock, owned by fillSource
 	uint32_t m_resetEpoch= 0;
 	bool m_bHasFillTime= false;
-	double m_lastFillTimestampMs= 0.0;
+	double m_lastFillStepMs= 0.0;
 	// The epoch the root follow state belongs to
 	uint32_t m_solveEpoch= 0;
 
@@ -165,7 +166,7 @@ private:
 		bool valid= false;
 		glm::vec3 position{0.f};
 		float yawRadians= 0.f;
-		double timestampMs= 0.0;
+		double stepMs= 0.0;
 	};
 	RootState m_root;
 };

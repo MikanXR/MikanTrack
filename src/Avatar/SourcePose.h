@@ -61,12 +61,29 @@ struct SourcePose
 	// The frame's clock, written by the filler alone. The epoch counts the
 	// filler's restarts: a consumer that keeps state across frames drops it
 	// when the epoch changes, rather than keeping a clock of its own.
+	//
+	// The output frames are not stamped in order: a face-only frame carries
+	// its sample's arrival time, later than the capture time of the camera
+	// frame that follows it. So the clock a consumer steps its holds and
+	// filters on is stepMs, not the frame's own timestamp. stepMs follows the
+	// timestamp forward, stays where it was across a backward step of up to
+	// kMaxBackwardStepMs (no time passes on that frame), and follows a larger
+	// backward step, which is a discontinuity: a consumer reads stepMs going
+	// backward as the end of whatever it was timing.
 	struct Clock
 	{
+		// Far above what a face-only frame leads the next camera frame by (the
+		// gap between one loop iteration's capture poll and its face update,
+		// a few milliseconds), and below any jump a consumer should restart on
+		static constexpr double kMaxBackwardStepMs= 500.0;
+
+		// The frame's own timestamp, which the published pose carries
 		double timestampMs= 0.0;
-		// Since the filler's previous frame, zero on the first frame of an
-		// epoch (negative on a timestamp regression the filler does not
-		// restart on)
+		// The time the stateful logic steps on
+		double stepMs= 0.0;
+		// stepMs since the filler's previous frame: zero on the first frame of
+		// an epoch and across a small backward step, negative on a larger one
+		// the filler does not restart on
 		double frameIntervalMs= 0.0;
 		uint32_t resetEpoch= 0;
 	};

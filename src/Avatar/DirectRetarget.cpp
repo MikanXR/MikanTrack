@@ -441,7 +441,9 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 
 	outSource= SourcePose();
 	outSource.pipeline= SourcePose::ePipeline::Direct;
+	// Any backward step restarts above, so the step clock is the frame's
 	outSource.clock.timestampMs= timestampMs;
+	outSource.clock.stepMs= timestampMs;
 	outSource.clock.frameIntervalMs= frameMs;
 	outSource.clock.resetEpoch= m_resetEpoch;
 

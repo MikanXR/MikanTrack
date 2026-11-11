@@ -10,8 +10,8 @@
 #include "SyntheticDirectUser.h"
 
 // The retarget stage: the loss stage's hold and freeze, the display stage
-// against the stream stage, and a scrub's pre-roll against a straight
-// play-through.
+// against the stream stage, a scrub's pre-roll against a straight
+// play-through, and the step clock across interleaved face-only frames.
 
 namespace
 {
@@ -269,8 +269,8 @@ static int runRetargetStageTest(const TestArgs&)
 		LossProbe probeRegress;
 		probeRegress.step(live, 4000.0, hold);
 		const bool bArmed= probeRegress.carried();
-		probeRegress.step(lost, 3900.0, hold);
-		check(bArmed && !probeRegress.carried(), "(a) a timestamp regression drops the hold");
+		probeRegress.step(lost, 3000.0, hold);
+		check(bArmed && !probeRegress.carried(), "(a) a timestamp regression of a second drops the hold");
 	}
 
 	// (b) Freeze on loss: VMC has no confidence, so a hand that stops being
@@ -312,6 +312,104 @@ static int runRetargetStageTest(const TestArgs&)
 		LossProbe probeCamera;
 		probeCamera.step(cameraOnly, 1000.0, freeze);
 		check(!probeCamera.carried(), "(b) a camera-space pose is not streamable as bones");
+	}
+
+	// (e) The step clock. Camera frames every 33 ms, each odd one followed by
+	// a face-only frame 45 ms later that repeats it, so the next camera frame
+	// steps 12 ms back; the hand lost from frame 10. The hold runs from the
+	// last frame that saw the hand for its 250 ms of forward time: no
+	// backward step ends it, no frame's interval is negative, and the step
+	// clock never goes back while each frame keeps its own timestamp. Then a
+	// backward step of exactly kMaxBackwardStepMs is still small, one a
+	// millisecond longer is a discontinuity that ends the hold.
+	{
+		HandPose live;
+		live.tracked= true;
+		live.confidence= 0.8f;
+		live.hasWorldPose= true;
+		live.palmPositionWorld= glm::vec3(0.1f, 0.2f, 0.3f);
+		const HandPose lost;
+		const double holdMs= 250.0;
+		const LossPolicy hold= makePositionLossPolicy(0.f, (float)holdMs, false);
+
+		LossProbe probe;
+		int frames= 0;
+		int backwardSteps= 0;
+		int clockWrong= 0;
+		int held= 0;
+		int heldPastHold= 0;
+		double holdStartMs= -1.0;
+		double lastHeldElapsedMs= -1.0;
+		double firstReleasedElapsedMs= -1.0;
+		double lastStepMs= -1.0;
+		double lastTimestampMs= -1.0;
+		double largestInterval= 0.0;
+		for (int index= 0; index < 30; ++index)
+		{
+			const HandPose& pose= index < 10 ? live : lost;
+			for (int pass= 0; pass < ((index % 2) == 1 ? 2 : 1); ++pass)
+			{
+				const double timestampMs= index * kFrameMs + (pass == 1 ? 45.0 : 0.0);
+				probe.step(pose, timestampMs, hold);
+				const SourcePose::Clock& clock= probe.source.clock;
+				frames++;
+				backwardSteps+= (lastTimestampMs >= 0.0 && timestampMs < lastTimestampMs) ? 1 : 0;
+				if (clock.timestampMs != timestampMs || clock.frameIntervalMs < 0.0 ||
+					(lastStepMs >= 0.0 && clock.stepMs != lastStepMs + clock.frameIntervalMs))
+				{
+					clockWrong++;
+				}
+				largestInterval= std::max(largestInterval, clock.frameIntervalMs);
+				lastStepMs= clock.stepMs;
+				lastTimestampMs= timestampMs;
+
+				if (probe.source.arms[0].state == eGroupState::Measured)
+				{
+					holdStartMs= clock.stepMs;
+				}
+				else if (probe.held())
+				{
+					held++;
+					lastHeldElapsedMs= clock.stepMs - holdStartMs;
+					heldPastHold+= lastHeldElapsedMs > holdMs ? 1 : 0;
+				}
+				else if (firstReleasedElapsedMs < 0.0)
+				{
+					firstReleasedElapsedMs= clock.stepMs - holdStartMs;
+				}
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (e) " << frames << " frames, " << backwardSteps << " backward steps, clock wrong on "
+							 << clockWrong << "; held on " << held << " frames, the last " << lastHeldElapsedMs
+							 << " ms and the first released " << firstReleasedElapsedMs << " ms into the hold";
+		check(backwardSteps > 0 && clockWrong == 0,
+			  "(e) across interleaved face-only frames the step clock never goes back and no interval is negative");
+		check(held > 0 && heldPastHold == 0 && lastHeldElapsedMs + largestInterval > holdMs &&
+				  firstReleasedElapsedMs > holdMs,
+			  "(e) a hold spanning interleaved face-only frames lasts its duration in forward time");
+
+		LossProbe probeSmall;
+		probeSmall.step(live, 6000.0, hold);
+		probeSmall.step(lost, 6100.0, hold);
+		probeSmall.step(lost, 6100.0 - SourcePose::Clock::kMaxBackwardStepMs, hold);
+		const bool bSmallHeld= probeSmall.held() && probeSmall.source.clock.stepMs == 6100.0 &&
+			probeSmall.source.clock.frameIntervalMs == 0.0 &&
+			probeSmall.source.clock.timestampMs == 6100.0 - SourcePose::Clock::kMaxBackwardStepMs;
+		probeSmall.step(lost, 6150.0, hold);
+		const bool bSmallResumed= probeSmall.held() && probeSmall.source.clock.frameIntervalMs == 50.0 &&
+			fabsf(probeSmall.out().confidence - 0.8f * (1.f - 150.f / 250.f)) < 1e-4f;
+		check(bSmallHeld && bSmallResumed,
+			  "(e) a backward step of kMaxBackwardStepMs passes no time and the hold carries on from where it was");
+
+		LossProbe probeLarge;
+		probeLarge.step(live, 7000.0, hold);
+		probeLarge.step(lost, 7100.0, hold);
+		const bool bLargeArmed= probeLarge.held();
+		probeLarge.step(lost, 7100.0 - SourcePose::Clock::kMaxBackwardStepMs - 1.0, hold);
+		check(bLargeArmed && !probeLarge.carried() && probeLarge.source.arms[0].state == eGroupState::Lost &&
+				  probeLarge.source.clock.stepMs == probeLarge.source.clock.timestampMs &&
+				  probeLarge.source.clock.frameIntervalMs < 0.0,
+			  "(e) a longer backward step is a discontinuity: the step clock follows it and the hold ends");
 	}
 
 	const AvatarModel model= makeModel(eVrmVersion::Vrm1, false);
