@@ -11,12 +11,13 @@
 class VideoPreviewPanel;
 
 // Which body the Stage View shows: the one the Pipeline strip's selection
-// asks for, or one of the two whatever the selection
+// asks for, one of the two whatever the selection, or both side by side
 enum class eStageViewMode : int
 {
 	Follow,
 	Cameras,
 	Scene,
+	Split,
 };
 
 // How the Retarget view lays out the source pose and the avatar: the one
@@ -31,7 +32,10 @@ enum class eRetargetLayout : int
 // and the calibration wizards
 struct StageViewContent
 {
+	// The bodies drawn: the camera view, the scene, or in the split mode
+	// both. A wizard's content is the cameras alone.
 	bool bCameras= false;
+	bool bScene= false;
 	// The camera view's camera, -1 for every camera
 	int cameraIndex= -1;
 	// The scene's top-level stage, whose layers it draws; invalid for the
@@ -59,6 +63,15 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 // shows every camera. Never a wizard's content.
 StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDirect, int directCameraIndex,
 										int cameraCount);
+
+// What the view shows for a mode, given what following the selection shows
+// (decideStageViewContent): the mode's body or bodies, with the camera the
+// selection names where it is about the frames and the scene stage it names
+// where it is not, every camera or the whole scene for a body the selection
+// does not ask for. A camera calibration wizard takes the view for every
+// camera whatever the mode.
+StageViewContent resolveStageViewContent(eStageViewMode mode, const StageViewContent& follow,
+										 bool bCameraWizardActive);
 
 // The central view: one window that shows the camera view or the 3D scene
 // for the stage selected in the Pipeline strip, with a header row naming
@@ -108,7 +121,8 @@ public:
 	bool isRetargetView() const;
 
 	// The automation reply: "camera all", "camera <index>" or "scene <stage
-	// id or none>", then " mode follow|cameras|scene", then on a scene
+	// id or none>", or in the split mode the camera part then the scene
+	// part, then " mode follow|cameras|scene|split", then on a scene
 	// " pov free|<index>" (the camera the scene is looked through, the word
 	// apart from the camera view's "camera"), then on the Retarget view
 	// " layout overlay|sidebyside", then " wizard" while a wizard holds the
@@ -128,6 +142,9 @@ private:
 	// The content for the mode and the last update's inputs
 	void decide();
 	void drawHeader();
+	// The two bodies, each filling the region it is drawn in
+	void drawCameraBody(const Frame& frame);
+	void drawSceneBody(const Frame& frame);
 	// The scene's camera choice: the free camera and every configured camera
 	void drawPovCombo();
 	static const char* getPovUnavailableKey(eScenePovAvailability availability);
@@ -137,6 +154,8 @@ private:
 	Scene3dPanel* m_scenePanel;
 	eStageViewMode m_mode= eStageViewMode::Follow;
 	eRetargetLayout m_retargetLayout= eRetargetLayout::Overlay;
+	// The camera half's share of the split mode's width, not persisted
+	float m_splitRatio= 0.5f;
 	PipelineStageId m_selected;
 	bool m_bDirect= false;
 	int m_directCameraIndex= -1;

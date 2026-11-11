@@ -1,11 +1,17 @@
 #include "StageView.h"
 
+#include <algorithm>
+
 #include "imgui.h"
 #include "imgui_internal.h" // window settings, dock builder
 
 #include "LocText.h"
 #include "PipelineText.h"
 #include "VideoPreviewPanel.h"
+
+// The bar between the split mode's halves, and the least share either keeps
+static constexpr float k_splitterWidth= 6.f;
+static constexpr float k_minSplitRatio= 0.2f;
 
 SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvatar, bool bShowPerCameraSkeletons)
 {
@@ -104,6 +110,31 @@ StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDire
 	}
 	if (content.cameraIndex >= cameraCount)
 		content.cameraIndex= -1;
+	content.bScene= !content.bCameras;
+	return content;
+}
+
+StageViewContent resolveStageViewContent(eStageViewMode mode, const StageViewContent& follow,
+										 bool bCameraWizardActive)
+{
+	StageViewContent content;
+	if (bCameraWizardActive)
+	{
+		// The pattern feed is the wizard's whole UI
+		content.bCameras= true;
+		content.bWizard= true;
+		return content;
+	}
+	// A selection that is about the frames names the camera, and one that is
+	// not names the scene's stage. A body the selection does not ask for
+	// shows every camera, or the whole scene.
+	content.bCameras= mode == eStageViewMode::Cameras || mode == eStageViewMode::Split ||
+		(mode == eStageViewMode::Follow && follow.bCameras);
+	content.bScene= mode == eStageViewMode::Split || !content.bCameras;
+	if (content.bCameras && follow.bCameras)
+		content.cameraIndex= follow.cameraIndex;
+	if (content.bScene && !follow.bCameras)
+		content.sceneStage= follow.sceneStage;
 	return content;
 }
 
@@ -111,24 +142,7 @@ void StageView::decide()
 {
 	const StageViewContent follow=
 		decideStageViewContent(m_selected, m_bDirect, m_directCameraIndex, (int)m_previewPanel->getCameraCount());
-
-	StageViewContent content;
-	if (m_bCameraWizardActive)
-	{
-		// The pattern feed is the wizard's whole UI
-		content.bCameras= true;
-		content.bWizard= true;
-	}
-	else if (m_mode == eStageViewMode::Cameras || (m_mode == eStageViewMode::Follow && follow.bCameras))
-	{
-		content.bCameras= true;
-		content.cameraIndex= follow.bCameras ? follow.cameraIndex : -1;
-	}
-	else if (!follow.bCameras)
-	{
-		content.sceneStage= follow.sceneStage;
-	}
-	m_content= content;
+	m_content= resolveStageViewContent(m_mode, follow, m_bCameraWizardActive);
 }
 
 void StageView::draw(bool* pOpen, const Frame& frame)
@@ -166,23 +180,65 @@ void StageView::draw(bool* pOpen, const Frame& frame)
 	}
 
 	drawHeader();
-	if (m_content.bCameras)
+	if (m_content.bCameras && m_content.bScene)
 	{
-		m_previewPanel->drawBody(*frame.cameraResults, *frame.executionProviders, frame.forearms,
-								 m_content.cameraIndex);
+		// Each body fills the region it is given, so each half is a child
+		// region, with a bar between them that drags the share
+		const ImGuiWindowFlags childFlags= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+		const ImVec2 available= ImGui::GetContentRegionAvail();
+		const float splitWidth= std::max(available.x - k_splitterWidth, 1.f);
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
+		if (ImGui::BeginChild("##stageViewCameras", ImVec2(splitWidth * m_splitRatio, available.y), ImGuiChildFlags_None,
+							  childFlags))
+			drawCameraBody(frame);
+		ImGui::EndChild();
+
+		ImGui::SameLine();
+		ImGui::InvisibleButton("##stageViewSplitter", ImVec2(k_splitterWidth, std::max(available.y, 1.f)));
+		if (ImGui::IsItemActive())
+		{
+			m_splitRatio= std::clamp(m_splitRatio + ImGui::GetIO().MouseDelta.x / splitWidth, k_minSplitRatio,
+									 1.f - k_minSplitRatio);
+		}
+		if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+			ImGui::GetColorU32(ImGui::IsItemActive()    ? ImGuiCol_SeparatorActive
+								   : ImGui::IsItemHovered() ? ImGuiCol_SeparatorHovered
+															: ImGuiCol_Separator));
+
+		ImGui::SameLine();
+		if (ImGui::BeginChild("##stageViewScene", ImVec2(0.f, available.y), ImGuiChildFlags_None, childFlags))
+			drawSceneBody(frame);
+		ImGui::EndChild();
+		ImGui::PopStyleVar();
+	}
+	else if (m_content.bCameras)
+	{
+		drawCameraBody(frame);
 	}
 	else
 	{
-		const SceneLayers layers= makeStageSceneLayers(m_content.sceneStage, m_scenePanel->getShowAvatar(),
-													   m_scenePanel->getShowPerCameraSkeletons());
-		SceneViewOptions options;
-		options.bPickSourceChains= isRetargetView();
-		options.bSideBySide= options.bPickSourceChains && m_retargetLayout == eRetargetLayout::SideBySide;
-		m_scenePanel->drawBody(*frame.fused, *frame.sceneCameras, *frame.scenePerCamera, *frame.gizmos, layers,
-							   options);
+		drawSceneBody(frame);
 	}
 
 	ImGui::End();
+}
+
+void StageView::drawCameraBody(const Frame& frame)
+{
+	m_previewPanel->drawBody(*frame.cameraResults, *frame.executionProviders, frame.forearms, m_content.cameraIndex);
+}
+
+void StageView::drawSceneBody(const Frame& frame)
+{
+	const SceneLayers layers= makeStageSceneLayers(m_content.sceneStage, m_scenePanel->getShowAvatar(),
+												   m_scenePanel->getShowPerCameraSkeletons());
+	SceneViewOptions options;
+	options.bPickSourceChains= isRetargetView();
+	options.bSideBySide= options.bPickSourceChains && m_retargetLayout == eRetargetLayout::SideBySide;
+	m_scenePanel->drawBody(*frame.fused, *frame.sceneCameras, *frame.scenePerCamera, *frame.gizmos, layers, options);
 }
 
 void StageView::drawHeader()
@@ -190,10 +246,11 @@ void StageView::drawHeader()
 	ImGui::AlignTextToFramePadding();
 	ImGui::TextUnformatted(makeTitle().c_str());
 
-	static const char* k_modeKeys[]= {"stageView.modeFollow", "stageView.modeCameras", "stageView.modeScene"};
+	static const char* k_modeKeys[]= {"stageView.modeFollow", "stageView.modeCameras", "stageView.modeScene",
+									  "stageView.modeSplit"};
 	ImGui::SameLine();
 	ImGui::BeginDisabled(m_content.bWizard);
-	ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.f);
+	ImGui::SetNextItemWidth(ImGui::GetFontSize() * 13.f);
 	if (ImGui::BeginCombo("##stageViewMode", locText(k_modeKeys[(int)m_mode])))
 	{
 		for (int modeIndex= 0; modeIndex < IM_ARRAYSIZE(k_modeKeys); ++modeIndex)
@@ -206,7 +263,7 @@ void StageView::drawHeader()
 	ImGui::EndDisabled();
 	ImGui::SetItemTooltip("%s", locText(m_content.bWizard ? "stageView.wizardNote" : "stageView.modeTooltip"));
 
-	if (!m_content.bCameras)
+	if (m_content.bScene)
 		drawPovCombo();
 
 	if (isRetargetView())
@@ -277,7 +334,7 @@ const char* StageView::getPovUnavailableKey(eScenePovAvailability availability)
 
 bool StageView::isRetargetView() const
 {
-	return !m_content.bCameras && m_content.sceneStage.isValid() &&
+	return m_content.bScene && m_content.sceneStage.isValid() &&
 		m_content.sceneStage.stage == ePipelineStage::Retarget;
 }
 
@@ -285,14 +342,15 @@ std::string StageView::makeTitle() const
 {
 	if (m_content.bWizard)
 		return locText("stageView.titleWizard");
-	if (m_content.bCameras)
-	{
-		return m_content.cameraIndex < 0 ? std::string(locText("stageView.titleAllCameras"))
-										 : locFormat("stageView.titleCameraFmt", m_content.cameraIndex + 1);
-	}
-	if (!m_content.sceneStage.isValid())
-		return locText("stageView.titleScene");
-	return locFormat("stageView.titleStageFmt", PipelineText::stageName(m_content.sceneStage).c_str());
+	const std::string cameraTitle= m_content.cameraIndex < 0
+		? std::string(locText("stageView.titleAllCameras"))
+		: locFormat("stageView.titleCameraFmt", m_content.cameraIndex + 1);
+	const std::string sceneTitle= !m_content.sceneStage.isValid()
+		? std::string(locText("stageView.titleScene"))
+		: locFormat("stageView.titleStageFmt", PipelineText::stageName(m_content.sceneStage).c_str());
+	if (m_content.bCameras && m_content.bScene)
+		return locFormat("stageView.titleSplitFmt", cameraTitle.c_str(), sceneTitle.c_str());
+	return m_content.bCameras ? cameraTitle : sceneTitle;
 }
 
 std::string StageView::describe() const
@@ -300,10 +358,13 @@ std::string StageView::describe() const
 	std::string text;
 	if (m_content.bCameras)
 		text= m_content.cameraIndex < 0 ? "camera all" : "camera " + std::to_string(m_content.cameraIndex);
-	else
-		text= "scene " + (m_content.sceneStage.isValid() ? PipelineModel::toString(m_content.sceneStage) : "none");
+	if (m_content.bScene)
+	{
+		text+= text.empty() ? "" : " ";
+		text+= "scene " + (m_content.sceneStage.isValid() ? PipelineModel::toString(m_content.sceneStage) : "none");
+	}
 	text+= std::string(" mode ") + getModeName(m_mode);
-	if (!m_content.bCameras)
+	if (m_content.bScene)
 		text+= " pov " + describePov(m_scenePanel->getPovCamera());
 	if (isRetargetView())
 		text+= std::string(" layout ") + getRetargetLayoutName(m_retargetLayout);
@@ -320,6 +381,8 @@ const char* StageView::getModeName(eStageViewMode mode)
 			return "cameras";
 		case eStageViewMode::Scene:
 			return "scene";
+		case eStageViewMode::Split:
+			return "split";
 		default:
 			return "follow";
 	}
@@ -327,7 +390,8 @@ const char* StageView::getModeName(eStageViewMode mode)
 
 bool StageView::parseMode(const std::string& text, eStageViewMode& outMode)
 {
-	for (const eStageViewMode mode : {eStageViewMode::Follow, eStageViewMode::Cameras, eStageViewMode::Scene})
+	for (const eStageViewMode mode : {eStageViewMode::Follow, eStageViewMode::Cameras, eStageViewMode::Scene,
+									  eStageViewMode::Split})
 	{
 		if (text == getModeName(mode))
 		{

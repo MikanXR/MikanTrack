@@ -99,7 +99,7 @@ void MainWindow::registerAutomation(AutomationServer* server)
 	server->registerCommandNamespace(
 		"pipeline",
 		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
-		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pov [free|<cameraIndex>]",
+		 "pipeline view [follow|cameras|scene|split|overlay|sidebyside]", "pipeline pov [free|<cameraIndex>]",
 		 "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",

@@ -89,6 +89,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-direct-retarget`: direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism, the body-wrist gate on hand slots
 - `--test-retarget-golden`: retarget golden: the live retarget path against its frozen copy, bit for bit, over synthetic sequences
 - `--test-setup-flow`: guided setup: the step chain of every tracking variant
+- `--test-stage-view`: Stage View: the content of every view mode and the mode names
 - `--test-pipeline-model`: pipeline model: layout per project shape, stage ids, status rules, string table coverage
 - `--test-vrm`: VRM loader and rest skeleton on synthetic in-memory files, both VRM generations
 
