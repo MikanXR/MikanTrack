@@ -11,18 +11,20 @@
 #include "BodyPoseTypes.h"
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
-#include "DirectStageSolver.h"
 #include "FrameRecorder.h"
 #include "HeadlessGlContext.h"
 #include "PathUtils.h"
+#include "RetargetChains.h"
+#include "RetargetStage.h"
 #include "Scene3dPanel.h"
 #include "TrackingRecording.h"
 #include "TrackingReplay.h"
 #include "VrmLoader.h"
 
 // Re-solves one recorded frame of a direct-mode take or dump through the
-// direct retarget and reports how the posed avatar sits on the camera's
-// landmarks: the loop after a solver change, with no recapture.
+// retarget stage, under the take's own chain settings as the app solved it,
+// and reports how the posed avatar sits on the camera's landmarks: the loop
+// after a solver change or a chain edit, with no recapture.
 //
 //   --pose-report <recording.jsonl> [frameIndex] [outDir]
 //
@@ -32,7 +34,8 @@
 // pose-report.json (the solve state and the posed avatar, the dump's own
 // serializers) and pose-report.png (the frame with the landmarks and the
 // posed skeleton beside the avatar rendered from the camera), and logs the
-// per-joint reprojection, the arm angles and the finger angles.
+// per-joint reprojection, each arm's mapping and IK weight with its wrist
+// goal, the arm angles and the finger angles.
 namespace
 {
 constexpr int kIterations= 60;
@@ -160,20 +163,25 @@ int runPoseReportTool(const TestArgs& args)
 	cameraModel.cy= (float)cameraMatrix.z1;
 	cameraModel.width= cameraFrame.frameWidth;
 	cameraModel.height= cameraFrame.frameHeight;
-	const DirectRetargetConfig directConfig= makeDirectRetargetConfig(config, rig);
+	// The stage as the app builds it for this take: the recorded chains (or
+	// the migration of a take from before them) decide each arm's mapping,
+	// IK weight, reach and loss rules
+	const RetargetChains chains= resolveRetargetChains(config, rig);
+	RetargetStage stage;
+	stage.setConfig(makeRetargetStageConfig(config, rig, chains, skeleton));
 
 	// The frame held still: the same frame solved at the recorded interval
 	// until the filters have settled on it
 	const double intervalMs= cameraFrame.captureFps > 1.f ? 1000.0 / (double)cameraFrame.captureFps : 33.3;
-	DirectStageSolver solver;
-	AvatarPose pose;
+	RetargetResult result;
 	const TrackingFrameResult::HeadPose noPhoneHead;
 	for (int iteration= 0; iteration < kIterations; ++iteration)
 	{
-		solver.solve(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs + intervalMs * iteration,
-					 *skeleton, directConfig, pose);
+		stage.solveDirect(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs + intervalMs * iteration,
+						  result);
 	}
-	const DirectRetarget::SolveState& state= solver.getSolveState();
+	const AvatarPose& pose= result.pose;
+	const DirectRetarget::SolveState& state= result.directState;
 	const glm::mat4 cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, pose, state);
 	if (state.bHandednessSwapped)
 		MIKAN_LOG_WARNING(kTag) << "the hand slots sit on the body's opposite wrists: left and right are swapped "
@@ -193,6 +201,9 @@ int runPoseReportTool(const TestArgs& args)
 	};
 	nlohmann::json joints= nlohmann::json::array();
 	nlohmann::json arms= nlohmann::json::array();
+	// Each arm's wrist goal on the frame, where the solve had one
+	glm::vec2 goalPx[2]{};
+	bool bGoalPx[2]= {false, false};
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const char* sideName= sideIndex == 0 ? "L" : "R";
@@ -214,6 +225,32 @@ int runPoseReportTool(const TestArgs& args)
 		reportJoint(shoulder, posed, *skeleton, pose, cameraToWorld, cameraModel, joints);
 		reportJoint(elbow, posed, *skeleton, pose, cameraToWorld, cameraModel, joints);
 		reportJoint(wrist, posed, *skeleton, pose, cameraToWorld, cameraModel, joints);
+		// Where the solve aimed the wrist, for an arm pulled toward a goal:
+		// a goal off the landmark is the goal's error, a wrist off its goal
+		// the arm's
+		if (result.goals.bHasWristGoal[sideIndex] &&
+			AvatarOverlay::projectToPixel(result.goals.wristGoalWorld[sideIndex], cameraToWorld, cameraModel,
+										  goalPx[sideIndex]))
+		{
+			bGoalPx[sideIndex]= true;
+			const glm::vec2& pixel= goalPx[sideIndex];
+			nlohmann::json joint= {{"bone", std::string(sideName) + " wrist goal"}, {"avatarPx", {pixel.x, pixel.y}}};
+			if (wrist.bLandmark)
+			{
+				const float missPx= glm::length(pixel - wrist.landmarkPx);
+				joint["landmarkPx"]= {wrist.landmarkPx.x, wrist.landmarkPx.y};
+				joint["missPx"]= missPx;
+				MIKAN_LOG_INFO(kTag) << "  " << sideName << " wrist goal: (" << pixel.x << ", " << pixel.y
+									 << ") landmark (" << wrist.landmarkPx.x << ", " << wrist.landmarkPx.y << ") miss "
+									 << missPx << " px";
+			}
+			else
+			{
+				MIKAN_LOG_INFO(kTag) << "  " << sideName << " wrist goal: (" << pixel.x << ", " << pixel.y
+									 << ") no landmark";
+			}
+			joints.push_back(joint);
+		}
 		if (hand.tracked)
 		{
 			static const char* kFingerNames[FINGER_COUNT]= {"thumb", "index", "middle", "ring", "pinky"};
@@ -236,6 +273,16 @@ int runPoseReportTool(const TestArgs& args)
 		// came to
 		const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
 		nlohmann::json armJson= {{"side", sideName}, {"chainValid", arm.chain.valid}};
+		// What the chain asked for and what the arm was solved at
+		const RetargetArmReadout& armReadout= result.armParameters[sideIndex];
+		const char* mappingName= armMappingName(chains.arms[sideIndex].mapping);
+		armJson["mapping"]= mappingName;
+		armJson["posed"]= armReadout.bPosed;
+		armJson["ikWeight"]= armReadout.effectiveIkWeight;
+		armJson["reachScale"]= armReadout.reachScale.value;
+		MIKAN_LOG_INFO(kTag) << sideName << " arm: mapping " << mappingName << ", solved at IK weight "
+							 << armReadout.effectiveIkWeight << ", reach scale " << armReadout.reachScale.value
+							 << (armReadout.bPosed ? "" : ", not posed");
 		if (arm.chain.valid)
 		{
 			const glm::vec3 upper= arm.chain.shoulder - arm.chain.elbow;
@@ -324,6 +371,14 @@ int runPoseReportTool(const TestArgs& args)
 	cv::Mat annotated;
 	DiagnosticDump::annotateFrame(raw, cameraFrame, annotated);
 	AvatarOverlay::drawPosedSkeleton(annotated, *skeleton, pose, cameraToWorld, cameraModel);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		if (bGoalPx[sideIndex])
+		{
+			cv::drawMarker(annotated, cv::Point((int)goalPx[sideIndex].x, (int)goalPx[sideIndex].y),
+						   cv::Scalar(0, 255, 255), cv::MARKER_TILTED_CROSS, 18, 2);
+		}
+	}
 
 	cv::Mat render;
 	{
