@@ -25,6 +25,9 @@
 static constexpr float k_promptWrapWidth= 440.f;
 static const ImVec4 k_colorGood(0.4f, 1.f, 0.5f, 1.f);
 static const ImVec4 k_colorWait(1.f, 0.85f, 0.3f, 1.f);
+// How long after the handedness step switches the flip setting a swap still
+// reported is the camera's, not the solver catching up with the switch
+static constexpr float k_handednessSettleSeconds= 3.f;
 
 // Opens (if needed) and begins a viewport-centered modal for the current step
 static bool beginCenteredModal(const char* title)
@@ -75,6 +78,9 @@ void SetupFlow::update()
 		case eStep::ArucoPrint:
 			updateArucoPrintPrompt();
 			break;
+		case eStep::HandednessCheck:
+			updateHandednessCheckPrompt();
+			break;
 		case eStep::NeutralCapture:
 			updateNeutralCapturePrompt();
 			break;
@@ -117,7 +123,9 @@ SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
 		case eStep::IntrinsicsRunning:
 			// The direct retarget has no world to calibrate: the camera is
 			// the world, and the neutral capture is its only reference
-			return setup == eTrackingSetup::SingleFront ? eStep::NeutralCapture : eStep::ArucoPrint;
+			return setup == eTrackingSetup::SingleFront ? eStep::HandednessCheck : eStep::ArucoPrint;
+		case eStep::HandednessCheck:
+			return setup == eTrackingSetup::SingleFront ? eStep::NeutralCapture : eStep::Inactive;
 		case eStep::ArucoPrint:
 			return eStep::ExtrinsicsRunning;
 		case eStep::ExtrinsicsRunning:
@@ -186,6 +194,13 @@ void SetupFlow::transitionTo(eStep step)
 			break;
 		case eStep::ArucoPrint:
 			m_arucoMarkerLengthMM= (float)config->camera(0).extrinsics.markerLengthMM;
+			break;
+		case eStep::HandednessCheck:
+			// The direct stage picks up the intrinsics just calibrated, so
+			// its solve says where the hand slots sit against the body
+			m_bHandednessFlipApplied= false;
+			m_handednessFlipAgeSeconds= 0.f;
+			m_app->getVisionThread()->requestConfigRefresh();
 			break;
 		case eStep::NeutralCapture:
 			// The direct stage picks up the intrinsics just calibrated, so
@@ -601,6 +616,68 @@ void SetupFlow::updateArucoPrintPrompt()
 		advanceFrom(eStep::ArucoPrint);
 	}
 	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
+void SetupFlow::updateHandednessCheckPrompt()
+{
+	if (!beginCenteredModal(locWindowTitle("windows.modalHandednessCheck")))
+		return;
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.handednessPrompt"));
+	ImGui::PopTextWrapPos();
+	ImGui::Spacing();
+
+	// The body model labels a wrist by the arm it ends, so it is the
+	// reference: slots that sit on the opposite wrists carry the wrong side,
+	// and the flip setting is switched to match, once. A swap still reported
+	// well after the switch is left to the user.
+	const DirectRetarget::SolveState& state= m_mainWindow->getLatestDirectState();
+	const bool bMatch= state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped;
+	if (m_bHandednessFlipApplied)
+		m_handednessFlipAgeSeconds+= ImGui::GetIO().DeltaTime;
+	if (state.bHandednessSwapped && !m_bHandednessFlipApplied)
+	{
+		AppConfig* config= m_app->getConfig();
+		config->tracking.flipHandedness= !config->tracking.flipHandedness;
+		config->markDirty();
+		m_app->getVisionThread()->requestConfigRefresh();
+		m_bHandednessFlipApplied= true;
+		m_handednessFlipAgeSeconds= 0.f;
+	}
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	if (m_bHandednessFlipApplied)
+		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessSwitched"));
+	if (bMatch)
+		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessMatch"));
+	else if (state.bHandednessSwapped && m_handednessFlipAgeSeconds > k_handednessSettleSeconds)
+		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessSwapped"));
+	else
+		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessWaiting"));
+	ImGui::PopTextWrapPos();
+
+	ImGui::Separator();
+	ImGui::BeginDisabled(!bMatch);
+	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		advanceFrom(eStep::HandednessCheck);
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.skip"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		advanceFrom(eStep::HandednessCheck);
+	}
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
 	{

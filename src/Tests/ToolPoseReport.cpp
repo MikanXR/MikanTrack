@@ -175,6 +175,9 @@ int runPoseReportTool(const TestArgs& args)
 	}
 	const DirectRetarget::SolveState& state= solver.getSolveState();
 	const glm::mat4 cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, pose, state);
+	if (state.bHandednessSwapped)
+		MIKAN_LOG_WARNING(kTag) << "the hand slots sit on the body's opposite wrists: left and right are swapped "
+								   "(tracking.flipHandedness)";
 	MIKAN_LOG_INFO(kTag) << recordingPath << " frame " << frameIndex << " of " << replay.getFrameCount() << ", camera "
 						 << cameraIndex << " " << cameraModel.width << "x" << cameraModel.height << ", " << kIterations
 						 << " solves at " << intervalMs << " ms, torso " << (state.torsoValid ? "solved" : "unsolved");

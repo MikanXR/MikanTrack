@@ -20,8 +20,9 @@ class VideoPreviewPanel;
 // extrinsics, hands, then IMU mounting or body measurement by variant). The
 // two single-camera variants load their VRM avatar first. The single-front
 // variant is the direct retarget: one webcam facing the user, intrinsics
-// for undistortion, then the neutral capture, with no marker and no
-// calibration wizards. The single-desk variant runs one camera that sees
+// for undistortion, the left and right hand check, then the neutral
+// capture, with no marker and no calibration wizards. The single-desk
+// variant runs one camera that sees
 // the desk marker through the extrinsics, the desk-plane hand measurement
 // and the body wizard.
 // Runs inside the normal tracking UI so the wizards keep
@@ -57,6 +58,7 @@ public:
 		HandCalibRunning,
 		MountingRunning,  // JoyCon variant only
 		BodyCalibRunning, // tri-camera and single-desk variants
+		HandednessCheck,  // single-front variant only
 		NeutralCapture,   // single-front variant only
 		ConfirmCancel,
 	};
@@ -102,6 +104,7 @@ private:
 	void updateCameraSelectionPrompt();
 	void updateCharucoPrintPrompt();
 	void updateArucoPrintPrompt();
+	void updateHandednessCheckPrompt();
 	void updateNeutralCapturePrompt();
 	void updateConfirmCancelPrompt();
 	// All five *Running steps: launch the step's wizard once, then wait for it
@@ -127,6 +130,10 @@ private:
 	bool m_bWizardLaunched= false;
 	int m_intrinsicsCameraIndex= 0;
 	NeutralCaptureControl m_neutralCapture;
+	// HandednessCheck state: whether this visit to the step has switched the
+	// flip setting, which it does once, and how long ago
+	bool m_bHandednessFlipApplied= false;
+	float m_handednessFlipAgeSeconds= 0.f;
 
 	// CameraSelection state: chosen enumeration index per camera slot, -1 =
 	// nothing picked yet

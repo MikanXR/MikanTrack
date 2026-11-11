@@ -1390,6 +1390,7 @@ void MainWindow::gatherPipelineInputs()
 		const DirectRetarget::SolveState& state= *m_directReadout.state;
 		in.bDirectTorso= state.torsoValid;
 		in.bDirectHeadMeasured= state.headMeasured;
+		in.bDirectHandednessSwapped= state.bHandednessSwapped;
 		in.directShoulderDepthMeters= m_directReadout.shoulderDepth;
 		in.directLeanDegrees= m_directReadout.leanDegrees;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)

@@ -124,4 +124,5 @@ The living plan: what is in flight now, what comes next, and the open questions.
 
 ## Open questions
 
+- Is `tracking.flipHandedness` true the right default? On the `USB2.0 HD UVC WebCam` it labelled the hands opposite to the body model on every direct take, and false fixed it. Is that webcam's feed mirrored, or is the default wrong for unmirrored webcams in general?
 - Capture-phase GPU path, if the profile justifies one: OpenCV's OpenCL T-API (`cv::UMat`, no shader code, still a CPU tensor at the ONNX boundary) or a D3D12 preprocess feeding DirectML through IoBinding (custom shaders, no readback, the larger job)?

@@ -37,6 +37,9 @@ constexpr float kFrameMarginPx= 16.f;
 // widths, is not the hand: the palm detector runs over the whole frame and
 // fires on hand-shaped things in the scene
 constexpr float kHandAgreementShoulderWidths= 0.5f;
+// Hand slots that sit on the opposite side's body wrist for this long, with
+// none on its own, are labelled the wrong way round
+constexpr double kHandednessSwapMs= 1000.0;
 // A group (torso, head, an arm) unseen for longer than this returns to rest,
 // and a gap longer than this restarts the filters. An arm earns its hold:
 // it is held for as long as it was continuously placed plus one frame, up
@@ -448,6 +451,7 @@ void DirectRetarget::resetMeasure()
 	m_state= SolveState();
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
+	m_handednessSwapStartMs= -1.0;
 	m_torso= TorsoState();
 	m_head= HeadState();
 	for (ArmState& arm : m_arms)
@@ -703,6 +707,10 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		m_state.headFrame= m_head.frame;
 
 	// -- Arms --
+	// This frame's evidence on the hand labels: a slot on its own side's
+	// body wrist, and a slot on the other side's
+	bool bAnyHandOnOwnWrist= false;
+	bool bAnyHandOnOppositeWrist= false;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		ArmState& arm= m_arms[sideIndex];
@@ -746,6 +754,16 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		const bool bHandNear= hand.tracked && bWristVisible && shoulderWidthPx > 0.f &&
 			glm::distance(handWristPx, bodyWristPx) <= kHandAgreementShoulderWidths * shoulderWidthPx;
 		const bool bHandGate= advanceGate(bHandNear, arm.handGateFrames, arm.bHandAccepted);
+		// The same slot against the other arm's wrist. The body model labels
+		// a wrist by the arm it ends, so a slot there and not here carries
+		// the wrong side, whatever the arms are doing.
+		const int oppositeWristIndex=
+			sideIndex == 0 ? (int)ePoseLandmark::RIGHT_WRIST : (int)ePoseLandmark::LEFT_WRIST;
+		const bool bHandOpposite= hand.tracked && usable(oppositeWristIndex) && shoulderWidthPx > 0.f &&
+			glm::distance(handWristPx, landmarkPx(oppositeWristIndex)) <=
+				kHandAgreementShoulderWidths * shoulderWidthPx;
+		bAnyHandOnOwnWrist|= bHandNear;
+		bAnyHandOnOppositeWrist|= bHandOpposite;
 		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
@@ -1119,6 +1137,17 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		sourceHand.fingerZero= SourcePose::eFingerZero::Metacarpal;
 		sourceHand.fingers= arm.fingers;
 	}
+
+	// Swapped hand labels: a run of frames with a slot on the opposite wrist
+	// and none on its own. A slot on its own wrist ends the run, and a frame
+	// with no evidence either way leaves it as it is. Reported only, nothing
+	// in the solve reads it.
+	if (bAnyHandOnOwnWrist)
+		m_handednessSwapStartMs= -1.0;
+	else if (bAnyHandOnOppositeWrist && m_handednessSwapStartMs < 0.0)
+		m_handednessSwapStartMs= timestampMs;
+	m_state.bHandednessSwapped=
+		m_handednessSwapStartMs >= 0.0 && (timestampMs - m_handednessSwapStartMs) >= kHandednessSwapMs;
 }
 
 void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,

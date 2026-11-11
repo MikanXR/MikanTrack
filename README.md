@@ -387,6 +387,8 @@ monitor before testing the real receiver.
   inference; yellow `CPU` = fallback (forceable with `"onnxEp": "cpu"` in config).
 - MediaPipe's handedness assumes a mirrored selfie view; the **Flip handedness**
   toggle (default on) corrects for a normal non-mirrored camera. Verify on your
-  rig and flip if L/R are swapped.
+  rig and flip if L/R are swapped. A single-camera direct project checks this
+  against the body model: the guided setup switches the toggle itself, and the
+  Direct solver stage warns when the hands are swapped.
 - Depth accuracy from a single camera is in the ±2 cm class; it depends on a
   good intrinsics calibration and an accurate hand-scale measurement.

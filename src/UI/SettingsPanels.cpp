@@ -1431,6 +1431,15 @@ void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& cont
 	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
 		drawDirectYesNoCell(arm.bElbowSeen);
 	ImGui::EndTable();
+
+	// Swapped labels reject both hands, and the fix is this one setting
+	if (state->bHandednessSwapped)
+	{
+		ImGui::PushTextWrapPos(0.f);
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", locText("directStage.handednessSwapped"));
+		ImGui::PopTextWrapPos();
+		drawFlipHandednessSection(context);
+	}
 }
 
 void SettingsPanels::drawDirectTorsoReadout(const TrackingSectionContext& context)

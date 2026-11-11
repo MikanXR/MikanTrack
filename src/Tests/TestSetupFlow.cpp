@@ -44,6 +44,7 @@ const char* stepName(eStep step)
 		case eStep::HandCalibRunning: return "Hand";
 		case eStep::MountingRunning: return "Mounting";
 		case eStep::BodyCalibRunning: return "Body";
+		case eStep::HandednessCheck: return "HandednessCheck";
 		case eStep::NeutralCapture: return "NeutralCapture";
 		case eStep::ConfirmCancel: return "ConfirmCancel";
 	}
@@ -94,7 +95,8 @@ static int runSetupFlowTest(const TestArgs&)
 								   eStep::ArucoPrint, eStep::ExtrinsicsRunning, eStep::HandCalibRunning,
 								   eStep::BodyCalibRunning};
 	const std::vector<eStep> singleFront= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::CameraSelection,
-										   eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::NeutralCapture};
+										   eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::HandednessCheck,
+										   eStep::NeutralCapture};
 	const std::vector<eStep> singleDesk= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::CameraSelection,
 										  eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::ArucoPrint,
 										  eStep::ExtrinsicsRunning, eStep::HandCalibRunning, eStep::BodyCalibRunning};
@@ -103,7 +105,8 @@ static int runSetupFlowTest(const TestArgs&)
 	checkChain(eSetup::DualOverheadJoyCons, joyCons, "(a) the Joy-Con chain adds the mounting wizard");
 	checkChain(eSetup::TriCameraFront, tri, "(a) the tri-camera chain runs intrinsics three times and ends at the body wizard");
 	checkChain(eSetup::SingleFront, singleFront,
-			   "(b) the single-front chain loads the avatar, calibrates one camera's intrinsics and captures the neutral");
+			   "(b) the single-front chain loads the avatar, calibrates one camera's intrinsics, checks the hands' "
+			   "left and right and captures the neutral");
 	checkChain(eSetup::SingleDesk, singleDesk,
 			   "(b) the single-desk chain loads the avatar and runs the marker, hand and body wizards on one camera");
 
@@ -121,6 +124,14 @@ static int runSetupFlowTest(const TestArgs&)
 		bFinal&= SetupFlow::nextStep(setup, eStep::Inactive) == eStep::Inactive;
 	}
 	check(bFinal, "(c) the mounting, body and neutral steps finish every variant");
+
+	bool bHandednessSingleFrontOnly= true;
+	for (eSetup setup : setups)
+	{
+		const bool bReaches= SetupFlow::nextStep(setup, eStep::IntrinsicsRunning) == eStep::HandednessCheck;
+		bHandednessSingleFrontOnly&= bReaches == (setup == eSetup::SingleFront);
+	}
+	check(bHandednessSingleFrontOnly, "(d) only the single-front variant reaches the handedness check");
 
 	MIKAN_LOG_INFO("test-setup-flow") << (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
 	return failures == 0 ? 0 : 1;

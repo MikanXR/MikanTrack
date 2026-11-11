@@ -237,6 +237,10 @@ public:
 		glm::quat headFrame{1.f, 0.f, 0.f, 0.f};
 		glm::quat headDelta{1.f, 0.f, 0.f, 0.f};
 		Arm arms[2];
+		// The hand slots have sat on the opposite side's body wrists, and
+		// none on its own, for a second: the hand model's left and right
+		// are the wrong way round for this camera
+		bool bHandednessSwapped= false;
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -360,6 +364,9 @@ private:
 	bool m_bHasTime= false;
 	double m_lastTimestampMs= 0.0;
 	bool m_bFiltersConfigured= false;
+	// When the current run of frames with swapped hand labels began,
+	// negative outside one
+	double m_handednessSwapStartMs= -1.0;
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

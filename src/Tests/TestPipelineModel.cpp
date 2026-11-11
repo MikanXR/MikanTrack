@@ -203,6 +203,7 @@ std::vector<Fault> makeFaults()
 			 in.bDirectNeutral= false;
 			 in.bDirectTorso= false;
 		 }},
+		{"swapped hand labels", [](Inputs& in) { in.bDirectHandednessSwapped= true; }},
 		{"no avatar", [](Inputs& in) { in.bAvatarLoaded= false; }},
 		{"osc disabled", [](Inputs& in) { in.bOscEnabled= false; }},
 		{"osc socket closed", [](Inputs& in) { in.bOscRunning= false; }},
@@ -397,6 +398,15 @@ static int runPipelineModelTest(const TestArgs&)
 				  stateOf(noNeutral, id(S::Torso)) == eStageState::Degraded &&
 				  stateOf(noNeutral, id(S::ArmChain)) == eStageState::Running,
 			  "(f) direct with no neutral: the solver and the torso degraded, the arm chain running");
+
+		Inputs swapped= makeHealthy(true, 1, false, 0);
+		swapped.bDirectHandednessSwapped= true;
+		check(stateOf(swapped, id(S::DirectSolver)) == eStageState::Degraded &&
+				  stateOf(swapped, id(S::Filters)) == eStageState::Degraded &&
+				  valueOf(swapped, id(S::Filters)) == "pipeline.valHandednessSwapped" &&
+				  reasonOf(swapped, id(S::Filters)) == "pipeline.whyDirectHandednessSwapped" &&
+				  stateOf(swapped, id(S::Torso)) == eStageState::Running,
+			  "(f) direct with swapped hand labels: the solver and its filters degraded, naming the swap");
 	}
 
 	// (f2) A replayed frame from a take with no stage state: the stages that

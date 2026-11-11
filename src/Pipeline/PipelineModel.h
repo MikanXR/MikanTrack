@@ -184,6 +184,8 @@ struct PipelineStatusInputs
 		float elbowMissPx= 0.f;
 	};
 	DirectArm directArms[2];
+	// The hand slots sit on the opposite side's body wrists
+	bool bDirectHandednessSwapped= false;
 
 	// Retarget
 	bool bAvatarLoaded= false;

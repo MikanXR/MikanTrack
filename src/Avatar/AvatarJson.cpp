@@ -108,6 +108,7 @@ json directSolveStateToJson(const DirectRetarget::SolveState& state)
 		{"spineDelta", quatToJson(state.spineDelta)},
 		{"headMeasured", state.headMeasured},
 		{"headDelta", quatToJson(state.headDelta)},
+		{"handednessSwapped", state.bHandednessSwapped},
 		{"arms", json::array({armToJson(state.arms[0]), armToJson(state.arms[1])})},
 	};
 	if (state.torsoValid)

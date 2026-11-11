@@ -337,10 +337,14 @@ StageStatus computeDirect(const Inputs& in, S stage)
 			return degraded(text("valNoNeutral"), noNeutral);
 		if (!in.bDirectTorso)
 			return running(text("valNoPerson"));
+		if (in.bDirectHandednessSwapped)
+			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
 		if (resting == 2)
 			return running(text("valArmsResting"));
 		return running(text("valDepthFmt", in.directShoulderDepthMeters));
 	case S::Filters:
+		if (in.bDirectHandednessSwapped)
+			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
 		return running(text("valHandsSeenFmt", countDirect(in, &Inputs::DirectArm::bHandSeen)));
 	case S::Torso:
 		if (!in.bDirectTorso)

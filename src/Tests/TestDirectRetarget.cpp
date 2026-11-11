@@ -669,6 +669,74 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(k) a hand slot on the body wrist is the hand");
 	}
 
+	// (k2) Hand slots carrying the wrong side sit on the other arm's body
+	// wrist. A second of that with no slot on its own wrist is reported as
+	// swapped labels, one agreeing frame ends it, and wrists held together,
+	// where a slot is beside both, are not a swap
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+
+		User user= makeNeutralUser();
+		auto putSlotsOnOppositeWrists= [&](User& frameUser) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				frameUser.handPixelOffset[sideIndex]=
+					project(camera, frameUser.wrist[1 - sideIndex]) - project(camera, frameUser.wrist[sideIndex]);
+		};
+		int frameIndex= 400;
+		auto run= [&](User& frameUser, int frameCount) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, frameUser, *rig.skeleton, timestampMs, frameIndex++);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto swapped= [&]() { return solver.getSolveState().bHandednessSwapped; };
+
+		putSlotsOnOppositeWrists(user);
+		run(user, 20);
+		check(!swapped(), "(k2) slots on the opposite wrists for under a second are not reported");
+		run(user, 15);
+		bool bBodyPlaced= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bBodyPlaced&= chain.valid && !solver.getSolveState().arms[sideIndex].bHandSeen;
+			bBodyPlaced&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(swapped(), "(k2) slots on the opposite wrists for over a second are reported as swapped");
+		check(bBodyPlaced, "(k2) swapped slots are not the hands, and the body wrists place the arms");
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.handPixelOffset[sideIndex]= glm::vec2(0.f);
+		run(user, 1);
+		check(!swapped(), "(k2) one frame with a slot on its own wrist ends the report");
+
+		// One hand in view, on the other arm's wrist
+		putSlotsOnOppositeWrists(user);
+		user.bHandTracked[1]= false;
+		run(user, 35);
+		check(swapped(), "(k2) a single slot on the opposite wrist is reported as swapped");
+		user.bHandTracked[1]= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.handPixelOffset[sideIndex]= glm::vec2(0.f);
+		run(user, 1);
+
+		// The wrists drawn together in front of the chest: each slot is
+		// beside both body wrists, its own among them
+		const glm::vec3 wristMidpoint= 0.5f * (user.wrist[0] + user.wrist[1]);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex]= wristMidpoint + 0.15f * (user.wrist[sideIndex] - wristMidpoint);
+		putSlotsOnOppositeWrists(user);
+		run(user, 40);
+		check(!swapped(), "(k2) wrists held together are not a swap");
+	}
+
 	// (p) The wrist's entry gate and the earned hold: a body wrist whose
 	// visibility flickers across the bar every other frame never poses the
 	// arm, one steady above it gets in with its hand on the third frame, a
