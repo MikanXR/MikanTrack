@@ -40,7 +40,8 @@ struct AvatarRetargetConfig
 	float rootFollowTimeConstantS= 0.3f;
 
 	// Per arm and hand, left then right (copied from the avatar's rig
-	// settings, see AvatarRig.h)
+	// settings, see AvatarRig.h, but for the elbow hint confidence, which is
+	// the arm chain's, see RetargetChains.h)
 	struct Side
 	{
 		// The point the elbow bends toward when nothing measured it, meters,

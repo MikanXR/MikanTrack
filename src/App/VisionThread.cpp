@@ -445,7 +445,9 @@ void VisionThread::handleRecordingStartOnThread()
 
 	RecordingHeader header;
 	header.formatVersion= TrackingRecording::k_formatVersion;
-	header.appConfigJsonText= m_config->toJsonString();
+	// With the chains the stage runs on, so a take from a project without a
+	// chain block still carries the ones it ran
+	header.appConfigJsonText= m_config->toJsonString(m_retargetChains);
 	header.cameraCount= (int)m_cameras.size();
 
 	// The audio sidecar starts first, since the header carries where in the
@@ -652,7 +654,7 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 		out.palmarSource= (int)capture.palmarSource;
 	}
 
-	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(), rawImu,
+	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(m_retargetChains), rawImu,
 										lastCapture, recordFrame.freshCameras.empty() ? nullptr : &recordFrame,
 										bAvatar ? &avatar : nullptr);
 	if (bOk)
@@ -736,11 +738,20 @@ void VisionThread::refreshConfigOnThread()
 	applyOscConfigOnThread();
 }
 
-void VisionThread::applyOscConfigOnThread()
+void VisionThread::applyRetargetStageConfigOnThread()
 {
 	// The stage keeps its holds, freezes and filters across a config change,
-	// and starts over only on a new skeleton
-	m_retargetStage.setConfig(makeRetargetStageConfig(*m_config, m_avatar.rig, m_avatar.skeleton));
+	// and starts over only on a new skeleton. The chains come from the
+	// adopted block, never the config's, which the main thread replaces on
+	// an edit.
+	m_retargetChains= std::make_shared<const RetargetChains>(
+		resolveRetargetChains(m_retargetChainBlock.get(), *m_config, m_avatar.rig));
+	m_retargetStage.setConfig(makeRetargetStageConfig(*m_config, m_avatar.rig, *m_retargetChains, m_avatar.skeleton));
+}
+
+void VisionThread::applyOscConfigOnThread()
+{
+	applyRetargetStageConfigOnThread();
 
 	if (m_oscStreamer == nullptr)
 	{
@@ -920,6 +931,15 @@ void VisionThread::setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skele
 	m_bAvatarSkeletonChanged= true;
 }
 
+void VisionThread::setRetargetChains(std::shared_ptr<const RetargetChains> chains)
+{
+	{
+		std::lock_guard<std::mutex> lock(m_avatarMutex);
+		m_pendingRetargetChains= std::move(chains);
+	}
+	m_bRetargetChainsChanged= true;
+}
+
 void VisionThread::setAvatarIdentity(const AvatarIdentity& identity)
 {
 	{
@@ -969,6 +989,16 @@ void VisionThread::servicePendingRequests()
 		// The rig that came with the skeleton reaches the retarget stage
 		// here, which starts its direct solver over on a new skeleton
 		applyOscConfigOnThread();
+	}
+	// A chain edit reaches the stage alone: no refresh, so a recording runs
+	// on and every hold, freeze and filter carries over
+	if (m_bRetargetChainsChanged.exchange(false))
+	{
+		{
+			std::lock_guard<std::mutex> lock(m_avatarMutex);
+			m_retargetChainBlock= m_pendingRetargetChains;
+		}
+		applyRetargetStageConfigOnThread();
 	}
 	if (m_bRecordingStopRequested.exchange(false))
 		finalizeRecordingOnThread(false, "");
@@ -1409,7 +1439,14 @@ bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 	// timestamp regression, which the gate answers by sending that frame.
 	iteration.outputResult= m_lastOutputResult;
 	iteration.outputResult.timestampMs= sampleTimestampMs;
-	const double holdMs= (double)m_config->osc.holdOnDropoutMs;
+	// The dropout window is the longest hold the position pipeline's arms
+	// take from their chains
+	double holdMs= 0.0;
+	for (const ChainLossPolicy& arm : m_retargetStage.getConfig().positionLoss.arms)
+	{
+		if (arm.hold == eLossHold::Timed)
+			holdMs= std::max(holdMs, (double)arm.holdMs);
+	}
 	if (m_lastCameraOutputMs < 0.0 || sampleTimestampMs - m_lastCameraOutputMs > holdMs)
 	{
 		for (HandPose& pose : iteration.outputResult.poses)

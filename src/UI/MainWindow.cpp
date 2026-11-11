@@ -38,6 +38,7 @@
 #include "PipelinePanel.h"
 #include "PipelineText.h"
 #include "ProjectManager.h"
+#include "RetargetChains.h"
 #include "Scene3dPanel.h"
 #include "SettingsPanels.h"
 #include "SetupFlow.h"
@@ -496,6 +497,7 @@ void MainWindow::update(float deltaSeconds)
 	OscSectionContext oscContext;
 	oscContext.config= config;
 	oscContext.visionThread= visionThread;
+	oscContext.app= m_app;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
 							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
@@ -1035,11 +1037,14 @@ void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* direct
 const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 	const AppConfig& liveConfig, const AvatarRigSettings& rig, const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	// The recording's lengths, direct settings and loss rules, the project's
-	// avatar placement, and the live rig
+	// The recording's lengths, direct settings and retarget chains (its loss
+	// rules and elbow hint confidences), the project's avatar placement, and
+	// the live rig. A take from before chain settings migrates its chains
+	// from its own legacy settings and the live rig.
 	const AppConfig& recordedConfig= m_timelinePanel->getRecordedConfig();
-	RetargetStageConfig stageConfig= makeRetargetStageConfig(recordedConfig, rig, skeleton);
-	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig);
+	const RetargetChains recordedChains= resolveRetargetChains(recordedConfig, rig);
+	RetargetStageConfig stageConfig= makeRetargetStageConfig(recordedConfig, rig, recordedChains, skeleton);
+	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig, recordedChains);
 	m_displayStage.setConfig(stageConfig);
 
 	// A direct-mode recording's camera and its undistorted pinhole, the

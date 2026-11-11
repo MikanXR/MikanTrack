@@ -17,6 +17,7 @@
 #include "HandRoiQuality.h"
 #include "LocalizationManager.h"
 #include "LocText.h"
+#include "RetargetChains.h"
 #include "Scene3dPanel.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
@@ -1784,17 +1785,31 @@ void SettingsPanels::drawOscDeliveryControls(const OscSectionContext& context)
 
 void SettingsPanels::drawOscLossControls(const OscSectionContext& context)
 {
-	bool bChanged= false;
-	OscConfig& osc= context.config->osc;
+	// Until the controls are per chain, both arms take the one value: the
+	// left arm's shows, and the freeze as the position pipeline performs it
+	RetargetChains chains= context.app->getRetargetChains();
+	float holdMs= chains.arms[0].loss.holdMs;
+	bool bFreeze= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, 0.f).arms[0].after == eLossAfter::Freeze;
 
-	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &osc.holdOnDropoutMs, 0.f, 1000.f, "%.0f ms");
+	bool bChanged= false;
+	if (ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &holdMs, 0.f, 1000.f, "%.0f ms"))
+	{
+		for (RetargetChains::Arm& arm : chains.arms)
+			arm.loss.holdMs= holdMs;
+		bChanged= true;
+	}
 	ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
 
-	bChanged|= ImGui::Checkbox(locLabel("oscPanel.freezeOnLoss"), &osc.vmcFreezeOnLoss);
+	if (ImGui::Checkbox(locLabel("oscPanel.freezeOnLoss"), &bFreeze))
+	{
+		for (RetargetChains::Arm& arm : chains.arms)
+			arm.loss.after= bFreeze ? eLossAfter::Freeze : eLossAfter::Release;
+		bChanged= true;
+	}
 	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
 
 	if (bChanged)
-		commitOscConfigChange(context);
+		context.app->setRetargetChains(chains);
 }
 
 void SettingsPanels::drawOscVmcControls(const OscSectionContext& context)

@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "LossStage.h"
+#include "RetargetChains.h"
 #include "RetargetStage.h"
 
 // A retarget stage driven one camera frame at a time with the skeleton and
@@ -27,7 +28,12 @@ public:
 		if (stageConfig.skeleton.get() != &skeleton)
 			stageConfig.skeleton= std::shared_ptr<const AvatarSkeleton>(std::shared_ptr<const AvatarSkeleton>(), &skeleton);
 		stageConfig.direct= config;
-		stageConfig.directLoss= makeDirectLossPolicy(config.restBlendMs);
+		// The rules from the chains a direct project with this config runs
+		// on, as the live code builds them
+		const RetargetChains chains=
+			migrateRetargetChains(true, 250.f, true, config.restBlendMs,
+								  {config.sides[0].elbowHintConfidence, config.sides[1].elbowHintConfidence});
+		stageConfig.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, 0.f);
 		m_stage.setConfig(stageConfig);
 		m_stage.solveDirect(camera, cameraModel, phoneHead, timestampMs, m_result);
 		outPose= m_result.pose;

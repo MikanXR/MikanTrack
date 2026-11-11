@@ -4,6 +4,7 @@
 
 #include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/quaternion_float.hpp"
+#include "glm/ext/scalar_constants.hpp"
 #include "glm/ext/vector_float3.hpp"
 
 #include "AvatarRetarget.h"
@@ -85,10 +86,18 @@ struct DirectRetargetConfig
 	// the rest pose is where a lost arm goes)
 	std::array<AvatarRetargetConfig::Side, 2> sides{};
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
-	// snaps. The rig's, carried with the direct pipeline's settings for the
-	// loss stage's arm policy (makeDirectLossPolicy): the solver does not
-	// read it.
+	// snaps. The left arm chain's, carried with the direct pipeline's settings
+	// for a caller that builds the loss stage's arm policy from this config
+	// alone (makeDirectLossPolicy): the solver does not read it, and the
+	// retarget stage takes each arm's from its chain.
 	float restBlendMs= 300.f;
+	// The rig's joint limits on the relative rotations, radians: the head
+	// against the neutral head, the spine (the lean and the shoulder line's
+	// turn) against the neutral torso, and each wrist (the palm in the
+	// forearm frame), left then right
+	float headLimitRadians= 70.f * glm::pi<float>() / 180.f;
+	float spineLimitRadians= 45.f * glm::pi<float>() / 180.f;
+	std::array<float, 2> wristLimitRadians{80.f * glm::pi<float>() / 180.f, 80.f * glm::pi<float>() / 180.f};
 };
 
 class DirectRetarget

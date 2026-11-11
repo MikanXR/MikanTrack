@@ -14,6 +14,7 @@
 #include "SourcePose.h"
 #include "TrackingTypes.h"
 
+class App;
 class AppConfig;
 class VisionThread;
 class VideoCaptureSystem;
@@ -191,11 +192,13 @@ struct OscReadout
 };
 
 // What the OSC sections read and write. readout: the shown frame's stream
-// status (the Output stage's diagnostics).
+// status (the Output stage's diagnostics). app: what the loss controls write
+// the retarget chain settings through.
 struct OscSectionContext
 {
 	AppConfig* config= nullptr;
 	VisionThread* visionThread= nullptr;
+	App* app= nullptr;
 	const OscReadout* readout= nullptr;
 };
 
@@ -327,7 +330,8 @@ void drawOscTargetControls(const OscSectionContext& context);
 void drawOscVmcControls(const OscSectionContext& context);
 void drawOscDeliveryControls(const OscSectionContext& context);
 // What the stream does with a lost hand: the dropout hold and freeze on
-// loss. The Retarget stage's.
+// loss. The Retarget stage's, written to both arm chains' loss policies,
+// which reach the vision thread without a config refresh.
 void drawOscLossControls(const OscSectionContext& context);
 // Whether the stream runs, its frame rate and the last frame's size, from
 // context.readout

@@ -12,6 +12,7 @@
 #include "DirectStageSolver.h"
 #include "LossStage.h"
 #include "OscStreamer.h"
+#include "RetargetChains.h"
 #include "RetargetStage.h"
 
 #include "FrozenAvatarRetarget.h"
@@ -75,15 +76,27 @@ inline OscStreamerConfig toLiveStream(const StreamConfig& config)
 	return out;
 }
 
+// The retarget chains a multi-camera project with these stream settings and
+// these per-side solver fields runs on: what the live code reads its loss
+// rules and elbow hint confidences from
+inline RetargetChains toLiveChains(const StreamConfig& config)
+{
+	return migrateRetargetChains(false, config.holdOnDropoutMs, config.vmcFreezeOnLoss, 300.f,
+								 {config.avatarRetarget.sides[0].elbowHintConfidence,
+								  config.avatarRetarget.sides[1].elbowHintConfidence});
+}
+
 // The live retarget stage's share of a stream config: the position
-// pipeline's solve and its loss rules
+// pipeline's solve and its loss rules, through the chains
 inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 {
+	const RetargetChains chains= toLiveChains(config);
 	RetargetStageConfig out;
 	out.skeleton= config.avatarSkeleton;
 	out.position= config.avatarRetarget;
+	applyRetargetChains(chains, out.position.sides);
 	out.user= config.bodyDimensions;
-	out.positionLoss= makePositionLossPolicy(config.minConfidence, config.holdOnDropoutMs, config.vmcFreezeOnLoss);
+	out.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.minConfidence);
 	return out;
 }
 // Bitwise equality of one padding-free value (a float, a bool, a glm vector
@@ -813,6 +826,8 @@ struct DirectPair
 	{
 		live.solve(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, livePose);
 		liveSplit.measure(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, liveSource);
+		// The direct rules built straight from the config, where the stage
+		// builds them from the chains, so the two are held to each other too
 		liveSplitLoss.apply(makeDirectLossPolicy(config.restBlendMs), &skeleton, config.sides, liveSource, nullptr);
 		liveSplit.place(liveSource, skeleton, config, liveSplitPose);
 		liveSplitState= liveSplit.getSolveState();

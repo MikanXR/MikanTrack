@@ -47,10 +47,6 @@ constexpr double kMaxHoldMs= 500.0;
 // is not on the person
 constexpr float kMinBodyDepthMeters= 0.15f;
 constexpr float kMaxBodyDepthMeters= 2.0f;
-// Joint limits on the relative rotations, radians
-constexpr float kHeadLimitRadians= 70.f * glm::pi<float>() / 180.f;
-constexpr float kWristLimitRadians= 80.f * glm::pi<float>() / 180.f;
-constexpr float kSpineLimitRadians= 45.f * glm::pi<float>() / 180.f;
 
 // One-euro bands. Pixels are accurate and fast, so their band is light.
 // Depths are the single view's guess and the quantity that jumps, so their
@@ -231,10 +227,11 @@ bool handFromPalm(const glm::vec3& forearmDirection, const glm::vec3& restPalmNo
 // avatar's trimmed rest palm frame under the posed forearm: a straight
 // wrist is the avatar's rest wrist, since the user's hands carry no
 // reference, a single view's palm at one instant being too unsure to be
-// subtracted from every later frame) and the fingers
+// subtracted from every later frame, within wristLimitRadians) and the
+// fingers
 void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
 			  const DirectRetarget::ArmPlacement& placement, const AvatarRetargetConfig::Side& sideConfig,
-			  AvatarPose& outPose)
+			  float wristLimitRadians, AvatarPose& outPose)
 {
 	const eHandSide side= (eHandSide)sideIndex;
 	const B upperArmBone= sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm);
@@ -249,7 +246,7 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 	placeBone(outPose, skeleton, lowerArmBone, chainDelta);
 
 	const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
-	const glm::quat relative= limitRotationAngle(placement.wristRotation, kWristLimitRadians);
+	const glm::quat relative= limitRotationAngle(placement.wristRotation, wristLimitRadians);
 	const glm::quat restLowerArm= skeleton.getBone(lowerArmBone).restRotationWorld;
 	const glm::quat trimmedRestPalm=
 		glm::quat_cast(glm::mat3(handRest.palmFrameWorld)) * glm::quat(sideConfig.handTrimRadians);
@@ -564,7 +561,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 																		   : glm::quat(1.f, 0.f, 0.f, 0.f);
 		const glm::quat torsoNow= lean * m_torso.lineFrame;
 		const glm::quat neutralTorso= tilt * config.neutral.torso;
-		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), kSpineLimitRadians);
+		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), config.spineLimitRadians);
 	}
 	m_state.spineDelta= spineDelta;
 	outSource.torso.state= bTorsoFresh ? eGroupState::Measured : bTorsoUsable ? eGroupState::Held : eGroupState::Lost;
@@ -1072,7 +1069,7 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 	{
 		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
 		if (source.head.state != eGroupState::Lost && source.head.state != eGroupState::Resting)
-			headDelta= limitRotationAngle(source.head.orientation, kHeadLimitRadians);
+			headDelta= limitRotationAngle(source.head.orientation, config.headLimitRadians);
 		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
 		placeBone(outPose, skeleton, B::Head, headDelta);
 		m_state.headDelta= headDelta;
@@ -1094,7 +1091,8 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 		placement.twist= sourceArm.twist;
 		placement.wristRotation= sourceHand.wristRotation;
 		placement.fingers= sourceHand.fingers;
-		placeArm(skeleton, sideIndex, spineDelta, placement, config.sides[sideIndex], outPose);
+		placeArm(skeleton, sideIndex, spineDelta, placement, config.sides[sideIndex],
+				 config.wristLimitRadians[sideIndex], outPose);
 	}
 }
 
@@ -1108,7 +1106,7 @@ void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRe
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		placeArm(skeleton, sideIndex, identity,
 				 makeRestPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]), config.sides[sideIndex],
-				 outPose);
+				 config.wristLimitRadians[sideIndex], outPose);
 }
 
 glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,

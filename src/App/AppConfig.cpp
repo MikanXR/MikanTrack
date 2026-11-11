@@ -18,6 +18,7 @@
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
 #include "Logger.h"
+#include "RetargetChains.h"
 #include "RetargetStage.h"
 
 using json= nlohmann::json;
@@ -336,7 +337,26 @@ static json cameraProfileToJson(const CameraProfile& profile)
 	};
 }
 
+RetargetChains resolveRetargetChains(const AppConfig& config, const AvatarRigSettings& rig)
+{
+	return resolveRetargetChains(config.retargetChains.get(), config, rig);
+}
+
+RetargetChains resolveRetargetChains(const RetargetChains* block, const AppConfig& config, const AvatarRigSettings& rig)
+{
+	if (block != nullptr)
+		return *block;
+	return migrateRetargetChains(config.direct.enabled, config.osc.holdOnDropoutMs, config.osc.vmcFreezeOnLoss,
+								 rig.restBlendMs, {rig.sides[0].elbowHintConfidence, rig.sides[1].elbowHintConfidence});
+}
+
 AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
+{
+	return makeAvatarRetargetConfig(config, rig, resolveRetargetChains(config, rig));
+}
+
+AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig,
+											  const RetargetChains& chains)
 {
 	using B= eHumanoidBone;
 	AvatarRetargetConfig retarget;
@@ -352,7 +372,6 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		const B handBone= sideIndex == 0 ? B::LeftHand : B::RightHand;
 		const B lowerArmBone= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
 		side.elbowHintOffset= rigSide.elbowHintOffset;
-		side.elbowHintConfidence= rigSide.elbowHintConfidence;
 		side.handTrimRadians= glm::radians(rig.rotationTrimDegrees[(int)handBone]);
 		side.forearmRollTrimRadians= glm::radians(rig.rotationTrimDegrees[(int)lowerArmBone].x);
 		side.curlGain= rigSide.curlGain;
@@ -365,10 +384,24 @@ AvatarRetargetConfig makeAvatarRetargetConfig(const AppConfig& config, const Ava
 		side.restPalmNormal= rigSide.restPalmNormal;
 		side.restFingerCurlRadians= glm::radians(rigSide.restFingerCurlDegrees);
 	}
+	applyRetargetChains(chains, retarget.sides);
 	return retarget;
 }
 
+// The rig's limits are degrees; the conversion is the one the solver's
+// defaults are written in, so the default limits land on the same bits
+static float limitDegreesToRadians(float degrees)
+{
+	return degrees * glm::pi<float>() / 180.f;
+}
+
 DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
+{
+	return makeDirectRetargetConfig(config, rig, resolveRetargetChains(config, rig));
+}
+
+DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig,
+											  const RetargetChains& chains)
 {
 	DirectRetargetConfig direct;
 	direct.cameraTiltRadians= glm::radians(config.direct.cameraTiltDegrees);
@@ -383,24 +416,34 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
 	direct.userForearmLengthMeters= dimensions.forearmLengthMeters;
 	// The rig adjustments are the position retarget's, one mapping
-	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
+	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig, chains);
 	direct.headTrimRadians= retarget.headTrimRadians;
-	direct.restBlendMs= rig.restBlendMs;
+	direct.restBlendMs= chains.arms[0].loss.restBlendMs;
 	direct.sides= retarget.sides;
+	direct.headLimitRadians= limitDegreesToRadians(rig.headLimitDegrees);
+	direct.spineLimitRadians= limitDegreesToRadians(rig.spineLimitDegrees);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		direct.wristLimitRadians[sideIndex]= limitDegreesToRadians(rig.sides[sideIndex].wristLimitDegrees);
 	return direct;
 }
 
 RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const AvatarRigSettings& rig,
 											std::shared_ptr<const AvatarSkeleton> skeleton)
 {
+	return makeRetargetStageConfig(config, rig, resolveRetargetChains(config, rig), std::move(skeleton));
+}
+
+RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const AvatarRigSettings& rig,
+											const RetargetChains& chains,
+											std::shared_ptr<const AvatarSkeleton> skeleton)
+{
 	RetargetStageConfig stage;
 	stage.skeleton= std::move(skeleton);
-	stage.position= makeAvatarRetargetConfig(config, rig);
+	stage.position= makeAvatarRetargetConfig(config, rig, chains);
 	stage.user= makeBodyDimensions(config);
-	stage.direct= makeDirectRetargetConfig(config, rig);
-	stage.positionLoss=
-		makePositionLossPolicy(config.osc.minConfidence, config.osc.holdOnDropoutMs, config.osc.vmcFreezeOnLoss);
-	stage.directLoss= makeDirectLossPolicy(stage.direct.restBlendMs);
+	stage.direct= makeDirectRetargetConfig(config, rig, chains);
+	stage.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence);
+	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence);
 	return stage;
 }
 
@@ -769,9 +812,24 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.osc.holdOnDropoutMs= os.value("holdOnDropoutMs", 250.f);
 	config.osc.vmcHeadOffsetMeters= os.value("vmcHeadOffsetMeters", 0.08f);
 	config.osc.vmcFreezeOnLoss= os.value("vmcFreezeOnLoss", true);
+
+	// The chains, once a project has them, take the place of the legacy
+	// stream keys above; a field they lack takes the project shape's default
+	config.retargetChains= nullptr;
+	const json& rt= j.value("retarget", json::object());
+	if (rt.is_object() && rt.contains("chains"))
+	{
+		config.retargetChains= std::make_shared<const RetargetChains>(
+			retargetChainsFromJson(rt["chains"], makeDefaultRetargetChains(config.direct.enabled)));
+	}
 }
 
 std::string AppConfig::toJsonString() const
+{
+	return toJsonString(retargetChains);
+}
+
+std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>& chains) const
 {
 	json j;
 	j["configVersion"]= k_configVersion;
@@ -930,10 +988,19 @@ std::string AppConfig::toJsonString() const
 		{"vmcPort", osc.port},
 		{"maxRateHz", osc.maxRateHz},
 		{"minConfidence", osc.minConfidence},
-		{"holdOnDropoutMs", osc.holdOnDropoutMs},
 		{"vmcHeadOffsetMeters", osc.vmcHeadOffsetMeters},
-		{"vmcFreezeOnLoss", osc.vmcFreezeOnLoss},
 	};
+	// The chains replace the legacy loss keys; without them the legacy keys
+	// are what a project's chains migrate from
+	if (chains != nullptr)
+	{
+		j["retarget"]= {{"chains", retargetChainsToJson(*chains)}};
+	}
+	else
+	{
+		j["osc"]["holdOnDropoutMs"]= osc.holdOnDropoutMs;
+		j["osc"]["vmcFreezeOnLoss"]= osc.vmcFreezeOnLoss;
+	}
 
 	return j.dump(2);
 }

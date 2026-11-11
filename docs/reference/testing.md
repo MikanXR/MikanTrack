@@ -30,7 +30,7 @@ Every command follows the same contract:
 
 ### Running every self-test in one pass
 
-The 35 self-tests are deterministic and need no hardware or input files, so they run as a batch. This drives the list from `--list-tests` rather than a hardcoded list, so a newly added test is picked up automatically:
+The 36 self-tests are deterministic and need no hardware or input files, so they run as a batch. This drives the list from `--list-tests` rather than a hardcoded list, so a newly added test is picked up automatically:
 
 ```bash
 cd build/Release && ./MikanTrack.exe --list-tests | awk '/^self-tests:/{f=1;next} /^[a-z]/{f=0} f && $1 ~ /^--/{print $1}' | while read -r flag; do ./MikanTrack.exe "$flag" >/dev/null 2>&1 || echo "FAIL $flag"; done; echo done
@@ -121,6 +121,8 @@ Nothing touches a project folder, a saved config, or any recording.
 - `--test-setup-flow`: the guided setup's step chain for every tracking variant through the pure `SetupFlow::nextStep` (the intrinsics step once per camera, the single-front chain ending in the neutral capture with no marker or wizard steps, the single-desk chain through the marker, hand and body wizards, the dual chains as before), and that the finishing steps end every variant.
 
 - `--test-iteration-history`: the vision thread's iteration history ring (`src/App/IterationHistory.h`). Numbering from 1 with values kept, a fetch of only what is newer than the reader has, wraparound keeping the newest entries, a reader that fell behind getting what is left with the lost count, a reader ahead of the ring getting nothing, a fetch appending to the reader's buffer, and `clear` restarting the numbering.
+
+- `--test-retarget-chains`: the project's chain settings (`src/Avatar/RetargetChains.h`), in memory. The JSON round trip of every field with an `ExprParameter` as an object and as a bare number, tolerant loading with the defaulted fields named, the migration of a multi-camera and of a direct project from non-default legacy values, the block taking precedence over the legacy keys and those no longer written, each pipeline's stage config from a block written under the other shape with the block unchanged, and a sidecar saved with and without a project chain block coming out byte-identical.
 
 - `--test-retarget-stage`: the retarget stage and the loss stage (`src/Avatar/RetargetStage.h`, `LossStage.h`). Case (a) is the dropout hold and its decay and case (b) the freeze rule, both moved from the streamer's tests with their expectations, the regression that drops a hold now a second long. Case (e) is the clock: across interleaved face-only frames the step time never goes back, no interval is negative and a hold lasts its duration in forward time, a backward step of exactly the limit keeps a hold running, and one a millisecond longer ends it. Case (c) feeds a display stage the same camera and face-only frames as a stream stage behind a 60 Hz send rate and requires the same pose on every frame, for both pipelines. Case (d) is the replay playhead: forward steps land on a straight play-through's pose bit for bit, and a scrub with its one second pre-roll lands within 0.005 in a position sequence and within 0.08 (about 9 degrees) in a direct one, where the wrist depth carries seconds of history.
 

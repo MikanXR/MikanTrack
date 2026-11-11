@@ -119,17 +119,22 @@ StreamConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& 
 								   const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
 	const BodyDimensions bodyDimensions= makeBodyDimensions(config);
+	// The frozen streamer took one hold and one freeze rule for both sides:
+	// the left arm's, as the position pipeline performs it from the chains
+	const RetargetChains chains= resolveRetargetChains(config, rig);
+	const ChainLossPolicy armLoss=
+		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence).arms[0];
 	StreamConfig oscConfig;
 	oscConfig.maxRateHz= 0.f;
 	oscConfig.minConfidence= config.osc.minConfidence;
-	oscConfig.holdOnDropoutMs= config.osc.holdOnDropoutMs;
+	oscConfig.holdOnDropoutMs= armLoss.hold == eLossHold::Timed ? armLoss.holdMs : 0.f;
 	oscConfig.forearmLengthMeters= bodyDimensions.forearmLengthMeters;
 	oscConfig.upperArmLengthMeters= bodyDimensions.upperArmLengthMeters;
 	oscConfig.shoulderWidthMeters= bodyDimensions.shoulderWidthMeters;
 	oscConfig.vmcHeadOffsetMeters= config.osc.vmcHeadOffsetMeters;
-	oscConfig.vmcFreezeOnLoss= config.osc.vmcFreezeOnLoss;
+	oscConfig.vmcFreezeOnLoss= armLoss.after == eLossAfter::Freeze;
 	oscConfig.bodyDimensions= bodyDimensions;
-	oscConfig.avatarRetarget= makeAvatarRetargetConfig(config, rig);
+	oscConfig.avatarRetarget= makeAvatarRetargetConfig(config, rig, chains);
 	oscConfig.avatarSkeleton= skeleton;
 	return oscConfig;
 }

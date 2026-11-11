@@ -53,6 +53,8 @@ std::string avatarRigToJson(const AvatarRigSettings& settings)
 	j["boneNodes"]= boneNodes;
 	j["rotationTrimDegrees"]= trims;
 	j["restBlendMs"]= settings.restBlendMs;
+	j["headLimitDegrees"]= settings.headLimitDegrees;
+	j["spineLimitDegrees"]= settings.spineLimitDegrees;
 	j["faceProfiles"]= settings.faceProfiles;
 	j["activeFaceProfile"]= settings.activeFaceProfile;
 
@@ -74,6 +76,7 @@ std::string avatarRigToJson(const AvatarRigSettings& settings)
 			{"restWristOffset", vec3ToJson(side.restWristOffset)},
 			{"restPalmNormal", vec3ToJson(side.restPalmNormal)},
 			{"restFingerCurlDegrees", side.restFingerCurlDegrees},
+			{"wristLimitDegrees", side.wristLimitDegrees},
 		};
 	}
 	return j.dump(2);
@@ -115,6 +118,8 @@ bool avatarRigFromJson(const std::string& text, AvatarRigSettings& outSettings, 
 			settings.rotationTrimDegrees[(int)bone]= vec3FromJson(it.value(), glm::vec3(0.f));
 		}
 		settings.restBlendMs= j.value("restBlendMs", settings.restBlendMs);
+		settings.headLimitDegrees= j.value("headLimitDegrees", settings.headLimitDegrees);
+		settings.spineLimitDegrees= j.value("spineLimitDegrees", settings.spineLimitDegrees);
 		const json& faceProfiles= j.value("faceProfiles", json::array());
 		for (const json& id : faceProfiles)
 		{
@@ -142,6 +147,7 @@ bool avatarRigFromJson(const std::string& text, AvatarRigSettings& outSettings, 
 			side.restWristOffset= vec3FromJson(sj.value("restWristOffset", json()), side.restWristOffset);
 			side.restPalmNormal= vec3FromJson(sj.value("restPalmNormal", json()), side.restPalmNormal);
 			side.restFingerCurlDegrees= sj.value("restFingerCurlDegrees", side.restFingerCurlDegrees);
+			side.wristLimitDegrees= sj.value("wristLimitDegrees", side.wristLimitDegrees);
 		}
 	}
 	catch (const std::exception& exception)

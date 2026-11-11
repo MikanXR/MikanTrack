@@ -122,7 +122,9 @@ struct OscConfig
 	float minConfidence= 0.f;
 	// Keep streaming the last good pose for this long after a dropout before
 	// the loss rule (freeze or silence) applies - bridges brief losses.
-	// 0 = apply it immediately.
+	// 0 = apply it immediately. Legacy: a project with retarget chain settings
+	// neither reads nor writes it (nor vmcFreezeOnLoss below), and one without
+	// migrates its chains from both.
 	float holdOnDropoutMs= 250.f;
 
 	// Neck -> head bone offset. A VMC receiver replaces the translation of
@@ -404,24 +406,43 @@ BodyDimensions makeBodyDimensions(const class AppConfig& config);
 struct HandFusionConfig;
 HandFusionConfig makeHandFusionConfig(const class AppConfig& config);
 
-// And for the avatar retarget: the OSC streamer and the 3D view both solve
-// from this one mapping of the project's avatar settings and the loaded
-// avatar's rig settings
-struct AvatarRetargetConfig;
+// The retarget chain settings a project runs on: its own chain block, or for
+// a project without one the chains migrated from its shape (direct or not),
+// its legacy stream settings (holdOnDropoutMs, vmcFreezeOnLoss) and the
+// avatar's sidecar (the rest blend, each arm's elbow hint confidence). The
+// second form takes the block in place of the config's, so a caller holding
+// its own snapshot never reads the config's.
+struct RetargetChains;
 struct AvatarRigSettings;
+RetargetChains resolveRetargetChains(const class AppConfig& config, const AvatarRigSettings& rig);
+RetargetChains resolveRetargetChains(const RetargetChains* block, const class AppConfig& config,
+									 const AvatarRigSettings& rig);
+
+// And for the avatar retarget: the OSC streamer and the 3D view both solve
+// from this one mapping of the project's avatar settings, the loaded
+// avatar's rig settings and the chains. The forms without chains resolve
+// them from the config.
+struct AvatarRetargetConfig;
 AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+											  const RetargetChains& chains);
 
 // And for the direct retarget: the vision thread, the 3D view's replay feed
 // and the gate tool all solve from this one mapping
 struct DirectRetargetConfig;
 DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+											  const RetargetChains& chains);
 
 // And for the retarget stage: both pipelines' solves through the mappings
-// above, and their loss rules from the stream's dropout settings and the
-// rig's rest blend
+// above, and each pipeline's loss rules from the chains (makeChainLossPolicy)
+// with the delivery rules' minimum confidence
 struct RetargetStageConfig;
 class AvatarSkeleton;
 RetargetStageConfig makeRetargetStageConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+											std::shared_ptr<const AvatarSkeleton> skeleton);
+RetargetStageConfig makeRetargetStageConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+											const RetargetChains& chains,
 											std::shared_ptr<const AvatarSkeleton> skeleton);
 
 class AppConfig
@@ -442,6 +463,11 @@ public:
 	RecordingConfig recording;
 	AvatarConfig avatar;
 	DirectConfig direct;
+	// The retarget chain settings under the project's "retarget" section, an
+	// immutable snapshot replaced whole on an edit; null for a project that
+	// has none yet, which runs on chains migrated from its legacy settings
+	// (resolveRetargetChains) and keeps writing those
+	std::shared_ptr<const RetargetChains> retargetChains;
 	// Rest-pose zero for the stereo-TRIANGULATED path (one set, not per
 	// camera: triangulated geometry has no per-camera model bias to fold in).
 	// Captured alongside the per-camera rest angles.
@@ -477,6 +503,10 @@ public:
 	// Serialized live config (same schema save() writes) - diagnostic dumps
 	// embed this so a dump always reflects unsaved in-UI changes too
 	std::string toJsonString() const;
+	// The same with the given chain block in place of retargetChains (null
+	// writes none, and the legacy stream keys instead), which this form never
+	// reads: what a thread holding its own snapshot of the chains writes
+	std::string toJsonString(const std::shared_ptr<const RetargetChains>& chains) const;
 
 	void markDirty() { m_bDirty= true; }
 	// Saves at most once per cooldown period when dirty; call from the main loop

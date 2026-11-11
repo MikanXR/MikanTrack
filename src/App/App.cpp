@@ -31,6 +31,7 @@
 #include "MainWindow.h"
 #include "PathUtils.h"
 #include "ProjectManager.h"
+#include "RetargetChains.h"
 #include "VideoCaptureSystem.h"
 #include "VisionThread.h"
 #include "VrmLoader.h"
@@ -284,6 +285,9 @@ bool App::activateProject(const std::filesystem::path& projectFile)
 	applyFaceConfig();
 	m_audioService->startup();
 	applyAudioConfig();
+	// The loaded project's chain block, or none, ahead of the thread's first
+	// frame
+	pushRetargetChains();
 	m_visionThread->start();
 	m_mainWindow->tryRestoreVideoDeviceFromConfig();
 	loadConfiguredAvatar();
@@ -391,6 +395,14 @@ bool App::loadAvatar(const std::filesystem::path& path)
 	m_avatarLoadError.clear();
 	++m_avatarGeneration;
 	m_visionThread->setAvatarSkeleton(m_avatarSkeleton, m_avatarRig);
+	// A project without chain settings takes the ones it migrates to now,
+	// when the sidecar's values the migration reads are at hand; the next
+	// save writes them, and from then on the project's chains are its own
+	if (m_config->retargetChains == nullptr)
+	{
+		m_config->retargetChains= std::make_shared<const RetargetChains>(resolveRetargetChains(*m_config, m_avatarRig));
+		pushRetargetChains();
+	}
 	rebuildFaceBinding();
 	applyAvatarElbowSeed();
 	return true;
@@ -407,6 +419,23 @@ void App::pushAvatarIdentity()
 	}
 	identity.faceBinding= m_faceBinding;
 	m_visionThread->setAvatarIdentity(identity);
+}
+
+RetargetChains App::getRetargetChains() const
+{
+	return resolveRetargetChains(*m_config, m_avatarRig);
+}
+
+void App::setRetargetChains(const RetargetChains& chains)
+{
+	m_config->retargetChains= std::make_shared<const RetargetChains>(chains);
+	m_config->markDirty();
+	pushRetargetChains();
+}
+
+void App::pushRetargetChains()
+{
+	m_visionThread->setRetargetChains(m_config->retargetChains);
 }
 
 void App::rebuildAvatarSkeleton()

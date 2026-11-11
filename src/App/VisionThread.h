@@ -13,6 +13,7 @@
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
 #include "FaceProfileRunner.h"
+#include "RetargetChains.h"
 #include "RetargetStage.h"
 #include "FaceRecorder.h"
 #include "FrameRecorder.h"
@@ -99,6 +100,13 @@ public:
 	// the avatar-driven VMC output. Applied before the next frame without a
 	// config refresh, which would end a recording. Survives a stop/start.
 	void setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skeleton, const AvatarRigSettings& rig);
+
+	// The project's retarget chain settings, an immutable snapshot (null for
+	// a project without a chain block, whose chains migrate from its legacy
+	// settings and the rig), for the retarget stage. Applied before the next
+	// frame like the skeleton, without a config refresh, so an edit neither
+	// ends a recording nor restarts a hold. Survives a stop/start.
+	void setRetargetChains(std::shared_ptr<const RetargetChains> chains);
 
 	// The loaded avatar's identity and face profile binding, for the VMC
 	// output's /VMC/Ext/VRM announcement and the face evaluation. Applied like
@@ -400,6 +408,10 @@ private:
 	// (Re)creates the OSC streamer and pushes the current config and avatar
 	// skeleton into it, and the retarget stage's config beside it
 	void applyOscConfigOnThread();
+	// The retarget stage's config from the project, the adopted rig and the
+	// adopted chain block, the chains it resolves to kept for the recording
+	// header and the dump
+	void applyRetargetStageConfigOnThread();
 	// Services a pending requestDiagnosticDump on the vision thread. path and
 	// phaseMs describe the iteration that writes the dump, for the telemetry
 	// its one-frame recording carries.
@@ -461,6 +473,13 @@ private:
 	AvatarIdentity m_pendingAvatarIdentity;
 	std::atomic<bool> m_bAvatarIdentityChanged{false};
 	AvatarIdentity m_avatarIdentity;
+	// Retarget chains handoff, the same way: the project's block (null for
+	// none) in the pending slot, adopted between frames, and the chains the
+	// stage runs on resolved from it
+	std::shared_ptr<const RetargetChains> m_pendingRetargetChains;
+	std::atomic<bool> m_bRetargetChainsChanged{false};
+	std::shared_ptr<const RetargetChains> m_retargetChainBlock;
+	std::shared_ptr<const RetargetChains> m_retargetChains;
 	// The face profile over the output frames (vision thread only)
 	FaceProfileRunner m_faceRunner;
 

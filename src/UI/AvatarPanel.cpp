@@ -15,6 +15,7 @@
 #include "BodyPoseSolver.h"
 #include "HandPoseModel.h"
 #include "PathUtils.h"
+#include "RetargetChains.h"
 #include "VrmLoader.h"
 
 #include "tinyfiledialogs.h"
@@ -443,9 +444,16 @@ void AvatarPanel::drawRetargetTab()
 
 void AvatarPanel::drawRestBlendControl()
 {
-	AvatarRigSettings rig= m_app->getAvatarRig();
-	if (ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &rig.restBlendMs, 0.f, 1000.f, "%.0f ms"))
-		m_app->setAvatarRig(rig);
+	// Until the controls are per chain, both arms ease over the one value,
+	// the left arm's shown
+	RetargetChains chains= m_app->getRetargetChains();
+	float restBlendMs= chains.arms[0].loss.restBlendMs;
+	if (ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &restBlendMs, 0.f, 1000.f, "%.0f ms"))
+	{
+		for (RetargetChains::Arm& arm : chains.arms)
+			arm.loss.restBlendMs= restBlendMs;
+		m_app->setRetargetChains(chains);
+	}
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", locText("avatarPanel.restBlendTooltip"));
 }
@@ -464,8 +472,12 @@ void AvatarPanel::drawArmControls(int sideIndex)
 									 "%.3f m");
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", locText("avatarPanel.elbowHintTooltip"));
-		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.elbowHintConfidenceSlider"), &side.elbowHintConfidence,
-									  0.f, 1.f, "%.2f");
+		// The elbow hint confidence is the arm chain's, the project's rather
+		// than the rig's
+		RetargetChains chains= m_app->getRetargetChains();
+		float& elbowHintConfidence= chains.arms[sideIndex].elbowHintConfidence;
+		bool bChainChanged= ImGui::SliderFloat(locLabel("avatarPanel.elbowHintConfidenceSlider"),
+											   &elbowHintConfidence, 0.f, 1.f, "%.2f");
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", locText("avatarPanel.elbowHintConfidenceTooltip"));
 
@@ -493,16 +505,19 @@ void AvatarPanel::drawArmControls(int sideIndex)
 		{
 			const AvatarRigSettings::Side defaults;
 			side.elbowHintOffset= defaults.elbowHintOffset;
-			side.elbowHintConfidence= defaults.elbowHintConfidence;
 			side.restElbowOffset= defaults.restElbowOffset;
 			side.restWristOffset= defaults.restWristOffset;
 			side.restPalmNormal= defaults.restPalmNormal;
 			side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 			bChanged= true;
+			elbowHintConfidence= RetargetChains::Arm().elbowHintConfidence;
+			bChainChanged= true;
 		}
 
 		if (bChanged)
 			m_app->setAvatarRig(rig);
+		if (bChainChanged)
+			m_app->setRetargetChains(chains);
 	}
 	ImGui::PopID();
 }
