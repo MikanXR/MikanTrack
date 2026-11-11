@@ -230,6 +230,8 @@
 		"handLossNote": "A lost hand follows its arm's loss policy.",
 		"handTrim": "Hand trim",
 		"headDirectLossNote": "When its tracking is lost, the solver holds the head, then it eases to rest.",
+		"headLimit": "Head limit",
+		"headLimitTooltip": "The largest rotation the head takes away from the neutral head, degrees, from the phone or the camera alike.\nA larger turn is clamped onto its own axis at this angle.\n180 changes nothing, zero holds the head at the neutral pose. The head trim applies after it.",
 		"headPositionLossNote": "When its tracking is lost, the head is released at once.",
 		"headTrim": "Head trim",
 		"ikWeightLabel": "IK weight",
@@ -238,10 +240,14 @@
 		"mappingBoneAnglesThenIk": "Bone angles, then IK to a goal",
 		"mappingLabel": "Mapping",
 		"rollTrim": "Roll trim",
+		"spineLimit": "Lean limit",
+		"spineLimitTooltip": "The largest rotation the spine takes away from the neutral torso, degrees (the lean and the turn of the shoulder line).\nEvery bone from the spine to the neck takes the same rotation.\n180 changes nothing, zero keeps the torso upright.",
 		"thenLabel": "Then",
 		"torsoDirectLossNote": "When its tracking is lost, the solver holds the torso, then it eases to rest.",
 		"torsoDirectNote": "The direct pipeline carries the measured lean from the spine to the neck.",
-		"torsoPositionNote": "A multi-camera project measures no torso, so this chain stays at the avatar's rest. The root follows the measured shoulders instead (see Placement)."
+		"torsoPositionNote": "A multi-camera project measures no torso, so this chain stays at the avatar's rest. The root follows the measured shoulders instead (see Placement).",
+		"wristLimit": "Wrist limit",
+		"wristLimitTooltip": "The largest rotation the hand takes against the forearm, degrees (the palm in the forearm's frame).\nA larger bend is clamped onto its own axis at this angle.\n180 changes nothing, zero holds the avatar's rest wrist. The forearm's roll is not limited."
 	},
 	"faceTab": {
 		"activeProfileCombo": "Active profile",

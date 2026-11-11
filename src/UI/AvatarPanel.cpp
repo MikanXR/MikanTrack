@@ -83,6 +83,18 @@ bool drawTrimControl(AvatarRigSettings& rig, eHumanoidBone bone, const char* lab
 	return bChanged;
 }
 
+// A joint limit from the rig, degrees: zero locks the joint at its rest and
+// 180 never clamps, since a rotation's short arc is at most a half turn. A
+// typed value clamps too, since a negative limit would turn the joint the
+// other way.
+bool drawLimitControl(float& degrees, const char* labelKey, const char* tooltipKey)
+{
+	const bool bChanged=
+		ImGui::SliderFloat(locLabel(labelKey), &degrees, 0.f, 180.f, "%.0f deg", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SetItemTooltip("%s", locText(tooltipKey));
+	return bChanged;
+}
+
 bool containsCaseInsensitive(const std::string& text, const char* filter)
 {
 	if (filter[0] == '\0')
@@ -579,18 +591,26 @@ void AvatarPanel::drawTorsoChain()
 		return;
 	}
 	drawNote("chains.torsoDirectNote");
+	AvatarRigSettings rig= m_app->getAvatarRig();
+	if (drawLimitControl(rig.spineLimitDegrees, "chains.spineLimit", "chains.spineLimitTooltip"))
+		m_app->setAvatarRig(rig);
 	drawSubHeading("chains.lossHeading");
 	drawNote("chains.torsoDirectLossNote");
 }
 
 void AvatarPanel::drawHeadChain()
 {
+	const bool bDirect= isDirectPipeline();
 	AvatarRigSettings rig= m_app->getAvatarRig();
-	if (drawTrimControl(rig, B::Head, "chains.headTrim", false))
+	bool bChanged= drawTrimControl(rig, B::Head, "chains.headTrim", false);
+	// Only the direct placement limits the head
+	if (bDirect)
+		bChanged|= drawLimitControl(rig.headLimitDegrees, "chains.headLimit", "chains.headLimitTooltip");
+	if (bChanged)
 		m_app->setAvatarRig(rig);
 
 	drawSubHeading("chains.lossHeading");
-	drawNote(isDirectPipeline() ? "chains.headDirectLossNote" : "chains.headPositionLossNote");
+	drawNote(bDirect ? "chains.headDirectLossNote" : "chains.headPositionLossNote");
 }
 
 bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, RetargetChains& chains)
@@ -743,6 +763,9 @@ void AvatarPanel::drawHandChain(int sideIndex)
 	bool bChanged= false;
 
 	bChanged|= drawTrimControl(rig, sideIndex == 0 ? B::LeftHand : B::RightHand, "chains.handTrim", false);
+	// Only the direct placement limits the wrist
+	if (isDirectPipeline())
+		bChanged|= drawLimitControl(side.wristLimitDegrees, "chains.wristLimit", "chains.wristLimitTooltip");
 
 	if (ImGui::Checkbox(locLabel("avatarPanel.thumbPronationAutoCheckbox"), &side.bThumbPronationAuto))
 	{
@@ -792,6 +815,7 @@ void AvatarPanel::drawHandChain(int sideIndex)
 		side.curlGain= defaults.curlGain;
 		side.splayGain= defaults.splayGain;
 		side.fingerEnabled= defaults.fingerEnabled;
+		side.wristLimitDegrees= defaults.wristLimitDegrees;
 		bChanged= true;
 	}
 

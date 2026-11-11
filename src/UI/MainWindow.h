@@ -207,6 +207,10 @@ private:
 	// and what the shown frame evaluated it to; with a form, sets it
 	bool handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 							std::string& outError);
+	// pipeline limit: a joint limit of the rig in degrees; with a value,
+	// sets it through the rig's edit path
+	bool handleLimitAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							   std::string& outError);
 
 	TrackingPanelState m_trackingPanelState;
 

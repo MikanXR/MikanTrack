@@ -101,7 +101,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline view [follow|cameras|scene|overlay|sidebyside]", "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
-		 "pipeline fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]"},
+		 "pipeline fx <leftArm|rightArm> elbowWeight [value <number>|expr <text...>]",
+		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -1444,6 +1445,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	}
 	if (verb == "fx")
 		return handleFxAutomation(args, outLines, outError);
+	if (verb == "limit")
+		return handleLimitAutomation(args, outLines, outError);
 	if (verb == "pinned")
 	{
 		const std::vector<PipelineStageId> pinned= m_pinnedWindows->getPinned();
@@ -1510,6 +1513,62 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 	}
 	outError= "unknown verb: " + verb;
 	return false;
+}
+
+bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									   std::string& outError)
+{
+	// limit <head|spine|leftWrist|rightWrist> [<degrees>]
+	if (args.size() < 2 || args.size() > 3)
+	{
+		outError= "usage: limit <head|spine|leftWrist|rightWrist> [<degrees>]";
+		return false;
+	}
+	if (m_app->getAvatarModel() == nullptr)
+	{
+		outError= "no avatar loaded";
+		return false;
+	}
+	AvatarRigSettings rig= m_app->getAvatarRig();
+	float* degrees= nullptr;
+	if (args[1] == "head")
+		degrees= &rig.headLimitDegrees;
+	else if (args[1] == "spine")
+		degrees= &rig.spineLimitDegrees;
+	else if (args[1] == "leftWrist")
+		degrees= &rig.sides[0].wristLimitDegrees;
+	else if (args[1] == "rightWrist")
+		degrees= &rig.sides[1].wristLimitDegrees;
+	if (degrees == nullptr)
+	{
+		outError= "unknown limit: " + args[1];
+		return false;
+	}
+
+	if (args.size() == 3)
+	{
+		// The slider's range: zero locks the joint, 180 never clamps
+		char* end= nullptr;
+		const double parsed= std::strtod(args[2].c_str(), &end);
+		if (end == args[2].c_str() || *end != '\0' || !(parsed >= 0.0 && parsed <= 180.0))
+		{
+			outError= "not a number of degrees in [0, 180]: " + args[2];
+			return false;
+		}
+		*degrees= (float)parsed;
+		// The rig's one edit path, the panel's: the vision thread takes it
+		// between frames and the sidecar is written by the rig's auto-save
+		m_app->setAvatarRig(rig);
+	}
+
+	char text[64];
+	std::snprintf(text, sizeof(text), "%s %.6g", args[1].c_str(), *degrees);
+	std::string line= text;
+	// Only the direct placement applies the limits
+	if (!m_pipelineInputs.bDirect)
+		line+= " (unused: the position pipeline applies no joint limit)";
+	outLines.push_back(line);
+	return true;
 }
 
 bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,

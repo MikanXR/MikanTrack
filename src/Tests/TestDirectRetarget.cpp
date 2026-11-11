@@ -1087,6 +1087,131 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bSteady, "(n) a wrist pixel jittered 2 px per frame leaves the chain's depth within 1 percent");
 	}
 
+	// (r) The rig's joint limits: one input with the upper body shifted to
+	// the user's left (a lean), the phone head turned 50 degrees and both
+	// wrists bent 30 degrees, solved under different limits. The default
+	// limits leave it as no limit does, bit for bit. A lower limit clamps
+	// its joint onto the same axis at the limit, the other joints as at the
+	// default. A limit of zero locks the joint at its rest.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		User user= makeNeutralUser();
+		const glm::vec3 shift(0.f, 0.12f, 0.f);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			user.shoulder[sideIndex]+= shift;
+			user.elbow[sideIndex]+= shift;
+			user.wrist[sideIndex]+= shift;
+			user.ear[sideIndex]+= shift;
+			const glm::quat bend= glm::angleAxis(glm::radians(-30.f), glm::vec3(0.f, 1.f, 0.f));
+			user.palm[sideIndex]= makePalm(bend * glm::vec3(1.f, 0.f, 0.f), bend * glm::vec3(0.f, 0.f, -1.f));
+		}
+		user.nose+= shift;
+		TrackingFrameResult::HeadPose phone;
+		phone.valid= true;
+		phone.orientationWorld= glm::angleAxis(glm::radians(50.f), glm::vec3(0.f, 0.f, 1.f));
+
+		struct Limited
+		{
+			AvatarPose pose;
+			DirectRetarget::SolveState state;
+		};
+		auto solveUnder= [&](float headDegrees, float spineDegrees, float wristDegrees) {
+			Rig rig= makeRig(kTiltDegrees);
+			rig.config.headLimitRadians= glm::radians(headDegrees);
+			rig.config.spineLimitRadians= glm::radians(spineDegrees);
+			rig.config.wristLimitRadians= {glm::radians(wristDegrees), glm::radians(wristDegrees)};
+			DirectStageSolver solver;
+			double timestampMs= 0.0;
+			captureNeutral(rig, camera, solver, timestampMs);
+			Limited out;
+			for (int repeat= 0; repeat < 10; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 200 + repeat);
+				solver.solve(frame, camera.model, phone, timestampMs, *rig.skeleton, rig.config, out.pose);
+				timestampMs+= 33.0;
+			}
+			out.state= solver.getSolveState();
+			return out;
+		};
+		// The default rig's limits, read from the rig settings in degrees
+		const AvatarRigSettings defaultRig;
+		const float headDefault= defaultRig.headLimitDegrees;
+		const float spineDefault= defaultRig.spineLimitDegrees;
+		const float wristDefault= defaultRig.sides[0].wristLimitDegrees;
+		const Limited atDefault= solveUnder(headDefault, spineDefault, wristDefault);
+		const Limited unlimited= solveUnder(180.f, 180.f, 180.f);
+		check(samePose(atDefault.pose, unlimited.pose),
+			  "(r) inside the default limits the pose is the one with no limit, bit for bit");
+
+		// The relative rotation the wrist took: the hand in the forearm
+		// against the avatar's rest hand in the forearm
+		const Rig shapeRig= makeRig(kTiltDegrees);
+		auto wristTaken= [&](const AvatarPose& pose, int sideIndex) {
+			return glm::inverse(restHandInForearm(*shapeRig.skeleton, sideIndex)) *
+				posedArm(*shapeRig.skeleton, pose, sideIndex).handInForearm;
+		};
+		// A rotation clamped to a limit: the same axis at the limit's angle
+		auto clampedTo= [&](const glm::quat& rotation, float limitDegrees) {
+			return glm::slerp(glm::quat(1.f, 0.f, 0.f, 0.f), rotation, glm::radians(limitDegrees) / rotationAngle(rotation));
+		};
+		const float tolerance= 1e-3f;
+
+		// The head: the phone's 50 degrees inside the default, clamped to 20
+		const glm::quat headFree= atDefault.pose.bones[(int)B::Head].deltaWorld;
+		const Limited headLimited= solveUnder(20.f, spineDefault, wristDefault);
+		const glm::quat headClamped= headLimited.pose.bones[(int)B::Head].deltaWorld;
+		AvatarPose headRestored= headLimited.pose;
+		headRestored.bones[(int)B::Head]= atDefault.pose.bones[(int)B::Head];
+		check(nearlySameRotation(headFree, phone.orientationWorld, tolerance) &&
+				  nearlyEqual(rotationAngle(headClamped), glm::radians(20.f), tolerance) &&
+				  nearlySameRotation(headClamped, clampedTo(headFree, 20.f), tolerance) &&
+				  samePose(headRestored, atDefault.pose),
+			  "(r) a head limit below the measured head clamps the head to it, the rest of the pose unchanged");
+
+		// The spine: the lean, measured between the two limits, clamped to 6
+		const glm::quat spineFree= atDefault.pose.bones[(int)B::Spine].deltaWorld;
+		const float leanRadians= rotationAngle(spineFree);
+		const Limited spineLimited= solveUnder(headDefault, 6.f, wristDefault);
+		const glm::quat spineClamped= spineLimited.pose.bones[(int)B::Spine].deltaWorld;
+		check(leanRadians > glm::radians(10.f) && leanRadians < glm::radians(spineDefault - 10.f) &&
+				  nearlyEqual(rotationAngle(spineClamped), glm::radians(6.f), tolerance) &&
+				  nearlySameRotation(spineClamped, clampedTo(spineFree, 6.f), tolerance) &&
+				  nearlySameRotation(spineLimited.pose.bones[(int)B::Neck].deltaWorld, spineClamped, tolerance) &&
+				  nearlySameRotation(spineLimited.pose.bones[(int)B::Head].deltaWorld, headFree, tolerance),
+			  "(r) a spine limit below the measured lean clamps the spine and the bones it carries to it");
+
+		// The wrists: the measured bend inside the default, clamped to 15
+		const Limited wristLimited= solveUnder(headDefault, spineDefault, 15.f);
+		bool bWristFree= true;
+		bool bWristClamped= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float measured= rotationAngle(atDefault.state.arms[sideIndex].wristRotation);
+			const glm::quat free= wristTaken(atDefault.pose, sideIndex);
+			const glm::quat clamped= wristTaken(wristLimited.pose, sideIndex);
+			bWristFree&= measured > glm::radians(20.f) && measured < glm::radians(wristDefault) &&
+				nearlyEqual(rotationAngle(free), measured, tolerance);
+			bWristClamped&= nearlyEqual(rotationAngle(clamped), glm::radians(15.f), tolerance) &&
+				nearlySameRotation(clamped, clampedTo(free, 15.f), tolerance);
+			const B lower= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
+			bWristClamped&= nearlySameRotation(wristLimited.pose.bones[(int)lower].deltaWorld,
+											   atDefault.pose.bones[(int)lower].deltaWorld, tolerance);
+		}
+		check(bWristFree, "(r) the measured wrist bend inside the default limit poses as measured");
+		check(bWristClamped, "(r) a wrist limit below the measured bend clamps the wrist to it, the forearm unchanged");
+
+		// Zero: every joint locked at its rest
+		const Limited locked= solveUnder(0.f, 0.f, 0.f);
+		bool bLocked= locked.pose.bones[(int)B::Head].present && locked.pose.bones[(int)B::Spine].present &&
+			rotationAngle(locked.pose.bones[(int)B::Head].deltaWorld) < tolerance &&
+			rotationAngle(locked.pose.bones[(int)B::Spine].deltaWorld) < tolerance &&
+			rotationAngle(locked.pose.bones[(int)B::Neck].deltaWorld) < tolerance;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bLocked&= rotationAngle(wristTaken(locked.pose, sideIndex)) < tolerance;
+		check(bLocked, "(r) a limit of zero locks the head, the spine and the wrists at their rest");
+	}
+
 	// (o) The vec2 One Euro filter: initialized on its first sample, then
 	// each component the scalar filter's
 	{
