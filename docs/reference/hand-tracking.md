@@ -6,7 +6,7 @@ The hand pipeline end to end: the two ONNX models and their inference wrapper, t
 
 ## Models and inference
 
-`OnnxSession` (`src/Vision/OnnxSession.h`) is the only ONNX Runtime touchpoint. `create(modelPath, preferredEp)` with `"directml"` tries the DirectML execution provider on device 0 with the session options DML requires (memory pattern disabled, sequential execution) and falls back to a plain CPU session on any failure. All sessions live on the single inference (vision) thread, sharing a process-lifetime `Ort::Env`.
+`OnnxSession` (`src/Vision/OnnxSession.h`) is the only ONNX Runtime touchpoint. `create(modelPath, preferredEp)` with `"directml"` tries the DirectML execution provider on the highest-performance GPU with the session options DML requires (memory pattern disabled, sequential execution) and falls back to a plain CPU session on any failure. The adapter is chosen by performance preference, not by adapter index, because index 0 on a hybrid-GPU laptop is the integrated GPU. The first session logs the adapter's name as `DirectML adapter: <name>`, and `main.cpp` exports `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance` so the OpenGL context lands on the same GPU. All sessions live on the single inference (vision) thread, sharing a process-lifetime `Ort::Env`.
 
 Two helpers matter to callers:
 

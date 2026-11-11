@@ -5,7 +5,63 @@
 
 #include "dml_provider_factory.h"
 
+#include <dxgi1_6.h>
+
 #include "Logger.h"
+
+#pragma comment(lib, "dxgi.lib")
+
+// Name of the adapter DXGI ranks first for high performance, which is the
+// adapter the DirectML provider's HighPerformance preference resolves to.
+static std::string describeHighPerformanceAdapter()
+{
+	std::string name= "unknown";
+
+	IDXGIFactory6* factory= nullptr;
+	if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+	{
+		IDXGIAdapter1* adapter= nullptr;
+		if (SUCCEEDED(factory->EnumAdapterByGpuPreference(
+				0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter))))
+		{
+			DXGI_ADAPTER_DESC1 desc= {};
+			char utf8Name[256]= {};
+			if (SUCCEEDED(adapter->GetDesc1(&desc)) &&
+				WideCharToMultiByte(
+					CP_UTF8, 0, desc.Description, -1, utf8Name, (int)sizeof(utf8Name), nullptr, nullptr) > 0)
+			{
+				name= utf8Name;
+			}
+			adapter->Release();
+		}
+		factory->Release();
+	}
+
+	return name;
+}
+
+// Adds the DirectML provider on the highest-performance GPU. The device-index
+// form of this call takes adapter 0, which on a hybrid-GPU laptop is the
+// integrated GPU.
+static void appendDirectMlProvider(Ort::SessionOptions& sessionOptions)
+{
+	const OrtDmlApi* dmlApi= nullptr;
+	Ort::ThrowOnError(Ort::GetApi().GetExecutionProviderApi(
+		"DML", ORT_API_VERSION, reinterpret_cast<const void**>(&dmlApi)));
+
+	OrtDmlDeviceOptions deviceOptions= {};
+	deviceOptions.Preference= OrtDmlPerformancePreference::HighPerformance;
+	deviceOptions.Filter= OrtDmlDeviceFilter::Gpu;
+	Ort::ThrowOnError(dmlApi->SessionOptionsAppendExecutionProvider_DML2(sessionOptions, &deviceOptions));
+
+	// Sessions are only created on the inference thread, so a plain flag is enough
+	static bool s_bAdapterLogged= false;
+	if (!s_bAdapterLogged)
+	{
+		s_bAdapterLogged= true;
+		MIKAN_MT_LOG_INFO("OnnxSession") << "DirectML adapter: " << describeHighPerformanceAdapter();
+	}
+}
 
 Ort::Env& OnnxSession::getSharedEnv()
 {
@@ -40,7 +96,7 @@ bool OnnxSession::create(const std::string& modelPath, const std::string& prefer
 			sessionOptions.DisableMemPattern();
 			sessionOptions.SetExecutionMode(ORT_SEQUENTIAL);
 			sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-			Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(sessionOptions, 0));
+			appendDirectMlProvider(sessionOptions);
 
 			m_session= std::make_unique<Ort::Session>(getSharedEnv(), widePath.c_str(), sessionOptions);
 			m_activeEp= "DirectML";
