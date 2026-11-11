@@ -17,10 +17,11 @@ Populates git submodules, wipes and re-downloads `deps/` (roughly 1.3 GB), and d
 ## Generate project files
 
 ```
+GenerateProjectFiles_X64_VS2026.bat
 GenerateProjectFiles_X64_VS2022.bat
 ```
 
-Configures `build/` with the `Visual Studio 17 2022` generator and produces `build/MikanTrack.sln`. Rerun after `InitialSetup_x64.bat`, and rerun any time a `.cpp` file is added to an existing `src/<Dir>` (the source list is a configure-time glob).
+Configures `build/` with the `Visual Studio 18 2026` generator (producing `build/MikanTrack.slnx`) or the `Visual Studio 17 2022` generator (producing `build/MikanTrack.sln`). A `build/` tree is tied to the generator that first configured it, so switching versions means deleting `build/` first. Rerun after `InitialSetup_x64.bat`, and rerun any time a `.cpp` file is added to an existing `src/<Dir>` (the source list is a configure-time glob).
 
 ---
 

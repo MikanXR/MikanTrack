@@ -32,6 +32,13 @@ set(GLEW_DLL ${GLEW_DIR}/bin/Release/x64/glew32.dll)
 
 # OpenCV (prebuilt, opencv_world)
 set(OpenCV_DIR ${DEPS_DIR}/opencv/build)
+# The Windows pack's OpenCVConfig.cmake maps MSVC_VERSION to a runtime folder only up to
+# 194x (VS2022) and finds no binaries for the VS2026 compiler. The pack ships vc16 binaries,
+# which toolsets since VS2015 link against, so name them directly for newer compilers.
+if(MSVC_VERSION GREATER_EQUAL 1950 AND NOT DEFINED OpenCV_RUNTIME)
+    set(OpenCV_ARCH x64)
+    set(OpenCV_RUNTIME vc16)
+endif()
 find_package(OpenCV REQUIRED PATHS ${OpenCV_DIR} NO_DEFAULT_PATH)
 
 # ONNX Runtime w/ DirectML (from nuget package)

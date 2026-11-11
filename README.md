@@ -196,13 +196,13 @@ Developer reference lives in [docs/reference/](docs/reference/):
 
 ## Building
 
-Windows 10/11, Visual Studio 2022, CMake >= 3.15.
+Windows 10/11, Visual Studio 2026 (CMake >= 4.2) or Visual Studio 2022 (CMake >= 3.15).
 
 ```bat
 git clone <this repo>
 cd MikanTrack
 InitialSetup_x64.bat            :: downloads deps/ (SDL2, OpenCV, GLEW, ONNX Runtime, DirectML) + models/ (ONNX models, sample avatars)
-GenerateProjectFiles_X64_VS2022.bat
+GenerateProjectFiles_X64_VS2026.bat :: or GenerateProjectFiles_X64_VS2022.bat
 cmake --build build --config Release
 build\Release\MikanTrack.exe
 ```
