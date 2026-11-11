@@ -3,11 +3,13 @@
 #include <cstring>
 
 #include "AvatarRig.h"
+#include "AvatarSkeleton.h"
 #include "DirectRetarget.h"
 #include "LossStage.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
 #include "SourcePoseInputs.h"
+#include "SyntheticAvatar.h"
 
 // The retarget chain settings: their JSON round trip and tolerant loading,
 // the migration of a project without them from its legacy settings and the
@@ -213,9 +215,17 @@ static int runRetargetChainsTest(const TestArgs&)
 				  chains.torso.loss.hold == eLossHold::None && chains.torso.loss.after == eLossAfter::Release,
 			  "(c) multi-camera: the head and the torso take the position policy's");
 		const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
+		// The direct pipeline keeps its own hold and performs what the block
+		// stores after it, the release
+		LossPolicy expectedDirect= makeDirectLossPolicy(0.f);
+		expectedDirect.torso.after= eLossAfter::Release;
+		expectedDirect.head.after= eLossAfter::Release;
+		for (ChainLossPolicy& arm : expectedDirect.arms)
+			arm.after= eLossAfter::Release;
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 400.f, false)) &&
-				  samePolicy(stage.directLoss, makeDirectLossPolicy(500.f)),
-			  "(c) multi-camera: both pipelines' loss rules are the ones the legacy settings built");
+				  samePolicy(stage.directLoss, expectedDirect),
+			  "(c) multi-camera: the position loss rules are the ones the legacy settings built, and the direct "
+			  "pipeline's own hold is followed by the stored release");
 		check(sameParameter(stage.arms[0].elbowWeight, makeDefaultElbowWeight(0, 0.3f)) &&
 				  sameParameter(stage.arms[1].elbowWeight, makeDefaultElbowWeight(1, 0.7f)) &&
 				  stage.arms[0].elbowWeight.expression == "clamp(source.leftLowerArm.confidence / 0.3, 0, 1)" &&
@@ -357,11 +367,14 @@ static int runRetargetChainsTest(const TestArgs&)
 			block.head.loss= {eLossHold::Timed, 200.f, eLossAfter::Freeze, 0.f};
 			config.retargetChains= std::make_shared<const RetargetChains>(block);
 			const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
-			LossPolicy expected= makeDirectLossPolicy(500.f);
-			expected.arms[1].restBlendMs= 120.f;
+			LossPolicy expected= makeDirectLossPolicy(0.f);
+			expected.torso.after= eLossAfter::Release;
+			expected.head.after= eLossAfter::Freeze;
+			for (ChainLossPolicy& arm : expected.arms)
+				arm.after= eLossAfter::Release;
 			check(samePolicy(stage.directLoss, expected),
-				  "(f) a multi-camera block under the direct pipeline: its own hold then the ease to rest on every "
-				  "chain, each arm over its own rest blend");
+				  "(f) a multi-camera block under the direct pipeline: its own hold on every chain, then what each "
+				  "chain stores, the timed hold not performed");
 			LossPolicy expectedPosition= makePositionLossPolicy(0.2f, 400.f, false);
 			expectedPosition.head.hold= eLossHold::Timed;
 			expectedPosition.head.holdMs= 200.f;
@@ -523,11 +536,96 @@ static int runRetargetChainsTest(const TestArgs&)
 			  "(h) a reach scale function round-trips as an object");
 	}
 
+	// (i) What follows the hold, resolved: each stored kind on every chain
+	// under each pipeline, with and without an avatar. Both pipelines perform
+	// each kind as stored, the rest blend going with the ease alone, but for
+	// the position pipeline without an avatar, which has no rest pose: there
+	// an ease to rest takes the default, a freeze for an arm and a release
+	// for the head. The direct pipeline keeps its own hold whatever is
+	// stored; the position pipeline turns a stored pipeline hold into a timed
+	// one of the stored length, the head's only when the length holds
+	// anything.
+	{
+		const AvatarModel model= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
+		const std::shared_ptr<const AvatarSkeleton> skeleton= std::make_shared<AvatarSkeleton>(model);
+		const AppConfig config= makeLegacyConfig(false);
+		const AvatarRigSettings rig= makeLegacyRig();
+		bool bResolved= true;
+		for (eLossAfter after : {eLossAfter::Release, eLossAfter::Freeze, eLossAfter::EaseToRest})
+		{
+			RetargetChains chains= makeDefaultRetargetChains(false);
+			for (RetargetChains::Loss* loss :
+				 {&chains.torso.loss, &chains.head.loss, &chains.arms[0].loss, &chains.arms[1].loss})
+			{
+				loss->hold= eLossHold::Timed;
+				loss->holdMs= 120.f;
+				loss->after= after;
+				loss->restBlendMs= 180.f;
+			}
+			const float blend= after == eLossAfter::EaseToRest ? 180.f : 0.f;
+			for (bool bAvatar : {true, false})
+			{
+				const RetargetStageConfig stage=
+					makeRetargetStageConfig(config, rig, chains, bAvatar ? skeleton : nullptr);
+				const bool bEaseHere= after != eLossAfter::EaseToRest || bAvatar;
+				// The position pipeline
+				LossPolicy position= makePositionLossPolicy(0.2f, 120.f, true);
+				position.head.hold= eLossHold::Timed;
+				position.head.holdMs= 120.f;
+				for (ChainLossPolicy& arm : position.arms)
+				{
+					arm.after= bEaseHere ? after : eLossAfter::Freeze;
+					arm.restBlendMs= bEaseHere ? blend : 0.f;
+				}
+				position.head.after= bEaseHere ? after : eLossAfter::Release;
+				position.head.restBlendMs= bEaseHere ? blend : 0.f;
+				// The direct pipeline, the same with an avatar or without
+				LossPolicy direct= makeDirectLossPolicy(0.f);
+				for (ChainLossPolicy* policy : {&direct.torso, &direct.head, &direct.arms[0], &direct.arms[1]})
+				{
+					policy->after= after;
+					policy->restBlendMs= blend;
+				}
+				const bool bSame= samePolicy(stage.positionLoss, position) && samePolicy(stage.directLoss, direct);
+				MIKAN_LOG_INFO("test-retarget-chains")
+					<< "  (i) stored " << lossAfterName(after) << (bAvatar ? " with" : " without")
+					<< " an avatar: position arm " << lossAfterName(stage.positionLoss.arms[0].after) << ", head "
+					<< lossAfterName(stage.positionLoss.head.after) << "; direct arm "
+					<< lossAfterName(stage.directLoss.arms[0].after) << ", head "
+					<< lossAfterName(stage.directLoss.head.after) << ", torso "
+					<< lossAfterName(stage.directLoss.torso.after) << (bSame ? "" : " (unexpected)");
+				bResolved&= bSame;
+			}
+		}
+		check(bResolved, "(i) each stored after resolves as stored in both pipelines, an ease to rest without an "
+						 "avatar taking the position default");
+
+		// The holds: a pipeline hold under the position pipeline, and a timed
+		// one under the direct pipeline
+		RetargetChains holds= makeDefaultRetargetChains(true);
+		holds.head.loss.holdMs= 300.f;
+		holds.arms[0].loss.hold= eLossHold::Timed;
+		holds.arms[0].loss.holdMs= 90.f;
+		const LossPolicy position= makeChainLossPolicy(holds, SourcePose::ePipeline::Position, 0.f, true);
+		const LossPolicy direct= makeChainLossPolicy(holds, SourcePose::ePipeline::Direct, 0.f, true);
+		RetargetChains noHeadHold= holds;
+		noHeadHold.head.loss.holdMs= 0.f;
+		check(position.head.hold == eLossHold::Timed && position.head.holdMs == 300.f &&
+				  makeChainLossPolicy(noHeadHold, SourcePose::ePipeline::Position, 0.f, true).head.hold ==
+					  eLossHold::None &&
+				  position.arms[1].hold == eLossHold::Timed && position.arms[1].holdMs == 250.f &&
+				  direct.arms[0].hold == eLossHold::Pipeline && direct.head.hold == eLossHold::Pipeline &&
+				  direct.arms[0].after == eLossAfter::EaseToRest && direct.arms[0].restBlendMs == 300.f,
+			  "(i) the position pipeline times a stored pipeline hold (the head's only with a length), and the direct "
+			  "pipeline keeps its own hold over a stored timed one");
+	}
+
 	MIKAN_LOG_INFO("test-retarget-chains") << (failures == 0 ? "ALL PASSED" : "FAILURES") << " (" << failures
 										   << " failed)";
 	return failures == 0 ? 0 : 1;
 }
 MIKAN_REGISTER_TEST("--test-retarget-chains",
 					"Retarget chains: JSON round trip, tolerant loading, migration, precedence over the legacy keys, "
-					"the stage config per pipeline, the sidecar untouched, the elbow weight's migration and side swap",
+					"the stage config per pipeline, the sidecar untouched, the elbow weight's migration and side swap, "
+					"the loss policy each pipeline resolves",
 					eTestCategory::SelfTest, runRetargetChainsTest);

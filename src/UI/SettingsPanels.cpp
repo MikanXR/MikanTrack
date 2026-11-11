@@ -1994,16 +1994,27 @@ static void drawSourceGroupsTable(const SourcePose& source)
 	ImGui::TableSetupColumn(locText("sourceStage.carriesColumn"));
 	ImGui::TableHeadersRow();
 
+	// A resting torso or head carries how far it has eased to the identity
+	auto describeRest= [](float restBlend) {
+		char buffer[64];
+		snprintf(buffer, sizeof(buffer), locText("sourceStage.restBlendFmt"), restBlend * 100.f);
+		return std::string(buffer);
+	};
+
 	std::string carries;
 	// The torso is the spine's rotation on the direct pipeline and the line
 	// between the shoulders on the position one, with no confidence of its own
-	if (source.torso.state != eGroupState::Lost)
+	if (source.torso.state == eGroupState::Resting)
+		carries= describeRest(source.torso.restBlend);
+	else if (source.torso.state != eGroupState::Lost)
 		carries= locText(source.pipeline == SourcePose::ePipeline::Direct ? "sourceStage.partSpine"
 																		  : "sourceStage.partShoulderLine");
 	drawSourceGroupRow("sourceStage.torso", source.torso.state, nullptr, carries);
 
 	carries.clear();
-	if (source.head.state != eGroupState::Lost)
+	if (source.head.state == eGroupState::Resting)
+		carries= describeRest(source.head.restBlend);
+	else if (source.head.state != eGroupState::Lost)
 		carries= locText("sourceStage.partOrientation");
 	drawSourceGroupRow("directStage.head", source.head.state, &source.head.confidence, carries);
 

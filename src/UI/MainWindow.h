@@ -215,6 +215,11 @@ private:
 	// sets it through the rig's edit path
 	bool handleLimitAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 							   std::string& outError);
+	// pipeline loss: a chain's stored loss policy, what the project's
+	// pipeline resolves it to, and the chain's state on the shown frame; with
+	// a field and a value, sets that field through the chains' edit path
+	bool handleLossAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							  std::string& outError);
 
 	TrackingPanelState m_trackingPanelState;
 

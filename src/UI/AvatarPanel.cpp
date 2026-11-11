@@ -95,6 +95,40 @@ bool drawLimitControl(float& degrees, const char* labelKey, const char* tooltipK
 	return bChanged;
 }
 
+// What follows a chain's hold, as stored: freeze, the ease to the rest pose
+// with its blend time, or release; true when anything changed
+bool drawLossAfter(RetargetChains::Loss& loss)
+{
+	struct Choice
+	{
+		eLossAfter after;
+		const char* labelKey;
+		const char* tooltipKey;
+	};
+	static const Choice k_choices[]= {
+		{eLossAfter::Freeze, "chains.afterFreezeRadio", "chains.afterFreezeTooltip"},
+		{eLossAfter::EaseToRest, "chains.afterEaseRadio", "chains.afterEaseTooltip"},
+		{eLossAfter::Release, "chains.afterReleaseRadio", "chains.afterReleaseTooltip"},
+	};
+	bool bChanged= false;
+	ImGui::TextUnformatted(locText("chains.thenLabel"));
+	for (const Choice& choice : k_choices)
+	{
+		if (ImGui::RadioButton(locLabel(choice.labelKey), loss.after == choice.after) && loss.after != choice.after)
+		{
+			loss.after= choice.after;
+			bChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText(choice.tooltipKey));
+	}
+	if (loss.after == eLossAfter::EaseToRest)
+	{
+		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &loss.restBlendMs, 0.f, 1000.f, "%.0f ms");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.restBlendTooltip"));
+	}
+	return bChanged;
+}
+
 bool containsCaseInsensitive(const std::string& text, const char* filter)
 {
 	if (filter[0] == '\0')
@@ -595,8 +629,12 @@ void AvatarPanel::drawTorsoChain()
 	AvatarRigSettings rig= m_app->getAvatarRig();
 	if (drawLimitControl(rig.spineLimitDegrees, "chains.spineLimit", "chains.spineLimitTooltip"))
 		m_app->setAvatarRig(rig);
+	// The solver's hold, then what follows it
 	drawSubHeading("chains.lossHeading");
 	drawNote("chains.torsoDirectLossNote");
+	RetargetChains chains= m_app->getRetargetChains();
+	if (drawLossAfter(chains.torso.loss))
+		m_app->setRetargetChains(chains);
 }
 
 void AvatarPanel::drawHeadChain()
@@ -610,42 +648,48 @@ void AvatarPanel::drawHeadChain()
 	if (bChanged)
 		m_app->setAvatarRig(rig);
 
+	// The direct solver's own hold, or a timed one, then what follows it
 	drawSubHeading("chains.lossHeading");
-	drawNote(bDirect ? "chains.headDirectLossNote" : "chains.headPositionLossNote");
+	RetargetChains chains= m_app->getRetargetChains();
+	RetargetChains::Loss& loss= chains.head.loss;
+	bool bChainChanged= false;
+	if (bDirect)
+	{
+		drawNote("chains.headDirectLossNote");
+	}
+	else
+	{
+		if (ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &loss.holdMs, 0.f, 1000.f, "%.0f ms"))
+		{
+			// A length the head holds for, which a block stored as holding
+			// nothing would not take
+			loss.hold= eLossHold::Timed;
+			bChainChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText("chains.headHoldTooltip"));
+	}
+	bChainChanged|= drawLossAfter(loss);
+	if (bChainChanged)
+		m_app->setRetargetChains(chains);
 }
 
-bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, RetargetChains& chains)
+bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains)
 {
 	RetargetChains::Loss& loss= chains.arms[sideIndex].loss;
 	bool bChanged= false;
 	if (bDirect)
 	{
 		drawNote("chains.directArmLossNote");
-		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &loss.restBlendMs, 0.f, 1000.f, "%.0f ms");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restBlendTooltip"));
-		return bChanged;
 	}
-
-	bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &loss.holdMs, 0.f, 1000.f, "%.0f ms");
-	ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
-
-	// What follows the hold as the position pipeline performs it, freeze or
-	// release
-	const bool bFreeze=
-		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, 0.f).arms[sideIndex].after == eLossAfter::Freeze;
-	int after= bFreeze ? 0 : 1;
-	ImGui::TextUnformatted(locText("chains.thenLabel"));
-	ImGui::SameLine();
-	ImGui::RadioButton(locLabel("chains.afterFreezeRadio"), &after, 0);
-	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
-	ImGui::SameLine();
-	ImGui::RadioButton(locLabel("chains.afterReleaseRadio"), &after, 1);
-	ImGui::SetItemTooltip("%s", locText("oscPanel.freezeOnLossTooltip"));
-	if ((after == 0) != bFreeze)
+	else
 	{
-		loss.after= after == 0 ? eLossAfter::Freeze : eLossAfter::Release;
-		bChanged= true;
+		bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &loss.holdMs, 0.f, 1000.f, "%.0f ms");
+		ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
 	}
+	bChanged|= drawLossAfter(loss);
+	// The measured-length stream has no rest pose
+	if (!bAvatar && loss.after == eLossAfter::EaseToRest)
+		drawNote("chains.easeWithoutAvatarNote");
 	return bChanged;
 }
 
@@ -659,7 +703,7 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	if (!bAvatar)
 	{
 		drawSubHeading("chains.lossHeading");
-		if (drawArmLoss(sideIndex, false, chains))
+		if (drawArmLoss(sideIndex, false, false, chains))
 			m_app->setRetargetChains(chains);
 		return;
 	}
@@ -705,11 +749,11 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	bRigChanged|= drawTrimControl(rig, lowerArmBone, "chains.rollTrim", true);
 
 	drawSubHeading("chains.lossHeading");
-	bChainChanged|= drawArmLoss(sideIndex, bDirect, chains);
+	bChainChanged|= drawArmLoss(sideIndex, bDirect, true, chains);
 
-	// The rest pose is where an arm that eases to rest goes
-	if (makeChainLossPolicy(chains, pipeline, 0.f).arms[sideIndex].after == eLossAfter::EaseToRest &&
-		ImGui::TreeNode(locLabel("avatarPanel.restPoseLabel")))
+	// The rest pose is where an arm that eases to rest goes, in either
+	// pipeline with an avatar
+	if (arm.loss.after == eLossAfter::EaseToRest && ImGui::TreeNode(locLabel("avatarPanel.restPoseLabel")))
 	{
 		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restElbowDrag"), &side.restElbowOffset.x, 0.005f, -1.f,
 										1.f, "%.3f m");

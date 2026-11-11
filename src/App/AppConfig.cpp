@@ -435,8 +435,12 @@ RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const Avata
 	stage.position= makeAvatarRetargetConfig(config, rig);
 	stage.user= makeBodyDimensions(config);
 	stage.direct= makeDirectRetargetConfig(config, rig, chains);
-	stage.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence);
-	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence);
+	// Without an avatar the position pipeline streams the measured-length
+	// skeleton, which has no rest pose to ease into
+	const bool bAvatar= stage.skeleton != nullptr;
+	stage.positionLoss=
+		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence, bAvatar);
+	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence, bAvatar);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const RetargetChains::Arm& arm= chains.arms[sideIndex];

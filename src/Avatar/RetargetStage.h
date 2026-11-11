@@ -167,11 +167,13 @@ public:
 
 	// The target solve over a source pose the loss stage handed on: at IK
 	// weight 1 the position solve (AvatarRetarget::solve) with each arm's
-	// parameters evaluated over the source, at 0 the direct placement
-	// (DirectRetarget::place). Nothing blends between the two yet, so any
-	// other weight leaves the pose invalid. outGoals and outArmParameters,
-	// when given, receive the position solve's wrist goals and what each
-	// arm's parameters evaluated to, and none otherwise.
+	// parameters evaluated over the source, each resting arm's bones then
+	// blended by its rest blend into the direct pipeline's rest pose
+	// (DirectRetarget::makeRestPose) with no wrist goal, at 0 the direct
+	// placement (DirectRetarget::place). Nothing blends between the two yet,
+	// so any other weight leaves the pose invalid. outGoals and
+	// outArmParameters, when given, receive the position solve's wrist goals
+	// and what each arm's parameters evaluated to, and none otherwise.
 	void solveTarget(const SourcePose& source, float armIkWeight, AvatarPose& outPose,
 					 AvatarRetargetGoals* outGoals= nullptr,
 					 std::array<RetargetArmReadout, 2>* outArmParameters= nullptr);

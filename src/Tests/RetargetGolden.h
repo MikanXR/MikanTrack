@@ -99,7 +99,8 @@ inline RetargetStageConfig toLiveStage(const StreamConfig& config)
 	out.skeleton= config.avatarSkeleton;
 	out.position= config.avatarRetarget;
 	out.user= config.bodyDimensions;
-	out.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.minConfidence);
+	out.positionLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.minConfidence,
+										  config.avatarSkeleton != nullptr);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const RetargetChains::Arm& arm= chains.arms[sideIndex];

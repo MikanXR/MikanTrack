@@ -2,11 +2,15 @@
 
 #include <algorithm>
 
+#include "glm/gtc/quaternion.hpp"
+
 #include "AvatarSkeleton.h"
 
 namespace
 {
 using eGroupState= SourcePose::eGroupState;
+
+const glm::quat k_identity(1.f, 0.f, 0.f, 0.f);
 
 float smoothstep(float t)
 {
@@ -34,6 +38,17 @@ void decayConfidences(const SourcePose::Head& held, float decay, SourcePose::Hea
 {
 	if (held.confidence.bPresent)
 		outHead.confidence.value= held.confidence.value * decay;
+}
+
+// A resting group's rotation part way from its last values to the identity
+void easeToIdentity(const SourcePose::Torso& from, float blend, SourcePose::Torso& outTorso)
+{
+	outTorso.spineDelta= glm::slerp(from.spineDelta, k_identity, blend);
+}
+
+void easeToIdentity(const SourcePose::Head& from, float blend, SourcePose::Head& outHead)
+{
+	outHead.orientation= glm::slerp(from.orientation, k_identity, blend);
 }
 
 // What places a direct arm's bones, read off the source's arm and hand
@@ -105,9 +120,10 @@ void LossStage::reset()
 }
 
 template <typename Group>
-void LossStage::resolveGroup(const ChainLossPolicy& policy, double timestampMs, Group& ioGroup,
+void LossStage::resolveGroup(const ChainLossPolicy& policy, const SourcePose::Clock& clock, Group& ioGroup,
 							 GroupMemory<Group>& memory)
 {
+	const double timestampMs= clock.stepMs;
 	const SourcePose::Confidence* confidence= gateConfidence(ioGroup);
 	const bool bGated= confidence != nullptr && confidence->bPresent && confidence->value < policy.minConfidence;
 	const bool bMeasured= ioGroup.state == eGroupState::Measured && !bGated;
@@ -151,6 +167,7 @@ void LossStage::resolveGroup(const ChainLossPolicy& policy, double timestampMs, 
 	{
 		memory.bCarried= true;
 		memory.carried= ioGroup;
+		memory.easeStartMs= -1.0;
 		return;
 	}
 
@@ -165,10 +182,22 @@ void LossStage::resolveGroup(const ChainLossPolicy& policy, double timestampMs, 
 		}
 		break;
 	case eLossAfter::EaseToRest:
-		// The torso and the head rest at the identity, the default values
+	{
+		// From the last values handed on to the identity, the default values,
+		// timed from the frame before so the first frame without them already
+		// moves; a group nothing carried in this epoch is at rest at once
+		if (memory.easeStartMs < 0.0)
+			memory.easeStartMs= timestampMs - clock.frameIntervalMs;
+		float blend= 1.f;
+		if (memory.bCarried && policy.restBlendMs > 0.f)
+			blend= smoothstep((float)((timestampMs - memory.easeStartMs) / policy.restBlendMs));
 		ioGroup= Group();
+		if (blend < 1.f)
+			easeToIdentity(memory.carried, blend, ioGroup);
 		ioGroup.state= eGroupState::Resting;
+		ioGroup.restBlend= blend;
 		return;
+	}
 	case eLossAfter::Release:
 		break;
 	}
@@ -190,12 +219,10 @@ void LossStage::apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 		memory.bStarted= true;
 		memory.epoch= ioSource.clock.resetEpoch;
 	}
-	const double timestampMs= ioSource.clock.stepMs;
-
 	// A torso with a loss of its own resolves first, so an arm's rest pose
 	// hangs off the lean the torso hands on
 	if (!policy.torso.bFollowsParent)
-		resolveGroup(policy.torso, timestampMs, ioSource.torso, memory.torso);
+		resolveGroup(policy.torso, ioSource.clock, ioSource.torso, memory.torso);
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -204,7 +231,9 @@ void LossStage::apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 	}
 
 	// A torso that is the line between the shoulders is carried while both
-	// arms are carried with a shoulder, measured only when both arms are
+	// arms are carried with a shoulder, measured only when both arms are. A
+	// resting position arm carries its last shoulder, as a frozen one does,
+	// so the root follow and the other clavicle carry on through its ease.
 	if (policy.torso.bFollowsParent)
 	{
 		const SourcePose::Arm& left= ioSource.arms[0];
@@ -212,17 +241,20 @@ void LossStage::apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 		SourcePose::Torso& torso= ioSource.torso;
 		const bool bBothShoulders= left.state != eGroupState::Lost && right.state != eGroupState::Lost &&
 			left.bHasShoulder && right.bHasShoulder;
+		auto isRepeated= [](const SourcePose::Arm& arm) {
+			return arm.state == eGroupState::Frozen || arm.state == eGroupState::Resting;
+		};
 		if (!bBothShoulders)
 			torso.state= eGroupState::Lost;
 		else if (left.state == eGroupState::Measured && right.state == eGroupState::Measured)
 			torso.state= eGroupState::Measured;
-		else if (left.state == eGroupState::Frozen || right.state == eGroupState::Frozen)
+		else if (isRepeated(left) || isRepeated(right))
 			torso.state= eGroupState::Frozen;
 		else
 			torso.state= eGroupState::Held;
 	}
 
-	resolveGroup(policy.head, timestampMs, ioSource.head, memory.head);
+	resolveGroup(policy.head, ioSource.clock, ioSource.head, memory.head);
 }
 
 void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const AvatarSkeleton* skeleton,
@@ -323,13 +355,12 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 		return;
 	}
 
-	switch (policy.after)
-	{
-	case eLossAfter::Freeze:
-	{
-		const SideValues& carried= memory.carried[sideIndex];
+	// The last values handed on, repeated; false when nothing was handed on
+	// in this epoch
+	const SideValues& carried= memory.carried[sideIndex];
+	auto freeze= [&]() {
 		if (!carried.valid)
-			break;
+			return false;
 		arm= carried.arm;
 		hand= carried.hand;
 		arm.state= eGroupState::Frozen;
@@ -339,12 +370,43 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 			*pose= carried.pose;
 			ioHands->bCarried[sideIndex]= true;
 		}
-		return;
-	}
+		return true;
+	};
+
+	switch (policy.after)
+	{
+	case eLossAfter::Freeze:
+		if (freeze())
+			return;
+		break;
 	case eLossAfter::EaseToRest:
 	{
-		if (ioSource.pipeline != SourcePose::ePipeline::Direct || skeleton == nullptr)
+		// Without a skeleton there is no rest pose to ease into
+		if (skeleton == nullptr)
+		{
+			if (freeze())
+				return;
 			break;
+		}
+		if (ioSource.pipeline != SourcePose::ePipeline::Direct)
+		{
+			// The last values handed on, which the target solve poses as it
+			// did on the frame before and blends into the rig's rest pose by
+			// the blend, timed from that frame so the first frame without a
+			// measurement already moves; an arm nothing carried in this epoch
+			// has none and is at rest at once
+			if (ease.easeStartMs < 0.0)
+				ease.easeStartMs= timestampMs - ioSource.clock.frameIntervalMs;
+			float blend= 1.f;
+			if (carried.valid && policy.restBlendMs > 0.f)
+				blend= smoothstep((float)((timestampMs - ease.easeStartMs) / policy.restBlendMs));
+			arm= carried.valid ? carried.arm : SourcePose::Arm();
+			hand= carried.valid ? carried.hand : SourcePose::Hand();
+			arm.state= eGroupState::Resting;
+			arm.restBlend= blend;
+			hand.state= eGroupState::Resting;
+			return;
+		}
 		// The ease into the rig's rest pose, from what the bones took last
 		// frame, timed from that frame so the first frame without a chain
 		// already moves; an arm nothing has placed in this epoch is at rest

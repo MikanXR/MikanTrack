@@ -18,8 +18,10 @@
 // The retarget stage: the loss stage's hold and freeze, the display stage
 // against the stream stage, a scrub's pre-roll against a straight
 // play-through, the step clock across interleaved face-only frames, the
-// elbow weight evaluated over the source pose's inputs, and the reach scale
-// and the goal offset placing the wrist goal.
+// elbow weight evaluated over the source pose's inputs, the reach scale and
+// the goal offset placing the wrist goal, and the loss policies: a position
+// arm's ease to rest, the position head's freeze, ease and timed hold, and
+// the direct pipeline's freeze, release and ease after the solver's hold.
 
 namespace
 {
@@ -201,6 +203,94 @@ TrackingFrameResult makeDirectFrame(const Camera& camera, const AvatarSkeleton& 
 		user.bHandTracked[0]= false;
 	}
 	return makeFrame(camera, user, skeleton, index * kFrameMs, index);
+}
+
+// -- Loss policies: the bones of an arm, how far they turn, and what the
+// stream carries --------------------------------------------------------------
+
+// One side's clavicle, arm, hand and fingers
+std::vector<B> makeArmBones(int sideIndex)
+{
+	const bool bLeft= sideIndex == 0;
+	std::vector<B> bones= {bLeft ? B::LeftShoulder : B::RightShoulder, bLeft ? B::LeftUpperArm : B::RightUpperArm,
+						   bLeft ? B::LeftLowerArm : B::RightLowerArm, bLeft ? B::LeftHand : B::RightHand};
+	const int firstFinger= (int)firstHumanoidFingerBone(sideIndex);
+	for (int index= 0; index < FINGER_COUNT * 3; ++index)
+		bones.push_back((B)(firstFinger + index));
+	return bones;
+}
+
+// The angle of the rotation from one to the other, accurate for small turns
+float rotationBetween(const glm::quat& a, const glm::quat& b)
+{
+	const glm::quat relative= glm::conjugate(a) * b;
+	return 2.f * atan2f(glm::length(glm::vec3(relative.x, relative.y, relative.z)), std::fabs(relative.w));
+}
+
+// A bone's delta, the identity where it is absent
+glm::quat boneDelta(const AvatarPose& pose, B bone)
+{
+	const AvatarPose::Bone& out= pose.bones[(int)bone];
+	return out.present ? out.deltaWorld : glm::quat(1.f, 0.f, 0.f, 0.f);
+}
+
+// The largest turn of any of the bones from one pose to another
+float largestTurn(const AvatarPose& a, const AvatarPose& b, const std::vector<B>& bones)
+{
+	float largest= 0.f;
+	for (B bone : bones)
+		largest= std::max(largest, rotationBetween(boneDelta(a, bone), boneDelta(b, bone)));
+	return largest;
+}
+
+// The bones placed the same way in both poses, every component equal (a
+// zero's sign aside)
+bool sameBones(const AvatarPose& a, const AvatarPose& b, const std::vector<B>& bones)
+{
+	for (B bone : bones)
+	{
+		const AvatarPose::Bone& x= a.bones[(int)bone];
+		const AvatarPose::Bone& y= b.bones[(int)bone];
+		if (x.present != y.present || x.deltaWorld.x != y.deltaWorld.x || x.deltaWorld.y != y.deltaWorld.y ||
+			x.deltaWorld.z != y.deltaWorld.z || x.deltaWorld.w != y.deltaWorld.w)
+			return false;
+	}
+	return true;
+}
+
+// Every placed bone of an arm hangs off placed bones of its arm: a forearm
+// under its upper arm, a hand under its forearm, a finger under its hand.
+// The spine and the clavicles may be absent under a placed arm or head,
+// which is how the position pipeline always poses them: an absent bone sits
+// at its rest under its parent.
+bool isWellFormed(const AvatarPose& pose)
+{
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const std::vector<B> bones= makeArmBones(sideIndex);
+		const bool bUpper= pose.bones[(int)bones[1]].present;
+		const bool bLower= pose.bones[(int)bones[2]].present;
+		const bool bHand= pose.bones[(int)bones[3]].present;
+		bool bFinger= false;
+		for (size_t index= 4; index < bones.size(); ++index)
+			bFinger|= pose.bones[(int)bones[index]].present;
+		if ((bLower && !bUpper) || (bHand && !bLower) || (bFinger && !bHand))
+			return false;
+	}
+	return true;
+}
+
+// Whether a frame's datagrams name a bone (the name with its terminator, so
+// no longer name matches)
+bool streamsBone(const std::vector<std::vector<uint8_t>>& packets, const char* name)
+{
+	const size_t length= std::strlen(name) + 1;
+	for (const std::vector<uint8_t>& packet : packets)
+	{
+		if (std::search(packet.begin(), packet.end(), name, name + length) != packet.end())
+			return true;
+	}
+	return false;
 }
 } // namespace
 
@@ -1019,6 +1109,530 @@ static int runRetargetStageTest(const TestArgs&)
 		check(bDirectSame, "(g) the direct pipeline reads neither the reach scale nor the goal offset");
 	}
 
+	// (h) A position arm that eases to rest. Both hands are lost from frame
+	// 20, the left arm easing to rest after its 250 ms hold over a 300 ms
+	// blend and the right one freezing, under a fixed root, so the left
+	// arm's eased bones start from exactly the bones its last carried values
+	// posed. The first frame of the ease and every frame after it turn each
+	// bone by no more than the blend's step times the bone's whole turn to
+	// the rest pose, the ease ends on the direct pipeline's rest pose
+	// (makeRestPose) exactly, and its state and blend read as a direct
+	// arm's do. A hand that returns mid-ease or at rest is placed by its
+	// measurement on the frame it returns, with no ease out, as the direct
+	// solver places a returning wrist the frame its entry gate admits it.
+	{
+		constexpr int kLostFrom= 20;
+		constexpr int kFrames= 80;
+		constexpr float kHoldMs= 250.f;
+		constexpr float kBlendMs= 300.f;
+		const std::vector<B> leftBones= makeArmBones(0);
+		RetargetStageConfig easeConfig= positionConfig;
+		easeConfig.position.followShoulders= false;
+		easeConfig.position.fixedRootPositionWorld= glm::vec3(0.f);
+		easeConfig.position.fixedRootYawDegrees= 0.f;
+		easeConfig.positionLoss= makePositionLossPolicy(0.f, kHoldMs, true);
+		easeConfig.positionLoss.arms[0].after= eLossAfter::EaseToRest;
+		easeConfig.positionLoss.arms[0].restBlendMs= kBlendMs;
+
+		// Both hands lost while lost(index) holds
+		auto runFrames= [&](const RetargetStageConfig& config, const std::function<bool(int)>& lost, int frameCount) {
+			RetargetStage stage;
+			stage.setConfig(config);
+			std::vector<RetargetResult> results(frameCount);
+			for (int index= 0; index < frameCount; ++index)
+			{
+				TrackingFrameResult frame= makePositionFrame(*skeleton, index, 1000, 1000);
+				if (lost(index))
+				{
+					frame.poses[0].tracked= false;
+					frame.poses[1].tracked= false;
+				}
+				stage.solvePosition(frame, results[index]);
+			}
+			return results;
+		};
+		const std::vector<RetargetResult> eased=
+			runFrames(easeConfig, [](int index) { return index >= kLostFrom; }, kFrames);
+
+		AvatarPose rest;
+		DirectRetarget::makeRestPose(*skeleton, easeConfig.direct, rest);
+
+		int firstResting= -1;
+		int firstAtRest= -1;
+		bool bHeldUntilEase= true;
+		bool bStates= true;
+		bool bRising= true;
+		bool bNoGoal= true;
+		float lastBlend= 0.f;
+		for (int index= kLostFrom; index < kFrames; ++index)
+		{
+			const SourcePose& source= eased[index].source;
+			const SourcePose::Arm& arm= source.arms[0];
+			if (arm.state == eGroupState::Resting)
+			{
+				if (firstResting < 0)
+					firstResting= index;
+				bStates&= source.hands[0].state == eGroupState::Resting &&
+					source.arms[1].state == eGroupState::Frozen && source.torso.state == eGroupState::Frozen;
+				bRising&= arm.restBlend >= lastBlend && arm.restBlend <= 1.f;
+				bNoGoal&= !eased[index].goals.bHasWristGoal[0];
+				lastBlend= arm.restBlend;
+				if (firstAtRest < 0 && arm.restBlend == 1.f)
+					firstAtRest= index;
+			}
+			else
+			{
+				bHeldUntilEase&= firstResting < 0 && arm.state == eGroupState::Held;
+			}
+		}
+		const double lastMeasuredMs= eased[kLostFrom - 1].source.clock.stepMs;
+		const bool bHoldTimed= firstResting > kLostFrom &&
+			eased[firstResting - 1].source.clock.stepMs - lastMeasuredMs <= kHoldMs &&
+			eased[firstResting].source.clock.stepMs - lastMeasuredMs > kHoldMs;
+		MIKAN_LOG_INFO(kTag) << "  (h) held frames " << kLostFrom << ".." << firstResting - 1 << ", resting from "
+							 << firstResting << " at blend "
+							 << (firstResting >= 0 ? eased[firstResting].source.arms[0].restBlend : -1.f)
+							 << ", at rest from " << firstAtRest;
+		check(bHeldUntilEase && bHoldTimed && firstAtRest > firstResting && bStates && bRising && bNoGoal,
+			  "(h) the position arm holds for its hold, then rests with its hand, its blend rising to 1, the torso "
+			  "carried on its last shoulder, and no wrist goal");
+
+		// The steps: the frame before the ease against its first frame, and
+		// every frame of the ease, each within the blend's step of the
+		// bones' whole turn to the rest pose
+		bool bStepsMeasured= false;
+		float worstExcess= -1e9f;
+		float firstStep= 0.f;
+		float wholeTurn= 0.f;
+		if (firstResting > 0 && firstAtRest > firstResting)
+		{
+			bStepsMeasured= true;
+			wholeTurn= largestTurn(eased[firstResting - 1].pose, rest, leftBones);
+			float previousBlend= 0.f;
+			for (int index= firstResting; index <= firstAtRest; ++index)
+			{
+				const float blend= eased[index].source.arms[0].restBlend;
+				const float step= largestTurn(eased[index - 1].pose, eased[index].pose, leftBones);
+				if (index == firstResting)
+					firstStep= step;
+				worstExcess= std::max(worstExcess, step - (blend - previousBlend) * wholeTurn);
+				previousBlend= blend;
+			}
+		}
+		MIKAN_LOG_INFO(kTag) << "  (h) whole turn to rest " << glm::degrees(wholeTurn) << " deg, first step "
+							 << glm::degrees(firstStep) << " deg, largest step past the blend's share "
+							 << glm::degrees(worstExcess) << " deg";
+		check(bStepsMeasured && worstExcess < 1e-4f && firstStep > 0.f && firstStep < 0.1f * wholeTurn,
+			  "(h) no jump: the first frame of the ease and every one after turn the bones by the blend's step alone");
+		bool bAtRest= firstAtRest > 0;
+		for (int index= std::max(firstAtRest, 0); bAtRest && index < kFrames; ++index)
+			bAtRest&= sameBones(eased[index].pose, rest, leftBones);
+		check(bAtRest, "(h) at rest the arm's bones are the direct pipeline's rest pose exactly, every component equal");
+
+		// Under a root yawed 40 degrees the rest pose turns with the root: the
+		// bones against the root are the rest pose's within float rounding
+		RetargetStageConfig yawedConfig= easeConfig;
+		yawedConfig.position.fixedRootYawDegrees= 40.f;
+		const std::vector<RetargetResult> followed=
+			runFrames(yawedConfig, [](int index) { return index >= kLostFrom; }, kFrames);
+		float followError= 0.f;
+		const AvatarPose& lastFollowed= followed[kFrames - 1].pose;
+		const glm::quat root= lastFollowed.rootRotationWorld;
+		for (B bone : leftBones)
+		{
+			const glm::quat bodyDelta= glm::inverse(root) * boneDelta(lastFollowed, bone) * root;
+			followError= std::max(followError, rotationBetween(bodyDelta, boneDelta(rest, bone)));
+			followError= lastFollowed.bones[(int)bone].present == rest.bones[(int)bone].present ? followError : 1.f;
+		}
+		MIKAN_LOG_INFO(kTag) << "  (h) under a root yawed " << glm::degrees(glm::angle(root))
+							 << " deg the rest pose is off by " << followError << " rad";
+		check(followed[kFrames - 1].source.arms[0].restBlend == 1.f && glm::angle(root) > 0.5f && followError < 1e-5f,
+			  "(h) under a yawed root the arm rests in the rest pose turned with the root, within 1e-5 rad");
+
+		// What the stream carries: the resting arm's bones throughout, and a
+		// released arm's not at all, beside the frozen right arm's
+		OscStreamerConfig oscConfig;
+		oscConfig.avatarSkeleton= skeleton;
+		OscStreamer streamer;
+		streamer.setConfig(oscConfig);
+		std::vector<std::vector<uint8_t>> packets;
+		bool bRestingSent= true;
+		for (int index= firstResting; index >= 0 && index < kFrames; ++index)
+		{
+			streamer.encodeFrame(makePositionFrame(*skeleton, index, 0, 1000), eased[index], packets);
+			bRestingSent&= streamsBone(packets, "LeftUpperArm") && streamsBone(packets, "LeftHand") &&
+				streamsBone(packets, "LeftIndexDistal") && streamsBone(packets, "RightUpperArm");
+		}
+		RetargetStageConfig releaseConfig= easeConfig;
+		releaseConfig.positionLoss.arms[0].after= eLossAfter::Release;
+		const std::vector<RetargetResult> released=
+			runFrames(releaseConfig, [](int index) { return index >= kLostFrom; }, kFrames);
+		streamer.encodeFrame(makePositionFrame(*skeleton, kFrames - 1, 0, 1000), released[kFrames - 1], packets);
+		const bool bReleasedSilent= released[kFrames - 1].source.arms[0].state == eGroupState::Lost &&
+			!streamsBone(packets, "LeftUpperArm") && !streamsBone(packets, "LeftHand") &&
+			streamsBone(packets, "RightUpperArm") && isWellFormed(released[kFrames - 1].pose);
+		check(bRestingSent && bReleasedSilent,
+			  "(h) the stream sends a resting arm's bones and a frozen arm's, and none of a released arm's");
+
+		// A returning hand: mid-ease and at rest, the frame it returns poses
+		// as a run that never lost it; lost again, it holds and eases afresh
+		const std::vector<RetargetResult> neverLost= runFrames(easeConfig, [](int) { return false; }, kFrames);
+		bool bReturned= firstResting > 0 && firstAtRest > 0;
+		int secondResting= -1;
+		float secondBlend= -1.f;
+		for (int returnFrame : {firstResting + 3, firstAtRest + 5})
+		{
+			if (!bReturned || returnFrame + 25 > kFrames)
+			{
+				bReturned= false;
+				break;
+			}
+			const int lostAgain= returnFrame + 5;
+			const std::vector<RetargetResult> returned= runFrames(
+				easeConfig,
+				[&](int index) { return (index >= kLostFrom && index < returnFrame) || index >= lostAgain; }, kFrames);
+			const bool bMidEase= returned[returnFrame - 1].source.arms[0].state == eGroupState::Resting;
+			bReturned&= bMidEase && returned[returnFrame].source.arms[0].state == eGroupState::Measured &&
+				samePoseBits(returned[returnFrame].pose, neverLost[returnFrame].pose) &&
+				returned[lostAgain].source.arms[0].state == eGroupState::Held;
+			for (int index= lostAgain; index < kFrames && secondResting < 0; ++index)
+			{
+				if (returned[index].source.arms[0].state == eGroupState::Resting)
+				{
+					secondResting= index;
+					secondBlend= returned[index].source.arms[0].restBlend;
+				}
+			}
+			bReturned&= secondResting > lostAgain && secondBlend > 0.f && secondBlend < 0.1f;
+			MIKAN_LOG_INFO(kTag) << "  (h) returned at frame " << returnFrame << " (blend "
+								 << returned[returnFrame - 1].source.arms[0].restBlend << " the frame before), lost again at "
+								 << lostAgain << ", resting again from " << secondResting << " at blend " << secondBlend;
+			secondResting= -1;
+		}
+		check(bReturned, "(h) a hand returning mid-ease or at rest is placed by its measurement at once, and a new "
+						 "loss holds and eases from there");
+	}
+
+	// (i) The position head: freeze repeats the last measured head, the ease
+	// to rest turns it to the identity over its blend, and a timed hold
+	// carries it first, its confidence decaying
+	{
+		constexpr int kLostFrom= 20;
+		constexpr int kFrames= 40;
+		RetargetStageConfig headConfig= positionConfig;
+		headConfig.position.followShoulders= false;
+		headConfig.position.fixedRootPositionWorld= glm::vec3(0.f);
+		headConfig.position.fixedRootYawDegrees= 0.f;
+		auto runHead= [&](const ChainLossPolicy& head) {
+			RetargetStageConfig config= headConfig;
+			config.positionLoss.head= head;
+			RetargetStage stage;
+			stage.setConfig(config);
+			std::vector<RetargetResult> results(kFrames);
+			for (int index= 0; index < kFrames; ++index)
+			{
+				TrackingFrameResult frame= makePositionFrame(*skeleton, index, 1000, 1000);
+				frame.head.valid= index < kLostFrom;
+				stage.solvePosition(frame, results[index]);
+			}
+			return results;
+		};
+		const glm::quat lastMeasured= makePositionFrame(*skeleton, kLostFrom - 1, 1000, 1000).head.orientationWorld;
+		auto sameQuat= [](const glm::quat& a, const glm::quat& b) { return std::memcmp(&a, &b, sizeof(glm::quat)) == 0; };
+
+		ChainLossPolicy freeze;
+		freeze.after= eLossAfter::Freeze;
+		const std::vector<RetargetResult> frozen= runHead(freeze);
+		bool bFrozen= true;
+		for (int index= kLostFrom; index < kFrames; ++index)
+		{
+			const SourcePose::Head& head= frozen[index].source.head;
+			bFrozen&= head.state == eGroupState::Frozen && sameQuat(head.orientation, lastMeasured) &&
+				sameBones(frozen[index].pose, frozen[kLostFrom - 1].pose, {B::Head});
+		}
+		check(bFrozen, "(i) a frozen head repeats its last measured rotation, and the head bone holds still");
+
+		ChainLossPolicy ease;
+		ease.after= eLossAfter::EaseToRest;
+		ease.restBlendMs= 200.f;
+		const std::vector<RetargetResult> rested= runHead(ease);
+		const float wholeTurn= rotationBetween(lastMeasured, glm::quat(1.f, 0.f, 0.f, 0.f));
+		const float firstBlend= rested[kLostFrom].source.head.restBlend;
+		const float firstStep= largestTurn(rested[kLostFrom - 1].pose, rested[kLostFrom].pose, {B::Head});
+		const SourcePose::Head& lastHead= rested[kFrames - 1].source.head;
+		const bool bEnded= lastHead.state == eGroupState::Resting && lastHead.restBlend == 1.f &&
+			sameQuat(lastHead.orientation, glm::quat(1.f, 0.f, 0.f, 0.f)) &&
+			rotationBetween(boneDelta(rested[kFrames - 1].pose, B::Head), glm::quat(1.f, 0.f, 0.f, 0.f)) < 1e-6f;
+		MIKAN_LOG_INFO(kTag) << "  (i) head ease: whole turn " << glm::degrees(wholeTurn) << " deg, first blend "
+							 << firstBlend << ", first step " << glm::degrees(firstStep) << " deg";
+		check(rested[kLostFrom].source.head.state == eGroupState::Resting && firstBlend > 0.f && firstBlend < 0.1f &&
+				  std::fabs(firstStep - firstBlend * wholeTurn) < 1e-4f && bEnded,
+			  "(i) a head easing to rest starts from its last rotation and reaches the identity with its blend at 1");
+
+		ChainLossPolicy timed;
+		timed.hold= eLossHold::Timed;
+		timed.holdMs= 100.f;
+		timed.after= eLossAfter::Freeze;
+		const std::vector<RetargetResult> held= runHead(timed);
+		bool bHeld= true;
+		int heldFrames= 0;
+		for (int index= kLostFrom; index < kFrames; ++index)
+		{
+			const SourcePose::Head& head= held[index].source.head;
+			const double elapsedMs= held[index].source.clock.stepMs - held[kLostFrom - 1].source.clock.stepMs;
+			if (elapsedMs <= 100.0)
+			{
+				heldFrames++;
+				bHeld&= head.state == eGroupState::Held && sameQuat(head.orientation, lastMeasured) &&
+					std::fabs(head.confidence.value - 0.9f * (float)(1.0 - elapsedMs / 100.0)) < 1e-5f;
+			}
+			else
+			{
+				bHeld&= head.state == eGroupState::Frozen && sameQuat(head.orientation, lastMeasured);
+			}
+		}
+		check(bHeld && heldFrames == 3,
+			  "(i) a head with a timed hold carries its last rotation for the hold, its confidence decaying, then "
+			  "freezes");
+	}
+
+	// (j) The direct pipeline's choices after the solver's hold: an arm, the
+	// head and the torso each frozen (the last carried values repeated),
+	// released (left out of the pose and the stream) or, for the head and
+	// the torso, eased to the identity over a blend; every pose well formed.
+	// The torso leans against a neutral captured beside it, so it carries a
+	// rotation to freeze and to ease from.
+	{
+		constexpr int kLostFrom= 30;
+		constexpr int kFrames= 70;
+		const TrackingFrameResult::HeadPose noPhone;
+		RetargetStageConfig leanConfig= directConfig;
+		{
+			RetargetStage capture;
+			capture.setConfig(directConfig);
+			RetargetResult result;
+			for (int index= 0; index < 10; ++index)
+			{
+				const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
+				capture.solveDirect(frame, camera.model, noPhone, frame.timestampMs, result);
+			}
+			DirectNeutralPose neutral;
+			capture.captureNeutral(neutral);
+			neutral.torso= neutral.torso * glm::angleAxis(0.2f, glm::vec3(0.f, 0.f, 1.f));
+			neutral.head= neutral.head * glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
+			leanConfig.direct.neutral= neutral;
+		}
+		enum class eLost
+		{
+			Arm,
+			Head,
+			Torso,
+		};
+		auto runDirect= [&](eLost lost, const LossPolicy& policy) {
+			RetargetStageConfig config= leanConfig;
+			config.directLoss= policy;
+			RetargetStage stage;
+			stage.setConfig(config);
+			std::vector<RetargetResult> results(kFrames);
+			for (int index= 0; index < kFrames; ++index)
+			{
+				TrackingFrameResult frame=
+					makeDirectFrame(camera, *skeleton, index, lost == eLost::Arm ? kLostFrom : 1000, 1000);
+				if (index >= kLostFrom && lost == eLost::Head)
+					frame.body.visibility[(int)ePoseLandmark::NOSE]= 0.1f;
+				if (index >= kLostFrom && lost == eLost::Torso)
+				{
+					frame.body.visibility[(int)ePoseLandmark::LEFT_SHOULDER]= 0.1f;
+					frame.body.visibility[(int)ePoseLandmark::RIGHT_SHOULDER]= 0.1f;
+				}
+				stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, results[index]);
+			}
+			return results;
+		};
+		// The last frame a group was carried (measured or held) and the first
+		// frame past it
+		auto lastCarried= [&](const std::vector<RetargetResult>& results, auto state) {
+			int last= -1;
+			for (int index= 0; index < kFrames; ++index)
+			{
+				const eGroupState groupState= state(results[index].source);
+				if (groupState == eGroupState::Measured || groupState == eGroupState::Held)
+					last= index;
+			}
+			return last;
+		};
+		OscStreamerConfig oscConfig;
+		oscConfig.avatarSkeleton= skeleton;
+		OscStreamer streamer;
+		streamer.setConfig(oscConfig);
+		std::vector<std::vector<uint8_t>> packets;
+		auto streamLast= [&](const std::vector<RetargetResult>& results) {
+			streamer.encodeFrame(makeDirectFrame(camera, *skeleton, kFrames - 1, 1000, 1000), results[kFrames - 1],
+								 packets);
+		};
+		auto allWellFormed= [](const std::vector<RetargetResult>& results) {
+			bool bWell= true;
+			for (const RetargetResult& result : results)
+				bWell&= result.pose.valid && isWellFormed(result.pose);
+			return bWell;
+		};
+		const LossPolicy defaults= makeDirectLossPolicy(leanConfig.direct.restBlendMs);
+		const std::vector<B> leftBones= makeArmBones(0);
+
+		// The arm
+		{
+			auto armState= [](const SourcePose& source) { return source.arms[0].state; };
+			LossPolicy policy= defaults;
+			policy.arms[0].after= eLossAfter::Freeze;
+			const std::vector<RetargetResult> frozen= runDirect(eLost::Arm, policy);
+			const int last= lastCarried(frozen, armState);
+			bool bFrozen= last > kLostFrom && last < kFrames - 5;
+			for (int index= last + 1; bFrozen && index < kFrames; ++index)
+			{
+				const SourcePose& carried= frozen[last].source;
+				const SourcePose& source= frozen[index].source;
+				bFrozen&= source.arms[0].state == eGroupState::Frozen && source.hands[0].state == eGroupState::Frozen &&
+					std::memcmp(&source.arms[0].upperDirection, &carried.arms[0].upperDirection, sizeof(glm::vec3)) == 0 &&
+					std::memcmp(&source.arms[0].forearmDirection, &carried.arms[0].forearmDirection, sizeof(glm::vec3)) ==
+						0 &&
+					source.arms[0].twist == carried.arms[0].twist &&
+					std::memcmp(&source.hands[0].wristRotation, &carried.hands[0].wristRotation, sizeof(glm::quat)) == 0 &&
+					std::memcmp(&source.hands[0].fingers, &carried.hands[0].fingers, sizeof(source.hands[0].fingers)) == 0 &&
+					frozen[index].pose.bones[(int)B::LeftHand].present;
+			}
+			streamLast(frozen);
+			const bool bFrozenSent= streamsBone(packets, "LeftUpperArm") && streamsBone(packets, "LeftHand");
+			MIKAN_LOG_INFO(kTag) << "  (j) arm: held through frame " << last << ", frozen after";
+			check(bFrozen && bFrozenSent && allWellFormed(frozen),
+				  "(j) a direct arm that freezes repeats its last carried placement after the solver's hold, and "
+				  "streams");
+
+			policy.arms[0].after= eLossAfter::Release;
+			const std::vector<RetargetResult> released= runDirect(eLost::Arm, policy);
+			const int releasedLast= lastCarried(released, armState);
+			bool bReleased= releasedLast == last;
+			for (int index= releasedLast + 1; bReleased && index < kFrames; ++index)
+			{
+				const RetargetResult& result= released[index];
+				bReleased&= result.source.arms[0].state == eGroupState::Lost &&
+					result.source.hands[0].state == eGroupState::Lost;
+				for (size_t bone= 1; bone < leftBones.size(); ++bone)
+					bReleased&= !result.pose.bones[(int)leftBones[bone]].present;
+				bReleased&= result.pose.bones[(int)B::RightUpperArm].present;
+			}
+			streamLast(released);
+			const bool bSilent= !streamsBone(packets, "LeftUpperArm") && !streamsBone(packets, "LeftHand") &&
+				!streamsBone(packets, "LeftIndexProximal") && streamsBone(packets, "RightUpperArm");
+			check(bReleased && bSilent && allWellFormed(released),
+				  "(j) a direct arm that releases leaves the pose and the stream after the solver's hold, its hand "
+				  "with it");
+		}
+
+		// The head
+		{
+			auto headState= [](const SourcePose& source) { return source.head.state; };
+			LossPolicy policy= defaults;
+			policy.head.after= eLossAfter::Freeze;
+			const std::vector<RetargetResult> frozen= runDirect(eLost::Head, policy);
+			const int last= lastCarried(frozen, headState);
+			bool bFrozen= last > kLostFrom && last < kFrames - 5;
+			for (int index= last + 1; bFrozen && index < kFrames; ++index)
+			{
+				bFrozen&= frozen[index].source.head.state == eGroupState::Frozen &&
+					std::memcmp(&frozen[index].source.head.orientation, &frozen[last].source.head.orientation,
+								sizeof(glm::quat)) == 0 &&
+					sameBones(frozen[index].pose, frozen[last].pose, {B::Head});
+			}
+			check(bFrozen && allWellFormed(frozen),
+				  "(j) a direct head that freezes repeats its last carried rotation after the solver's hold");
+
+			policy.head.after= eLossAfter::Release;
+			const std::vector<RetargetResult> released= runDirect(eLost::Head, policy);
+			bool bReleased= lastCarried(released, headState) == last;
+			for (int index= last + 1; bReleased && index < kFrames; ++index)
+				bReleased&= released[index].source.head.state == eGroupState::Lost &&
+					!released[index].pose.bones[(int)B::Head].present && released[index].pose.bones[(int)B::Neck].present;
+			streamLast(released);
+			check(bReleased && !streamsBone(packets, "Head") && streamsBone(packets, "Neck") && allWellFormed(released),
+				  "(j) a direct head that releases leaves the pose and the stream, the neck still placed");
+
+			policy.head.after= eLossAfter::EaseToRest;
+			policy.head.restBlendMs= 200.f;
+			const std::vector<RetargetResult> rested= runDirect(eLost::Head, policy);
+			const glm::quat from= rested[last].source.head.orientation;
+			const float firstBlend= rested[last + 1].source.head.restBlend;
+			const float firstTurn= rotationBetween(rested[last + 1].source.head.orientation, from);
+			const float wholeTurn= rotationBetween(from, glm::quat(1.f, 0.f, 0.f, 0.f));
+			const SourcePose::Head& end= rested[kFrames - 1].source.head;
+			const bool bRested= rested[last + 1].source.head.state == eGroupState::Resting && firstBlend > 0.f &&
+				firstBlend < 0.2f && std::fabs(firstTurn - firstBlend * wholeTurn) < 1e-4f && end.restBlend == 1.f &&
+				rested[kFrames - 1].pose.bones[(int)B::Head].present &&
+				rotationBetween(boneDelta(rested[kFrames - 1].pose, B::Head),
+								glm::inverse(glm::quat(leanConfig.direct.headTrimRadians))) < 1e-6f;
+			MIKAN_LOG_INFO(kTag) << "  (j) head: held through frame " << last << ", whole turn to rest "
+								 << glm::degrees(wholeTurn) << " deg, first blend " << firstBlend;
+			check(bRested && wholeTurn > 0.01f && allWellFormed(rested),
+				  "(j) a direct head that eases to rest turns from its last rotation to the rest over its blend");
+		}
+
+		// The torso
+		{
+			auto torsoState= [](const SourcePose& source) { return source.torso.state; };
+			const B spineBones[]= {B::Spine, B::Chest, B::UpperChest, B::Neck};
+			LossPolicy policy= defaults;
+			policy.torso.after= eLossAfter::Freeze;
+			const std::vector<RetargetResult> frozen= runDirect(eLost::Torso, policy);
+			const int last= lastCarried(frozen, torsoState);
+			bool bFrozen= last > kLostFrom && last < kFrames - 5 &&
+				rotationBetween(frozen[last].source.torso.spineDelta, glm::quat(1.f, 0.f, 0.f, 0.f)) > 0.05f;
+			for (int index= last + 1; bFrozen && index < kFrames; ++index)
+			{
+				bFrozen&= frozen[index].source.torso.state == eGroupState::Frozen &&
+					std::memcmp(&frozen[index].source.torso.spineDelta, &frozen[last].source.torso.spineDelta,
+								sizeof(glm::quat)) == 0 &&
+					sameBones(frozen[index].pose, frozen[last].pose, {B::Spine, B::Chest, B::UpperChest, B::Neck});
+			}
+			check(bFrozen && allWellFormed(frozen),
+				  "(j) a direct torso that freezes repeats its last carried lean after the solver's hold");
+
+			policy.torso.after= eLossAfter::Release;
+			const std::vector<RetargetResult> released= runDirect(eLost::Torso, policy);
+			bool bReleased= lastCarried(released, torsoState) == last;
+			bool bArmsPlaced= false;
+			for (int index= last + 1; bReleased && index < kFrames; ++index)
+			{
+				const RetargetResult& result= released[index];
+				bReleased&= result.source.torso.state == eGroupState::Lost && result.pose.bones[(int)B::Head].present;
+				for (B bone : spineBones)
+					bReleased&= !result.pose.bones[(int)bone].present;
+				bArmsPlaced|= result.pose.bones[(int)B::LeftUpperArm].present;
+			}
+			streamLast(released);
+			check(bReleased && bArmsPlaced && !streamsBone(packets, "Spine") && !streamsBone(packets, "Neck") &&
+					  streamsBone(packets, "Head") && allWellFormed(released),
+				  "(j) a direct torso that releases leaves the spine bones out of the pose and the stream, the head "
+				  "and the arms still placed");
+
+			policy.torso.after= eLossAfter::EaseToRest;
+			policy.torso.restBlendMs= 200.f;
+			const std::vector<RetargetResult> rested= runDirect(eLost::Torso, policy);
+			const glm::quat from= rested[last].source.torso.spineDelta;
+			const float firstBlend= rested[last + 1].source.torso.restBlend;
+			const float firstTurn= rotationBetween(rested[last + 1].source.torso.spineDelta, from);
+			const float wholeTurn= rotationBetween(from, glm::quat(1.f, 0.f, 0.f, 0.f));
+			const SourcePose::Torso& end= rested[kFrames - 1].source.torso;
+			const glm::quat identity(1.f, 0.f, 0.f, 0.f);
+			const bool bRested= rested[last + 1].source.torso.state == eGroupState::Resting && firstBlend > 0.f &&
+				firstBlend < 0.2f && std::fabs(firstTurn - firstBlend * wholeTurn) < 1e-4f && end.restBlend == 1.f &&
+				std::memcmp(&end.spineDelta, &identity, sizeof(glm::quat)) == 0 &&
+				rested[kFrames - 1].pose.bones[(int)B::Spine].present;
+			MIKAN_LOG_INFO(kTag) << "  (j) torso: held through frame " << last << ", whole turn to rest "
+								 << glm::degrees(wholeTurn) << " deg, first blend " << firstBlend;
+			check(bRested && allWellFormed(rested),
+				  "(j) a direct torso that eases to rest turns from its last lean to the identity over its blend");
+		}
+	}
+
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
 	return failures == 0 ? 0 : 1;
 }
@@ -1026,5 +1640,5 @@ static int runRetargetStageTest(const TestArgs&)
 MIKAN_REGISTER_TEST("--test-retarget-stage",
 					"Retarget stage: the loss stage's hold and freeze, the display stage against the stream stage, "
 					"a scrub's pre-roll against a straight play-through, the elbow weight over the source inputs, "
-					"the reach scale and the goal offset",
+					"the reach scale and the goal offset, the loss policies of both pipelines",
 					eTestCategory::SelfTest, runRetargetStageTest)

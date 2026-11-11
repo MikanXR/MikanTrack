@@ -96,16 +96,23 @@ struct SourcePose
 	{
 		eGroupState state= eGroupState::Lost;
 		glm::quat spineDelta{1.f, 0.f, 0.f, 0.f}; // Direct
+		// Resting: how far the ease has carried the spine to the identity, 1
+		// at rest
+		float restBlend= 0.f;
 	};
 
 	// The head. Position: the world head frame (+X facing, +Y left, +Z up).
 	// Direct: the head's rotation from the neutral head, or the phone's head,
-	// before the joint limit and the rig's trim. Identity while lost.
+	// before the joint limit and the rig's trim. Identity while lost. A
+	// resting head carries the ease from its last values to the identity.
 	struct Head
 	{
 		eGroupState state= eGroupState::Lost;
 		Confidence confidence;
 		glm::quat orientation{1.f, 0.f, 0.f, 0.f};
+		// Resting: how far the ease has carried the head to the identity, 1
+		// at rest
+		float restBlend= 0.f;
 	};
 
 	// One arm. The positions are world, in the pipeline's units. Position:
@@ -114,8 +121,10 @@ struct SourcePose
 	// forearm length. Direct: the solved chain, every joint present, plus the
 	// placement: the chain's directions and the forearm's twist about its
 	// axis against the avatar's rest palm (zero while the hand was never
-	// measured). A resting arm carries the placement the loss stage eased it
-	// to and no chain, its hand the rest wrist and fingers.
+	// measured). A resting direct arm carries the placement the loss stage
+	// eased it to and no chain, its hand the rest wrist and fingers. A
+	// resting position arm carries its last carried values, which the target
+	// solve poses and then eases into the rig's rest pose by restBlend.
 	struct Arm
 	{
 		eGroupState state= eGroupState::Lost;

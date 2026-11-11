@@ -120,10 +120,11 @@ StreamConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& 
 {
 	const BodyDimensions bodyDimensions= makeBodyDimensions(config);
 	// The frozen streamer took one hold and one freeze rule for both sides:
-	// the left arm's, as the position pipeline performs it from the chains
+	// the left arm's, as the position pipeline performs it from the chains.
+	// It knew no rest pose, so an ease to rest takes the stream's freeze.
 	const RetargetChains chains= resolveRetargetChains(config, rig);
 	const ChainLossPolicy armLoss=
-		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence).arms[0];
+		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence, false).arms[0];
 	StreamConfig oscConfig;
 	oscConfig.maxRateHz= 0.f;
 	oscConfig.minConfidence= config.osc.minConfidence;

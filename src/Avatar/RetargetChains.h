@@ -122,13 +122,18 @@ RetargetChains makeDefaultRetargetChains(bool bDirect);
 
 // The loss rules one pipeline performs from the chains. A stored kind the
 // pipeline cannot perform takes that pipeline's default for the chain, the
-// stored numbers stay. The position pipeline performs no hold or a timed one
-// (its own hold becomes a timed one) and a release or a freeze (an ease to
-// rest becomes a freeze) on the arms and the head, gates the arms on
-// minConfidence, and carries its torso with the arms. The direct pipeline
-// performs its own hold then the ease to rest on every chain, each arm over
-// its own rest blend.
-LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence);
+// stored numbers stay. What follows the hold (release, freeze, or the ease
+// to rest over the stored rest blend) is performed as stored by both
+// pipelines, but for an ease to rest in the position pipeline without an
+// avatar (bAvatar false), whose measured-length stream has no rest pose:
+// it takes the default, a freeze for an arm and a release for the head. The
+// position pipeline performs no hold or a timed one (its own hold becomes a
+// timed one of the stored length) on the arms and the head, gates the arms
+// on minConfidence, and carries its torso with the arms. The direct pipeline
+// keeps its own hold on every chain, whatever kind is stored, since that
+// hold also keeps the solver's chain and filters alive.
+LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence,
+							   bool bAvatar);
 
 // The other arm's copy of an arm: the goal offset reflected across the body's
 // midplane, the text of each parameter that can be a function (the IK

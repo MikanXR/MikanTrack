@@ -104,7 +104,11 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
 		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale> [value <number>|expr <text...>]",
 		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
-		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]"},
+		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]",
+		 "pipeline loss <torso|head|leftArm|rightArm>",
+		 "pipeline loss <torso|head|leftArm|rightArm> after <release|freeze|easeToRest>",
+		 "pipeline loss <torso|head|leftArm|rightArm> hold <ms>",
+		 "pipeline loss <torso|head|leftArm|rightArm> blend <ms>"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -1451,6 +1455,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		return handleGoalAutomation(args, outLines, outError);
 	if (verb == "limit")
 		return handleLimitAutomation(args, outLines, outError);
+	if (verb == "loss")
+		return handleLossAutomation(args, outLines, outError);
 	if (verb == "pinned")
 	{
 		const std::vector<PipelineStageId> pinned= m_pinnedWindows->getPinned();
@@ -1571,6 +1577,167 @@ bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std
 	// Only the direct placement applies the limits
 	if (!m_pipelineInputs.bDirect)
 		line+= " (unused: the position pipeline applies no joint limit)";
+	outLines.push_back(line);
+	return true;
+}
+
+// A loss rule as "hold <kind> <ms> after <kind> blend <ms>"
+static std::string formatLoss(eLossHold hold, float holdMs, eLossAfter after, float restBlendMs)
+{
+	char text[128];
+	std::snprintf(text, sizeof(text), "hold %s %.6g after %s blend %.6g", lossHoldName(hold), holdMs,
+				  lossAfterName(after), restBlendMs);
+	return text;
+}
+
+static const char* groupStateName(SourcePose::eGroupState state)
+{
+	switch (state)
+	{
+	case SourcePose::eGroupState::Lost:
+		return "lost";
+	case SourcePose::eGroupState::Measured:
+		return "measured";
+	case SourcePose::eGroupState::Held:
+		return "held";
+	case SourcePose::eGroupState::Frozen:
+		return "frozen";
+	case SourcePose::eGroupState::Resting:
+		return "resting";
+	}
+	return "";
+}
+
+bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									  std::string& outError)
+{
+	// loss <chain> [after <kind> | hold <ms> | blend <ms>]
+	if (args.size() != 2 && args.size() != 4)
+	{
+		outError= "usage: loss <torso|head|leftArm|rightArm> [after <release|freeze|easeToRest>|hold <ms>|blend <ms>]";
+		return false;
+	}
+	eRetargetChain chain;
+	if (!AvatarPanel::parseChainId(args[1], chain) || chain == eRetargetChain::LeftHand ||
+		chain == eRetargetChain::RightHand)
+	{
+		outError= "not a chain with a loss policy: " + args[1];
+		return false;
+	}
+	const int sideIndex= chain == eRetargetChain::LeftArm ? 0 : chain == eRetargetChain::RightArm ? 1 : -1;
+	RetargetChains chains= m_app->getRetargetChains();
+	RetargetChains::Loss* storedLoss= &chains.head.loss;
+	if (sideIndex >= 0)
+		storedLoss= &chains.arms[sideIndex].loss;
+	else if (chain == eRetargetChain::Torso)
+		storedLoss= &chains.torso.loss;
+	RetargetChains::Loss& loss= *storedLoss;
+
+	if (args.size() == 4)
+	{
+		const std::string& field= args[2];
+		const std::string& value= args[3];
+		if (field == "after")
+		{
+			bool bFound= false;
+			for (eLossAfter after : {eLossAfter::Release, eLossAfter::Freeze, eLossAfter::EaseToRest})
+			{
+				if (value == lossAfterName(after))
+				{
+					loss.after= after;
+					bFound= true;
+				}
+			}
+			if (!bFound)
+			{
+				outError= "unknown after: " + value;
+				return false;
+			}
+		}
+		else if (field == "hold" || field == "blend")
+		{
+			char* end= nullptr;
+			const double parsed= std::strtod(value.c_str(), &end);
+			if (end == value.c_str() || *end != '\0' || !std::isfinite(parsed) || parsed < 0.0)
+			{
+				outError= "not a number of milliseconds of at least 0: " + value;
+				return false;
+			}
+			if (field == "blend")
+			{
+				loss.restBlendMs= (float)parsed;
+			}
+			else
+			{
+				loss.holdMs= (float)parsed;
+				// As the head's slider does: a length the head holds for, which
+				// a block stored as holding nothing would not take
+				if (chain == eRetargetChain::Head)
+					loss.hold= eLossHold::Timed;
+			}
+		}
+		else
+		{
+			outError= "unknown field: " + field;
+			return false;
+		}
+		// The chains' one edit path, the panel's
+		m_app->setRetargetChains(chains);
+	}
+	outLines.push_back("stored " + formatLoss(loss.hold, loss.holdMs, loss.after, loss.restBlendMs));
+
+	// What the project's pipeline performs: the direct one with an avatar in
+	// a direct project, the position one otherwise
+	const AppConfig* config= m_app->getConfig();
+	const bool bAvatar= m_app->getAvatarSkeleton() != nullptr;
+	const bool bDirect= config->direct.enabled && bAvatar;
+	const LossPolicy policy= makeChainLossPolicy(
+		chains, bDirect ? SourcePose::ePipeline::Direct : SourcePose::ePipeline::Position, config->osc.minConfidence,
+		bAvatar);
+	const ChainLossPolicy* resolvedPolicy= &policy.head;
+	if (sideIndex >= 0)
+		resolvedPolicy= &policy.arms[sideIndex];
+	else if (chain == eRetargetChain::Torso)
+		resolvedPolicy= &policy.torso;
+	const ChainLossPolicy& resolved= *resolvedPolicy;
+	std::string line= std::string("resolved ") + (bDirect ? "direct " : "position ");
+	if (resolved.bFollowsParent)
+		line+= "follows the arms";
+	else
+		line+= formatLoss(resolved.hold, resolved.holdMs, resolved.after, resolved.restBlendMs);
+	outLines.push_back(line);
+
+	// The chain's group state on the frame the scene shows
+	const SourcePose* source= m_sourcePoseReadout.source;
+	if (source == nullptr)
+	{
+		outLines.push_back("shown none");
+		return true;
+	}
+	SourcePose::eGroupState state= SourcePose::eGroupState::Lost;
+	float restBlend= 0.f;
+	if (sideIndex >= 0)
+	{
+		state= source->arms[sideIndex].state;
+		restBlend= source->arms[sideIndex].restBlend;
+	}
+	else if (chain == eRetargetChain::Torso)
+	{
+		state= source->torso.state;
+		restBlend= source->torso.restBlend;
+	}
+	else
+	{
+		state= source->head.state;
+		restBlend= source->head.restBlend;
+	}
+	line= std::string("shown ") + groupStateName(state);
+	if (state == SourcePose::eGroupState::Resting)
+	{
+		char text[32];
+		std::snprintf(text, sizeof(text), " blend %.3f", restBlend);
+		line+= text;
+	}
 	outLines.push_back(line);
 	return true;
 }

@@ -1059,16 +1059,26 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 	// The root is fixed: the camera is the world and the user faces it
 	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
 
+	// A released torso leaves the spine bones out, at the avatar's rest, which
+	// is the identity the lost torso's spineDelta carries, so the arms hang
+	// off the spine as it is drawn
 	const glm::quat spineDelta= source.torso.spineDelta;
-	placeBone(outPose, skeleton, B::Spine, spineDelta);
-	placeBone(outPose, skeleton, B::Chest, spineDelta);
-	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
-	placeBone(outPose, skeleton, B::Neck, spineDelta);
+	if (source.torso.state != eGroupState::Lost)
+	{
+		placeBone(outPose, skeleton, B::Spine, spineDelta);
+		placeBone(outPose, skeleton, B::Chest, spineDelta);
+		placeBone(outPose, skeleton, B::UpperChest, spineDelta);
+		placeBone(outPose, skeleton, B::Neck, spineDelta);
+	}
 
-	// The head within its limit, under the rig's trim; at rest, the identity
+	// The head within its limit, under the rig's trim; at rest, the identity,
+	// and on the way there the eased rotation the source carries. A released
+	// head is left out.
+	m_state.headDelta= glm::quat(1.f, 0.f, 0.f, 0.f);
+	if (source.head.state != eGroupState::Lost)
 	{
 		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
-		if (source.head.state != eGroupState::Lost && source.head.state != eGroupState::Resting)
+		if (source.head.state != eGroupState::Resting || source.head.restBlend < 1.f)
 			headDelta= limitRotationAngle(source.head.orientation, config.headLimitRadians);
 		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
 		placeBone(outPose, skeleton, B::Head, headDelta);

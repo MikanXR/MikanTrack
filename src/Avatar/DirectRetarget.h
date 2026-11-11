@@ -140,8 +140,10 @@ public:
 	// head and the wrist take their joint limits and the rig's trims here.
 	// Every arm the source carries is placed from its placement, a resting
 	// one (the loss stage's ease into the rig's rest pose) like a measured
-	// one; a lost arm is left out. A resting head is the identity. Writes the
-	// solve state's head delta. Holds no state across frames.
+	// one; a lost arm is left out. A head at rest is the identity, one easing
+	// there the rotation the source carries. A lost torso leaves the spine
+	// bones out and a lost head the head bone, each then at the avatar's
+	// rest. Writes the solve state's head delta. Holds no state across frames.
 	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
 			   AvatarPose& outPose);
 

@@ -1,10 +1,50 @@
 #include "RetargetStage.h"
 
+#include "glm/gtc/quaternion.hpp"
+
+#include "AvatarRetargetMath.h"
 #include "AvatarSkeleton.h"
 #include "SourcePoseInputs.h"
 
 namespace
 {
+using B= eHumanoidBone;
+
+// A resting position arm's bones part way from the ones its last carried
+// values posed into the rig's rest pose, by the arm's rest blend. The rest
+// pose is the direct pipeline's, posed with the root at the identity, so it
+// is carried into the solve's world by the root's rotation. Each bone turns
+// along its own arc, and a bone the rest pose leaves out (the clavicle)
+// turns to the identity and is left out at rest. At a blend of 1 the bones
+// are the rest pose's.
+void easeArmToRest(const AvatarPose& restPose, int sideIndex, float blend, AvatarPose& ioPose)
+{
+	const glm::quat root= ioPose.rootRotationWorld;
+	const glm::quat inverseRoot= glm::inverse(root);
+	auto easeBone= [&](B bone) {
+		const AvatarPose::Bone& rest= restPose.bones[(int)bone];
+		AvatarPose::Bone& out= ioPose.bones[(int)bone];
+		const glm::quat restDelta= rest.present ? root * rest.deltaWorld * inverseRoot : rest.deltaWorld;
+		if (!(blend < 1.f))
+		{
+			out.present= rest.present;
+			out.deltaWorld= restDelta;
+			return;
+		}
+		if (!out.present && !rest.present)
+			return;
+		const glm::quat from= out.present ? out.deltaWorld : glm::quat(1.f, 0.f, 0.f, 0.f);
+		out.present= true;
+		out.deltaWorld= glm::slerp(from, restDelta, blend);
+	};
+	easeBone(AvatarRetargetMath::sideBone(sideIndex, B::LeftShoulder, B::RightShoulder));
+	easeBone(AvatarRetargetMath::sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm));
+	easeBone(AvatarRetargetMath::sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm));
+	easeBone(AvatarRetargetMath::sideBone(sideIndex, B::LeftHand, B::RightHand));
+	const int firstFinger= (int)firstHumanoidFingerBone(sideIndex);
+	for (int index= 0; index < FINGER_COUNT * 3; ++index)
+		easeBone((B)(firstFinger + index));
+}
 // One parameter at its site over the filled inputs, clamped to [minValue,
 // maxValue], and what it evaluated to
 float evaluateParameter(ExprParameterRunner& runner, const float* inputs, double timeSeconds, float minValue,
@@ -148,6 +188,25 @@ void RetargetStage::solveTarget(const SourcePose& source, float armIkWeight, Ava
 		if (outArmParameters != nullptr)
 			*outArmParameters= readout;
 		m_position.solve(source, *m_config.skeleton, m_config.position, arms, outPose, outGoals);
+
+		// A resting arm, posed from its last carried values, eases into the
+		// rest pose the direct pipeline eases its arms into; the rest pose,
+		// not the goal, places it
+		AvatarPose restPose;
+		bool bRestPosed= false;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			if (source.arms[sideIndex].state != SourcePose::eGroupState::Resting)
+				continue;
+			if (!bRestPosed)
+			{
+				DirectRetarget::makeRestPose(*m_config.skeleton, m_config.direct, restPose);
+				bRestPosed= true;
+			}
+			easeArmToRest(restPose, sideIndex, source.arms[sideIndex].restBlend, outPose);
+			if (outGoals != nullptr)
+				outGoals->bHasWristGoal[sideIndex]= false;
+		}
 	}
 	else if (armIkWeight == 0.f)
 		m_direct.place(source, *m_config.skeleton, m_config.direct, outPose);

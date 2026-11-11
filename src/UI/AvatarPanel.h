@@ -109,9 +109,9 @@ private:
 	void drawTorsoChain();
 	void drawHeadChain();
 	void drawArmChain(int sideIndex, bool bAvatar);
-	// The arm's loss controls the pipeline performs, edited in chains;
-	// true when anything changed
-	bool drawArmLoss(int sideIndex, bool bDirect, RetargetChains& chains);
+	// The arm's loss controls, edited in chains: the hold as the pipeline
+	// performs it, then what follows it; true when anything changed
+	bool drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains);
 	void drawHandChain(int sideIndex);
 
 	App* m_app;

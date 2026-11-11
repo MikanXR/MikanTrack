@@ -175,15 +175,28 @@ RetargetChains::Loss migratedGroupLoss(bool bDirect)
 	return loss;
 }
 
-// The position pipeline performs no hold or a timed one and a release or a
-// freeze; any other stored kind keeps the default already in ioPolicy
-void applyPositionLoss(const RetargetChains::Loss& stored, ChainLossPolicy& ioPolicy)
+// What follows the hold as stored, the rest blend with an ease to rest
+void applyStoredAfter(const RetargetChains::Loss& stored, ChainLossPolicy& ioPolicy)
+{
+	ioPolicy.after= stored.after;
+	if (stored.after == eLossAfter::EaseToRest)
+		ioPolicy.restBlendMs= stored.restBlendMs;
+}
+
+// The position pipeline performs no hold or a timed one, and its own hold
+// becomes a timed one of the stored length (an arm's default already is,
+// the head's only when the length holds anything). It performs every kind of
+// what follows, except an ease to rest without an avatar, which has no rest
+// pose: that keeps the default already in ioPolicy.
+void applyPositionLoss(const RetargetChains::Loss& stored, bool bAvatar, ChainLossPolicy& ioPolicy)
 {
 	if (stored.hold == eLossHold::None || stored.hold == eLossHold::Timed)
 		ioPolicy.hold= stored.hold;
+	else if (stored.holdMs > 0.f)
+		ioPolicy.hold= eLossHold::Timed;
 	ioPolicy.holdMs= stored.holdMs;
-	if (stored.after == eLossAfter::Release || stored.after == eLossAfter::Freeze)
-		ioPolicy.after= stored.after;
+	if (stored.after != eLossAfter::EaseToRest || bAvatar)
+		applyStoredAfter(stored, ioPolicy);
 }
 } // namespace
 
@@ -316,15 +329,19 @@ RetargetChains makeDefaultRetargetChains(bool bDirect)
 								 {k_defaultElbowHintConfidence, k_defaultElbowHintConfidence});
 }
 
-LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence)
+LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence,
+							   bool bAvatar)
 {
 	if (pipeline == SourcePose::ePipeline::Direct)
 	{
-		// Every chain takes the pipeline's own hold and then rests; only each
-		// arm's rest blend comes from its chain
+		// Every chain keeps the solver's hold, which also keeps its chain and
+		// filters alive for the next measurement; what follows it is the
+		// chain's
 		LossPolicy policy= makeDirectLossPolicy(0.f);
+		applyStoredAfter(chains.torso.loss, policy.torso);
+		applyStoredAfter(chains.head.loss, policy.head);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			policy.arms[sideIndex].restBlendMs= chains.arms[sideIndex].loss.restBlendMs;
+			applyStoredAfter(chains.arms[sideIndex].loss, policy.arms[sideIndex]);
 		return policy;
 	}
 
@@ -333,8 +350,8 @@ LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeli
 	// under what the chains store
 	LossPolicy policy= makePositionLossPolicy(minConfidence, 0.f, true);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		applyPositionLoss(chains.arms[sideIndex].loss, policy.arms[sideIndex]);
-	applyPositionLoss(chains.head.loss, policy.head);
+		applyPositionLoss(chains.arms[sideIndex].loss, bAvatar, policy.arms[sideIndex]);
+	applyPositionLoss(chains.head.loss, bAvatar, policy.head);
 	return policy;
 }
 

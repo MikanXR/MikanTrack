@@ -44,10 +44,13 @@ enum class eLossAfter : uint8_t
 	// The last values handed on, repeated, so the target solve re-solves
 	// them every frame and whatever else moves (the root follow) still moves
 	Freeze,
-	// The rest pose: an arm of the direct pipeline eases into the rig's rest
-	// pose over restBlendMs from the last placement handed on, the torso and
-	// the head rest at the identity at once. An arm of the position pipeline
-	// has no rest placement and is released.
+	// The rest pose, eased into over restBlendMs (zero snaps). A direct arm
+	// blends its placement from the last one handed on into the rig's rest
+	// placement. A position arm hands on its last carried values marked
+	// resting, and the target solve blends the bones they pose into the
+	// rig's rest pose, the one the direct pipeline eases into. The torso and
+	// the head turn from their last values to the identity. Without a
+	// skeleton an arm has no rest pose and freezes instead.
 	EaseToRest,
 };
 
@@ -68,7 +71,7 @@ struct ChainLossPolicy
 	// The Timed hold's length, milliseconds; zero or less holds nothing
 	float holdMs= 0.f;
 	eLossAfter after= eLossAfter::Release;
-	// The arm's ease into rest, milliseconds; zero snaps
+	// The ease into rest, milliseconds; zero snaps
 	float restBlendMs= 0.f;
 };
 
@@ -93,7 +96,8 @@ LossPolicy makePositionLossPolicy(float minConfidence, float holdOnDropoutMs, bo
 
 // The direct pipeline's rules: each arm through the hold the solver earned,
 // then eased into the rig's rest pose over restBlendMs; the hands with their
-// arms; the torso and the head through the solver's hold, then at rest
+// arms; the torso and the head through the solver's hold, then at rest at
+// once
 LossPolicy makeDirectLossPolicy(float restBlendMs);
 
 // The position pipeline's hand poses beside its source pose. In: the frame's.
@@ -114,9 +118,9 @@ public:
 
 	// Rewrites the source pose with what the target solve gets on this
 	// frame, each group's state saying how it got there. skeleton and
-	// rigSides place the direct pipeline's rest pose (no skeleton, no rest:
-	// the arm is released). ioHands: the position pipeline's hand poses,
-	// resolved alongside the source, or null.
+	// rigSides place the direct pipeline's rest pose; without a skeleton an
+	// arm that would ease to rest freezes. ioHands: the position pipeline's
+	// hand poses, resolved alongside the source, or null.
 	void apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 			   const std::array<AvatarRetargetConfig::Side, 2>& rigSides, SourcePose& ioSource, LossHands* ioHands);
 
@@ -141,7 +145,8 @@ private:
 		double easeStartMs= -1.0;
 		DirectRetarget::ArmPlacement easeFrom;
 	};
-	// A torso or a head: its timed hold and the last values handed on
+	// A torso or a head: its timed hold, the last values handed on, and when
+	// its ease into rest began (negative while it is carried)
 	template <typename Group>
 	struct GroupMemory
 	{
@@ -150,6 +155,7 @@ private:
 		Group held;
 		bool bCarried= false;
 		Group carried;
+		double easeStartMs= -1.0;
 	};
 	// One pipeline's memory and the epoch it belongs to. The two pipelines
 	// keep theirs apart: a project in direct mode falls back to the position
@@ -167,7 +173,7 @@ private:
 	};
 
 	template <typename Group>
-	static void resolveGroup(const ChainLossPolicy& policy, double timestampMs, Group& ioGroup,
+	static void resolveGroup(const ChainLossPolicy& policy, const SourcePose::Clock& clock, Group& ioGroup,
 							 GroupMemory<Group>& memory);
 	void resolveSide(const ChainLossPolicy& policy, int sideIndex, const AvatarSkeleton* skeleton,
 					 const AvatarRetargetConfig::Side& rigSide, PipelineMemory& memory, SourcePose& ioSource,

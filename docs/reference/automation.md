@@ -116,6 +116,8 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pinned`: one pinned stage per line, or `none`
 - `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
+- `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
+- `pipeline loss <chain> after <release|freeze|easeToRest>`, `pipeline loss <chain> hold <ms>`, `pipeline loss <chain> blend <ms>`: set that field of the chain's stored policy. A hold on the head also makes its hold timed
 - `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note on a direct project, which does not use it) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)
 - `pipeline goal <arm> <x> <y> <z>`: sets the goal offset, meters in the rooted torso frame
 - `pipeline limit <head|spine|leftWrist|rightWrist>`: that joint limit of the loaded avatar's rig in degrees, with a note when the project's pipeline applies none
