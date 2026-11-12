@@ -262,13 +262,13 @@ static int runFaceExprTest(const TestArgs&)
 		check(near(column(webcam, "mouthSmileLeft"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileRight"), 0.5f, 1e-3f) &&
 				  near(column(webcam, "mouthPucker"), 0.f),
 			  "a wider mouth reads both smile columns alike and no pucker");
-		// 5.6 px narrower is 0.07 face widths, half the pucker's travel of 0.14
-		fillWebcamFaceSource(withMouthCorners(15.2f, 0.f), true, &neutral, webcam);
+		// 4 px narrower is 0.05 face widths, half the pucker's travel of 0.1
+		fillWebcamFaceSource(withMouthCorners(16.f, 0.f), true, &neutral, webcam);
 		check(near(column(webcam, "mouthPucker"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f),
 			  "a narrower mouth reads the pucker and no smile");
-		// A lip gap of 0.2 face widths draws the corners in by 0.07, which is
+		// A lip gap of 0.2 face widths draws the corners in by 0.06, which is
 		// the jaw's and neither shape's
-		fillWebcamFaceSource(withMouthCorners(15.2f, 16.f), true, &neutral, webcam);
+		fillWebcamFaceSource(withMouthCorners(15.6f, 16.f), true, &neutral, webcam);
 		check(near(column(webcam, "mouthPucker"), 0.f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f, 1e-3f) &&
 				  near(column(webcam, "jawOpen"), 1.f, 1e-3f),
 			  "the width an open jaw costs reads as neither a pucker nor a smile");

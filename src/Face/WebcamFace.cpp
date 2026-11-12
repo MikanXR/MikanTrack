@@ -9,10 +9,10 @@ namespace
 constexpr float k_blinkFullFraction= 0.4f;
 constexpr float k_jawOpenFull= 0.2f;
 constexpr float k_smileFull= 0.18f;
-constexpr float k_puckerFull= 0.14f;
+constexpr float k_puckerFull= 0.1f;
 // An opening jaw draws the mouth corners in: the width it costs, per face
 // width of lip gap, which is given back before the width is read
-constexpr float k_jawWidthLoss= 0.35f;
+constexpr float k_jawWidthLoss= 0.3f;
 constexpr float k_browInnerFull= 0.1f;
 constexpr float k_browOuterFull= 0.12f;
 
