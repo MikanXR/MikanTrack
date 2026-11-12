@@ -1378,6 +1378,8 @@ void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, 
 		recorded.timestampMs= sample.timestampMs;
 		recorded.bTracked= sample.faceTracked;
 		recorded.blendshapes= sample.blendshapes;
+		recorded.bHasHead= sample.hasHead;
+		recorded.headEulerDegrees= sample.headEulerDegrees;
 		m_faceRecorder.enqueue(recorded);
 	}
 	// The phone lost the face: its values are stale, so they read zero and

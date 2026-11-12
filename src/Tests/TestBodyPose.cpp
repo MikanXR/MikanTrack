@@ -1,5 +1,7 @@
 #include "TestCommon.h"
 
+#include "WholeBodyFaceRatios.h"
+
 // Synthetic tests for BodyPoseSolver. Everything it produces comes from 2D
 // rays plus known body lengths - no pose model 3D - so every case here can be
 // constructed exactly and checked to sub-millimetre.
@@ -956,6 +958,93 @@ static int runBodyPoseTest(const TestArgs&)
 		BodyPoseTracker::fillObservation(planar, planarBody);
 		check(!planarBody.wholeBody.present && !TrackingJson::bodyPoseToJson(planarBody).contains("wholeBody"),
 			  "the planar backend writes no blocks");
+	}
+
+	// The face shape ratios: a synthetic iBUG face reads the same at twice
+	// the size, shifted and rolled, and each shape moves with its feature
+	// alone.
+	{
+		// Image coordinates, y down, the person's left at larger x
+		auto makeFace= [](float eyeGap, float lipGap, float browLift) {
+			WholeBodyExtras extras;
+			extras.present= true;
+			extras.faceScores.fill(0.9f);
+			auto set= [&](int index, float x, float y) { extras.face[index]= glm::vec3(x, y, 0.f); };
+			// Right eye 36..41 and left eye 42..47, each 20 wide
+			set(36, -40.f, 0.f);
+			set(37, -33.f, -eyeGap * 0.5f);
+			set(38, -27.f, -eyeGap * 0.5f);
+			set(39, -20.f, 0.f);
+			set(40, -27.f, eyeGap * 0.5f);
+			set(41, -33.f, eyeGap * 0.5f);
+			set(42, 20.f, 0.f);
+			set(43, 27.f, -eyeGap * 0.5f);
+			set(44, 33.f, -eyeGap * 0.5f);
+			set(45, 40.f, 0.f);
+			set(46, 33.f, eyeGap * 0.5f);
+			set(47, 27.f, eyeGap * 0.5f);
+			// Brows 17..21 right and 22..26 left
+			for (int index= 0; index < 5; ++index)
+			{
+				set(17 + index, -45.f + 6.f * (float)index, -12.f - browLift);
+				set(22 + index, 21.f + 6.f * (float)index, -12.f - browLift);
+			}
+			// Mouth corners, the outer lip's middle and the inner lip's gap
+			set(48, -18.f, 50.f);
+			set(54, 18.f, 50.f);
+			set(51, 0.f, 45.f);
+			set(57, 0.f, 55.f);
+			set(62, 0.f, 50.f - lipGap * 0.5f);
+			set(66, 0.f, 50.f + lipGap * 0.5f);
+			return extras;
+		};
+		auto transformed= [](WholeBodyExtras extras, float scale, float rollRadians, const glm::vec2& shift) {
+			const float c= std::cos(rollRadians);
+			const float s= std::sin(rollRadians);
+			for (glm::vec3& point : extras.face)
+				point= glm::vec3(scale * (c * point.x - s * point.y) + shift.x,
+								 scale * (s * point.x + c * point.y) + shift.y, 0.f);
+			return extras;
+		};
+		auto near= [](float a, float b) { return std::fabs(a - b) < 1e-4f; };
+
+		const WholeBodyExtras base= makeFace(6.f, 4.f, 0.f);
+		const WholeBodyFaceRatios ratios= computeWholeBodyFaceRatios(base);
+		const WholeBodyFaceRatios moved=
+			computeWholeBodyFaceRatios(transformed(base, 2.f, 0.4f, glm::vec2(300.f, 120.f)));
+		check(ratios.valid && near(ratios.faceWidthPx, 80.f) && near(moved.faceWidthPx, 160.f) &&
+				  near(ratios.minScore, 0.9f),
+			  "the face width is the outer eye corner span");
+		check(near(ratios.eyeOpenness[0], moved.eyeOpenness[0]) && near(ratios.eyeOpenness[1], moved.eyeOpenness[1]) &&
+				  near(ratios.mouthOpen, moved.mouthOpen) && near(ratios.mouthWidth, moved.mouthWidth) &&
+				  near(ratios.mouthCornerLift[0], moved.mouthCornerLift[0]) &&
+				  near(ratios.browHeight[1], moved.browHeight[1]) &&
+				  near(ratios.browInnerHeight, moved.browInnerHeight),
+			  "the ratios read the same at twice the size, rolled and shifted");
+		check(near(ratios.eyeOpenness[0], 6.f / 20.f) && near(ratios.mouthOpen, 4.f / 80.f) &&
+				  near(ratios.mouthWidth, 36.f / 80.f) && near(ratios.browHeight[0], 12.f / 80.f),
+			  "each ratio is its distance over its span");
+
+		const WholeBodyFaceRatios closed= computeWholeBodyFaceRatios(makeFace(1.f, 4.f, 0.f));
+		const WholeBodyFaceRatios open= computeWholeBodyFaceRatios(makeFace(6.f, 12.f, 0.f));
+		const WholeBodyFaceRatios raised= computeWholeBodyFaceRatios(makeFace(6.f, 4.f, 5.f));
+		check(closed.eyeOpenness[0] < 0.25f * ratios.eyeOpenness[0] && near(closed.mouthOpen, ratios.mouthOpen),
+			  "a closing eye lowers the openness and nothing else");
+		check(open.mouthOpen > 2.5f * ratios.mouthOpen && near(open.eyeOpenness[1], ratios.eyeOpenness[1]),
+			  "an opening mouth raises the mouth ratio alone");
+		check(raised.browHeight[0] > ratios.browHeight[0] && raised.browInnerHeight > ratios.browInnerHeight &&
+				  near(raised.eyeOpenness[0], ratios.eyeOpenness[0]),
+			  "raised brows raise the brow heights alone");
+
+		// One eye alone moves its own side: side 0 is the person's left, the
+		// iBUG points 42 to 47
+		WholeBodyExtras wink= base;
+		for (int index : {43, 44, 46, 47})
+			wink.face[index].y= 0.f;
+		const WholeBodyFaceRatios winked= computeWholeBodyFaceRatios(wink);
+		check(winked.eyeOpenness[0] < 0.01f && near(winked.eyeOpenness[1], ratios.eyeOpenness[1]),
+			  "side 0 is the person's left eye");
+		check(!computeWholeBodyFaceRatios(WholeBodyExtras()).valid, "no block, no ratios");
 	}
 
 	if (failures == 0)

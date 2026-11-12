@@ -102,7 +102,12 @@ std::string sampleToLine(const RecordedFaceSample& sample)
 	json weights= json::array();
 	for (float weight : sample.blendshapes)
 		weights.push_back(weight);
-	const json j= {{"seq", sample.sequence}, {"t", sample.timestampMs}, {"tracked", sample.bTracked}, {"w", weights}};
+	json j= {{"seq", sample.sequence}, {"t", sample.timestampMs}, {"tracked", sample.bTracked}, {"w", weights}};
+	if (sample.bHasHead)
+	{
+		j["head"]=
+			json::array({sample.headEulerDegrees.x, sample.headEulerDegrees.y, sample.headEulerDegrees.z});
+	}
 	return j.dump();
 }
 
@@ -123,6 +128,15 @@ bool sampleFromLine(const std::string& line, RecordedFaceSample& outSample)
 		if (!weights[index].is_number())
 			return false;
 		sample.blendshapes[index]= weights[index].get<float>();
+	}
+	if (j.contains("head"))
+	{
+		const json& head= j["head"];
+		if (!head.is_array() || head.size() != 3 || !head[0].is_number() || !head[1].is_number() ||
+			!head[2].is_number())
+			return false;
+		sample.bHasHead= true;
+		sample.headEulerDegrees= glm::vec3(head[0].get<float>(), head[1].get<float>(), head[2].get<float>());
 	}
 	outSample= sample;
 	return true;

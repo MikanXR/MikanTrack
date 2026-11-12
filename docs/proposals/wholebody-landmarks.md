@@ -18,8 +18,6 @@ The model already computes these points. Carrying them costs no inference. What 
 
 - **Face expressions without the phone.** face.md's sources are the phone and the microphone. plan.md's Later list holds "A `webcam.*` face source". The 68 points give eye openness, mouth opening and width, and brow height, from the camera the direct mode already runs.
 
-- **A better head.** The direct head is solved from three points, the ears and the nose (avatar.md, the direct pipeline's Head rule). Hair and headsets hide the ears. The face block gives about 50 rigid points (the eyes, the nose, the jaw line) for a fit against a generic face.
-
 - **Hand reacquisition.** plan.md's direct-mode item "Direct mode's hand pipeline runs blind" says the hand slots need seeding from the body model, because the cross-camera search hints need extrinsics the direct setup lacks. The whole-body hand block gives what a `HandSearchHint` needs: a center, a direction and a size.
 
 - **Hand side evidence.** The direct solver reports swapped hand labels from wrist distances alone, and plan.md's open question asks whether `tracking.flipHandedness` defaults right. The hand block is 21 points per hand labelled by the arm it ends, so the hand slots can be matched by hand shape and not only by one wrist pixel.
@@ -38,7 +36,7 @@ The model already computes these points. Carrying them costs no inference. What 
 
 - The face neutrals live on `DirectNeutralPose`, behind their own present flag. A neutral captured before they existed reads generic defaults, and the Webcam row prompts a recapture.
 
-- The head has two references. The neutral capture stores one head frame per method, the face fit and the ear and nose head. The solver uses the face fit while its scores clear the gate and the ear and nose head otherwise, each against its own neutral.
+- The head stays the ear and nose head. A head from the face block was measured on the 2026-11-12 take and dropped (piece 6, LEARNINGS.md section 24).
 
 - The block lives on `BodyPoseObservation`. A sibling on `CameraFrameResult` was considered. Nothing found argues for it: the block comes from the same model run, shares the observation's `modelFrameIndex`, box source and hold behavior, and rides the same mirrors and recording key.
 
@@ -54,7 +52,7 @@ The model already computes these points. Carrying them costs no inference. What 
 
 - The measurement take shares a session with the take plan.md's direct stage 1 item owes. Same setup and calibration, two takes back to back: the IMU and depth-sweep take for the forearm gates, then this proposal's face and hands script.
 
-- The take includes a head sweep with the ears hidden by over-ear headphones, since hidden ears are the reason for piece 6. The face fit can pass its gate on that segment alone.
+- The take includes a head sweep with the ears hidden by over-ear headphones, since hidden ears were the reason for piece 6.
 
 ## What is in place
 
@@ -113,6 +111,8 @@ Before any consumer is built, measure what the points are worth from the webcam 
 	- the side each whole-body hand assigns to each hand slot against the stereo fused side
 	- the hand pipeline re-run over the raw frames with body hints off and on: the frames from a dropout to the slot's return, the hints' funnel by source, and the count of hints that met no free slot
 
+Two facts found while building the tool. The face sidecar recorded the blendshapes alone, so it now also writes the phone's head rotation (face.md), which the head comparison needs from the take. And the hand truth is the fused hands the rig triangulated: a fused hand one camera alone supplied is that camera's own slot, and on the 2026-10-31 webcam-position take that slot was a scene false positive above the frame's top edge.
+
 The hint comparison has to re-run the hand models on the raw frames. A recording's replay starts after inference, so it cannot show what a hint would have changed.
 
 The gates come out of these numbers. Each consumer below lands only when its gate passes, and a gate that fails is recorded in LEARNINGS.md as a measured verdict.
@@ -147,13 +147,9 @@ Each ratio shape is a ratio of face-landmark distances normalized by a face size
 
 The Auto profile falls back to the webcam when the phone is not tracked. It is generated from the measured mask, so a column outside the mask keeps the rule it has now. Each webcam term below stands for the raw column inside Auto's dead zone and smoothing functions, with the dead zone sized from piece 4's rest jitter so that landmark noise at rest does not open a silent mouth through the max. Each ARKit column the webcam measures reads `select(phone.tracked, phone.X, select(webcam.tracked, webcam.X, <the current viseme fallback or 0>))`, and the VRM presets follow the same order: the blinks from the webcam's blinks, the gaze directions left at rest since the source has no gaze. On a mouth column both sources apply at once: the webcam's shape and the column's viseme fallback combine with max, so `jawOpen` reads `select(phone.tracked, phone.jawOpen, max(webcam.jawOpen, <viseme fallback>))` and a vowel preset reads `select(phone.tracked, phone.jawOpen, max(webcam.jawOpen, viseme.aa))`. Either source alone opens the mouth, and a source that is not tracked reads zero and drops out of the max. A user who wants another rule duplicates Auto and edits the functions.
 
-### 6. The head from the face fit (gated)
+### 6. The head from the face fit (dropped)
 
-A PnP fit of the face block's rigid points (the eye corners, the nose bridge and tip, the jaw line) against a generic 3D face in the direct camera's intrinsics gives the head rotation. It lands only if piece 4 shows it closer to the phone head than the ear and nose head, on the ears-visible sweep or on the headphones sweep alone.
-
-The ear and nose head stays as the fallback. The solver uses the face fit while the face block is present and its scores clear the gate, and the ear and nose head otherwise: a hand over the face, a far turn, a backend without the block, a recording made before the block existed. The two heads have different rest frames, so `DirectNeutralPose` stores a head reference per method and each is measured against its own. A neutral that lacks the face fit's reference keeps the solver on the ear and nose head until a recapture. The existing head filter smooths the handover between them.
-
-Either head goes through the existing filters and the 70 degree limit, and the phone head still wins while it streams. The fit's output rotation enters the head frame at one conversion point beside the current one (conventions.md).
+Dropped on piece 4's numbers. A head from the face block was to replace the ear and nose head where it read closer to the phone head. On the take's two head sweeps a six-point face fit sat 15.8 and 15.3 degrees p50 from the phone (ears visible, headphones) and the ear and nose head 18.7 and 15.8, a difference the comparison does not resolve, and a rigid fit on the model's own face depth sat 44 and 41. The ear and nose head read on every frame of the headphones sweep, so the hidden ears this piece was for did not cost the head. The measurement stays in `--gate-wholebody` and the verdict is in LEARNINGS.md, section 24.
 
 ### 7. Hand slot seeding from the whole-body hands
 
@@ -182,9 +178,9 @@ The gate from piece 4: on the hands-crossing and clasping segments, the shape ma
 ## Order and review stops
 
 1. Pieces 1 to 3: the block, the recording key, the overlay and the dump. Self-contained, behavior-neutral, and the overlay alone shows the points on the rig.
-2. Pieces 4 and 4b: the take, the tool and the blink evaluation. Review stop: the numbers decide which of pieces 5 to 8 go ahead, with what gates, and whether a face model is added.
+2. Pieces 4 and 4b: the take, the tool and the blink evaluation. Review stop: the numbers decide which of pieces 5, 7 and 8 go ahead, with what gates, and whether a face model is added.
 3. Pieces 7 and 8, the hand pair. They are independent of the face and answer two existing plan.md items.
-4. Piece 5, with the face model if 4b chose one, then piece 6 if its gate passed.
+4. Piece 5, with the face model if 4b chose one.
 
 Each piece ends with its self-test and a replay check (`--replay-verify` on recordings made before the change, which must still load and verify).
 
@@ -196,7 +192,6 @@ Each piece ends with its self-test and a replay check (`--replay-verify` on reco
 - The Auto profile generated for a nine-column mask leaves every other column's function as it is today.
 - The shape ratios on synthetic faces at two distances read the same.
 - A neutral without the face ratios loads with them absent and the source reads the defaults.
-- The direct solver on a synthetic user whose face block drops out hands the head to the ear and nose head against its own neutral, with no jump at the handover beyond the filter's band.
 - The hint builder on a synthetic hand produces the ROI `HandRoi::fromLandmarks` would.
 - `--test-seeding`: with both slots active, a body hint evicts the slot on neither whole-body hand, leaves a slot on one alone, and a cross-camera hint evicts nothing.
 - The shape match on two synthetic hands at one wrist position assigns the sides, and falls back to the wrist distance when a hand's scores are below the gate.
@@ -213,5 +208,6 @@ None open. The questions raised in both rounds are answered under Decisions.
 - Any change to the VMC wire.
 - The multi-camera position pipeline's head, which the body solver and the phone already cover.
 - Body hints in multi-camera projects.
+- A head from the face block (piece 6, measured and dropped).
 - Per-frame hand label correction from the shape match.
 - The shape match in the solver's entry gate.

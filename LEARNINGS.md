@@ -302,6 +302,24 @@ The crop is now one warp straight from the frame into the model input, at twice 
 
 Learned: a staged image pipeline ported from a demo carries the demo's intermediate buffers, and their cost and their clipping are both invisible until a hand fills the frame. Compose the geometry and resample once.
 
+## 24. A head from the face landmarks: three estimators, none closer to the phone
+
+The whole-body model emits 68 face landmarks, and the direct mode's head comes from three body keypoints, the ears and the nose. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 6) was to fit the head from the face instead, on the expectation that headphones and hair hide the ears. The measurement take was `2026-11-12_00-18-34`: the webcam-position camera, the phone's head rotation in the face sidecar as truth, a head sweep with the ears visible and a second one under over-ear headphones. `--gate-wholebody` compares each head as a turn from the rest pose, after the one rotation that best carries the phone's turns onto the method's.
+
+Over the two sweeps, p50 error against the phone:
+
+- the six-point face fit (a PnP of the nose tip, chin, eye corners and mouth corners against a generic face): 15.8 and 15.3 degrees
+- the ear and nose head: 18.7 and 15.8 degrees
+- a rigid fit of the brows, nose and eyes lifted by the model's own depth: 43.9 and 41.0 degrees, its turn 2.3 times the phone's. At a quarter of the depth it reads 15.5 and 15.4, where the depth axis adds almost nothing.
+
+Every method read on every frame of both sweeps. The model placed the ears through the headphones, so the failure the piece was built for did not occur. The six-point fit and the ear and nose head sat 14 degrees from each other with no phone in it. A mirrored alignment fitted neither better, which rules out a phone axis read with the wrong sign, and shifting the phone by 200 ms either way moved the numbers by under 2 degrees.
+
+Two earlier readings of the same take were wrong and are worth keeping as the lesson. Over the whole take the ear and nose head read 8.4 degrees against the fit's 12.4, because the take is mostly a still head, where a filtered estimate sits quiet and a raw one jitters. And the ear head appeared to read on 54 percent of frames, because the tool took a head frame that repeated bit for bit as a held one, and a still head through a filter repeats.
+
+Dropped: no face head is closer to the phone than the ear and nose head by more than the comparison resolves. Not settled: whether 15 degrees is the true error of all three during a turn or a floor in the comparison, which has not been run against a known rotation.
+
+Learned: judge an estimator on the segment that exercises it. A whole-take median over a mostly still take measures the filter, and a freshness test built on "the value changed" fails on exactly the frames where nothing moves.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
