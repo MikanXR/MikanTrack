@@ -575,37 +575,8 @@ static int runVmcTest(const TestArgs&)
 		check(!vmc.bones[(int)eVmcBone::Head].present, "an invalid head streams nothing");
 	}
 
-	// (g) Freeze on loss. VMC has no confidence, so a hand that stops being
-	// measured can only be expressed as an arm that stops moving.
-	{
-		HandPose live= makePose(eHandSide::Left, glm::quat(1.f, 0.f, 0.f, 0.f), glm::vec3(0.2f, 0.1f, 0.9f),
-								glm::quat(1.f, 0.f, 0.f, 0.f), glm::vec3(0.f, 0.15f, 1.3f));
-		HandPose lost;
-
-		OscStreamer::HeldPoseState held;
-		HandPose out;
-
-		check(OscStreamer::resolveVmcOutputPose(live, true, true, held, out) &&
-				  nearlyEqual(out.palmPositionWorld, live.palmPositionWorld, 1e-6f),
-			  "a live pose streams unchanged");
-
-		check(OscStreamer::resolveVmcOutputPose(lost, false, true, held, out) &&
-				  nearlyEqual(out.palmPositionWorld, live.palmPositionWorld, 1e-6f),
-			  "a lost hand freezes at its last streamed pose");
-
-		OscStreamer::HeldPoseState heldOff;
-		check(OscStreamer::resolveVmcOutputPose(live, true, false, heldOff, out),
-			  "freeze off still streams a live pose");
-		check(!OscStreamer::resolveVmcOutputPose(lost, false, false, heldOff, out),
-			  "freeze off releases the arm on loss");
-
-		// A camera-space pose has no world anchor to hang a skeleton off
-		HandPose cameraOnly= live;
-		cameraOnly.hasWorldPose= false;
-		OscStreamer::HeldPoseState heldCamera;
-		check(!OscStreamer::resolveVmcOutputPose(cameraOnly, true, true, heldCamera, out),
-			  "a camera-space pose is not streamable as bones");
-	}
+	// (g) Freeze on loss lives in the retarget stage's loss stage now, and its
+	// cases with it (--test-retarget-stage)
 
 	// (h) The wire itself. Everything above checks the retarget; this checks
 	// what a receiver actually parses, decoded straight from the encoded bundle
@@ -633,8 +604,17 @@ static int runVmcTest(const TestArgs&)
 		OscStreamer streamer;
 		streamer.setConfig(config);
 
+		// The frame through the retarget stage with no avatar, as the vision
+		// thread runs it: both hands live, so both are carried
+		RetargetStage stage;
+		RetargetStageConfig stageConfig;
+		stageConfig.positionLoss= makePositionLossPolicy(0.f, 250.f, true);
+		stage.setConfig(stageConfig);
+		RetargetResult retarget;
+		stage.solvePosition(frame, retarget);
+
 		std::vector<std::vector<uint8_t>> packets;
-		streamer.encodeFrame(frame, packets);
+		streamer.encodeFrame(frame, retarget, packets);
 
 		// Every datagram must be a COMPLETE bundle in its own right - UDP does
 		// not reassemble at the OSC layer - and must fit the size a receiver
@@ -774,7 +754,10 @@ static int runVmcTest(const TestArgs&)
 		auto decodeFrame= [&streamer](const AvatarPose* directPose, std::vector<DecodedMessage>& outMessages) {
 			TrackingFrameResult emptyFrame;
 			std::vector<std::vector<uint8_t>> packets;
-			streamer.encodeFrame(emptyFrame, packets, directPose);
+			RetargetResult retarget;
+			if (directPose != nullptr)
+				retarget.pose= *directPose;
+			streamer.encodeFrame(emptyFrame, retarget, packets);
 			outMessages.clear();
 			bool bWellFormed= !packets.empty();
 			for (const std::vector<uint8_t>& packet : packets)
@@ -849,7 +832,9 @@ static int runVmcTest(const TestArgs&)
 		bareStreamer.setConfig(bareConfig);
 		TrackingFrameResult emptyFrame;
 		std::vector<std::vector<uint8_t>> packets;
-		bareStreamer.encodeFrame(emptyFrame, packets, &pose);
+		RetargetResult bareRetarget;
+		bareRetarget.pose= pose;
+		bareStreamer.encodeFrame(emptyFrame, bareRetarget, packets);
 		messages.clear();
 		for (const std::vector<uint8_t>& packet : packets)
 			decodeBundle(packet, messages);
@@ -911,7 +896,7 @@ static int runVmcTest(const TestArgs&)
 		auto encodeOn= [](OscStreamer& targetStreamer, const TrackingFrameResult& sourceFrame,
 						  std::vector<DecodedMessage>& outMessages) {
 			std::vector<std::vector<uint8_t>> packets;
-			targetStreamer.encodeFrame(sourceFrame, packets);
+			targetStreamer.encodeFrame(sourceFrame, RetargetResult(), packets);
 			outMessages.clear();
 			bool bWellFormed= !packets.empty();
 			for (const std::vector<uint8_t>& packet : packets)
@@ -1156,7 +1141,7 @@ static int runVmcTest(const TestArgs&)
 		OscStreamer rawStreamer;
 		rawStreamer.setConfig(config);
 		std::vector<std::vector<uint8_t>> packets;
-		rawStreamer.encodeFrame(rawFrame, packets);
+		rawStreamer.encodeFrame(rawFrame, RetargetResult(), packets);
 		messages.clear();
 		for (const std::vector<uint8_t>& packet : packets)
 			decodeBundle(packet, messages);
@@ -1178,7 +1163,7 @@ static int runVmcTest(const TestArgs&)
 		mismatched.faceBinding= runner.getBinding();
 		OscStreamer mismatchedStreamer;
 		mismatchedStreamer.setConfig(mismatched);
-		mismatchedStreamer.encodeFrame(rawFrame, packets);
+		mismatchedStreamer.encodeFrame(rawFrame, RetargetResult(), packets);
 		messages.clear();
 		for (const std::vector<uint8_t>& packet : packets)
 			decodeBundle(packet, messages);
@@ -1341,7 +1326,7 @@ static int runVmcTest(const TestArgs&)
 			frame.timestampMs= 1000.0;
 			frame.face= userSources;
 			std::vector<std::vector<uint8_t>> packets;
-			streamer.encodeFrame(frame, packets);
+			streamer.encodeFrame(frame, RetargetResult(), packets);
 			std::vector<DecodedMessage> messages;
 			for (const std::vector<uint8_t>& packet : packets)
 				decodeBundle(packet, messages);
@@ -1366,7 +1351,7 @@ static int runVmcTest(const TestArgs&)
 			autoRunner.setBinding(autoBinding);
 			frame.timestampMs= 1010.0;
 			autoRunner.evaluate(frame.face, frame.timestampMs);
-			streamer.encodeFrame(frame, packets);
+			streamer.encodeFrame(frame, RetargetResult(), packets);
 			messages.clear();
 			for (const std::vector<uint8_t>& packet : packets)
 				decodeBundle(packet, messages);

@@ -13,12 +13,15 @@
 #include "DiagnosticDump.h"
 #include "DirectRetarget.h"
 #include "FaceProfileRunner.h"
+#include "RetargetChains.h"
+#include "RetargetStage.h"
 #include "FaceRecorder.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
 #include "HandBoneCalibrator.h"
 #include "HandPoseModel.h"
 #include "HandFusion.h"
+#include "IterationHistory.h"
 #include "TrackingRecorder.h"
 #include "TrackingTypes.h"
 
@@ -67,12 +70,14 @@ public:
 	// Returns false if nothing new arrived since the last call.
 	bool fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFrame);
 
-	// Copies the newest fused (world-space, smoothed) tracking result, and
-	// in direct mode the avatar pose the direct retarget solved for it (an
-	// invalid pose otherwise). Returns false if nothing new arrived since
-	// the last call.
-	bool fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose= nullptr,
-						  DirectRetarget::SolveState* outDirectState= nullptr);
+	// Copies the newest fused (world-space, smoothed) tracking result, what
+	// the retarget stage made of it (the posed avatar the stream carries,
+	// invalid with no avatar loaded; the source pose after the loss stage;
+	// in direct mode the direct solve state), and the fusion diagnostics
+	// behind it (empty for a passthrough or direct frame). Returns false if
+	// nothing new arrived since the last call.
+	bool fetchFusedResult(TrackingFrameResult& outResult, RetargetResult* outRetarget= nullptr,
+						  FusionDiagnostics* outFusionDiagnostics= nullptr);
 
 	// Per-side camera index that dominated the last fusion (-1 = untracked)
 	int getDominantCamera(eHandSide side) const { return m_dominantCamera[(int)side].load(); }
@@ -95,6 +100,13 @@ public:
 	// the avatar-driven VMC output. Applied before the next frame without a
 	// config refresh, which would end a recording. Survives a stop/start.
 	void setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skeleton, const AvatarRigSettings& rig);
+
+	// The project's retarget chain settings, an immutable snapshot (null for
+	// a project without a chain block, whose chains migrate from its legacy
+	// settings and the rig), for the retarget stage. Applied before the next
+	// frame like the skeleton, without a config refresh, so an edit neither
+	// ends a recording nor restarts a hold. Survives a stop/start.
+	void setRetargetChains(std::shared_ptr<const RetargetChains> chains);
 
 	// The loaded avatar's identity and face profile binding, for the VMC
 	// output's /VMC/Ext/VRM announcement and the face evaluation. Applied like
@@ -268,6 +280,46 @@ public:
 	float getLastHitchMs() const { return m_lastHitchMs; }
 	eVisionPhase getLastHitchPhase() const { return (eVisionPhase)m_lastHitchPhase.load(); }
 
+	// Per-camera readouts are fixed size so they need no locking; cameras
+	// beyond this are simply not reported.
+	static constexpr int k_maxReportedCameras= 8;
+
+	// What the last loop iteration did, for the pipeline status display.
+	// Fixed size, copied under one mutex.
+	struct Telemetry
+	{
+		enum class ePath : int
+		{
+			Idle= 0,
+			FaceOnly,
+			Fused,
+			Passthrough,
+			Direct
+		};
+		bool bValid= false; // false until the first iteration publishes
+		ePath path= ePath::Idle;
+		double timestampMs= 0.0;                     // the output frame's timestamp, 0 on an idle iteration
+		float phaseMs[(int)eVisionPhase::Count]= {}; // the iteration's time per phase
+		float totalMs= 0.f;
+		uint64_t iteration= 0;     // counts published iterations
+		bool bOscRunning= false;   // the streamer exists and its socket is open
+		float oscSendRateHz= 0.f;  // OscStreamer::getMessagesPerSecond
+		int oscLastPacketCount= 0; // datagrams in the last frame sent
+		int oscLastFrameBytes= 0;  // bytes in the last frame sent, all datagrams
+		bool bBodyModelLoaded[k_maxReportedCameras]= {}; // per camera: body tracker allocated and loaded
+	};
+	Telemetry getTelemetry() const;
+
+	// The frame loop's recent iterations, for the Performance chart (display
+	// only: no recording and no replayed stage reads it). Appends every held
+	// entry numbered after afterSequence, oldest first, and returns the
+	// newest entry's number. An entry is an iteration whose own timings the
+	// telemetry published: a camera frame, or a face-only frame while no
+	// camera frame is recent. The idle spins between frames are left out.
+	uint64_t fetchIterationHistory(uint64_t afterSequence, std::vector<IterationHistory::Entry>& outEntries) const;
+	// An iteration at least this long is a hitch
+	static double getHitchThresholdMs();
+
 private:
 	// Scratch for one loop iteration, threaded through the stages below
 	struct IterationState
@@ -285,7 +337,19 @@ private:
 		// The recording record under assembly, live only while recording
 		bool bRecordingThisFrame= false;
 		RecordedFrame recordFrame;
+		// The loop's per-phase times so far this iteration, for the recorded
+		// telemetry
+		const double* phaseMs= nullptr;
 	};
+
+	// Which path the iteration took: the direct camera, the fusion, or the
+	// camera-space passthrough
+	static Telemetry::ePath getCameraIterationPath(const IterationState& iteration);
+	// The stage state a recorded frame carries for display. nowMs places the
+	// cameras' last frames in time (a camera whose newest frame is older than
+	// the telemetry hold window reads as not streaming).
+	void gatherRecordedTelemetry(Telemetry::ePath path, const double* phaseMs, double nowMs,
+								 RecordedTelemetry& outTelemetry);
 
 	// The loop and its stages, in iteration order. Each stage works on the
 	// iteration scratch and the members; the main-thread handoffs stay here.
@@ -302,15 +366,27 @@ private:
 	// fusion, IMU and body-solve stages
 	bool isDirectModeActive() const;
 	void runDirectStage(IterationState& iteration);
-	// The direct retarget over the direct camera's result, after the face
-	// stage so the phone head reaches it; an invalid pose without a skeleton
-	void solveDirectPose(IterationState& iteration);
+	// The retarget stage's direct pipeline over the direct camera's result,
+	// after the face stage so the phone head reaches it. False when it cannot
+	// run (no skeleton, no intrinsics), when the frame takes the position
+	// pipeline instead.
+	bool solveDirectRetarget(const IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
+	// The mounting wizard's motion recording and bias calibration requests,
+	// serviced before every IMU service update whether or not a palm is in
+	// view
+	void serviceImuRequests();
+	// A requested mounting capture, published for fetchImuMountingCapture.
+	// Needs no palm this iteration: the capture consumes averaged windows.
+	void serviceImuMountingCapture();
+	// Copies the IMU service's per-side status into the UI snapshot
+	void publishImuStatus();
 	// Vision body solve, then the fusion bookkeeping (search-hint seed,
 	// dominant camera, per-camera confidence, auto hand-scale)
 	void runBodySolveStage(IterationState& iteration);
-	// The face profile evaluation, the OSC send and the fused-result publish
+	// The face profile evaluation, the retarget stage, the OSC send and the
+	// fused-result publish
 	void runOutputStage(IterationState& iteration);
 	// The microphone's visemes onto the output's viseme source
 	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
@@ -329,11 +405,17 @@ private:
 	void runDiagnosticsStage(IterationState& iteration);
 
 	void refreshConfigOnThread();
-	// (Re)creates the OSC streamer and pushes the current config, body
-	// dimensions and avatar skeleton into it
+	// (Re)creates the OSC streamer and pushes the current config and avatar
+	// skeleton into it, and the retarget stage's config beside it
 	void applyOscConfigOnThread();
-	// Services a pending requestDiagnosticDump on the vision thread
-	void performDiagnosticDump(const TrackingFrameResult& latestOutput);
+	// The retarget stage's config from the project, the adopted rig and the
+	// adopted chain block, the chains it resolves to kept for the recording
+	// header and the dump
+	void applyRetargetStageConfigOnThread();
+	// Services a pending requestDiagnosticDump on the vision thread. path and
+	// phaseMs describe the iteration that writes the dump, for the telemetry
+	// its one-frame recording carries.
+	void performDiagnosticDump(const TrackingFrameResult& latestOutput, Telemetry::ePath path, const double* phaseMs);
 
 	VideoCaptureSystem* m_videoCapture= nullptr;
 	AppConfig* m_config= nullptr;
@@ -391,6 +473,13 @@ private:
 	AvatarIdentity m_pendingAvatarIdentity;
 	std::atomic<bool> m_bAvatarIdentityChanged{false};
 	AvatarIdentity m_avatarIdentity;
+	// Retarget chains handoff, the same way: the project's block (null for
+	// none) in the pending slot, adopted between frames, and the chains the
+	// stage runs on resolved from it
+	std::shared_ptr<const RetargetChains> m_pendingRetargetChains;
+	std::atomic<bool> m_bRetargetChainsChanged{false};
+	std::shared_ptr<const RetargetChains> m_retargetChainBlock;
+	std::shared_ptr<const RetargetChains> m_retargetChains;
 	// The face profile over the output frames (vision thread only)
 	FaceProfileRunner m_faceRunner;
 
@@ -405,9 +494,7 @@ private:
 	std::atomic<float> m_autoScaleFactor{1.f};
 
 	// Per (camera, side) confidence from the last fusion, published for the
-	// UI readout. Fixed size so it needs no locking; cameras beyond this are
-	// simply not reported.
-	static constexpr int k_maxReportedCameras= 8;
+	// UI readout, k_maxReportedCameras cameras
 	std::atomic<float> m_observationConfidence[k_maxReportedCameras * 2];
 
 	// A mouth sample older than this is a stage that stopped, not a mouth
@@ -416,15 +503,20 @@ private:
 	// Fused result handoff (mutex-guarded, latest-wins)
 	std::mutex m_fusedMutex;
 	TrackingFrameResult m_fusedResult;
-	AvatarPose m_fusedDirectPose;
-	DirectRetarget::SolveState m_fusedDirectState;
+	RetargetResult m_fusedRetarget;
+	// A display copy of the fuse behind m_fusedResult; a face-only frame,
+	// which repeats the last output, keeps the last one
+	FusionDiagnostics m_fusedDiagnostics;
 	bool m_bFusedFresh= false;
 
-	// Direct retarget (single camera, no world calibration): the solver and
-	// its pose for the frame, and the neutral capture handoff
-	DirectRetarget m_directRetarget;
-	DirectRetargetConfig m_directConfig;
-	AvatarPose m_directPose;
+	// The retarget stage, run on every output frame ahead of the send-rate
+	// gate, and its result for the last one. In direct mode a camera frame
+	// the direct pipeline solved leaves m_bDirectRetarget set, and a
+	// face-only frame repeats that result.
+	RetargetStage m_retargetStage;
+	RetargetResult m_retarget;
+	bool m_bDirectRetarget= false;
+	// The direct retarget's neutral capture handoff
 	std::atomic_bool m_bNeutralCaptureRequested{false};
 	std::mutex m_neutralCaptureMutex;
 	NeutralCapture m_capturedNeutral;
@@ -451,6 +543,25 @@ private:
 	// Logs and publishes a loop iteration that overran the hitch threshold,
 	// attributing it to the phase that consumed the most time
 	void reportHitchIfSlow(double totalMs, const double* phaseMs);
+
+	// Publishes the iteration's telemetry snapshot (display only: nothing on
+	// the vision thread reads it back)
+	void publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs);
+	mutable std::mutex m_telemetryMutex;
+	Telemetry m_telemetry;
+	// Written once per published iteration, after the telemetry, under a
+	// mutex of its own so a reader copying the history never holds up the
+	// telemetry
+	mutable std::mutex m_iterationHistoryMutex;
+	IterationHistory m_iterationHistory;
+	// When the last camera-frame iteration published (vision thread only),
+	// and how long its path stands in for the idle iterations after it
+	double m_lastCameraTelemetryMs= -1.0e9;
+	static constexpr double k_cameraTelemetryHoldMs= 500.0;
+	// The last camera-frame iteration's Diagnostics phase time (vision thread
+	// only): a recorded frame is assembled inside that phase, so it carries
+	// the previous one's
+	double m_lastDiagnosticsPhaseMs= 0.0;
 
 	// Consumes a pending recording start request on the vision thread (state
 	// reset + header snapshot + recorder start)

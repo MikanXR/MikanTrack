@@ -35,6 +35,8 @@ struct AvatarFaceTab::Frame
 	std::shared_ptr<const FaceProfileBinding> binding;
 	const std::vector<FaceExprCompileError>* errors= nullptr;
 	const FaceExprEditTarget* activeEdit= nullptr;
+	// The row whose Edit button this draw saw pressed
+	std::optional<FaceExprEditTarget>* editRequest= nullptr;
 	bool bReadOnly= false;
 	// The binding has the edited profile's shape: its id, its output count
 	// and its variable count. The binding's indices then name the edited
@@ -46,12 +48,10 @@ struct AvatarFaceTab::Frame
 	bool bLive= false;
 };
 
-std::optional<FaceExprEditTarget> AvatarFaceTab::draw(App* app, const FaceSources& face,
-													  const FaceExprEditTarget* activeEdit)
+std::optional<FaceExprEditTarget> AvatarFaceTab::drawRows(App* app, const FaceSources& face,
+														  const FaceExprEditTarget* activeEdit)
 {
-	m_editRequest.reset();
-	drawProfileBar(app);
-
+	std::optional<FaceExprEditTarget> editRequest;
 	m_profile= app->getActiveFaceProfile();
 	FaceProfile& profile= m_profile;
 
@@ -60,6 +60,7 @@ std::optional<FaceExprEditTarget> AvatarFaceTab::draw(App* app, const FaceSource
 	frame.binding= app->getFaceBinding();
 	frame.errors= &app->getFaceProfileErrors();
 	frame.activeEdit= activeEdit;
+	frame.editRequest= &editRequest;
 	frame.bReadOnly= app->isActiveFaceProfileAuto();
 	if (frame.binding != nullptr)
 	{
@@ -77,7 +78,7 @@ std::optional<FaceExprEditTarget> AvatarFaceTab::draw(App* app, const FaceSource
 
 	if (bChanged && !frame.bReadOnly)
 		app->editActiveFaceProfile(profile);
-	return m_editRequest;
+	return editRequest;
 }
 
 void AvatarFaceTab::drawProfileBar(App* app)
@@ -226,7 +227,7 @@ void AvatarFaceTab::drawEditCell(const Frame& frame, bool bLet, int index)
 	if (frame.activeEdit != nullptr && *frame.activeEdit == target)
 		ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ImGui::GetColorU32(ImGuiCol_Header));
 	if (ImGui::SmallButton(locLabel("exprEditor.editButton")))
-		m_editRequest= target;
+		*frame.editRequest= target;
 	ImGui::SetItemTooltip("%s", locText("exprEditor.editTooltip"));
 }
 

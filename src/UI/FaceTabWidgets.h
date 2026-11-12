@@ -10,7 +10,7 @@
 class App;
 class FaceProfileBinding;
 
-// The Face tab's row widgets and the text it shares with the expression
+// The face profile editor's row widgets and the text it shares with the expression
 // editor, so an error and a target read the same wherever an expression is
 // edited.
 namespace FaceTabWidgets
@@ -24,6 +24,11 @@ std::string errorText(const FaceExprCompileError& error);
 // A single-line InputText with its error, if any, underlined at its span and
 // spelled out below. True when text changed.
 bool textInputWithError(const char* id, std::string& text, const FaceExprCompileError* error);
+
+// Its two halves, for a row that puts something beside the input: the input
+// at width with the error's span underlined, and the error spelled out
+bool textInputWithErrorSpan(const char* id, std::string& text, const FaceExprCompileError* error, float width);
+void drawErrorText(const FaceExprCompileError& error);
 
 // Why a binding's output has no target, in the UI's language; "" when it has one
 std::string problemText(const FaceProfileBinding& binding, size_t outputIndex);

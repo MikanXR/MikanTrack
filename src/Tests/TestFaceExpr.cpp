@@ -1,5 +1,9 @@
 #include "TestCommon.h"
 
+#include "nlohmann/json.hpp"
+
+#include "ExprInputTable.h"
+#include "ExprParameter.h"
 #include "FaceExprCompiler.h"
 #include "FaceExprEditorText.h"
 #include "FaceExprEvaluator.h"
@@ -13,7 +17,8 @@
 // Tests for the face expression language: the parser, the compiler and its
 // errors, every function, the time rule, the state slots across a recompile,
 // the input sets, the profile JSON, the function table, the editor's text
-// operations, and the outputs reading a let.
+// operations, the outputs reading a let, a second input table, and the
+// value-or-function parameter with its JSON and its runner.
 
 namespace
 {
@@ -607,6 +612,197 @@ static int runFaceExprTest(const TestArgs&)
 			  "a let's readers are the outputs naming it directly or through another let");
 	}
 
+	// (p) A second input table
+	{
+		const ExprNameTable source(
+			{"source.leftLowerArm.confidence", "source.rightLowerArm.confidence", "source.leftHand.present"});
+		check(source.getCount() == 3 && source.findSlot("SOURCE.LEFTLOWERARM.CONFIDENCE") == 0 &&
+				  source.findSlot("source.leftHand.Present") == 2 && source.findSlot("source.nope") < 0 &&
+				  source.findSlot("") < 0,
+			  "the name table finds a slot without case and refuses a name it lacks");
+		bool bNamesRoundTrip= true;
+		for (int slot= 0; slot < source.getCount(); ++slot)
+			bNamesRoundTrip&= source.findSlot(source.getName(slot)) == slot;
+		check(bNamesRoundTrip && source.getName(0) == "source.leftLowerArm.confidence" && source.getName(3).empty() &&
+				  source.getName(-1).empty(),
+			  "every name table slot's name resolves to it, and a slot out of range has no name");
+
+		const ExprInputTable& face= FaceExprInputs::table();
+		check(face.getCount() == FaceExprInputs::k_count &&
+				  face.findSlot("phone.eyeBlink_L") == FaceExprInputs::fromName("phone.eyeBlinkLeft") &&
+				  face.getName(FaceExprInputs::k_visemePresent) == "viseme.present",
+			  "the face table is FaceExprInputs as a table");
+
+		const FaceExprCompileResult result= compileFaceProfile(
+			profileOf({"smooth(source.leftLowerArm.confidence, 0.1) + source.leftHand.present"}), source);
+		bool bEvaluated= false;
+		bool bShort= false;
+		bool bLong= false;
+		bool bNull= false;
+		bool bFaceSources= false;
+		if (result.program != nullptr)
+		{
+			FaceExprEvaluator evaluator;
+			evaluator.setProgram(result.program);
+			FaceExprState state;
+			float inputs[3]= {0.f, 0.5f, 1.f};
+			float value= -1.f;
+			const bool bFirst= evaluator.evaluate(inputs, 3, 0.0, state, &value);
+			inputs[0]= 1.f;
+			const bool bSecond= evaluator.evaluate(inputs, 3, 0.1, state, &value);
+			bEvaluated= result.program->inputCount == 3 && result.program->constantBase == 3 && bFirst && bSecond &&
+						near(value, 2.f - expf(-1.f), 1e-3f) && evaluator.getInputValue(2) == 1.f &&
+						evaluator.getInputValue(3) == 0.f;
+
+			// A count mismatch runs nothing and reads 0
+			FaceExprState freshState;
+			const float wide[4]= {1.f, 1.f, 1.f, 1.f};
+			value= -1.f;
+			bShort= !evaluator.evaluate(wide, 2, 0.0, freshState, &value) && value == 0.f && !freshState.bHasTime &&
+					freshState.slots.empty();
+			value= -1.f;
+			bLong= !evaluator.evaluate(wide, 4, 0.0, freshState, &value) && value == 0.f &&
+				   evaluator.getInputValue(0) == 0.f;
+			value= -1.f;
+			bNull= !evaluator.evaluate(nullptr, 3, 0.0, freshState, &value) && value == 0.f;
+			value= -1.f;
+			evaluator.evaluate(phoneSources("jawOpen", 1.f), 0.0, freshState, &value);
+			bFaceSources= value == 0.f && !freshState.bHasTime;
+		}
+		check(bEvaluated, "an expression with a stateful call compiles and evaluates against a second table");
+		check(bShort && bLong && bNull, "an input count other than the program's runs nothing and reads zero");
+		check(bFaceSources, "the face sources fed to another table's program read zero");
+
+		FaceExprCompileResult refused= compileFaceProfile(profileOf({"phone.jawOpen"}), source);
+		check(refused.program == nullptr && refused.errors.size() == 1 &&
+				  refused.errors[0].code == eFaceExprErrorCode::UnknownInput && refused.errors[0].span.begin == 0 &&
+				  refused.errors[0].span.end == 13 && refused.errors[0].message == "unknown input 'phone.jawOpen'",
+			  "a face input is unknown against another table");
+		refused= compileFaceProfile(profileOf({"source.leftLowerArm.confidence"}));
+		check(refused.program == nullptr && refused.errors.size() == 1 &&
+				  refused.errors[0].code == eFaceExprErrorCode::UnknownInput,
+			  "another table's input is unknown against the face table");
+		const FaceExprCompileResult faceResult= compileFaceProfile(profileOf({"phone.jawOpen"}));
+		check(faceResult.program != nullptr && faceResult.program->inputCount == FaceExprInputs::k_count &&
+				  faceResult.program->constantBase == FaceExprInputs::k_count,
+			  "a face program records the face table's input count");
+	}
+
+	// (q) The value-or-function setting's JSON
+	{
+		using json= nlohmann::json;
+		ExprParameter plain;
+		plain.value= 0.25f;
+		const json plainJson= exprParameterToJson(plain);
+		const ExprParameter plainBack= exprParameterFromJson(json::parse(plainJson.dump()), 1.f);
+		check(plainJson.is_number() && plainJson.dump() == "0.25" && plainBack.value == 0.25f &&
+				  !plainBack.bUseExpression && plainBack.expression.empty(),
+			  "a plain value with no text writes and reads a bare number");
+		const ExprParameter fromInteger= exprParameterFromJson(json::parse("3"), 1.f);
+		check(fromInteger.value == 3.f && !fromInteger.bUseExpression && fromInteger.expression.empty(),
+			  "an existing numeric setting loads as a plain value");
+
+		ExprParameter function;
+		function.value= 0.5f;
+		function.expression= "clamp(source.leftLowerArm.confidence / 0.6, 0, 1)";
+		function.bUseExpression= true;
+		const json functionJson= exprParameterToJson(function);
+		const ExprParameter functionBack= exprParameterFromJson(json::parse(functionJson.dump()), 1.f);
+		check(functionJson.is_object() && functionBack.value == 0.5f && functionBack.expression == function.expression &&
+				  functionBack.bUseExpression,
+			  "a function round-trips as an object");
+
+		function.bUseExpression= false;
+		const json keptJson= exprParameterToJson(function);
+		const ExprParameter keptBack= exprParameterFromJson(json::parse(keptJson.dump()), 1.f);
+		check(keptJson.is_object() && keptBack.value == 0.5f && keptBack.expression == function.expression &&
+				  !keptBack.bUseExpression,
+			  "a function switched to its value keeps its text");
+
+		const auto isDefault= [](const ExprParameter& parameter) {
+			return parameter.value == 0.75f && parameter.expression.empty() && !parameter.bUseExpression;
+		};
+		check(isDefault(exprParameterFromJson(json("text"), 0.75f)) &&
+				  isDefault(exprParameterFromJson(json::array(), 0.75f)) &&
+				  isDefault(exprParameterFromJson(json(nullptr), 0.75f)) &&
+				  isDefault(exprParameterFromJson(json::parse("{\"value\": \"x\", \"expression\": 7, "
+															  "\"useExpression\": \"yes\"}"),
+												  0.75f)),
+			  "malformed input falls back on the default as a plain value");
+	}
+
+	// (r) The parameter runner
+	{
+		const ExprNameTable source({"source.leftLowerArm.confidence", "source.rightLowerArm.confidence"});
+		ExprParameterRunner runner;
+		ExprParameter parameter;
+		parameter.value= 0.5f;
+		parameter.expression= "source.leftLowerArm.confidence * 2";
+		parameter.bUseExpression= true;
+		runner.setParameter(parameter, source);
+		float inputs[2]= {0.8f, 0.f};
+		const float clamped= runner.evaluate(inputs, 2, 0.0, 0.f, 1.f);
+		check(runner.getCompileError() == nullptr && clamped == 1.f && near(runner.getLastRawValue(), 1.6f) &&
+				  runner.getLastUsedExpression(),
+			  "the runner clamps the expression's value to the range and keeps the raw value");
+
+		parameter.bUseExpression= false;
+		parameter.value= 3.f;
+		runner.setParameter(parameter, source);
+		check(runner.evaluate(inputs, 2, 0.01, 0.f, 1.f) == 1.f && !runner.getLastUsedExpression() &&
+				  runner.evaluate(inputs, 2, 0.02, -1.f, 2.f) == 2.f,
+			  "the plain value is clamped to the range");
+
+		parameter.value= 0.25f;
+		parameter.bUseExpression= true;
+		parameter.expression= "phone.jawOpen";
+		runner.setParameter(parameter, source);
+		const FaceExprCompileError* error= runner.getCompileError();
+		check(error != nullptr && error->code == eFaceExprErrorCode::UnknownInput && error->span.begin == 0 &&
+				  error->span.end == 13 && runner.getProgram() == nullptr &&
+				  runner.evaluate(inputs, 2, 0.03, 0.f, 1.f) == 0.25f && !runner.getLastUsedExpression(),
+			  "a compile error falls back on the plain value and is exposed with its span");
+
+		parameter.expression= "source.leftLowerArm.confidence";
+		runner.setParameter(parameter, source);
+		inputs[0]= NAN;
+		const float nonFinite= runner.evaluate(inputs, 2, 0.04, 0.f, 1.f);
+		check(runner.getCompileError() == nullptr && nonFinite == 0.25f && std::isnan(runner.getLastRawValue()) &&
+				  !runner.getLastUsedExpression(),
+			  "a non-finite result falls back on the plain value");
+		inputs[0]= 0.6f;
+		check(runner.evaluate(inputs, 1, 0.05, 0.f, 1.f) == 0.25f && !runner.getLastUsedExpression(),
+			  "an input count other than the table's falls back on the plain value");
+
+		// The same text keeps its program and its smoothing, a toggle to the
+		// value and back included; new text starts over
+		parameter.expression= "smooth(source.leftLowerArm.confidence, 0.1)";
+		runner.setParameter(parameter, source);
+		const std::shared_ptr<const FaceExprProgram> program= runner.getProgram();
+		inputs[0]= 0.f;
+		runner.evaluate(inputs, 2, 1.0, 0.f, 1.f);
+		inputs[0]= 1.f;
+		runner.evaluate(inputs, 2, 1.1, 0.f, 1.f);
+		parameter.bUseExpression= false;
+		parameter.value= 0.9f;
+		runner.setParameter(parameter, source);
+		const float whileOff= runner.evaluate(inputs, 2, 1.1, 0.f, 1.f);
+		parameter.bUseExpression= true;
+		runner.setParameter(parameter, source);
+		const float kept= runner.evaluate(inputs, 2, 1.1, 0.f, 1.f);
+		check(program != nullptr && runner.getProgram() == program && whileOff == 0.9f &&
+				  near(kept, 1.f - expf(-1.f), 1e-3f),
+			  "an unchanged text is not recompiled and keeps its stateful call's state");
+		parameter.expression= "smooth(source.leftLowerArm.confidence, 0.2)";
+		runner.setParameter(parameter, source);
+		const float restarted= runner.evaluate(inputs, 2, 1.1, 0.f, 1.f);
+		const ExprNameTable otherSource({"source.leftLowerArm.confidence", "source.rightLowerArm.confidence"});
+		const std::shared_ptr<const FaceExprProgram> editedProgram= runner.getProgram();
+		runner.setParameter(parameter, otherSource);
+		check(editedProgram != program && restarted == 1.f && runner.getProgram() != editedProgram,
+			  "a new text or a new table recompiles, and a new text starts its state over");
+	}
+
 	if (failures == 0)
 		MIKAN_LOG_INFO(k_label) << "All face expression tests passed";
 	return failures == 0 ? 0 : 1;
@@ -615,5 +811,6 @@ static int runFaceExprTest(const TestArgs&)
 MIKAN_REGISTER_TEST("--test-faceexpr",
 					"face expressions: precedence, functions, names, variables, smooth, the time rule, hysteresis, state "
 					"slots across a recompile, input sets, profile JSON, the library, the function table, the editor's "
-					"text operations, the outputs reading a let",
+					"text operations, the outputs reading a let, a second input table, the value-or-function "
+					"parameter's JSON and runner",
 					eTestCategory::SelfTest, runFaceExprTest);

@@ -22,9 +22,6 @@ bool isMouthInput(int slot)
 void AvatarMouthReadout::draw(const std::shared_ptr<const AvatarModel>& model,
 							  const std::shared_ptr<const FaceProfileBinding>& binding, const FaceSources& face)
 {
-	if (!ImGui::CollapsingHeader(locLabel("oscPanel.mouthSection")))
-		return;
-
 	if (model == nullptr || binding == nullptr || binding->getProgram() == nullptr)
 	{
 		ImGui::TextDisabled("%s", locText("oscPanel.mouthNone"));

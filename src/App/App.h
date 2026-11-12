@@ -24,6 +24,7 @@ class FaceService;
 class ImuService;
 class LocalizationManager;
 class ProjectManager;
+struct RetargetChains;
 class VideoCaptureSystem;
 class VisionThread;
 class MainWindow;
@@ -81,7 +82,7 @@ public:
 
 	// The loaded VRM avatar, if any. Loaded on the main thread (the renderer
 	// builds GL resources from it) when a project activates and from the
-	// Avatar panel; cleared with the project. The generation counter advances
+	// Retarget stage or the File menu; cleared with the project. The generation counter advances
 	// on every change so the renderer knows when to re-upload.
 	bool loadAvatar(const std::filesystem::path& path);
 	void clearAvatar();
@@ -96,6 +97,15 @@ public:
 	void setAvatarRig(const AvatarRigSettings& rig);
 	// What applying the rig and building the skeleton reported
 	const std::vector<std::string>& getAvatarRigWarnings() const { return m_avatarRigWarnings; }
+
+	// The project's retarget chain settings: its chain block, or the chains a
+	// project without one migrates to from its legacy settings and the rig
+	RetargetChains getRetargetChains() const;
+	// Writes the project's chain block (creating it on a project without one)
+	// and hands it to the vision thread as a snapshot it adopts between
+	// frames, with no config refresh, so a recording runs on
+	void setRetargetChains(const RetargetChains& chains);
+
 	uint32_t getAvatarGeneration() const { return m_avatarGeneration; }
 	const std::string& getAvatarLoadError() const { return m_avatarLoadError; }
 	// Resolves AvatarConfig::modelPath: absolute as is, else the project
@@ -207,6 +217,8 @@ private:
 	void rebuildFaceBinding();
 	// The avatar's identity and the face binding to the vision thread
 	void pushAvatarIdentity();
+	// The project's chain block (or none) to the vision thread
+	void pushRetargetChains();
 	void updateFaceProfileAutoSave(float deltaSeconds);
 	void saveFaceProfileIfDirty();
 	// Mutable here only so the rig's mapping can be reapplied on the main

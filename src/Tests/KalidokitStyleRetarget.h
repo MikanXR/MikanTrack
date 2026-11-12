@@ -37,7 +37,7 @@ public:
 
 	void reset();
 
-	// Same shape as DirectRetarget::solve, without the phone head
+	// Same shape as DirectStageSolver::solve, without the phone head
 	void solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
 			   const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose);
 

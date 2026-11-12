@@ -39,7 +39,9 @@ struct AvatarRigSettings
 		// relative to the avatar's upper-arm joint
 		glm::vec3 elbowHintOffset{-0.15f, 0.f, -0.30f};
 		// The forearm confidence at and above which the measured elbow fully
-		// decides the bend; below it the bend blends toward the hint
+		// decides the bend; below it the bend blends toward the hint. A
+		// project without chain settings migrates it to its arms' elbow
+		// weight function.
 		float elbowHintConfidence= 0.5f;
 
 		// The thumb's flexion hinge pronation. Auto reads its sign from which
@@ -65,14 +67,26 @@ struct AvatarRigSettings
 		glm::vec3 restWristOffset{0.28f, 0.f, -0.34f};
 		glm::vec3 restPalmNormal{0.f, 0.f, -1.f};
 		float restFingerCurlDegrees= 15.f;
+
+		// The direct retarget's limit on the wrist, the palm's rotation in
+		// the forearm frame, degrees
+		float wristLimitDegrees= 80.f;
 	};
 	// Left, right. The default elbow hint and rest pose lie in the sagittal
 	// plane, so they are their own mirror images.
 	std::array<Side, 2> sides{};
 
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
-	// snaps
+	// snaps. A project with retarget chain settings takes each arm's from its
+	// chain and reads neither this nor the sides' elbowHintConfidence; both
+	// stay for a project without them.
 	float restBlendMs= 300.f;
+
+	// The direct retarget's joint limits, degrees: the head's rotation away
+	// from the neutral head, and the spine's (the lean and the shoulder
+	// line's turn) away from the neutral torso
+	float headLimitDegrees= 70.f;
+	float spineLimitDegrees= 45.f;
 
 	// The face profiles assigned to the avatar, by library id, and the one
 	// that drives the face. An empty active id runs the built-in Auto

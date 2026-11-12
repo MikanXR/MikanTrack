@@ -1,5 +1,7 @@
 #include "VisionThread.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 
 #include "AppConfig.h"
@@ -19,6 +21,19 @@
 // arriving, find no free block, and are dropped). Well above a healthy
 // iteration - two cameras of inference plus fusion runs in the low tens of ms.
 static constexpr double k_hitchThresholdMs= 50.0;
+
+// The recorded telemetry mirrors the loop's phase list and per-camera readouts
+static_assert(RecordedTelemetry::k_phaseCount == (int)VisionThread::eVisionPhase::Count,
+			  "RecordedTelemetry::phaseMs must hold one entry per vision phase");
+static_assert(RecordedTelemetry::k_maxCameras == VisionThread::k_maxReportedCameras,
+			  "RecordedTelemetry must hold every reported camera");
+static_assert(IterationHistory::k_phaseCount == (int)VisionThread::eVisionPhase::Count,
+			  "IterationHistory::Entry::phaseMs must hold one entry per vision phase");
+
+double VisionThread::getHitchThresholdMs()
+{
+	return k_hitchThresholdMs;
+}
 
 const char* VisionThread::getPhaseName(eVisionPhase phase)
 {
@@ -64,6 +79,182 @@ void VisionThread::reportHitchIfSlow(double totalMs, const double* phaseMs)
 		<< (int)phaseMs[(int)eVisionPhase::Face] << " osc "
 		<< (int)phaseMs[(int)eVisionPhase::Osc] << " diag "
 		<< (int)phaseMs[(int)eVisionPhase::Diagnostics] << "]";
+}
+
+void VisionThread::publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs)
+{
+	// Gathered outside the lock: the streamer and the cameras publish their
+	// own atomics, and the vision thread owns both lists
+	Telemetry snapshot;
+	snapshot.bValid= true;
+	snapshot.path= path;
+	snapshot.timestampMs= timestampMs;
+	for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
+		snapshot.phaseMs[phaseIndex]= (float)phaseMs[phaseIndex];
+	snapshot.totalMs= (float)totalMs;
+	if (m_oscStreamer != nullptr)
+	{
+		snapshot.bOscRunning= m_oscStreamer->isRunning();
+		snapshot.oscSendRateHz= m_oscStreamer->getMessagesPerSecond();
+		snapshot.oscLastPacketCount= m_oscStreamer->getLastPacketCount();
+		snapshot.oscLastFrameBytes= m_oscStreamer->getLastFrameBytes();
+	}
+	const int reportedCameras= std::min((int)m_cameras.size(), k_maxReportedCameras);
+	for (int cameraIndex= 0; cameraIndex < reportedCameras; ++cameraIndex)
+		snapshot.bBodyModelLoaded[cameraIndex]= m_cameras[cameraIndex]->isBodyModelLoaded();
+
+	// The loop spins many times between camera frames, and a reader samples
+	// whichever iteration came last: an idle or face-only iteration shortly
+	// after a camera frame keeps that frame's path and timings, so the
+	// snapshot says what the pipeline is doing rather than what the last
+	// two milliseconds did. Past the window the cameras have stopped.
+	const bool bCameraPath= path == Telemetry::ePath::Fused || path == Telemetry::ePath::Passthrough ||
+		path == Telemetry::ePath::Direct;
+	const double nowMs= steadyNowMs();
+	if (bCameraPath)
+		m_lastCameraTelemetryMs= nowMs;
+
+	bool bOwnTimings= true;
+	{
+		std::lock_guard<std::mutex> lock(m_telemetryMutex);
+		snapshot.iteration= m_telemetry.iteration + 1;
+		if (!bCameraPath && m_telemetry.bValid && nowMs - m_lastCameraTelemetryMs < k_cameraTelemetryHoldMs)
+		{
+			bOwnTimings= false;
+			snapshot.path= m_telemetry.path;
+			snapshot.timestampMs= m_telemetry.timestampMs;
+			snapshot.totalMs= m_telemetry.totalMs;
+			for (int phaseIndex= 0; phaseIndex < (int)eVisionPhase::Count; ++phaseIndex)
+				snapshot.phaseMs[phaseIndex]= m_telemetry.phaseMs[phaseIndex];
+		}
+		m_telemetry= snapshot;
+	}
+
+	// The history holds the iterations whose own timings were published,
+	// which leaves out the idle spins and the face-only frames between
+	// camera frames
+	if (bOwnTimings && path != Telemetry::ePath::Idle)
+	{
+		std::lock_guard<std::mutex> lock(m_iterationHistoryMutex);
+		m_iterationHistory.push(snapshot.phaseMs, snapshot.totalMs, totalMs >= k_hitchThresholdMs);
+	}
+}
+
+VisionThread::Telemetry VisionThread::getTelemetry() const
+{
+	std::lock_guard<std::mutex> lock(m_telemetryMutex);
+	return m_telemetry;
+}
+
+uint64_t VisionThread::fetchIterationHistory(uint64_t afterSequence,
+											 std::vector<IterationHistory::Entry>& outEntries) const
+{
+	std::lock_guard<std::mutex> lock(m_iterationHistoryMutex);
+	m_iterationHistory.fetchNewerThan(afterSequence, outEntries);
+	return m_iterationHistory.getNewestSequence();
+}
+
+VisionThread::Telemetry::ePath VisionThread::getCameraIterationPath(const IterationState& iteration)
+{
+	return iteration.bDirect ? Telemetry::ePath::Direct
+		: iteration.bAnyWorldCandidate ? Telemetry::ePath::Fused
+									   : Telemetry::ePath::Passthrough;
+}
+
+void VisionThread::gatherRecordedTelemetry(Telemetry::ePath path, const double* phaseMs, double nowMs,
+										   RecordedTelemetry& outTelemetry)
+{
+	outTelemetry= RecordedTelemetry();
+	outTelemetry.present= true;
+	outTelemetry.path= (int)path;
+	// The Diagnostics phase is still running while the record is assembled,
+	// so it carries the previous camera-frame iteration's
+	double totalMs= 0.0;
+	for (int phaseIndex= 0; phaseIndex < RecordedTelemetry::k_phaseCount; ++phaseIndex)
+	{
+		const double ms= phaseIndex == (int)eVisionPhase::Diagnostics ? m_lastDiagnosticsPhaseMs
+			: phaseMs != nullptr ? phaseMs[phaseIndex]
+								 : 0.0;
+		outTelemetry.phaseMs[phaseIndex]= (float)ms;
+		totalMs+= ms;
+	}
+	outTelemetry.totalMs= (float)totalMs;
+
+	if (m_oscStreamer != nullptr)
+	{
+		outTelemetry.oscRunning= m_oscStreamer->isRunning();
+		outTelemetry.oscSendRateHz= m_oscStreamer->getMessagesPerSecond();
+		outTelemetry.oscLastPacketCount= m_oscStreamer->getLastPacketCount();
+		outTelemetry.oscLastFrameBytes= m_oscStreamer->getLastFrameBytes();
+	}
+
+	outTelemetry.dominantCamera[0]= m_dominantCamera[0].load();
+	outTelemetry.dominantCamera[1]= m_dominantCamera[1].load();
+	for (int cameraIndex= 0; cameraIndex < RecordedTelemetry::k_maxCameras; ++cameraIndex)
+	{
+		outTelemetry.observationConfidence[cameraIndex][0]= m_observationConfidence[cameraIndex * 2].load();
+		outTelemetry.observationConfidence[cameraIndex][1]= m_observationConfidence[cameraIndex * 2 + 1].load();
+	}
+	outTelemetry.autoHandScaleFactor= m_autoScaleFactor.load();
+
+	// The capture system's main-thread device object is never dereferenced
+	// here: device-open compares the slot's pointer only, and a camera
+	// streams when its newest frame reached this thread within the hold window
+	outTelemetry.cameraCount= std::min((int)m_cameras.size(), RecordedTelemetry::k_maxCameras);
+	for (int cameraIndex= 0; cameraIndex < outTelemetry.cameraCount; ++cameraIndex)
+	{
+		const CameraContext& context= *m_cameras[cameraIndex];
+		const int deviceIndex= context.getCameraIndex();
+		const double lastFrameMs= context.getLastResult().timestampMs;
+		const char* executionProvider= context.getActiveExecutionProvider();
+		RecordedTelemetry::Camera& camera= outTelemetry.cameras[cameraIndex];
+		camera.deviceOpen= m_videoCapture->getIsDeviceOpen(deviceIndex);
+		camera.streaming= camera.deviceOpen && lastFrameMs > 0.0 && nowMs - lastFrameMs <= k_cameraTelemetryHoldMs;
+		camera.deviceFrameRate= m_videoCapture->getDeviceFrameRate(deviceIndex);
+		camera.droppedFrames= (int)m_videoCapture->getDroppedFrameCount(deviceIndex);
+		camera.queuedFrames= (int)m_videoCapture->getQueuedFrameCount(deviceIndex);
+		camera.callbackCopyMs= m_videoCapture->getCallbackCopyMs(deviceIndex);
+		camera.trackingEnabled= context.isTrackingEnabled();
+		camera.handPipelineReady= executionProvider != nullptr && std::strcmp(executionProvider, "none") != 0;
+		camera.bodyModelLoaded= context.isBodyModelLoaded();
+	}
+
+	// The statuses as they stand: in direct mode the service is not updated
+	outTelemetry.imuEnabled= m_config->imu.enabled;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const ImuSideStatus status= m_imuService->getSideStatus((eHandSide)sideIndex);
+		RecordedImuStatus& imu= outTelemetry.imu[sideIndex];
+		imu.deviceConnected= status.deviceConnected;
+		imu.streaming= status.streaming;
+		imu.calibrated= status.calibrated;
+		imu.orientationValid= status.orientationValid;
+		imu.sampleRateHz= status.sampleRateHz;
+		imu.batteryLevel= status.batteryLevel;
+		imu.yawDriftDegPerSecond= status.gyroBiasDegreesPerSecond.z;
+		imu.rollErrorDegrees= status.wristAxialTwistDegrees;
+	}
+
+	if (m_faceService != nullptr)
+	{
+		const FaceServiceStatus status= m_faceService->getStatus();
+		outTelemetry.face.enabled= status.enabled;
+		outTelemetry.face.bound= status.bound;
+		outTelemetry.face.streaming= status.streaming;
+		outTelemetry.face.faceTracked= status.latest.valid && status.latest.faceTracked;
+		outTelemetry.face.datagramsPerSecond= status.datagramsPerSecond;
+	}
+
+	if (m_audioService != nullptr)
+	{
+		const AudioServiceStatus status= m_audioService->getStatus();
+		outTelemetry.audio.enabled= status.enabled;
+		outTelemetry.audio.deviceOpen= status.deviceOpen;
+		outTelemetry.audio.backendReady= status.backendReady;
+		outTelemetry.audio.gateOpen= status.gateOpen;
+		outTelemetry.audio.levelDbfs= status.levelDbfs;
+		outTelemetry.audio.inferMsEma= status.inferMsEma;
+	}
 }
 
 VisionThread::VisionThread(VideoCaptureSystem* videoCapture, ImuService* imuService, FaceService* faceService,
@@ -142,18 +333,18 @@ bool VisionThread::fetchPreviewFrame(int cameraIndex, VisionPreviewFrame& outFra
 	return m_cameras[cameraIndex]->fetchPreviewFrame(outFrame);
 }
 
-bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, AvatarPose* outDirectPose,
-									DirectRetarget::SolveState* outDirectState)
+bool VisionThread::fetchFusedResult(TrackingFrameResult& outResult, RetargetResult* outRetarget,
+									FusionDiagnostics* outFusionDiagnostics)
 {
 	std::lock_guard<std::mutex> lock(m_fusedMutex);
 	if (!m_bFusedFresh)
 		return false;
 
 	outResult= m_fusedResult;
-	if (outDirectPose != nullptr)
-		*outDirectPose= m_fusedDirectPose;
-	if (outDirectState != nullptr)
-		*outDirectState= m_fusedDirectState;
+	if (outRetarget != nullptr)
+		*outRetarget= m_fusedRetarget;
+	if (outFusionDiagnostics != nullptr)
+		*outFusionDiagnostics= m_fusedDiagnostics;
 	m_bFusedFresh= false;
 	return true;
 }
@@ -254,7 +445,9 @@ void VisionThread::handleRecordingStartOnThread()
 
 	RecordingHeader header;
 	header.formatVersion= TrackingRecording::k_formatVersion;
-	header.appConfigJsonText= m_config->toJsonString();
+	// With the chains the stage runs on, so a take from a project without a
+	// chain block still carries the ones it ran
+	header.appConfigJsonText= m_config->toJsonString(m_retargetChains);
 	header.cameraCount= (int)m_cameras.size();
 
 	// The audio sidecar starts first, since the header carries where in the
@@ -353,7 +546,8 @@ std::string VisionThread::getLastDumpPath()
 	return m_lastDumpPath;
 }
 
-void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput)
+void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput, Telemetry::ePath path,
+										 const double* phaseMs)
 {
 	std::string dumpDir;
 	DiagAvatarSnapshot avatar;
@@ -376,19 +570,25 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 	{
 		const RecordedCameraInput& input= context->getLastRecordInput();
 		if (input.frameIndex >= 0)
+		{
 			recordFrame.freshCameras.push_back(input);
+			recordFrame.freshCameras.back().bHaveCaptureTimings= true;
+			recordFrame.freshCameras.back().captureTimings= context->getLastResult().result.captureTimings;
+		}
 	}
 	TrackingRecording::snapshotFusedOutput(latestOutput, recordFrame.outPoses);
 	recordFrame.checksum= TrackingRecording::computeFusedChecksum(latestOutput);
+	gatherRecordedTelemetry(path, phaseMs, steadyNowMs(), recordFrame.telemetry);
 
 	// The avatar half: the direct solver's pose for this output and the
 	// state behind it
-	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_directPose.valid;
+	const bool bAvatar= isDirectModeActive() && m_avatar.skeleton != nullptr && m_bDirectRetarget &&
+		m_retarget.pose.valid;
 	if (bAvatar)
 	{
 		avatar.skeleton= m_avatar.skeleton.get();
-		avatar.pose= &m_directPose;
-		avatar.solveState= &m_directRetarget.getSolveState();
+		avatar.pose= &m_retarget.pose;
+		avatar.solveState= &m_retarget.directState;
 		avatar.modelPath= m_avatarIdentity.path;
 		avatar.cameraIndex= m_config->direct.cameraIndex;
 	}
@@ -454,7 +654,7 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 		out.palmarSource= (int)capture.palmarSource;
 	}
 
-	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(), rawImu,
+	const bool bOk= m_diagnostics.write(dumpDir, snapshots, latestOutput, m_config->toJsonString(m_retargetChains), rawImu,
 										lastCapture, recordFrame.freshCameras.empty() ? nullptr : &recordFrame,
 										bAvatar ? &avatar : nullptr);
 	if (bOk)
@@ -533,15 +733,26 @@ void VisionThread::refreshConfigOnThread()
 		m_imuService->setConfig(imuConfig);
 	}
 
-	// Direct retarget: the solver config follows the project and the rig
-	m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
-
-	// OSC
+	// OSC, and the retarget stage that feeds it, which follows the project
+	// and the rig
 	applyOscConfigOnThread();
+}
+
+void VisionThread::applyRetargetStageConfigOnThread()
+{
+	// The stage keeps its holds, freezes and filters across a config change,
+	// and starts over only on a new skeleton. The chains come from the
+	// adopted block, never the config's, which the main thread replaces on
+	// an edit.
+	m_retargetChains= std::make_shared<const RetargetChains>(
+		resolveRetargetChains(m_retargetChainBlock.get(), *m_config, m_avatar.rig));
+	m_retargetStage.setConfig(makeRetargetStageConfig(*m_config, m_avatar.rig, *m_retargetChains, m_avatar.skeleton));
 }
 
 void VisionThread::applyOscConfigOnThread()
 {
+	applyRetargetStageConfigOnThread();
+
 	if (m_oscStreamer == nullptr)
 	{
 		m_oscStreamer= std::make_unique<OscStreamer>();
@@ -560,8 +771,6 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.targetIp= m_config->osc.targetIp;
 		oscConfig.port= (uint16_t)m_config->osc.port;
 		oscConfig.maxRateHz= (float)m_config->osc.maxRateHz;
-		oscConfig.minConfidence= m_config->osc.minConfidence;
-		oscConfig.holdOnDropoutMs= m_config->osc.holdOnDropoutMs;
 		// The VMC bone offsets must agree with the lengths the body-pose solver
 		// placed those joints with, or the streamed skeleton contradicts the
 		// pose it is carrying.
@@ -569,11 +778,7 @@ void VisionThread::applyOscConfigOnThread()
 		oscConfig.upperArmLengthMeters= bodyDimensions.upperArmLengthMeters;
 		oscConfig.shoulderWidthMeters= bodyDimensions.shoulderWidthMeters;
 		oscConfig.vmcHeadOffsetMeters= m_config->osc.vmcHeadOffsetMeters;
-		oscConfig.vmcFreezeOnLoss= m_config->osc.vmcFreezeOnLoss;
-		// The avatar path takes the same lengths the solver placed the joints
-		// with, plus the skeleton the main thread handed over
-		oscConfig.bodyDimensions= bodyDimensions;
-		oscConfig.avatarRetarget= makeAvatarRetargetConfig(*m_config, m_avatar.rig);
+		// The skeleton the main thread handed over, which the stage poses
 		oscConfig.avatarSkeleton= m_avatar.skeleton;
 		oscConfig.avatarPath= m_avatarIdentity.path;
 		oscConfig.avatarTitle= m_avatarIdentity.title;
@@ -596,6 +801,11 @@ void VisionThread::threadLoop()
 {
 	MIKAN_MT_LOG_INFO("VisionThread") << "Vision thread started";
 
+	// A new run streams to a fresh streamer: nothing held or frozen in the
+	// last run carries into it
+	m_retargetStage.reset();
+	m_bDirectRetarget= false;
+
 	// Per-phase timing for the hitch watchdog, reset each iteration
 	double phaseMs[(int)eVisionPhase::Count]= {};
 
@@ -612,6 +822,7 @@ void VisionThread::threadLoop()
 		};
 
 		IterationState iteration;
+		iteration.phaseMs= phaseMs;
 
 		servicePendingRequests();
 		lapPhase(eVisionPhase::ConfigRefresh);
@@ -625,17 +836,27 @@ void VisionThread::threadLoop()
 
 		if (!iteration.bAnyNewResult)
 		{
-			if (runFaceOnlyOutput(iteration, steadyNowMs()))
+			const bool bFaceOnly= runFaceOnlyOutput(iteration, steadyNowMs());
+			if (bFaceOnly)
 				lapPhase(eVisionPhase::Osc);
 
 			// Still service dump requests while idle (cameras may be stopped)
 			if (m_bDumpRequested.exchange(false))
-				performDiagnosticDump(m_lastOutputResult);
+			{
+				performDiagnosticDump(m_lastOutputResult,
+									  bFaceOnly ? Telemetry::ePath::FaceOnly : Telemetry::ePath::Idle, phaseMs);
+			}
 			lapPhase(eVisionPhase::Diagnostics);
 
 			// The idle sleep below is not a hitch, but a slow config refresh or
 			// dump write on this path still starves the cameras
-			reportHitchIfSlow(steadyNowMs() - iterationStartMs, phaseMs);
+			const double idleTotalMs= steadyNowMs() - iterationStartMs;
+			reportHitchIfSlow(idleTotalMs, phaseMs);
+
+			if (bFaceOnly)
+				publishTelemetry(Telemetry::ePath::FaceOnly, iteration.outputResult.timestampMs, idleTotalMs, phaseMs);
+			else
+				publishTelemetry(Telemetry::ePath::Idle, 0.0, idleTotalMs, phaseMs);
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 			continue;
@@ -661,6 +882,19 @@ void VisionThread::threadLoop()
 				runBodySolveStage(iteration);
 				lapPhase(eVisionPhase::Fusion);
 			}
+			else
+			{
+				// No world palm to anchor or fill from, but the service still
+				// drains its samples and adopts discovered devices, so the
+				// status the UI reads keeps describing the wrists, and the
+				// wizard's requests (a bias calibration is taken with the
+				// hands away) are not held until a hand appears
+				serviceImuRequests();
+				m_imuService->update();
+				serviceImuMountingCapture();
+				publishImuStatus();
+				lapPhase(eVisionPhase::Imu);
+			}
 		}
 
 		runOutputStage(iteration);
@@ -669,8 +903,12 @@ void VisionThread::threadLoop()
 		runCalibrationCaptures();
 		runDiagnosticsStage(iteration);
 		lapPhase(eVisionPhase::Diagnostics);
+		m_lastDiagnosticsPhaseMs= phaseMs[(int)eVisionPhase::Diagnostics];
 
-		reportHitchIfSlow(steadyNowMs() - iterationStartMs, phaseMs);
+		const double totalMs= steadyNowMs() - iterationStartMs;
+		reportHitchIfSlow(totalMs, phaseMs);
+
+		publishTelemetry(getCameraIterationPath(iteration), iteration.outputResult.timestampMs, totalMs, phaseMs);
 	}
 
 	// Finalize an in-flight recording before the contexts are torn down
@@ -691,6 +929,15 @@ void VisionThread::setAvatarSkeleton(std::shared_ptr<const AvatarSkeleton> skele
 		m_pendingAvatar.rig= rig;
 	}
 	m_bAvatarSkeletonChanged= true;
+}
+
+void VisionThread::setRetargetChains(std::shared_ptr<const RetargetChains> chains)
+{
+	{
+		std::lock_guard<std::mutex> lock(m_avatarMutex);
+		m_pendingRetargetChains= std::move(chains);
+	}
+	m_bRetargetChainsChanged= true;
 }
 
 void VisionThread::setAvatarIdentity(const AvatarIdentity& identity)
@@ -739,14 +986,19 @@ void VisionThread::servicePendingRequests()
 			m_faceRunner.setBinding(m_avatarIdentity.faceBinding != nullptr ? m_avatarIdentity.faceBinding
 																			 : makeAutoFaceBinding(nullptr));
 		}
-		if (bSkeletonChanged)
-		{
-			// A new skeleton means new lengths: the direct solver starts over
-			// on them with the rig that came with it
-			m_directRetarget.reset();
-			m_directConfig= makeDirectRetargetConfig(*m_config, m_avatar.rig);
-		}
+		// The rig that came with the skeleton reaches the retarget stage
+		// here, which starts its direct solver over on a new skeleton
 		applyOscConfigOnThread();
+	}
+	// A chain edit reaches the stage alone: no refresh, so a recording runs
+	// on and every hold, freeze and filter carries over
+	if (m_bRetargetChainsChanged.exchange(false))
+	{
+		{
+			std::lock_guard<std::mutex> lock(m_avatarMutex);
+			m_retargetChainBlock= m_pendingRetargetChains;
+		}
+		applyRetargetStageConfigOnThread();
 	}
 	if (m_bRecordingStopRequested.exchange(false))
 		finalizeRecordingOnThread(false, "");
@@ -859,12 +1111,11 @@ void VisionThread::runDirectStage(IterationState& iteration)
 	}
 }
 
-void VisionThread::solveDirectPose(IterationState& iteration)
+bool VisionThread::solveDirectRetarget(const IterationState& iteration)
 {
-	m_directPose.clear();
 	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
 	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
-		return;
+		return false;
 
 	DirectCameraModel cameraModel;
 	cameraModel.fx= camera.fx;
@@ -875,8 +1126,8 @@ void VisionThread::solveDirectPose(IterationState& iteration)
 	cameraModel.height= camera.result.frameHeight;
 	// The only head on a camera-space result is the phone's, which the face
 	// stage just placed on the output when it streams
-	m_directRetarget.solve(camera.result, cameraModel, iteration.outputResult.head, camera.result.timestampMs,
-						   *m_avatar.skeleton, m_directConfig, m_directPose);
+	return m_retargetStage.solveDirect(camera.result, cameraModel, iteration.outputResult.head,
+									   camera.result.timestampMs, m_retarget);
 }
 
 void VisionThread::runImuStage(IterationState& iteration)
@@ -887,18 +1138,7 @@ void VisionThread::runImuStage(IterationState& iteration)
 	// orientation onto the pose.
 	TrackingFrameResult& outputResult= iteration.outputResult;
 
-	if (m_bImuMotionRecordingRequested.exchange(false))
-	{
-		const eMountingMotion motion= (eMountingMotion)m_requestedImuMotionRecording.load();
-		if (motion == eMountingMotion::None)
-			m_imuService->endMotionRecording();
-		else
-			m_imuService->beginMotionRecording(motion);
-	}
-	if (m_bImuBiasCalibrationRequested.exchange(false))
-		m_imuService->beginBiasCalibration();
-	if (m_bImuBiasCancelRequested.exchange(false))
-		m_imuService->cancelBiasCalibration();
+	serviceImuRequests();
 	m_imuService->update();
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -963,26 +1203,49 @@ void VisionThread::runImuStage(IterationState& iteration)
 		}
 	}
 
-	// Mounting capture: needs a tracked palm AND a converged filter
-	if (m_bImuMountingCaptureRequested.exchange(false))
-	{
-		// No pose argument and no "is the hand tracked right now" test: the
-		// capture consumes the averaged window, so what matters is what was
-		// seen during the twist, not this instant
-		ImuMountingCapture capture;
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			m_imuService->captureMounting((eHandSide)sideIndex, capture.sides[sideIndex]);
+	serviceImuMountingCapture();
+	publishImuStatus();
+}
 
-		std::lock_guard<std::mutex> lock(m_imuMutex);
-		m_capturedImuMounting= capture;
-		m_bImuMountingReady= true;
-	}
-
+void VisionThread::serviceImuRequests()
+{
+	if (m_bImuMotionRecordingRequested.exchange(false))
 	{
-		std::lock_guard<std::mutex> lock(m_imuMutex);
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			m_imuStatus[sideIndex]= m_imuService->getSideStatus((eHandSide)sideIndex);
+		const eMountingMotion motion= (eMountingMotion)m_requestedImuMotionRecording.load();
+		if (motion == eMountingMotion::None)
+			m_imuService->endMotionRecording();
+		else
+			m_imuService->beginMotionRecording(motion);
 	}
+	if (m_bImuBiasCalibrationRequested.exchange(false))
+		m_imuService->beginBiasCalibration();
+	if (m_bImuBiasCancelRequested.exchange(false))
+		m_imuService->cancelBiasCalibration();
+}
+
+void VisionThread::serviceImuMountingCapture()
+{
+	// Mounting capture: needs a converged filter
+	if (!m_bImuMountingCaptureRequested.exchange(false))
+		return;
+
+	// No pose argument and no "is the hand tracked right now" test: the
+	// capture consumes the averaged window, so what matters is what was
+	// seen during the twist, not this instant
+	ImuMountingCapture capture;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		m_imuService->captureMounting((eHandSide)sideIndex, capture.sides[sideIndex]);
+
+	std::lock_guard<std::mutex> lock(m_imuMutex);
+	m_capturedImuMounting= capture;
+	m_bImuMountingReady= true;
+}
+
+void VisionThread::publishImuStatus()
+{
+	std::lock_guard<std::mutex> lock(m_imuMutex);
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		m_imuStatus[sideIndex]= m_imuService->getSideStatus((eHandSide)sideIndex);
 }
 
 void VisionThread::runBodySolveStage(IterationState& iteration)
@@ -1043,23 +1306,35 @@ void VisionThread::runOutputStage(IterationState& iteration)
 	// expressions advance exactly once per frame
 	m_faceRunner.evaluate(iteration.outputResult.face, iteration.outputResult.timestampMs);
 
-	// In direct mode the streamer and the window take the solver's pose: a
-	// camera frame solves a fresh one, a face-only frame repeats the last
-	if (iteration.bDirect)
-		solveDirectPose(iteration);
-	const bool bDirectPose= isDirectModeActive();
-	if (!bDirectPose)
-		m_directPose.clear();
+	// The retarget stage, every output frame and ahead of the streamer's
+	// send-rate gate, so its holds and filters advance on every frame. In
+	// direct mode a camera frame runs the direct pipeline and a face-only
+	// frame repeats its result. Any other frame, and a direct frame the
+	// direct pipeline cannot solve, runs the position pipeline.
+	if (!isDirectModeActive())
+		m_bDirectRetarget= false;
+	else if (iteration.bDirect)
+		m_bDirectRetarget= solveDirectRetarget(iteration);
+	if (!m_bDirectRetarget)
+		m_retargetStage.solvePosition(iteration.outputResult, m_retarget);
 
 	if (m_oscStreamer != nullptr)
-		m_oscStreamer->sendFrame(iteration.outputResult, bDirectPose ? &m_directPose : nullptr);
+		m_oscStreamer->sendFrame(iteration.outputResult, m_retarget);
 
 	// Publish the result (latest-wins)
 	{
 		std::lock_guard<std::mutex> lock(m_fusedMutex);
 		m_fusedResult= iteration.outputResult;
-		m_fusedDirectPose= m_directPose;
-		m_fusedDirectState= bDirectPose ? m_directRetarget.getSolveState() : DirectRetarget::SolveState();
+		m_fusedRetarget= m_retarget;
+		// A camera frame publishes what its fuse reported, and a passthrough
+		// or direct frame, which ran no fuse, an empty report
+		if (iteration.bAnyNewResult)
+		{
+			if (iteration.bAnyWorldCandidate && !iteration.bDirect)
+				m_fusedDiagnostics= m_fusion.getLastDiagnostics();
+			else
+				m_fusedDiagnostics= FusionDiagnostics();
+		}
 		m_bFusedFresh= true;
 	}
 	m_lastOutputResult= iteration.outputResult;
@@ -1164,7 +1439,14 @@ bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 	// timestamp regression, which the gate answers by sending that frame.
 	iteration.outputResult= m_lastOutputResult;
 	iteration.outputResult.timestampMs= sampleTimestampMs;
-	const double holdMs= (double)m_config->osc.holdOnDropoutMs;
+	// The dropout window is the longest hold the position pipeline's arms
+	// take from their chains
+	double holdMs= 0.0;
+	for (const ChainLossPolicy& arm : m_retargetStage.getConfig().positionLoss.arms)
+	{
+		if (arm.hold == eLossHold::Timed)
+			holdMs= std::max(holdMs, (double)arm.holdMs);
+	}
 	if (m_lastCameraOutputMs < 0.0 || sampleTimestampMs - m_lastCameraOutputMs > holdMs)
 	{
 		for (HandPose& pose : iteration.outputResult.poses)
@@ -1236,7 +1518,7 @@ void VisionThread::runCalibrationCaptures()
 	if (m_bNeutralCaptureRequested.exchange(false))
 	{
 		NeutralCapture capture;
-		if (m_directRetarget.captureNeutral(capture.neutral))
+		if (m_retargetStage.captureNeutral(capture.neutral))
 		{
 			{
 				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
@@ -1333,7 +1615,12 @@ void VisionThread::runDiagnosticsStage(IterationState& iteration)
 		{
 			RecordedCameraInput input;
 			if (context->consumePendingRecordInput(input))
+			{
+				// Display only: the step times of the frame this input came from
+				input.bHaveCaptureTimings= true;
+				input.captureTimings= context->getLastResult().result.captureTimings;
 				recordFrame.freshCameras.push_back(std::move(input));
+			}
 		}
 		// The mouth stage's newest frame, tied to the sidecar's stream when
 		// it is the one the sidecar records
@@ -1346,9 +1633,12 @@ void VisionThread::runDiagnosticsStage(IterationState& iteration)
 			recordFrame.mouth.audioFrameIndex=
 				m_bRecordingAudio && mouth.captureEpoch == m_recordingAudioEpoch ? mouth.audioFrameIndex : -1;
 		}
+		// The stage state behind this frame, for a replay to show
+		gatherRecordedTelemetry(getCameraIterationPath(iteration), iteration.phaseMs, iteration.newestTimestampMs,
+								recordFrame.telemetry);
 		m_recorder->enqueueFrame(std::move(recordFrame));
 	}
 
 	if (m_bDumpRequested.exchange(false))
-		performDiagnosticDump(m_lastOutputResult);
+		performDiagnosticDump(m_lastOutputResult, getCameraIterationPath(iteration), iteration.phaseMs);
 }

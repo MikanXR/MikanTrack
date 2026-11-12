@@ -1,31 +1,78 @@
 #pragma once
 
 #include <array>
-#include <optional>
 #include <string>
 
-#include "AvatarFaceTab.h"
 #include "AvatarMapFigure.h"
+#include "ExprParameterField.h" // ExprParameterLiveValue
+#include "RetargetStage.h"      // RetargetResult
 
 class App;
 class AppConfig;
+struct RetargetChains;
 
-// The avatar panel: which VRM is loaded and what the loader read from it
-// (Model), the humanoid map with its per-bone overrides and rotation trims
-// (Mapping), and the elbow hints and hand tweaks plus a preview pose to tune
-// them against (Retarget), and the face profiles (Face, see AvatarFaceTab).
+// The chains of the avatar the Retarget stage's settings show one at a time,
+// in the order of their row
+enum class eRetargetChain
+{
+	Torso,
+	Head,
+	LeftArm,
+	RightArm,
+	LeftHand,
+	RightHand,
+	Count,
+};
+
+// The Retarget stage's sections, which the Inspector hosts: which VRM is
+// loaded and what the loader read from it, its placement, the humanoid map
+// with its per-bone overrides (Mapping), a preview pose to tune against, and
+// the chains, one at a time: each chain's rig corrections and the project's
+// chain settings. The face profiles are the Profile stage's (see
+// AvatarFaceTab). Owns the preview pose, the elbow gizmo toggles, the
+// mapping view's selection and the chain selection.
 // Loading goes through App (the model is main-thread, GL-adjacent state);
-// placement edits go to the persisted AvatarConfig and rig edits to
-// App::setAvatarRig.
+// placement edits go to the persisted AvatarConfig, rig edits to
+// App::setAvatarRig and chain edits to App::setRetargetChains.
 class AvatarPanel
 {
 public:
 	AvatarPanel(App* app, AppConfig* config);
 
-	// face: the frame the scene shows, for the Face tab's live values.
-	// activeEdit: the row the expression editor is on (null: none). Returns
-	// the row whose Edit button the Face tab saw pressed this frame.
-	std::optional<FaceExprEditTarget> draw(bool* pOpen, const FaceSources& face, const FaceExprEditTarget* activeEdit);
+	// Per-frame state, run every frame whether or not a section is drawn:
+	// the preview pose falls back to Live and the chain selection to the
+	// left arm while no model is loaded
+	void update();
+
+	// What the load controls' buttons and the File menu's items run: the
+	// open-file dialog and a load, and an unload, each persisting the
+	// project's model path
+	void loadAvatarFromDialog();
+	void unloadAvatar();
+
+	// The sections, each drawable in a host window, and twice in one frame.
+	// All but the load controls and the chains need a loaded model;
+	// drawModelSummary and drawMapping draw nothing without one.
+	void drawLoadControls();
+	void drawModelSummary();
+	void drawPlacement();
+	// The view buttons, the figure, the reset, the filter and the bone table
+	void drawMapping();
+	void drawPreviewPose();
+	// The chain row and the selected chain's settings. Without a model the
+	// row holds the two arms and an arm shows its loss controls only, the
+	// rules the stream applies to the measured-length skeleton.
+	void drawChains();
+
+	// The chain the settings show. A setter for whatever else picks a chain
+	// (the row, automation); without a model only an arm can be selected.
+	eRetargetChain getSelectedChain() const { return m_selectedChain; }
+	// False, and no change, for a chain the loaded model cannot show
+	bool setSelectedChain(eRetargetChain chain);
+	// The chain's id, the key of its block in the project's chain settings
+	// ("torso", "head", "leftArm", "rightArm", "leftHand", "rightHand")
+	static const char* getChainId(eRetargetChain chain);
+	static bool parseChainId(const std::string& id, eRetargetChain& outChain);
 
 	// What the 3D scene's avatar is posed from. Rest and Demo are canned
 	// frames for tuning the rig without cameras; the VMC output always
@@ -40,17 +87,32 @@ public:
 	// Whether an arm's elbow hint is shown as a draggable gizmo in the scene
 	bool getShowElbowGizmo(int sideIndex) const { return m_bShowElbowGizmo[sideIndex]; }
 
+	// The result the scene shows, or null when nothing was solved: what each
+	// arm's parameters evaluated to, which the parameter fields draw, and the
+	// position solve's wrist goals
+	void setShownResult(const RetargetResult* result);
+	// A parameter's live value as the field draws it
+	static ExprParameterLiveValue toLiveValue(const RetargetParameterReadout& readout);
+	const std::array<RetargetArmReadout, 2>& getShownArmParameters() const { return m_shownArmParameters; }
+	const AvatarRetargetGoals& getShownGoals() const { return m_shownGoals; }
+
 private:
-	void drawLoadControls();
-	void drawModelTab();
-	void drawModelSummary();
-	void drawPlacement();
-	void drawMappingTab();
 	void drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states);
-	void drawRetargetTab();
-	void drawArmControls(int sideIndex);
-	void drawHandControls(int sideIndex);
 	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> computeDotStates() const;
+
+	// A model and its skeleton are loaded
+	bool hasAvatar() const;
+	// The direct pipeline poses the avatar: a direct project with a model.
+	// Without a model the position pipeline's stream runs in either shape.
+	bool isDirectPipeline() const;
+	void drawChainRow(bool bAvatar);
+	void drawTorsoChain();
+	void drawHeadChain();
+	void drawArmChain(int sideIndex, bool bAvatar);
+	// The arm's loss controls, edited in chains: the hold as the pipeline
+	// performs it, then what follows it; true when anything changed
+	bool drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains);
+	void drawHandChain(int sideIndex);
 
 	App* m_app;
 	AppConfig* m_config;
@@ -60,8 +122,9 @@ private:
 	bool m_bScrollToSelected= false;
 	char m_nodeFilter[64]= {};
 
-	AvatarFaceTab m_faceTab;
-
 	ePreviewPose m_previewPose= ePreviewPose::Live;
 	bool m_bShowElbowGizmo[2]= {false, false};
+	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
+	std::array<RetargetArmReadout, 2> m_shownArmParameters{};
+	AvatarRetargetGoals m_shownGoals;
 };

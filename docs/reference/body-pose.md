@@ -24,7 +24,7 @@ The detector's output box is a face box, not a person box. Only its keypoints ar
 
 `RtmPoseModel` (`src/Vision/RtmPoseModel.h`) runs the two OpenMMLab SimCC landmark models, which share everything but their sizes: the input size, the keypoint count and the presence of a depth axis are read from the model's own tensor shapes at load (the MMDeploy export leaves the keypoint dimension dynamic, so that one is read off the first run's output). Both are top-down: the caller supplies the person box, and each keypoint is predicted independently inside it with its own score. There is no full-body prior, so a joint outside the frame degrades to a low score instead of being invented. BlazePose landmarking was evaluated and removed as a poor fit: it always emits one coherent full body, so a subject truncated at a desk makes it fabricate the unseen legs, and its self-referential crop cannot recover (see [LEARNINGS.md](../../LEARNINGS.md)).
 
-The backend per camera (`eBodyPoseBackend`, `bodyPose.backend` in the camera config, the Model combo beside the camera's checkbox in the Tracking panel):
+The backend per camera (`eBodyPoseBackend`, `bodyPose.backend` in the camera config, the Model combo beside the camera's checkbox in the camera's Body model stage):
 
 - `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model and the metric rig's choice, where depth comes from the triangulated wrists
 - `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint, the single-camera direct mode's choice, where that depth is all the depth there is

@@ -48,6 +48,50 @@ eHumanoidBone fingerBone(int sideIndex, int finger, int phalanx)
 	return (eHumanoidBone)((int)firstHumanoidFingerBone(sideIndex) + finger * 3 + phalanx);
 }
 
+glm::vec3 solveTwoBoneElbow(const glm::vec3& shoulder, const glm::vec3& wrist, float upperArm, float forearm,
+							const glm::vec3& polePoint, const glm::vec3& fallbackPoleDirection,
+							const glm::vec3& restDirection)
+{
+	const glm::vec3 toWrist= wrist - shoulder;
+	const float reach= glm::length(toWrist);
+	const glm::vec3 axis= reach > 1e-6f ? toWrist / reach : restDirection;
+
+	// At (or within rounding of) full reach the arm is straight; the bend
+	// direction is meaningless there and would only jitter
+	if (reach >= (upperArm + forearm) * (1.f - 1e-5f))
+		return shoulder + axis * upperArm;
+
+	// Law of cosines: distance along the axis from the shoulder to the
+	// elbow circle's center, then the circle's radius
+	float along= (upperArm * upperArm - forearm * forearm + reach * reach) / std::max(2.f * reach, 1e-6f);
+	along= std::clamp(along, -upperArm, upperArm);
+	const float radius= std::sqrt(std::max(upperArm * upperArm - along * along, 0.f));
+	const glm::vec3 center= shoulder + axis * along;
+
+	glm::vec3 bend= projectPerpendicular(polePoint - center, axis);
+	if (glm::dot(bend, bend) < 1e-8f)
+		bend= projectPerpendicular(fallbackPoleDirection, axis);
+	if (glm::dot(bend, bend) < 1e-8f)
+	{
+		// The pole sits on the arm axis: any perpendicular will do, chosen
+		// deterministically
+		bend= glm::cross(axis, glm::vec3(0.f, 0.f, 1.f));
+		if (glm::dot(bend, bend) < 1e-8f)
+			bend= glm::cross(axis, glm::vec3(1.f, 0.f, 0.f));
+	}
+	return center + safeNormalize(bend) * radius;
+}
+
+void pullArmTowardGoal(const glm::vec3& shoulder, const glm::vec3& angleElbow, const glm::vec3& angleWrist,
+					   const glm::vec3& goal, const glm::vec3& polePoint, float ikWeight, float upperArm, float forearm,
+					   const glm::vec3& fallbackPoleDirection, const glm::vec3& restDirection, glm::vec3& outElbow,
+					   glm::vec3& outWrist)
+{
+	outWrist= angleWrist + (goal - angleWrist) * ikWeight;
+	const glm::vec3 pole= angleElbow + (polePoint - angleElbow) * ikWeight;
+	outElbow= solveTwoBoneElbow(shoulder, outWrist, upperArm, forearm, pole, fallbackPoleDirection, restDirection);
+}
+
 glm::quat swingTo(const glm::quat& parentDelta, const glm::vec3& rootedRestDirection, const glm::vec3& worldDirection)
 {
 	return glm_shortest_arc(parentDelta * rootedRestDirection, worldDirection) * parentDelta;

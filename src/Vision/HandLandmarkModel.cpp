@@ -11,8 +11,11 @@
 
 static constexpr int kHandInputSize= 224;
 
+// The crop is sampled at up to this many times the model resolution and box
+// filtered down, so a large hand is averaged rather than point sampled
+static constexpr int kMaxSupersample= 2;
+
 // mp_handpose.py crop constants
-static constexpr float kPalmBoxPreEnlargeFactor= 4.f;
 static constexpr float kPalmBoxShiftY= -0.4f;
 static constexpr float kPalmBoxEnlargeFactor= 3.f;
 static constexpr float kHandBoxShiftY= -0.1f;
@@ -73,69 +76,6 @@ bool HandLandmarkModel::load(const std::string& modelPath, const std::string& pr
 	return true;
 }
 
-// Port of mp_handpose.py::_cropAndPadFromPalm.
-// Shifts/enlarges the palm box, clips it to the image, crops, and pads the
-// crop to a square (side= diagonal when forRotation so corners survive the
-// later rotation). Returns false on a degenerate (empty) crop.
-static bool cropAndPadFromPalm(
-	const cv::Mat& image,
-	glm::vec2 boxMin, glm::vec2 boxMax,
-	bool forRotation,
-	cv::Mat& outImage,
-	glm::ivec2& outClippedBoxMin, glm::ivec2& outClippedBoxMax,
-	glm::ivec2& outBias)
-{
-	// shift bounding box
-	const glm::vec2 wh= boxMax - boxMin;
-	const glm::vec2 shift= forRotation ? glm::vec2(0.f) : glm::vec2(0.f, kPalmBoxShiftY) * wh;
-	boxMin+= shift;
-	boxMax+= shift;
-
-	// enlarge bounding box
-	const glm::vec2 center= (boxMin + boxMax) * 0.5f;
-	const float enlarge= forRotation ? kPalmBoxPreEnlargeFactor : kPalmBoxEnlargeFactor;
-	const glm::vec2 halfSize= (boxMax - boxMin) * enlarge * 0.5f;
-
-	// int truncation matches numpy astype(np.int32)
-	glm::ivec2 intMin((int)(center.x - halfSize.x), (int)(center.y - halfSize.y));
-	glm::ivec2 intMax((int)(center.x + halfSize.x), (int)(center.y + halfSize.y));
-
-	// clip to image bounds
-	intMin.x= std::clamp(intMin.x, 0, image.cols);
-	intMin.y= std::clamp(intMin.y, 0, image.rows);
-	intMax.x= std::clamp(intMax.x, 0, image.cols);
-	intMax.y= std::clamp(intMax.y, 0, image.rows);
-
-	const int cropW= intMax.x - intMin.x;
-	const int cropH= intMax.y - intMin.y;
-	if (cropW <= 0 || cropH <= 0)
-		return false;
-
-	const cv::Mat crop= image(cv::Rect(intMin.x, intMin.y, cropW, cropH));
-
-	// pad to square so corner pixels survive rotation / keep aspect
-	const int sideLen=
-		forRotation
-		? (int)std::sqrt((double)cropW * cropW + (double)cropH * cropH)
-		: std::max(cropW, cropH);
-	const int padW= sideLen - cropW;
-	const int padH= sideLen - cropH;
-	const int left= padW / 2;
-	const int top= padH / 2;
-	// BORDER_ISOLATED: crop is a ROI view; without it BORDER_CONSTANT would
-	// pull real out-of-ROI pixels instead of black (the demo pads numpy
-	// slices, which always pad black)
-	cv::copyMakeBorder(
-		crop, outImage,
-		top, padH - top, left, padW - left,
-		cv::BORDER_CONSTANT | cv::BORDER_ISOLATED, cv::Scalar(0, 0, 0));
-
-	outClippedBoxMin= intMin;
-	outClippedBoxMax= intMax;
-	outBias= glm::ivec2(intMin.x - left, intMin.y - top);
-	return true;
-}
-
 void HandLandmarkModel::estimate(
 	const cv::Mat& bgrFrame,
 	const HandRoi& roi,
@@ -145,59 +85,100 @@ void HandLandmarkModel::estimate(
 	if (!m_session.isValid() || bgrFrame.empty())
 		return;
 
-	// -- Preprocess (mp_handpose.py::_preprocess) --
-	// 1) generous pre-crop around the palm box (diagonal-square padded)
-	glm::ivec2 clippedBoxMin, clippedBoxMax, bias;
-	if (!cropAndPadFromPalm(bgrFrame, roi.palmBoxMin, roi.palmBoxMax, true,
-							m_cropMat, clippedBoxMin, clippedBoxMax, bias))
-		return;
+	// -- Preprocess (mp_handpose.py::_preprocess geometry, one resampling) --
+	// The crop is a square in the frame rotated so the wrist -> middle MCP
+	// direction points up. The rotated frame is only ever a coordinate
+	// system: no rotated image is built, and the square is sampled straight
+	// out of the source frame, so the cost is fixed by the model resolution
+	// rather than by how large the hand is.
 
-	cv::cvtColor(m_cropMat, m_rgbMat, cv::COLOR_BGR2RGB);
-	const glm::ivec2 padBias= bias;
-
-	// palm box + keypoints in crop coordinates
-	const glm::vec2 cropBoxMin= glm::vec2(clippedBoxMin - padBias);
-	const glm::vec2 cropBoxMax= glm::vec2(clippedBoxMax - padBias);
-	std::array<glm::vec2, 7> cropKeypoints;
-	for (int i= 0; i < 7; ++i)
-		cropKeypoints[i]= roi.palmKeypoints[i] - glm::vec2(padBias);
-
-	// 2) rotation from wrist (kp0) -> middle MCP (kp2)
-	const float radians= PalmDetector::computeRotation(cropKeypoints[0], cropKeypoints[2]);
+	// 1) rotation from wrist (kp0) -> middle MCP (kp2), about the palm box center
+	const float radians= PalmDetector::computeRotation(roi.palmKeypoints[0], roi.palmKeypoints[2]);
 	const double angleDeg= (double)radians * 180.0 / 3.14159265358979;
-
-	const glm::vec2 rotationCenter= (cropBoxMin + cropBoxMax) * 0.5f;
-	const cv::Mat rotationMatrix=
+	const glm::vec2 rotationCenter= (roi.palmBoxMin + roi.palmBoxMax) * 0.5f;
+	const cv::Mat rotatedFromImage=
 		cv::getRotationMatrix2D(cv::Point2f(rotationCenter.x, rotationCenter.y), angleDeg, 1.0);
-	cv::warpAffine(m_rgbMat, m_rotatedMat, rotationMatrix, m_rgbMat.size());
+	cv::Mat imageFromRotated;
+	cv::invertAffineTransform(rotatedFromImage, imageFromRotated);
 
-	// rotate the palm keypoints and take their bounding box
-	auto applyAffine= [&rotationMatrix](const glm::vec2& p) -> glm::vec2 {
-		const double* m0= rotationMatrix.ptr<double>(0);
-		const double* m1= rotationMatrix.ptr<double>(1);
+	auto applyAffine= [](const cv::Mat& m, const glm::vec2& p) -> glm::vec2 {
+		const double* m0= m.ptr<double>(0);
+		const double* m1= m.ptr<double>(1);
 		return glm::vec2(
 			(float)(m0[0] * p.x + m0[1] * p.y + m0[2]),
 			(float)(m1[0] * p.x + m1[1] * p.y + m1[2]));
 	};
-	glm::vec2 rotatedKpMin= applyAffine(cropKeypoints[0]);
+
+	// 2) rotated palm keypoint bbox, shifted [0,-0.4], enlarged 3x, padded to
+	// a square about its center (int truncation matches numpy astype(np.int32))
+	glm::vec2 rotatedKpMin= applyAffine(rotatedFromImage, roi.palmKeypoints[0]);
 	glm::vec2 rotatedKpMax= rotatedKpMin;
 	for (int i= 1; i < 7; ++i)
 	{
-		const glm::vec2 p= applyAffine(cropKeypoints[i]);
+		const glm::vec2 p= applyAffine(rotatedFromImage, roi.palmKeypoints[i]);
 		rotatedKpMin= glm::min(rotatedKpMin, p);
 		rotatedKpMax= glm::max(rotatedKpMax, p);
 	}
-
-	// 3) final crop: rotated keypoint bbox shifted [0,-0.4], enlarged 3x
-	glm::ivec2 rotatedBoxMin, rotatedBoxMax, unusedBias;
-	if (!cropAndPadFromPalm(m_rotatedMat, rotatedKpMin, rotatedKpMax, false,
-							m_finalCropMat, rotatedBoxMin, rotatedBoxMax, unusedBias))
+	const glm::vec2 kpExtent= rotatedKpMax - rotatedKpMin;
+	const glm::vec2 boxCenter=
+		(rotatedKpMin + rotatedKpMax) * 0.5f + glm::vec2(0.f, kPalmBoxShiftY) * kpExtent;
+	const glm::vec2 boxHalfSize= kpExtent * kPalmBoxEnlargeFactor * 0.5f;
+	const glm::ivec2 boxMin((int)(boxCenter.x - boxHalfSize.x), (int)(boxCenter.y - boxHalfSize.y));
+	const glm::ivec2 boxMax((int)(boxCenter.x + boxHalfSize.x), (int)(boxCenter.y + boxHalfSize.y));
+	const int side= std::max(boxMax.x - boxMin.x, boxMax.y - boxMin.y);
+	if (side <= 0)
 		return;
+	const glm::ivec2 padBefore((side - (boxMax.x - boxMin.x)) / 2, (side - (boxMax.y - boxMin.y)) / 2);
+	const glm::vec2 squareMin= glm::vec2(boxMin - padBefore);
+	const glm::vec2 squareCenter= squareMin + glm::vec2(0.5f * (float)side);
 
-	cv::resize(m_finalCropMat, m_resizedMat, cv::Size(kHandInputSize, kHandInputSize), 0.0, 0.0, cv::INTER_AREA);
+	// A square wholly off the frame would feed the model a black image
+	{
+		glm::vec2 imageMin= applyAffine(imageFromRotated, squareMin);
+		glm::vec2 imageMax= imageMin;
+		const glm::vec2 corners[3]= {
+			squareMin + glm::vec2((float)side, 0.f),
+			squareMin + glm::vec2(0.f, (float)side),
+			squareMin + glm::vec2((float)side)};
+		for (const glm::vec2& corner : corners)
+		{
+			const glm::vec2 p= applyAffine(imageFromRotated, corner);
+			imageMin= glm::min(imageMin, p);
+			imageMax= glm::max(imageMax, p);
+		}
+		if (imageMax.x <= 0.f || imageMax.y <= 0.f || imageMin.x >= (float)bgrFrame.cols ||
+			imageMin.y >= (float)bgrFrame.rows)
+			return;
+	}
+
+	// 3) one warp from the frame into the square at the sampling resolution,
+	// black outside the frame. Output pixel u samples the rotated frame at
+	// squareMin + (u + 0.5) * step - 0.5, the pixel-center mapping a resize
+	// uses, composed with the inverse rotation.
+	const int supersample= std::clamp((side + kHandInputSize - 1) / kHandInputSize, 1, kMaxSupersample);
+	const int sampleSize= kHandInputSize * supersample;
+	const double step= (double)side / (double)sampleSize;
+	const double* inv0= imageFromRotated.ptr<double>(0);
+	const double* inv1= imageFromRotated.ptr<double>(1);
+	const double originX= (double)squareMin.x + 0.5 * step - 0.5;
+	const double originY= (double)squareMin.y + 0.5 * step - 0.5;
+	const cv::Matx23d imageFromSample(
+		inv0[0] * step, inv0[1] * step, inv0[0] * originX + inv0[1] * originY + inv0[2],
+		inv1[0] * step, inv1[1] * step, inv1[0] * originX + inv1[1] * originY + inv1[2]);
+	cv::warpAffine(
+		bgrFrame, m_sampledMat, imageFromSample, cv::Size(sampleSize, sampleSize),
+		cv::INTER_LINEAR | cv::WARP_INVERSE_MAP, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+
+	const cv::Mat* modelSizedMat= &m_sampledMat;
+	if (supersample > 1)
+	{
+		cv::resize(m_sampledMat, m_resizedMat, cv::Size(kHandInputSize, kHandInputSize), 0.0, 0.0, cv::INTER_AREA);
+		modelSizedMat= &m_resizedMat;
+	}
+	cv::cvtColor(*modelSizedMat, m_rgbMat, cv::COLOR_BGR2RGB);
 
 	cv::Mat inputMat(kHandInputSize, kHandInputSize, CV_32FC3, m_inputBuffer.data());
-	m_resizedMat.convertTo(inputMat, CV_32FC3, 1.0 / 255.0);
+	m_rgbMat.convertTo(inputMat, CV_32FC3, 1.0 / 255.0);
 
 	const std::array<int64_t, 4> inputShape= {1, kHandInputSize, kHandInputSize, 3};
 	Ort::Value inputTensor= Ort::Value::CreateTensor<float>(
@@ -213,47 +194,29 @@ void HandLandmarkModel::estimate(
 	outResult.confidence= outputs[m_confidenceOutputIndex].GetTensorData<float>()[0];
 	outResult.handedness= outputs[m_handednessOutputIndex].GetTensorData<float>()[0];
 
-	// scale from 224-crop space back to rotated-crop pixels
-	const glm::vec2 whRotatedBox= glm::vec2(rotatedBoxMax - rotatedBoxMin);
-	const float scaleFactor=
-		std::max(whRotatedBox.x, whRotatedBox.y) / (float)kHandInputSize;
+	// scale from 224-crop space back to rotated-frame pixels
+	const float scaleFactor= (float)side / (float)kHandInputSize;
 
-	// de-rotation matrix applied as row-vector * R (np.dot(lm, R[:, :2]))
-	const cv::Mat coordsRotationMatrix= cv::getRotationMatrix2D(cv::Point2f(0.f, 0.f), angleDeg, 1.0);
-	const double r00= coordsRotationMatrix.at<double>(0, 0);
-	const double r01= coordsRotationMatrix.at<double>(0, 1);
-	const double r10= coordsRotationMatrix.at<double>(1, 0);
-	const double r11= coordsRotationMatrix.at<double>(1, 1);
-	auto deRotate= [&](const glm::vec2& p) -> glm::vec2 {
+	// rotation-only part of the inverse rotation, for directions
+	auto deRotate= [inv0, inv1](const glm::vec2& p) -> glm::vec2 {
 		return glm::vec2(
-			(float)(p.x * r00 + p.y * r10),
-			(float)(p.x * r01 + p.y * r11));
+			(float)(inv0[0] * p.x + inv0[1] * p.y),
+			(float)(inv1[0] * p.x + inv1[1] * p.y));
 	};
-
-	// inverse of the first-stage rotation matrix, applied to the crop center
-	const double m00= rotationMatrix.at<double>(0, 0);
-	const double m01= rotationMatrix.at<double>(0, 1);
-	const double m02= rotationMatrix.at<double>(0, 2);
-	const double m10= rotationMatrix.at<double>(1, 0);
-	const double m11= rotationMatrix.at<double>(1, 1);
-	const double m12= rotationMatrix.at<double>(1, 2);
-	const glm::vec2 rotatedCenter= glm::vec2(rotatedBoxMin + rotatedBoxMax) * 0.5f;
-	const glm::vec2 originalCenter(
-		(float)(rotatedCenter.x * m00 + rotatedCenter.y * m10 + (-(m00 * m02 + m10 * m12))),
-		(float)(rotatedCenter.x * m01 + rotatedCenter.y * m11 + (-(m01 * m02 + m11 * m12))));
-
-	const glm::vec2 finalOffset= originalCenter + glm::vec2(padBias);
 
 	glm::vec2 lmMin(0.f), lmMax(0.f);
 	for (int i= 0; i < HAND_LANDMARK_COUNT; ++i)
 	{
-		// crop-space -> centered/scaled -> de-rotated -> translated
-		const glm::vec2 centered(
-			(landmarkData[i * 3 + 0] - (float)kHandInputSize * 0.5f) * scaleFactor,
-			(landmarkData[i * 3 + 1] - (float)kHandInputSize * 0.5f) * scaleFactor);
+		// crop space -> rotated frame about the square center -> frame
+		const glm::vec2 rotatedPos=
+			squareCenter +
+			glm::vec2(
+				landmarkData[i * 3 + 0] - (float)kHandInputSize * 0.5f,
+				landmarkData[i * 3 + 1] - (float)kHandInputSize * 0.5f) *
+				scaleFactor;
 		const float z= landmarkData[i * 3 + 2] * scaleFactor;
 
-		const glm::vec2 imagePos= deRotate(centered) + finalOffset;
+		const glm::vec2 imagePos= applyAffine(imageFromRotated, rotatedPos);
 		outResult.imagePoints[i]= glm::vec3(imagePos, z);
 
 		// world landmarks: de-rotate x/y, keep z (meters, hand-centered)
@@ -276,23 +239,24 @@ void HandLandmarkModel::estimate(
 	{
 		const glm::vec2 wh= lmMax - lmMin;
 		const glm::vec2 shift= glm::vec2(0.f, kHandBoxShiftY) * wh;
-		const glm::vec2 boxMin= lmMin + shift;
-		const glm::vec2 boxMax= lmMax + shift;
-		const glm::vec2 center= (boxMin + boxMax) * 0.5f;
-		const glm::vec2 halfSize= (boxMax - boxMin) * kHandBoxEnlargeFactor * 0.5f;
+		const glm::vec2 boxMinShifted= lmMin + shift;
+		const glm::vec2 boxMaxShifted= lmMax + shift;
+		const glm::vec2 center= (boxMinShifted + boxMaxShifted) * 0.5f;
+		const glm::vec2 halfSize= (boxMaxShifted - boxMinShifted) * kHandBoxEnlargeFactor * 0.5f;
 		outResult.handBoxMin= center - halfSize;
 		outResult.handBoxMax= center + halfSize;
 	}
 
-	// debug box: the final crop region mapped back to full-frame pixels
+	// debug box: the sampled square mapped back to full-frame pixels
 	{
+		const float s= (float)side;
 		const glm::vec2 corners[4]= {
-			glm::vec2(rotatedBoxMin),
-			glm::vec2((float)rotatedBoxMin.x, (float)rotatedBoxMax.y),
-			glm::vec2(rotatedBoxMax),
-			glm::vec2((float)rotatedBoxMax.x, (float)rotatedBoxMin.y)};
+			squareMin,
+			squareMin + glm::vec2(0.f, s),
+			squareMin + glm::vec2(s),
+			squareMin + glm::vec2(s, 0.f)};
 		for (int i= 0; i < 4; ++i)
-			outResult.usedRoi.corners[i]= deRotate(corners[i] - rotatedCenter) + finalOffset;
+			outResult.usedRoi.corners[i]= applyAffine(imageFromRotated, corners[i]);
 		outResult.usedRoi.rotationRadians= radians;
 		outResult.usedRoi.score= outResult.confidence;
 	}

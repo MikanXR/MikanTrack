@@ -37,6 +37,9 @@ constexpr float kFrameMarginPx= 16.f;
 // widths, is not the hand: the palm detector runs over the whole frame and
 // fires on hand-shaped things in the scene
 constexpr float kHandAgreementShoulderWidths= 0.5f;
+// Hand slots that sit on the opposite side's body wrist for this long, with
+// none on its own, are labelled the wrong way round
+constexpr double kHandednessSwapMs= 1000.0;
 // A group (torso, head, an arm) unseen for longer than this returns to rest,
 // and a gap longer than this restarts the filters. An arm earns its hold:
 // it is held for as long as it was continuously placed plus one frame, up
@@ -47,10 +50,6 @@ constexpr double kMaxHoldMs= 500.0;
 // is not on the person
 constexpr float kMinBodyDepthMeters= 0.15f;
 constexpr float kMaxBodyDepthMeters= 2.0f;
-// Joint limits on the relative rotations, radians
-constexpr float kHeadLimitRadians= 70.f * glm::pi<float>() / 180.f;
-constexpr float kWristLimitRadians= 80.f * glm::pi<float>() / 180.f;
-constexpr float kSpineLimitRadians= 45.f * glm::pi<float>() / 180.f;
 
 // One-euro bands. Pixels are accurate and fast, so their band is light.
 // Depths are the single view's guess and the quantity that jumps, so their
@@ -100,6 +99,17 @@ constexpr float kPnpSampleMaxReach= 0.98f;
 // mirror until it persists this many consecutive frames
 constexpr float kPalmJumpRadians= 60.f * glm::pi<float>() / 180.f;
 constexpr int kPalmJumpAcceptFrames= 2;
+// The lifted palm's mirror along the view ray is taken on how much better
+// its finger axis continues the forearm than the lifted one's does, the
+// gain, which runs to 2 and is about 1 for a hand pointing along the forearm
+// at the camera. The gain is twice the finger axis's lean along the view ray
+// times the forearm's, so with the fingers upright it is near zero and its
+// sign is noise, while the mirror turns an edge-on palm's normal right
+// round. So the mirror is taken above one bar and kept above a lower one,
+// and under that the lifted palm stands. Upright hands turned about the
+// wrist, which need no mirror, reach a gain of 0.3.
+constexpr float kPalmMirrorEnterGain= 0.5f;
+constexpr float kPalmMirrorLeaveGain= 0.3f;
 
 const glm::vec3 k_up(0.f, 0.f, 1.f);
 const glm::vec3 k_left(0.f, 1.f, 0.f);
@@ -140,12 +150,6 @@ bool advanceGate(bool bEvidence, int& frames, bool& bAccepted)
 double earnedHoldMs(double sightingStartMs, double solvedTimestampMs, double frameMs)
 {
 	return std::min(std::max(solvedTimestampMs - sightingStartMs, 0.0) + frameMs, kMaxHoldMs);
-}
-
-float smoothstep(float t)
-{
-	t= std::clamp(t, 0.f, 1.f);
-	return t * t * (3.f - 2.f * t);
 }
 
 // A rotation from a forward and a left that may not be exactly
@@ -237,10 +241,11 @@ bool handFromPalm(const glm::vec3& forearmDirection, const glm::vec3& restPalmNo
 // avatar's trimmed rest palm frame under the posed forearm: a straight
 // wrist is the avatar's rest wrist, since the user's hands carry no
 // reference, a single view's palm at one instant being too unsure to be
-// subtracted from every later frame) and the fingers
+// subtracted from every later frame, within wristLimitRadians) and the
+// fingers
 void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
 			  const DirectRetarget::ArmPlacement& placement, const AvatarRetargetConfig::Side& sideConfig,
-			  AvatarPose& outPose)
+			  float wristLimitRadians, AvatarPose& outPose)
 {
 	const eHandSide side= (eHandSide)sideIndex;
 	const B upperArmBone= sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm);
@@ -255,7 +260,7 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 	placeBone(outPose, skeleton, lowerArmBone, chainDelta);
 
 	const AvatarSkeleton::HandRest& handRest= skeleton.getHand(side);
-	const glm::quat relative= limitRotationAngle(placement.wristRotation, kWristLimitRadians);
+	const glm::quat relative= limitRotationAngle(placement.wristRotation, wristLimitRadians);
 	const glm::quat restLowerArm= skeleton.getBone(lowerArmBone).restRotationWorld;
 	const glm::quat trimmedRestPalm=
 		glm::quat_cast(glm::mat3(handRest.palmFrameWorld)) * glm::quat(sideConfig.handTrimRadians);
@@ -268,33 +273,77 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 					 skeleton.getBone(handBone).restPositionWorld, placement.fingers, sideConfig, outPose);
 }
 
-// The rest placement from the rig: the chain's directions from the rest
-// offsets, under the lean; the palm facing the rest normal, through the
-// same hand math as a measured palm (a normal along the forearm leaves the
-// wrist straight); the four fingers curled, the thumb at the avatar's rest
-DirectRetarget::ArmPlacement restPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
-										   const AvatarRetargetConfig::Side& sideConfig)
+// An arm's placement with its chain's directions pulled from its bone angles
+// toward a goal by the arm's IK weight, the twist, the wrist and the fingers
+// kept, so they ride on the posed forearm as the bone angles place them. The
+// world is the posed avatar's, whose axes are the solve's (the two differ by
+// a translation), so the source's offsets carry across as they are, and in
+// the avatar's units. avatarShoulder is the posed upper-arm joint.
+void pullPlacementTowardGoal(const SourcePose& source, const AvatarSkeleton& skeleton, int sideIndex,
+							 const glm::quat& spineDelta, const glm::vec3& avatarShoulder,
+							 const AvatarRetargetArm& armSettings, const AvatarRetargetConfig::Side& sideConfig,
+							 DirectRetarget::ArmPlacement& ioPlacement, AvatarRetargetGoals* outGoals)
 {
 	const eHandSide side= (eHandSide)sideIndex;
-	DirectRetarget::ArmPlacement rest;
-	rest.upperDirection= safeNormalize(spineDelta * sideConfig.restElbowOffset);
-	rest.forearmDirection= safeNormalize(spineDelta * (sideConfig.restWristOffset - sideConfig.restElbowOffset));
-	const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, rest.upperDirection, rest.forearmDirection);
-	const glm::vec3 palmZ=
-		safeNormalize(projectPerpendicular(spineDelta * sideConfig.restPalmNormal, swing.forearmDirection));
-	if (glm::dot(palmZ, palmZ) > 0.f)
+	const SourcePose::Arm& sourceArm= source.arms[sideIndex];
+	const B lowerArmBone= sideBone(sideIndex, B::LeftLowerArm, B::RightLowerArm);
+	const float upperArm= skeleton.getUpperArmLength(side);
+	const float forearm= skeleton.getForearmLength(side);
+	const float avatarReach= upperArm + forearm;
+
+	// The arm as its bone angles place it: the directions the swings take
+	const ChainSwing swing=
+		swingChain(skeleton, sideIndex, spineDelta, ioPlacement.upperDirection, ioPlacement.forearmDirection);
+	const glm::vec3 angleUpper= swing.upperDelta * restDirection(skeleton, lowerArmBone);
+	const glm::vec3 angleElbow= avatarShoulder + angleUpper * upperArm;
+	const glm::vec3 angleWrist= angleElbow + swing.forearmDirection * forearm;
+
+	// The source's offsets from its shoulder: the chain's, or for an arm with
+	// no chain (one easing to rest) its directions at the source's lengths
+	glm::vec3 wristOffset;
+	glm::vec3 elbowOffset;
+	if (sourceArm.bHasShoulder && sourceArm.bHasElbow)
 	{
-		const glm::quat palm= palmFrame(swing.forearmDirection, palmZ);
-		handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, rest.twist,
-					 rest.wristRotation);
+		wristOffset= sourceArm.wristPosition - sourceArm.shoulderPosition;
+		elbowOffset= sourceArm.elbowPosition - sourceArm.shoulderPosition;
 	}
-	for (int finger= (int)eFinger::Index; finger < FINGER_COUNT; ++finger)
+	else
 	{
-		rest.fingers[finger].proximal= sideConfig.restFingerCurlRadians;
-		rest.fingers[finger].intermediate= sideConfig.restFingerCurlRadians;
-		rest.fingers[finger].distal= 0.5f * sideConfig.restFingerCurlRadians;
+		elbowOffset= angleUpper * source.upperArmLength;
+		wristOffset= elbowOffset + swing.forearmDirection * source.forearmLength;
 	}
-	return rest;
+
+	// The source's arm is the user's proportions in the avatar's units, so
+	// the reach scale's ratio is the avatar's arm over the source's
+	const float sourceReach= source.upperArmLength + source.forearmLength;
+	const float ratio= sourceReach > 1e-3f ? avatarReach / sourceReach : 1.f;
+	const float factor= reachFactor(armSettings.reachScale, ratio);
+	glm::vec3 goal= avatarShoulder + wristOffset * factor;
+	// The root is the identity, so the rooted torso frame is the world's
+	if (armSettings.goalOffset != glm::vec3(0.f))
+		goal+= armSettings.goalOffset;
+	if (outGoals != nullptr)
+	{
+		outGoals->bHasWristGoal[sideIndex]= true;
+		outGoals->wristGoalWorld[sideIndex]= goal;
+	}
+	const glm::vec3 toGoal= goal - avatarShoulder;
+	const float reach= glm::length(toGoal);
+	if (reach > avatarReach && reach > 1e-6f)
+		goal= avatarShoulder + toGoal * (avatarReach / reach);
+	const glm::vec3 polePoint= avatarShoulder + elbowOffset * factor;
+
+	const float ikWeight= std::min(armSettings.ikWeight, 1.f);
+	glm::vec3 elbow;
+	glm::vec3 wrist;
+	pullArmTowardGoal(avatarShoulder, angleElbow, angleWrist, goal, polePoint, ikWeight, upperArm, forearm,
+					  safeNormalize(sideConfig.elbowHintOffset), angleUpper, elbow, wrist);
+	const glm::vec3 upperDirection= safeNormalize(elbow - avatarShoulder);
+	const glm::vec3 forearmDirection= safeNormalize(wrist - elbow);
+	if (glm::dot(upperDirection, upperDirection) > 0.f)
+		ioPlacement.upperDirection= upperDirection;
+	if (glm::dot(forearmDirection, forearmDirection) > 0.f)
+		ioPlacement.forearmDirection= forearmDirection;
 }
 
 // A unit direction between two, falling to the target where they cancel
@@ -302,28 +351,6 @@ glm::vec3 mixDirection(const glm::vec3& from, const glm::vec3& to, float t)
 {
 	const glm::vec3 mixed= safeNormalize(glm::mix(from, to, t));
 	return glm::dot(mixed, mixed) > 0.f ? mixed : to;
-}
-
-// The placement part way from one to another: the directions and the
-// finger angles linearly, the twist by the shorter way round, the wrist
-// along the arc
-DirectRetarget::ArmPlacement blendPlacement(const DirectRetarget::ArmPlacement& from,
-											const DirectRetarget::ArmPlacement& to, float t)
-{
-	DirectRetarget::ArmPlacement out;
-	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
-	out.forearmDirection= mixDirection(from.forearmDirection, to.forearmDirection, t);
-	out.twist= from.twist + wrapAngle(to.twist - from.twist) * t;
-	out.wristRotation= glm::slerp(from.wristRotation, to.wristRotation, t);
-	for (int finger= 0; finger < FINGER_COUNT; ++finger)
-	{
-		out.fingers[finger].lateral= glm::mix(from.fingers[finger].lateral, to.fingers[finger].lateral, t);
-		out.fingers[finger].proximal= glm::mix(from.fingers[finger].proximal, to.fingers[finger].proximal, t);
-		out.fingers[finger].intermediate=
-			glm::mix(from.fingers[finger].intermediate, to.fingers[finger].intermediate, t);
-		out.fingers[finger].distal= glm::mix(from.fingers[finger].distal, to.fingers[finger].distal, t);
-	}
-	return out;
 }
 
 // The elbow for a wrist, both bone lengths held by construction: on the bone
@@ -379,11 +406,63 @@ void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::
 	}
 }
 
+DirectRetarget::ArmPlacement DirectRetarget::makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex,
+															   const glm::quat& spineDelta,
+															   const AvatarRetargetConfig::Side& sideConfig)
+{
+	// A normal along the forearm leaves the wrist straight
+	const eHandSide side= (eHandSide)sideIndex;
+	ArmPlacement rest;
+	rest.upperDirection= safeNormalize(spineDelta * sideConfig.restElbowOffset);
+	rest.forearmDirection= safeNormalize(spineDelta * (sideConfig.restWristOffset - sideConfig.restElbowOffset));
+	const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, rest.upperDirection, rest.forearmDirection);
+	const glm::vec3 palmZ=
+		safeNormalize(projectPerpendicular(spineDelta * sideConfig.restPalmNormal, swing.forearmDirection));
+	if (glm::dot(palmZ, palmZ) > 0.f)
+	{
+		const glm::quat palm= palmFrame(swing.forearmDirection, palmZ);
+		handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, rest.twist,
+					 rest.wristRotation);
+	}
+	for (int finger= (int)eFinger::Index; finger < FINGER_COUNT; ++finger)
+	{
+		rest.fingers[finger].proximal= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].intermediate= sideConfig.restFingerCurlRadians;
+		rest.fingers[finger].distal= 0.5f * sideConfig.restFingerCurlRadians;
+	}
+	return rest;
+}
+
+DirectRetarget::ArmPlacement DirectRetarget::blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t)
+{
+	ArmPlacement out;
+	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
+	out.forearmDirection= mixDirection(from.forearmDirection, to.forearmDirection, t);
+	out.twist= from.twist + wrapAngle(to.twist - from.twist) * t;
+	out.wristRotation= glm::slerp(from.wristRotation, to.wristRotation, t);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		out.fingers[finger].lateral= glm::mix(from.fingers[finger].lateral, to.fingers[finger].lateral, t);
+		out.fingers[finger].proximal= glm::mix(from.fingers[finger].proximal, to.fingers[finger].proximal, t);
+		out.fingers[finger].intermediate=
+			glm::mix(from.fingers[finger].intermediate, to.fingers[finger].intermediate, t);
+		out.fingers[finger].distal= glm::mix(from.fingers[finger].distal, to.fingers[finger].distal, t);
+	}
+	return out;
+}
+
 void DirectRetarget::reset()
+{
+	resetMeasure();
+	m_resetEpoch++;
+}
+
+void DirectRetarget::resetMeasure()
 {
 	m_state= SolveState();
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
+	m_handednessSwapStartMs= -1.0;
 	m_torso= TorsoState();
 	m_head= HeadState();
 	for (ArmState& arm : m_arms)
@@ -421,17 +500,22 @@ DirectRetarget::PnpScale DirectRetarget::getPnpScale(int sideIndex) const
 	return out;
 }
 
-void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
-						   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
-						   const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose)
+void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+							 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
+							 const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, SourcePose& outSource)
 {
+	using eGroupState= SourcePose::eGroupState;
+
 	// The frame clock. A regression (a replay scrub) or a gap past the hold
 	// starts over: nothing measured before it should shape what comes after.
 	if (m_bHasTime)
 	{
 		const double gapMs= timestampMs - m_lastTimestampMs;
 		if (gapMs < 0.0 || gapMs > kMaxHoldMs)
-			reset();
+		{
+			resetMeasure();
+			m_resetEpoch++;
+		}
 	}
 	if (!m_bFiltersConfigured)
 		configureFilters();
@@ -440,11 +524,13 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	m_bHasTime= true;
 	m_lastTimestampMs= timestampMs;
 
-	outPose.clear();
-	outPose.valid= true;
-	outPose.timestampMs= timestampMs;
-	// The root is fixed: the camera is the world and the user faces it
-	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
+	outSource= SourcePose();
+	outSource.pipeline= SourcePose::ePipeline::Direct;
+	// Any backward step restarts above, so the step clock is the frame's
+	outSource.clock.timestampMs= timestampMs;
+	outSource.clock.stepMs= timestampMs;
+	outSource.clock.frameIntervalMs= frameMs;
+	outSource.clock.resetEpoch= m_resetEpoch;
 
 	m_state= SolveState();
 	m_state.camera= cameraModel;
@@ -467,6 +553,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 	const float noseForward= config.noseForwardMeters * lengthScale;
 	const float torsoLength= std::max(
 		skeleton.getRestShoulderMidpointWorld().z - skeleton.getBone(B::Hips).restPositionWorld.z, 0.05f);
+	outSource.upperArmLength= config.userUpperArmLengthMeters * lengthScale;
+	outSource.forearmLength= config.userForearmLengthMeters * lengthScale;
 
 	const BodyPoseObservation& body= camera.body;
 	const bool bFrameKnown= cameraModel.width > 0 && cameraModel.height > 0;
@@ -561,13 +649,11 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 																		   : glm::quat(1.f, 0.f, 0.f, 0.f);
 		const glm::quat torsoNow= lean * m_torso.lineFrame;
 		const glm::quat neutralTorso= tilt * config.neutral.torso;
-		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), kSpineLimitRadians);
+		spineDelta= limitRotationAngle(torsoNow * glm::inverse(neutralTorso), config.spineLimitRadians);
 	}
 	m_state.spineDelta= spineDelta;
-	placeBone(outPose, skeleton, B::Spine, spineDelta);
-	placeBone(outPose, skeleton, B::Chest, spineDelta);
-	placeBone(outPose, skeleton, B::UpperChest, spineDelta);
-	placeBone(outPose, skeleton, B::Neck, spineDelta);
+	outSource.torso.state= bTorsoFresh ? eGroupState::Measured : bTorsoUsable ? eGroupState::Held : eGroupState::Lost;
+	outSource.torso.spineDelta= spineDelta;
 
 	// -- Head: the two ear rays plus the known head width, the nose a known
 	// distance forward of their midpoint, the same filtering as the torso --
@@ -611,29 +697,31 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			filter.reset();
 		m_head.depthFilter.reset();
 	}
+	if (phoneHead.valid)
 	{
-		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
-		if (phoneHead.valid)
-		{
-			// Already canonical: the face anchor captured at the neutral
-			// pose makes looking at the screen the identity
-			headDelta= limitRotationAngle(phoneHead.orientationWorld, kHeadLimitRadians);
-		}
-		else if (bHeadUsable)
-		{
-			const glm::quat relative=
-				config.neutral.present ? m_head.frame * glm::inverse(tilt * config.neutral.head) : m_head.frame;
-			headDelta= limitRotationAngle(relative, kHeadLimitRadians);
-		}
-		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
-		placeBone(outPose, skeleton, B::Head, headDelta);
-		m_state.headMeasured= bHeadUsable;
-		if (bHeadUsable)
-			m_state.headFrame= m_head.frame;
-		m_state.headDelta= headDelta;
+		// Already canonical: the face anchor captured at the neutral pose
+		// makes looking at the screen the identity
+		outSource.head.state= eGroupState::Measured;
+		outSource.head.confidence.bPresent= true;
+		outSource.head.confidence.value= phoneHead.confidence;
+		outSource.head.orientation= phoneHead.orientationWorld;
 	}
+	else if (bHeadUsable)
+	{
+		outSource.head.state=
+			m_head.solvedTimestampMs == timestampMs ? eGroupState::Measured : eGroupState::Held;
+		outSource.head.orientation=
+			config.neutral.present ? m_head.frame * glm::inverse(tilt * config.neutral.head) : m_head.frame;
+	}
+	m_state.headMeasured= bHeadUsable;
+	if (bHeadUsable)
+		m_state.headFrame= m_head.frame;
 
 	// -- Arms --
+	// This frame's evidence on the hand labels: a slot on its own side's
+	// body wrist, and a slot on the other side's
+	bool bAnyHandOnOwnWrist= false;
+	bool bAnyHandOnOppositeWrist= false;
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		ArmState& arm= m_arms[sideIndex];
@@ -677,6 +765,16 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		const bool bHandNear= hand.tracked && bWristVisible && shoulderWidthPx > 0.f &&
 			glm::distance(handWristPx, bodyWristPx) <= kHandAgreementShoulderWidths * shoulderWidthPx;
 		const bool bHandGate= advanceGate(bHandNear, arm.handGateFrames, arm.bHandAccepted);
+		// The same slot against the other arm's wrist. The body model labels
+		// a wrist by the arm it ends, so a slot there and not here carries
+		// the wrong side, whatever the arms are doing.
+		const int oppositeWristIndex=
+			sideIndex == 0 ? (int)ePoseLandmark::RIGHT_WRIST : (int)ePoseLandmark::LEFT_WRIST;
+		const bool bHandOpposite= hand.tracked && usable(oppositeWristIndex) && shoulderWidthPx > 0.f &&
+			glm::distance(handWristPx, landmarkPx(oppositeWristIndex)) <=
+				kHandAgreementShoulderWidths * shoulderWidthPx;
+		bAnyHandOnOwnWrist|= bHandNear;
+		bAnyHandOnOppositeWrist|= bHandOpposite;
 		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
@@ -891,43 +989,22 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
 		if (!bChainUsable)
 		{
+			// Nothing places the arm: the source says so, and the loss stage
+			// decides what a lost arm does
 			arm.chain.valid= false;
 			arm.wristPixelFilter.reset();
 			arm.elbowPixelFilter.reset();
 			arm.depthFilter.reset();
-
-			// The ease into the rig's rest pose, from what the bones took
-			// last frame, timed from that frame so the first frame without
-			// a chain already moves; an arm nothing has placed since the
-			// last reset is at rest at once
-			if (arm.easeStartMs < 0.0)
-			{
-				arm.easeStartMs= timestampMs - frameMs;
-				arm.easeFrom= arm.lastPlacement;
-			}
-			const DirectRetarget::ArmPlacement rest= restPlacement(skeleton, sideIndex, spineDelta, sideConfig);
-			float blend= 1.f;
-			if (arm.bPlaced && config.restBlendMs > 0.f)
-				blend= smoothstep((float)((timestampMs - arm.easeStartMs) / config.restBlendMs));
-			const DirectRetarget::ArmPlacement placement=
-				blend < 1.f ? blendPlacement(arm.easeFrom, rest, blend) : rest;
-			arm.lastPlacement= placement;
-			arm.bPlaced= true;
-			armState.bResting= true;
-			armState.restBlend= blend;
-			placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
 			continue;
 		}
-		arm.easeStartMs= -1.0;
 		armState.chain= arm.chain;
 		armState.pnpScale= getPnpScale(sideIndex);
 
-		// Upper arm and forearm: swings from rest onto the chain's directions
-		DirectRetarget::ArmPlacement placement;
-		placement.upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
-		placement.forearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
-		const ChainSwing swing=
-			swingChain(skeleton, sideIndex, spineDelta, placement.upperDirection, placement.forearmDirection);
+		// The chain's directions, and the swings the placement will make onto
+		// them, which the hand is measured under
+		const glm::vec3 upperDirection= safeNormalize(arm.chain.elbow - arm.chain.shoulder);
+		const glm::vec3 chainForearmDirection= safeNormalize(arm.chain.wrist - arm.chain.elbow);
+		const ChainSwing swing= swingChain(skeleton, sideIndex, spineDelta, upperDirection, chainForearmDirection);
 		const glm::vec3 forearmDirection= swing.forearmDirection;
 
 		// The hand: the palm frame in the world, its normal's roll about the
@@ -935,7 +1012,8 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		// measured forearm frame (the wrist). Held through a hand dropout, a
 		// slot the body disagrees with counting as one.
 		const glm::vec3 restPalmNormal= restPalmNormalUnder(skeleton, side, swing);
-		if (bHandSeen && pose.tracked && pose.hasCameraPose)
+		const bool bHandRead= bHandSeen && pose.tracked && pose.hasCameraPose;
+		if (bHandRead)
 		{
 			const glm::quat palmRaw= glm::normalize(worldFromCam * pose.palmOrientationCamera);
 			glm::vec3 palmXRaw= palmRaw * glm::vec3(1.f, 0.f, 0.f);
@@ -951,12 +1029,20 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			{
 				const glm::vec3 mirroredX= palmXRaw - 2.f * glm::dot(palmXRaw, viewRay) * viewRay;
 				const glm::vec3 mirroredZ= -(palmZRaw - 2.f * glm::dot(palmZRaw, viewRay) * viewRay);
-				if (glm::dot(mirroredX, forearmDirection) > glm::dot(palmXRaw, forearmDirection))
+				const float mirrorGain= glm::dot(mirroredX, forearmDirection) - glm::dot(palmXRaw, forearmDirection);
+				arm.bPalmMirrored= mirrorGain > (arm.bPalmMirrored ? kPalmMirrorLeaveGain : kPalmMirrorEnterGain);
+				armState.palmMirrorGain= mirrorGain;
+				if (arm.bPalmMirrored)
 				{
 					palmXRaw= mirroredX;
 					palmZRaw= mirroredZ;
 				}
 			}
+			else
+			{
+				arm.bPalmMirrored= false;
+			}
+			armState.bPalmMirrored= arm.bPalmMirrored;
 
 			// The hold: a raw palm that jumps away from the filtered one is
 			// the lift's remaining flip until it persists, then it is a turn
@@ -1030,6 +1116,7 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 			arm.palmZFilter.reset();
 			arm.bPalmFiltered= false;
 			arm.palmJumpFrames= 0;
+			arm.bPalmMirrored= false;
 			arm.palmarMemory.reset();
 			for (OneEuroFilter& filter : arm.fingerFilters)
 				filter.reset();
@@ -1041,17 +1128,137 @@ void DirectRetarget::solve(const TrackingFrameResult& camera, const DirectCamera
 		armState.filteredPalm= arm.filteredPalm;
 		armState.fingers= arm.fingers;
 
-		// An arm whose hand was never seen rolls only by the rig's trim and
-		// keeps the avatar's rest wrist
+		// The source: the chain, and what places the arm's bones. An arm
+		// whose hand was never seen rolls only by the rig's trim and keeps
+		// the avatar's rest wrist.
+		SourcePose::Arm& sourceArm= outSource.arms[sideIndex];
+		sourceArm.state= arm.solvedTimestampMs == timestampMs ? eGroupState::Measured : eGroupState::Held;
+		sourceArm.bHasShoulder= true;
+		sourceArm.shoulderPosition= arm.chain.shoulder;
+		sourceArm.bHasElbow= true;
+		sourceArm.elbowPosition= arm.chain.elbow;
+		sourceArm.wristPosition= arm.chain.wrist;
+		sourceArm.upperDirection= upperDirection;
+		sourceArm.forearmDirection= chainForearmDirection;
+		SourcePose::Hand& sourceHand= outSource.hands[sideIndex];
+		sourceHand.state= bHandRead ? eGroupState::Measured
+			: arm.bHandMeasured     ? eGroupState::Held
+									: eGroupState::Lost;
+		if (bHandRead)
+		{
+			sourceHand.confidence.bPresent= true;
+			sourceHand.confidence.value= pose.confidence;
+		}
 		if (arm.bHandMeasured)
 		{
-			placement.twist= arm.twist;
-			placement.wristRotation= arm.wristRotation;
+			sourceArm.twist= arm.twist;
+			sourceHand.wristRotation= arm.wristRotation;
 		}
-		placement.fingers= arm.fingers;
-		arm.lastPlacement= placement;
-		arm.bPlaced= true;
-		placeArm(skeleton, sideIndex, spineDelta, placement, sideConfig, outPose);
+		sourceHand.fingerZero= SourcePose::eFingerZero::Metacarpal;
+		sourceHand.fingers= arm.fingers;
+	}
+
+	// Swapped hand labels: a run of frames with a slot on the opposite wrist
+	// and none on its own. A slot on its own wrist ends the run, and a frame
+	// with no evidence either way leaves it as it is. Reported only, nothing
+	// in the solve reads it.
+	if (bAnyHandOnOwnWrist)
+		m_handednessSwapStartMs= -1.0;
+	else if (bAnyHandOnOppositeWrist && m_handednessSwapStartMs < 0.0)
+		m_handednessSwapStartMs= timestampMs;
+	m_state.bHandednessSwapped=
+		m_handednessSwapStartMs >= 0.0 && (timestampMs - m_handednessSwapStartMs) >= kHandednessSwapMs;
+}
+
+void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const DirectRetargetConfig& config, AvatarPose& outPose)
+{
+	std::array<AvatarRetargetArm, 2> boneAngles;
+	for (AvatarRetargetArm& arm : boneAngles)
+		arm.ikWeight= 0.f;
+	place(source, skeleton, config, boneAngles, outPose);
+}
+
+void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const DirectRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
+						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
+{
+	using eGroupState= SourcePose::eGroupState;
+	if (outGoals != nullptr)
+		*outGoals= AvatarRetargetGoals();
+
+	outPose.clear();
+	outPose.valid= true;
+	outPose.timestampMs= source.clock.timestampMs;
+	// The root is fixed: the camera is the world and the user faces it
+	placeBone(outPose, skeleton, B::Hips, glm::quat(1.f, 0.f, 0.f, 0.f));
+
+	// A released torso leaves the spine bones out, at the avatar's rest, which
+	// is the identity the lost torso's spineDelta carries, so the arms hang
+	// off the spine as it is drawn
+	const glm::quat spineDelta= source.torso.spineDelta;
+	if (source.torso.state != eGroupState::Lost)
+	{
+		placeBone(outPose, skeleton, B::Spine, spineDelta);
+		placeBone(outPose, skeleton, B::Chest, spineDelta);
+		placeBone(outPose, skeleton, B::UpperChest, spineDelta);
+		placeBone(outPose, skeleton, B::Neck, spineDelta);
+	}
+
+	// The head within its limit, under the rig's trim; at rest, the identity,
+	// and on the way there the eased rotation the source carries. A released
+	// head is left out.
+	m_state.headDelta= glm::quat(1.f, 0.f, 0.f, 0.f);
+	if (source.head.state != eGroupState::Lost)
+	{
+		glm::quat headDelta(1.f, 0.f, 0.f, 0.f);
+		if (source.head.state != eGroupState::Resting || source.head.restBlend < 1.f)
+			headDelta= limitRotationAngle(source.head.orientation, config.headLimitRadians);
+		headDelta= headDelta * glm::inverse(glm::quat(config.headTrimRadians));
+		placeBone(outPose, skeleton, B::Head, headDelta);
+		m_state.headDelta= headDelta;
+	}
+
+	// The avatar's shoulders under the placed spine, which an arm pulled
+	// toward a goal reaches from; the arms do not move them
+	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posedTorso;
+	bool bTorsoPosed= false;
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const SourcePose::Arm& sourceArm= source.arms[sideIndex];
+		const SourcePose::Hand& sourceHand= source.hands[sideIndex];
+		if (sourceArm.state == eGroupState::Lost)
+			continue;
+
+		// Upper arm and forearm: swings from rest onto the chain's
+		// directions; the forearm's roll and the hand as the source measured
+		// them against the avatar's rest palm
+		ArmPlacement placement;
+		placement.upperDirection= sourceArm.upperDirection;
+		placement.forearmDirection= sourceArm.forearmDirection;
+		placement.twist= sourceArm.twist;
+		placement.wristRotation= sourceHand.wristRotation;
+		placement.fingers= sourceHand.fingers;
+		const AvatarRetargetArm& armSettings= arms[sideIndex];
+		if (outGoals != nullptr)
+		{
+			outGoals->bPosed[sideIndex]= true;
+			outGoals->ikWeight[sideIndex]= armSettings.ikWeight > 0.f ? armSettings.ikWeight : 0.f;
+		}
+		if (armSettings.ikWeight > 0.f)
+		{
+			if (!bTorsoPosed)
+			{
+				computePosedBones(skeleton, outPose, posedTorso);
+				bTorsoPosed= true;
+			}
+			pullPlacementTowardGoal(source, skeleton, sideIndex, spineDelta,
+									posedTorso[(int)sideBone(sideIndex, B::LeftUpperArm, B::RightUpperArm)].positionWorld,
+									armSettings, config.sides[sideIndex], placement, outGoals);
+		}
+		placeArm(skeleton, sideIndex, spineDelta, placement, config.sides[sideIndex],
+				 config.wristLimitRadians[sideIndex], outPose);
 	}
 }
 
@@ -1063,8 +1270,9 @@ void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRe
 	const glm::quat identity(1.f, 0.f, 0.f, 0.f);
 	placeBone(outPose, skeleton, B::Hips, identity);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		placeArm(skeleton, sideIndex, identity, restPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]),
-				 config.sides[sideIndex], outPose);
+		placeArm(skeleton, sideIndex, identity,
+				 makeRestPlacement(skeleton, sideIndex, identity, config.sides[sideIndex]), config.sides[sideIndex],
+				 config.wristLimitRadians[sideIndex], outPose);
 }
 
 glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,

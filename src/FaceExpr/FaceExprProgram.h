@@ -48,7 +48,8 @@ struct FaceExprInstruction
 };
 
 // An immutable compiled face profile. The register file is laid out as the
-// input slots (FaceExprInputs), then the constants, then the temporaries;
+// input slots of the table it was compiled against (inputCount of them), then
+// the constants, then the temporaries;
 // the instructions run the lets in dependency order and then the outputs in
 // profile order. A program carries no state: the stateful call sites name
 // slots in a FaceExprState, so one program can drive several evaluators.
@@ -70,6 +71,8 @@ struct FaceExprProgram
 	};
 
 	int registerCount= 0;
+	// The input table's slot count: the inputs an evaluate must supply
+	int inputCount= 0;
 	int constantBase= 0;
 	std::vector<float> constants;
 	std::vector<FaceExprInstruction> instructions;

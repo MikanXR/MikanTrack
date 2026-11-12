@@ -64,6 +64,10 @@ public:
 	// is never dereferenced from the main thread
 	const char* getActiveExecutionProvider() const { return m_activeEp.load(); }
 
+	// True when the profile enables body pose and its tracker loaded its
+	// models. Written by configure() on the vision thread.
+	bool isBodyModelLoaded() const { return m_bBodyModelLoaded.load(); }
+
 	// Copies the newest preview frame + per-camera result. Returns false if
 	// nothing new arrived since the last call.
 	bool fetchPreviewFrame(VisionPreviewFrame& outFrame);
@@ -128,6 +132,7 @@ private:
 	std::atomic_bool m_bTrackingEnabled{true};
 	std::atomic_bool m_bUndistortEnabled{true};
 	std::atomic<const char*> m_activeEp{"none"};
+	std::atomic_bool m_bBodyModelLoaded{false};
 
 	CameraFrameResult m_lastResult;
 

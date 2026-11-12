@@ -56,6 +56,10 @@ struct RecordedCameraInput
 	float inferenceMs= 0.f;
 	float lumaInstability= 0.f;
 	float lumaFlickerHz= 0.f;
+	// The capture stage's step times for this frame, display only like the
+	// fields above (absent in recordings made before they were carried)
+	bool bHaveCaptureTimings= false;
+	TrackingFrameResult::CaptureTimings captureTimings;
 
 	std::array<RecordedHandInput, 2> hands;
 
@@ -109,6 +113,89 @@ struct RecordedMouth
 	MouthFrame frame;
 };
 
+// Stage state of the iteration that produced a recorded frame, for
+// display in a replay. No replayed stage reads it and the checksum does
+// not cover it.
+struct RecordedImuStatus
+{
+	bool deviceConnected= false;
+	bool streaming= false;
+	bool calibrated= false;
+	bool orientationValid= false;
+	float sampleRateHz= 0.f;
+	float batteryLevel= 0.f;
+	float yawDriftDegPerSecond= 0.f; // the gyro bias about the yaw axis, as the Tracking panel reads it
+	float rollErrorDegrees= 0.f;     // the wrist axial twist, the mounting roll error
+};
+
+struct RecordedTelemetry
+{
+	static constexpr int k_maxCameras= 8;
+	static constexpr int k_phaseCount= 8; // VisionThread::eVisionPhase::Count
+
+	RecordedTelemetry()
+	{
+		for (int cameraIndex= 0; cameraIndex < k_maxCameras; ++cameraIndex)
+		{
+			observationConfidence[cameraIndex][0]= -1.f;
+			observationConfidence[cameraIndex][1]= -1.f;
+		}
+	}
+
+	bool present= false;
+	int path= 0; // VisionThread::Telemetry::ePath
+	float phaseMs[k_phaseCount]= {};
+	float totalMs= 0.f;
+
+	bool oscRunning= false;
+	float oscSendRateHz= 0.f;
+	int oscLastPacketCount= 0;
+	int oscLastFrameBytes= 0;
+
+	int dominantCamera[2]= {-1, -1};
+	float observationConfidence[k_maxCameras][2]; // -1 where a camera gave no observation
+	float autoHandScaleFactor= 1.f;
+
+	struct Camera
+	{
+		bool deviceOpen= false;
+		bool streaming= false;
+		float deviceFrameRate= 0.f;
+		int droppedFrames= 0;
+		int queuedFrames= 0;
+		float callbackCopyMs= 0.f;
+		bool trackingEnabled= true;
+		bool handPipelineReady= false; // an execution provider is active
+		bool bodyModelLoaded= false;
+	};
+	int cameraCount= 0;
+	Camera cameras[k_maxCameras];
+
+	bool imuEnabled= false;
+	RecordedImuStatus imu[2];
+
+	struct Face
+	{
+		bool enabled= false;
+		bool bound= false;
+		bool streaming= false;
+		bool faceTracked= false;
+		float datagramsPerSecond= 0.f;
+	};
+	Face face;
+
+	struct Audio
+	{
+		bool enabled= false;
+		bool deviceOpen= false;
+		bool backendReady= false;
+		bool gateOpen= false;
+		float levelDbfs= -100.f;
+		float inferMsEma= 0.f;
+	};
+	Audio audio;
+};
+
 struct RecordedFrame
 {
 	int64_t seq= -1;
@@ -124,6 +211,8 @@ struct RecordedFrame
 	std::array<RecordedImuOutput, 2> imu;
 	RecordedMouth mouth;
 	uint64_t checksum= 0;
+	// Absent (present false) in recordings made before it was carried
+	RecordedTelemetry telemetry;
 };
 
 // The audio sidecar beside the recording: the microphone as captured, 16 kHz
@@ -196,6 +285,11 @@ std::string makeAudioSidecarPath(const std::string& recordingFilePath);
 // The face sidecar likewise:
 // <dir>/2026-01-01_12-00-00.jsonl -> <dir>/2026-01-01_12-00-00.face.jsonl
 std::string makeFaceSidecarPath(const std::string& recordingFilePath);
+// Whether a path names one of the files above that the recorder writes
+// beside a take (the face or the audio sidecar), by its name alone
+bool isRecordingSidecarFile(const std::string& path);
+// Whether a path names a take: a .jsonl file that is not a sidecar
+bool isRecordingFile(const std::string& path);
 
 nlohmann::json headerToJson(const RecordingHeader& header);
 bool headerFromJson(const nlohmann::json& j, RecordingHeader& outHeader);

@@ -1,7 +1,7 @@
 # MikanTrack
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~211_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~633_L-blue)
+![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~212_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~635_L-blue)
 (estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
@@ -55,18 +55,18 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   triangulation, and a hand tracked by one camera but lost by another is
   projected into the lost camera's image to re-seed its search directly.
   Prefer 720p per camera and separate USB controllers for two streams.
-- **VRM avatar**: load a VRM 0.x or 1.0 avatar (Avatar panel) and see it
+- **VRM avatar**: load a VRM 0.x or 1.0 avatar (Retarget stage, or File > Load Avatar) and see it
   toon-shaded in the 3D scene, posed from the tracked hands, elbows and head
   with the avatar's own proportions (reach scaled onto its arms, elbows from a
   two-bone solve hinted by the measured elbow, fingers on its own hand rig).
-  The VMC stream then carries that avatar's bones. The panel's Mapping
-  and Retarget tabs fix a rig's bone mapping, trim its rest pose, place the
+  The VMC stream then carries that avatar's bones. The Retarget stage's
+  Mapping group and its chains fix a rig's bone mapping, trim its rest pose, place the
   elbow hints (draggable in the 3D scene) and tune the fingers, saved in a
   `<name>.mikanrig.json` beside the VRM.
 - Live preview with landmark overlay; alternate 3D scene view rendering the
   forward-kinematics hand reconstruction (what the VMC finger bones are built from),
   camera frustums, marker grid, orbit camera
-- **Body measurement wizard** (Tracking panel -> Measure My Body): the elbow,
+- **Body measurement wizard** (Body solver stage -> Measure My Body): the elbow,
   shoulder and head estimates rest on lengths that are NOT anatomical - they
   are distances between the pose model's own landmarks, which sit inside the
   real joints by an amount that varies per person and per model. Raise ONE hand
@@ -93,7 +93,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   in mm, scale) - the numbers are saved with the config as a baseline. Hand
   scale is measured continuously by stereo triangulation while tracking runs,
   until calibrated hand skeletons supersede it.
-- **Microphone mouth** (Audio panel): with no phone face streaming, the
+- **Microphone mouth** (Microphone stage): with no phone face streaming, the
   voice drives the avatar's mouth from the microphone through uLipSync's
   method, scored against your own calibrated vowels at a fraction of a
   percent of a core. A VRM avatar with the vowel presets gets them straight
@@ -103,11 +103,11 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   opens with the voice's volume alone. Calibrate records the five vowels
   and the room's silence through six three-second prompts, builds your
   profile, and sets the gate from the silence. Import loads a profile
-  exported from uLipSync or VTube Studio instead. The panel shows the
-  viseme weights live, and the OSC Output panel shows what they become on
+  exported from uLipSync or VTube Studio instead. The stage shows the
+  viseme weights live, and the Profile stage shows what they become on
   the loaded avatar. Under the built-in Auto face profile the phone's face
   takes the mouth back whenever it streams. A face profile authored in the
-  Avatar panel's Face tab can mix them instead, for example the phone's
+  Profile stage can mix them instead, for example the phone's
   eyes and brows with the voice's mouth. The Model combo switches between
   Simple Loudness (the jaw by volume alone), MFCC (uLipSync, the
   calibrated default above), and Oculus LipSync (Meta's engine; release
@@ -124,7 +124,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   reopening a closed panel; per-project config persisted to
   `%USERPROFILE%/Documents/MikanTrack/<project>/project.json` (the last-project
   pointer lives in `%APPDATA%/MikanTrack/config.json`)
-- **Image quality diagnostics** (Tracking panel): per-camera statistics of
+- **Image quality diagnostics** (Capture stage): per-camera statistics of
   each hand's region in the exact image the model consumed - luminance,
   highlight/shadow clipping, contrast, hand-vs-background separation,
   sharpness, sensor noise, plus whole-frame flicker/auto-exposure-hunting
@@ -143,7 +143,7 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   so any phase that overruns the frame budget drops frames on all of them at
   once and reads downstream as a camera or USB fault. Iterations over 50 ms are
   logged with a per-phase breakdown (capture/inference, IMU, fusion, OSC,
-  diagnostics) and counted in the Tracking panel. Device discovery, which used
+  diagnostics) and counted in the Performance panel. Device discovery, which used
   to block that thread for ~200 ms at a time, runs on its own worker.
 - **Tracking recording + deterministic replay (F10 / Timeline panel)**:
   records every input to the post-inference stages (per-camera landmarks and
@@ -196,13 +196,13 @@ Developer reference lives in [docs/reference/](docs/reference/):
 
 ## Building
 
-Windows 10/11, Visual Studio 2022, CMake >= 3.15.
+Windows 10/11, Visual Studio 2026 (CMake >= 4.2) or Visual Studio 2022 (CMake >= 3.15).
 
 ```bat
 git clone <this repo>
 cd MikanTrack
 InitialSetup_x64.bat            :: downloads deps/ (SDL2, OpenCV, GLEW, ONNX Runtime, DirectML) + models/ (ONNX models, sample avatars)
-GenerateProjectFiles_X64_VS2022.bat
+GenerateProjectFiles_X64_VS2026.bat :: or GenerateProjectFiles_X64_VS2022.bat
 cmake --build build --config Release
 build\Release\MikanTrack.exe
 ```
@@ -253,7 +253,7 @@ data is meaningful (no metric 3D / world space).
 
 MikanTrack streams the [VMC protocol](https://protocol.vmc.info): OSC 1.0
 bundles over UDP unicast, default target `127.0.0.1:39539` (VMC's
-conventional port; **OSC panel -> Target IP / Port**). It was developed
+conventional port; **VMC stream stage -> Target IP / Port**). It was developed
 against [VMC4UE](https://github.com/HAL9HARUKU/VMC4UE). In Unreal Engine the
 consumer is [VRM4U](https://github.com/ruyo/VRM4U)'s VMC node
 (`AnimNode_VrmVMC`): point it at the configured port and it drives the VRM's
@@ -276,11 +276,11 @@ the head into parent-relative bones.
 | `/VMC/Ext/Blend/Apply` | (none) | after the last blendshape value |
 | `/VMC/Ext/VRM` | `sss` | loaded avatar's local file path, title, SHA-256 of the file (once a second) |
 
-With the face stream on (Tracking panel, Face section), the blendshapes go out
+With the face stream on (Phone stage, under Face and mouth), the blendshapes go out
 under the names the avatar's face profile targets, and the phone's head rotation
 drives the `Head` bone. The built-in Auto profile sends the loaded avatar's own
-expression names, or the 52 ARKit names with no avatar loaded. The Avatar
-panel's Face tab authors other profiles (see
+expression names, or the 52 ARKit names with no avatar loaded. The
+Profile stage authors other profiles (see
 [face.md](docs/reference/face.md)).
 
 Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,
@@ -302,7 +302,7 @@ the rotation and the translation of every bone it is sent, so each one carries
 a real offset: shoulder width, upper arm and forearm from the Body panel, and
 the finger offsets from the calibrated hand skeleton. The one length nothing
 here measures is neck-to-head, which is the **Head offset** slider (raise it if
-the head sinks into the shoulders). With a VRM loaded in the Avatar panel the
+the head sinks into the shoulders). With a VRM loaded in the Retarget stage the
 bones carry that avatar's own proportions instead.
 
 **Bones degrade one at a time.** VMC carries no confidence, so an unmeasured
@@ -320,14 +320,16 @@ answers "is a hand here" and stays near 1.0 on a badly conditioned edge-on
 view whose depth swings by centimeters, so it is not usable as a trust signal
 on its own. Fusion weights each camera by `confidence x how face-on the palm
 is`, so a camera with a poor view of a hand stops polluting the fused pose.
-Set **OSC panel -> Min confidence** to treat a hand below a threshold as lost.
+Set **Delivery rules stage -> Min confidence** to treat a hand below a threshold as lost.
 A lost hand keeps streaming its last good pose for the **Dropout hold**
 (default 250 ms), which bridges brief losses. Past the hold its bones keep
-streaming frozen (**Freeze on loss**, default on); turning that off stops the
-messages instead, which returns that arm to the avatar's rest T-pose. Tune the
-threshold with the live per-camera confidence table in the Tracking panel.
+streaming frozen. Choosing Release instead stops the messages, which returns
+that arm to the avatar's rest T-pose. Both are per arm, under the Retarget
+stage's arm chains (**Dropout hold** and **Then**). Tune the
+threshold with the live per-camera confidence table in the Inspector (select
+the Fusion stage, Diagnostics).
 
-**Palm frame and finger angles.** The OSC panel shows what the solver
+**Palm frame and finger angles.** The Source pose stage shows what the solver
 measures for each hand, the inputs the bones are built from. The palm frame
 (Ultraleap-compatible) has its origin at the palm center (midway wrist to
 middle knuckle), **+X toward the fingers**, **+Z out of the palmar surface**,
@@ -335,8 +337,8 @@ middle knuckle), **+X toward the fingers**, **+Z out of the palmar surface**,
 
 - **Zero = the rest pose.** Forward kinematics starts from the per-finger
   `neutralDirInPalm` (the flat-hand default: four fingers parallel to palm
-  +X, thumb along its own metacarpal). **Tracking panel -> Calibrate
-  Hands...** measures your bone lengths and then captures your rest pose (in
+  +X, thumb along its own metacarpal). **Fusion stage -> Calibrate
+  Hands...** in the Inspector measures your bone lengths and then captures your rest pose (in
   that order, since measured bones move the thumb's angle zero), so your rest
   pose reads zeros on all four angles and streams as the avatar's rest hand.
   Without the capture a hand hovering over a keyboard reports 20-50 degrees of
@@ -385,6 +387,8 @@ monitor before testing the real receiver.
   inference; yellow `CPU` = fallback (forceable with `"onnxEp": "cpu"` in config).
 - MediaPipe's handedness assumes a mirrored selfie view; the **Flip handedness**
   toggle (default on) corrects for a normal non-mirrored camera. Verify on your
-  rig and flip if L/R are swapped.
+  rig and flip if L/R are swapped. A single-camera direct project checks this
+  against the body model: the guided setup switches the toggle itself, and the
+  Direct solver stage warns when the hands are swapped.
 - Depth accuracy from a single camera is in the ±2 cm class; it depends on a
   good intrinsics calibration and an accurate hand-scale measurement.

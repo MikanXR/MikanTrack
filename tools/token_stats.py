@@ -53,6 +53,7 @@ SESSIONS = {
     "5f25b0f0-c7f7-43a7-abdc-6f6ba32b84d3": "Face expression proposal (Nov 7)",
     "ea86ee1e-bccf-46b3-b617-6133963f2fce": "Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8)",
     "47c0a5db-65e3-42ed-b2c9-8f4d257eb842": "Face expression system implementation (Nov 8)",
+    "fde5afec-cb75-45e2-a019-be4a70e2c40e": "Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11)",
 }
 
 # Same project folder, not MikanTrack work (MikanXR, UE plugin, ARKit, misc).

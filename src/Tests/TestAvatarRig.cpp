@@ -1,10 +1,15 @@
 #include "TestCommon.h"
 
+#include <cstring>
+
+#include "glm/ext/scalar_constants.hpp"
 #include "glm/gtx/quaternion.hpp"
+#include "nlohmann/json.hpp"
 
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
+#include "DirectRetarget.h"
 #include "MathGLM.h"
 #include "PathUtils.h"
 #include "SyntheticAvatar.h"
@@ -139,7 +144,8 @@ AvatarPose solveScenario(const Scenario& scenario)
 	AvatarRetarget retarget;
 	AvatarPose pose;
 	retarget.solve(scenario.poses, scenario.bSideValid, scenario.head, 0.0, scenario.user, *scenario.skeleton,
-				   makeAvatarRetargetConfig(config, scenario.rig), pose);
+				   makeAvatarRetargetConfig(config, scenario.rig), pose,
+				   {scenario.rig.sides[0].elbowHintConfidence, scenario.rig.sides[1].elbowHintConfidence});
 	return pose;
 }
 
@@ -187,6 +193,9 @@ static int runAvatarRigTest(const TestArgs&)
 		saved.sides[1].restPalmNormal= glm::vec3(0.f, -1.f, 0.f);
 		saved.sides[1].restFingerCurlDegrees= 25.f;
 		saved.restBlendMs= 450.f;
+		saved.headLimitDegrees= 55.f;
+		saved.spineLimitDegrees= 30.f;
+		saved.sides[1].wristLimitDegrees= 65.f;
 		saved.faceProfiles= {"0f1e2d3c-4b5a-4968-8776-655443322110", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"};
 		saved.activeFaceProfile= saved.faceProfiles[1];
 
@@ -212,6 +221,21 @@ static int runAvatarRigTest(const TestArgs&)
 				a.restPalmNormal == b.restPalmNormal && a.restFingerCurlDegrees == b.restFingerCurlDegrees;
 		}
 		check(bSame, "(a) the sidecar round-trips through a non-ASCII path");
+		bool bLimitsSame= loaded.headLimitDegrees == saved.headLimitDegrees &&
+			loaded.spineLimitDegrees == saved.spineLimitDegrees;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bLimitsSame&= loaded.sides[sideIndex].wristLimitDegrees == saved.sides[sideIndex].wristLimitDegrees;
+		check(bLimitsSame && loaded.sides[0].wristLimitDegrees == 80.f,
+			  "(a) the sidecar round-trips the joint limits (head, spine, each wrist)");
+		{
+			// The fields a project's retarget chains took over are still
+			// written, with what they hold
+			const nlohmann::json written= nlohmann::json::parse(avatarRigToJson(saved));
+			check(written.value("restBlendMs", 0.f) == 450.f &&
+					  written["right"].value("elbowHintConfidence", 0.f) == 0.7f &&
+					  written["left"].value("elbowHintConfidence", 0.f) == 0.5f,
+				  "(a) the sidecar still writes the rest blend and each side's elbow hint confidence");
+		}
 		check(loaded.faceProfiles == saved.faceProfiles && loaded.activeFaceProfile == saved.activeFaceProfile,
 			  "(a) the sidecar round-trips the face profile ids and the active id");
 		AvatarRigSettings versionOne;
@@ -219,6 +243,33 @@ static int runAvatarRigTest(const TestArgs&)
 		check(avatarRigFromJson("{\"version\": 1, \"restBlendMs\": 200}", versionOne, versionOneError) &&
 				  versionOne.faceProfiles.empty() && versionOne.activeFaceProfile.empty() && versionOne.restBlendMs == 200.f,
 			  "(a) a version 1 sidecar loads with no face profiles assigned");
+		check(versionOne.headLimitDegrees == 70.f && versionOne.spineLimitDegrees == 45.f &&
+				  versionOne.sides[0].wristLimitDegrees == 80.f && versionOne.sides[1].wristLimitDegrees == 80.f,
+			  "(a) a sidecar without the joint limits loads today's limits (head 70, spine 45, wrists 80 degrees)");
+		{
+			// The default limits reach the direct solver on the bits of the
+			// constants it applied before the sidecar carried them, and an
+			// edited limit reaches it converted
+			AppConfig config;
+			DirectRetargetConfig defaults;
+			const DirectRetargetConfig mapped= makeDirectRetargetConfig(config, AvatarRigSettings());
+			auto sameBits= [](float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; };
+			const float k_degrees= glm::pi<float>() / 180.f;
+			check(sameBits(mapped.headLimitRadians, 70.f * glm::pi<float>() / 180.f) &&
+					  sameBits(mapped.spineLimitRadians, 45.f * glm::pi<float>() / 180.f) &&
+					  sameBits(mapped.wristLimitRadians[0], 80.f * glm::pi<float>() / 180.f) &&
+					  sameBits(mapped.wristLimitRadians[1], 80.f * glm::pi<float>() / 180.f) &&
+					  sameBits(mapped.headLimitRadians, defaults.headLimitRadians) &&
+					  sameBits(mapped.spineLimitRadians, defaults.spineLimitRadians) &&
+					  sameBits(mapped.wristLimitRadians[1], defaults.wristLimitRadians[1]),
+				  "(a) the default joint limits reach the direct solver bit for bit");
+			const DirectRetargetConfig edited= makeDirectRetargetConfig(config, saved);
+			check(nearlyEqual(edited.headLimitRadians, 55.f * k_degrees, 1e-6f) &&
+					  nearlyEqual(edited.spineLimitRadians, 30.f * k_degrees, 1e-6f) &&
+					  nearlyEqual(edited.wristLimitRadians[1], 65.f * k_degrees, 1e-6f) &&
+					  nearlyEqual(edited.wristLimitRadians[0], 80.f * k_degrees, 1e-6f),
+				  "(a) edited joint limits reach the direct solver");
+		}
 		check(loaded.boneNodeOverrides[(int)B::LeftEye].has_value() && loaded.boneNodeOverrides[(int)B::LeftEye]->empty() &&
 				  !loaded.boneNodeOverrides[(int)B::RightEye].has_value(),
 			  "(a) an unmapped override stays distinct from no override");

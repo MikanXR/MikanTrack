@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pipeline panel mockup</title>
+<style>
+:root{
+	--bg:#1f2126; --child:#24262b; --frame:#33384a; --frame-h:#47525f; --border:#4c5569;
+	--text:#e6edf3; --dim:#99a6b3; --btn:#485a7c; --btn-h:#5c73a6; --accent:#80a6e6;
+	--header:#5c6b8c; --error:#ff6666; --warn:#ffcc66; --ok:#7fd48a; --bar:#5a86c7; --line:#5d6b88;
+	--mono: Consolas, "Cascadia Mono", "JetBrains Mono", monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:#15171b;color:var(--text);font:13px/1.35 "Segoe UI",system-ui,sans-serif;min-width:1240px;display:flex;flex-direction:column;overflow:hidden}
+button,.btn{background:var(--btn);color:var(--text);border:1px solid rgba(0,0,0,.25);border-radius:3px;padding:3px 10px;font:inherit;cursor:pointer}
+button:hover{background:var(--btn-h)} button:disabled{opacity:.45;cursor:default}
+select,input[type=text]{background:var(--frame);color:var(--text);border:1px solid rgba(0,0,0,.3);border-radius:3px;padding:3px 6px;font:inherit}
+label.chk{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.dim{color:var(--dim)} .mono{font-family:var(--mono)}
+.spacer{flex:1}
+
+/* mockup controls, outside the app window */
+#mockbar{display:flex;align-items:center;gap:14px;padding:5px 12px;background:#101216;border-bottom:1px dashed #3a4252;font-size:12px}
+#mockbar b{color:var(--warn);font-weight:600}
+#mockbar .na{color:var(--warn)}
+
+/* app window */
+#app{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+#menubar{display:flex;align-items:center;gap:2px;padding:2px 6px;background:#2a2e38;border-bottom:1px solid #15171b;position:relative}
+#menubar .m{padding:3px 9px;border-radius:3px;cursor:pointer;user-select:none}
+#menubar .m:hover,#menubar .m.open{background:var(--btn)}
+#menubar .proj{color:var(--dim);font-size:12px;padding-right:6px}
+.dropdown{position:absolute;top:26px;left:6px;background:#2a2e38;border:1px solid var(--border);border-radius:3px;padding:4px;min-width:200px;z-index:30;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.dropdown div{padding:4px 10px;border-radius:3px;cursor:pointer}
+.dropdown div:hover{background:var(--btn)} .dropdown div.off{opacity:.45;cursor:default}
+.dropdown hr{border:0;border-top:1px solid #3a4252;margin:4px 0}
+
+/* panel chrome */
+.panel{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg)}
+.ptitle{background:#3a4660;padding:3px 10px;font-weight:600;font-size:12px;display:flex;align-items:center;gap:10px}
+.ptitle .tab{padding:2px 10px;border-radius:3px 3px 0 0;cursor:pointer;font-weight:500;color:#c5cfdd}
+.ptitle .tab.on{background:var(--bg);color:var(--text)}
+.pbody{flex:1;min-height:0;overflow:auto;padding:8px 10px}
+
+/* pipeline strip */
+#strip{border-bottom:1px solid #15171b}
+#strip .pbody{overflow:hidden;padding:8px 12px 6px}
+#top{display:grid;grid-auto-rows:46px 34px;row-gap:6px;align-items:center;justify-content:start}
+.stage{background:var(--frame);border:1px solid #55607a;border-radius:4px;padding:4px 9px;cursor:pointer;user-select:none;min-width:118px;height:46px;display:flex;flex-direction:column;justify-content:center}
+.stage:hover{background:var(--frame-h)}
+.stage .n{font-weight:600;white-space:nowrap}
+.stage .v{display:flex;align-items:center;gap:6px;font-size:12px;color:#c7d2e0;white-space:nowrap}
+.stage.sel{outline:2px solid var(--accent);outline-offset:1px;background:#3b4763}
+.stage.par{outline:1px dashed var(--accent);outline-offset:1px}
+.stage.off{opacity:.5;border-style:dashed}
+.stage.pill{border-radius:17px;min-width:0;height:34px;padding:2px 12px;background:#2b3345;border-color:#6d7ca0}
+.stage.pill .n{font-weight:500;font-size:12px}
+.stage.side{height:34px;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px}
+.stage.sub{height:26px;min-width:0;flex-direction:row;align-items:center;justify-content:flex-start;gap:7px;padding:2px 8px}
+.stage.sub .n{font-weight:500}
+.stage.camlbl{width:132px;background:#2b3345} .stage.camlbl .v{display:none}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block}
+.dot.run{background:var(--ok)} .dot.deg{background:var(--warn)}
+.dot.off{background:transparent;border:2px solid #7c8698} .dot.cfg{background:transparent;border:2px solid var(--error)}
+.arrow{width:26px;height:2px;background:var(--line);position:relative;justify-self:stretch}
+.arrow:after{content:"";position:absolute;right:-1px;top:-4px;border-left:7px solid var(--line);border-top:5px solid transparent;border-bottom:5px solid transparent}
+.arrow.sm{width:16px}
+.elbow{position:relative;height:34px;align-self:stretch}
+.elbow:before{content:"";position:absolute;left:0;top:50%;width:50%;border-top:2px solid var(--line)}
+.elbow:after{content:"";position:absolute;left:calc(50% - 1px);bottom:50%;height:46px;border-left:2px solid var(--line)}
+#subrow{height:98px;margin-top:8px;border-top:1px solid #333948;padding-top:7px;display:flex;flex-direction:column;gap:5px;overflow:hidden}
+#subrow .lane{display:flex;align-items:center;gap:0}
+#subrow .lane .lbl{width:150px;color:var(--dim);font-size:12px;white-space:nowrap}
+#subrow .none{color:var(--dim);font-size:12px;padding-top:4px}
+#legend{display:flex;gap:12px;font-size:11px;color:var(--dim);font-weight:400;align-items:center}
+#legend span{display:inline-flex;align-items:center;gap:5px}
+
+/* middle */
+#mid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 440px;gap:1px;background:#15171b}
+#view .pbody{padding:0;overflow:hidden;position:relative;background:#111317}
+#view canvas{width:100%;height:100%;display:block}
+#insp h2{margin:0;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+#insp .crumb{color:var(--dim);font-size:12px;margin-bottom:2px}
+#insp .desc{color:#c2ccd9;margin:6px 0 8px}
+.chip{font-size:11px;padding:1px 8px;border-radius:10px;font-weight:500}
+.chip.run{background:rgba(127,212,138,.18);color:var(--ok)} .chip.deg{background:rgba(255,204,102,.18);color:var(--warn)}
+.chip.off{background:rgba(153,166,179,.18);color:var(--dim)} .chip.cfg{background:rgba(255,102,102,.18);color:var(--error)}
+details.sec{border-top:1px solid #3a4252;padding:5px 0}
+details.sec>summary{cursor:pointer;font-weight:600;color:#c7d2e0;list-style:none;user-select:none;padding:2px 0}
+details.sec>summary:before{content:"▸ ";color:var(--dim)} details.sec[open]>summary:before{content:"▾ "}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:3px 10px;margin:5px 0 3px 12px}
+.kv .k{color:var(--dim)}
+.why{margin:5px 0 3px 12px;padding:6px 8px;border-left:3px solid var(--warn);background:rgba(255,204,102,.07)}
+.why.cfg{border-color:var(--error);background:rgba(255,102,102,.07)} .why.off{border-color:#7c8698;background:rgba(153,166,179,.07)}
+.todo{margin:5px 0 3px 12px;color:var(--dim);font-style:italic;font-size:12px}
+.row{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:3px 0 3px 12px;min-height:22px}
+.row .k{color:#c2ccd9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row.wide{grid-template-columns:1fr}
+.row select{width:100%} .row input[type=text]{width:100%}
+.sl{display:flex;align-items:center;gap:6px} .sl input{flex:1;min-width:0} .sl .num{font-family:var(--mono);font-size:12px;width:62px;text-align:right;color:#c7d2e0}
+.ro{font-family:var(--mono);font-size:12px;color:#dbe4ee}
+.subh{margin:9px 0 3px 12px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #2f3543;padding-bottom:2px}
+.inote{margin:4px 0 4px 12px;color:var(--dim);font-size:12px}
+.calrow{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;margin:4px 0 4px 12px}
+.calrow .s{color:var(--dim);font-size:12px}
+.ibar{position:relative;height:16px;background:var(--frame);border-radius:3px;overflow:hidden}
+.ibar>i{position:absolute;left:0;top:0;bottom:0;background:var(--bar)}
+.ibar>b{position:absolute;inset:0;display:grid;place-items:center;font-weight:400;font-size:11px;font-family:var(--mono)}
+table.it{border-collapse:collapse;margin:4px 0 4px 12px;width:calc(100% - 12px);font-size:12px}
+table.it th{text-align:left;color:var(--dim);font-weight:500;padding:2px 5px;border-bottom:1px solid #3a4252}
+table.it td{padding:2px 5px;font-family:var(--mono)}
+details.grp{margin:4px 0 4px 8px;border-left:2px solid #333948;padding-left:2px}
+details.grp>summary{cursor:pointer;color:#c7d2e0;list-style:none;user-select:none;padding:2px 4px;font-weight:500}
+details.grp>summary:before{content:"▸ ";color:var(--dim)} details.grp[open]>summary:before{content:"▾ "}
+.v3{display:flex;gap:4px;align-items:center} .v3 input{width:60px;font-family:var(--mono);font-size:12px;padding:2px 4px}
+.cks{display:flex;flex-wrap:wrap;gap:3px 10px}
+.btnrow{display:flex;flex-wrap:wrap;gap:6px;margin:5px 0 5px 12px}
+.chains{margin:4px 0 6px 12px;border:1px solid #333948;border-radius:3px;overflow:hidden}
+.chain{display:grid;grid-template-columns:92px 1fr;gap:8px;padding:3px 8px;cursor:pointer;font-size:12px}
+.chain:nth-child(even){background:rgba(255,255,255,.025)} .chain:hover{background:rgba(128,166,230,.12)}
+.chain.on{background:rgba(128,166,230,.2);box-shadow:inset 3px 0 var(--accent)} .chain .n{font-weight:600;font-size:13px}
+.fxb{padding:0 6px;font-family:var(--mono);font-size:11px;height:20px;background:var(--frame)} .fxb.on{background:var(--accent);color:#10131a}
+.fxin{flex:1;min-width:0;font-family:var(--mono);font-size:12px;padding:2px 5px}
+.pin{position:fixed;width:860px;height:480px;background:var(--bg);border:1px solid var(--border);border-radius:4px;box-shadow:0 8px 28px rgba(0,0,0,.6);display:flex;flex-direction:column}
+.pin .ptitle{cursor:move;user-select:none;border-radius:4px 4px 0 0}
+.pin .x{width:16px;height:16px;border-radius:3px;background:#6b7b9c;display:inline-grid;place-items:center;font-size:11px;color:#fff;cursor:pointer}
+.pin .pb{flex:1;min-height:0;display:grid;grid-template-columns:1fr 400px}
+.pin .pv{background:#111317;min-width:0;min-height:0} .pin .pv canvas{width:100%;height:100%;display:block}
+.pin .pi{overflow:auto;padding:8px 10px;border-left:1px solid #15171b}
+.pin h2{margin:0;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px} .pin .crumb{color:var(--dim);font-size:12px} .pin .desc{color:#c2ccd9;margin:6px 0 8px}
+#perfCv{width:100%;height:122px;display:block}
+.issue{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:3px;cursor:pointer;margin-left:6px}
+.issue:hover{background:rgba(128,166,230,.12)}
+
+/* bottom dock */
+#dock{height:168px;border-top:1px solid #15171b}
+#tl{display:flex;flex-direction:column;gap:8px}
+#tl .row{display:flex;align-items:center;gap:10px}
+#tl input[type=range]{flex:1}
+.seg{display:inline-flex;border:1px solid rgba(0,0,0,.3);border-radius:3px;overflow:hidden}
+.seg span{padding:3px 12px;cursor:pointer;background:var(--frame)} .seg span.on{background:var(--btn-h)}
+.live{color:var(--ok);font-weight:600} .replay{color:var(--warn);font-weight:600}
+#log{font-family:var(--mono);font-size:12px;white-space:pre-wrap;color:#c2ccd9}
+#log .w{color:var(--warn)} #log .e{color:var(--error)}
+
+#tip{position:fixed;z-index:50;max-width:320px;background:#2a2e38;border:1px solid var(--border);border-radius:3px;padding:6px 9px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.5);pointer-events:none;display:none}
+#tip b{display:block;margin-bottom:2px}
+#tip .r{margin-top:4px;color:var(--warn)}
+#toast{position:fixed;left:50%;bottom:190px;transform:translateX(-50%);background:#2a2e38;border:1px solid var(--border);border-radius:3px;padding:6px 12px;display:none;z-index:60}
+</style>
+</head>
+<body>
+
+<div id="mockbar">
+	<b>Mockup controls</b>
+	<label>Project setup <select id="setup">
+		<option value="tri">Tri-camera, body pose, Joy-Cons</option>
+		<option value="dual">Dual overhead, no body or IMU</option>
+		<option value="direct">Single front camera, direct mode</option>
+	</select></label>
+	<label>Scenario <select id="scenario">
+		<option value="ok">All healthy</option>
+		<option value="dropout">Left hand dropout (2 s to 4 s)</option>
+		<option value="noext">No extrinsics</option>
+		<option value="noimu">IMU missing</option>
+	</select></label>
+	<span id="scna" class="na"></span>
+	<span class="spacer"></span>
+	<span class="dim">Pass 3 of 3. Double-click a stage to pin it. Select Retarget for the chain editor, or the Source pose pill for its tables.</span>
+</div>
+
+<div id="app">
+	<div id="menubar">
+		<span class="m" id="mFile">File</span><span class="m">View</span><span class="m">Calibration</span><span class="m">Help</span>
+		<span class="spacer"></span><span class="proj" id="projName"></span>
+		<div class="dropdown" id="fileMenu" style="display:none">
+			<div class="off">Load Project...</div>
+			<div id="miLoadAvatar">Load Avatar...</div>
+			<div id="miUnloadAvatar">Unload Avatar</div>
+			<hr>
+			<div class="off">Close Project</div>
+			<div class="off">Exit</div>
+		</div>
+	</div>
+
+	<div class="panel" id="strip">
+		<div class="ptitle">Pipeline<span class="spacer"></span>
+			<span id="legend">
+				<span><i class="dot run"></i>Running</span><span><i class="dot deg"></i>Degraded</span>
+				<span><i class="dot off"></i>Inactive</span><span><i class="dot cfg"></i>Not configured</span>
+			</span>
+		</div>
+		<div class="pbody"><div id="top"></div><div id="subrow"></div></div>
+	</div>
+
+	<div id="mid">
+		<div class="panel" id="view">
+			<div class="ptitle"><span id="viewTitle">3D Scene</span><span class="spacer"></span><label class="chk" id="sbs" style="font-weight:400;display:none"><input type="checkbox" id="sbsChk">Side by side</label><label class="chk" id="camView" style="font-weight:400" title="Inert in the mockup. Today this is the Tracking panel's Overlay checkbox."><input type="checkbox">View from camera</label></div>
+			<div class="pbody"><canvas id="cv"></canvas></div>
+		</div>
+		<div class="panel" id="insp">
+			<div class="ptitle">Inspector</div>
+			<div class="pbody" id="inspBody"></div>
+		</div>
+	</div>
+
+	<div class="panel" id="dock">
+		<div class="ptitle" id="dockTabs">
+			<span class="tab on" data-tab="tl">Timeline</span><span class="tab" data-tab="log">Log</span><span class="tab" data-tab="perf">Performance</span>
+		</div>
+		<div class="pbody">
+			<div id="tl">
+				<div class="row">
+					<button id="rec" title="Inert in the mockup">&#9679; Start Recording (F10)</button>
+					<label class="chk" title="Inert in the mockup"><input type="checkbox">Also record raw camera frames</label>
+					<button title="Inert in the mockup">Dump tracking state (F9)</button><button title="Inert in the mockup">Dump in 3 s (Shift+F9)</button>
+					<span class="seg" id="mode"><span data-m="live" class="on">Live</span><span data-m="replay">Replay</span></span>
+					<span id="modeLbl" class="live">LIVE</span>
+					<span class="spacer"></span>
+					<span class="dim">Every stage view shows this frame.</span>
+				</div>
+				<div class="row">
+					<button id="play">Pause</button>
+					<input type="range" id="scrub" min="0" max="6" step="0.01" value="0">
+					<span class="mono" id="tlbl" style="width:150px;text-align:right"></span>
+				</div>
+				<div class="row dim" id="recName"></div>
+			</div>
+			<div id="log" style="display:none"></div>
+			<div id="perf" style="display:none"><canvas id="perfCv"></canvas></div>
+		</div>
+	</div>
+</div>
+
+<div id="tip"></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ============================== scripted data ============================== */
+const LOOP = 6, W = 2 * Math.PI / LOOP, FPS = 30;
+const app = { setup: "tri", scenario: "ok", t: 0, mode: "live", playing: true, sel: null, avatar: true, chain: "larm", ch: {}, fx: {}, sbs: false };
+
+const SETUPS = {
+	tri: { name: "Desk tri-camera", cams: [
+		{ id: "cam0", label: "cam0 overhead", kind: "over", body: false },
+		{ id: "cam1", label: "cam1 overhead", kind: "over", body: false },
+		{ id: "cam2", label: "cam2 front", kind: "front", body: "RTMPose" } ], imu: true },
+	dual: { name: "Desk dual", cams: [
+		{ id: "cam0", label: "cam0 overhead", kind: "over", body: false },
+		{ id: "cam1", label: "cam1 overhead", kind: "over", body: false } ], imu: false },
+	direct: { name: "Webcam direct", cams: [
+		{ id: "cam0", label: "cam0 webcam", kind: "front", body: "RTMW3D" } ], imu: false },
+};
+const isMulti = () => app.setup !== "direct";
+const lostNow = () => app.scenario === "dropout" && app.t >= 2 && app.t < 4;
+const lostAge = () => lostNow() ? app.t - 2 : 0;
+const noExt = () => isMulti() && app.scenario === "noext";
+const imuGone = () => app.setup === "tri" && app.scenario === "noimu";
+const wob = (k, a) => a * Math.sin(app.t * W * k);
+
+/* retarget chains: the settings the Retarget stage edits. Defaults follow the project's pipeline. */
+const CHAINS = [["torso", "Torso"], ["head", "Head"], ["larm", "Left arm"], ["rarm", "Right arm"], ["lhand", "Left hand"], ["rhand", "Right hand"]];
+function chainDefaults() {
+	const m = isMulti(), arm = () => ({ mode: m ? "ik" : "angle", ik: 1, reach: 1, pole: 1, hold: m ? 250 : 500, earned: !m, after: m ? "freeze" : "rest", blend: 300 });
+	app.ch = { torso: { hold: 500, after: "rest", blend: 300 }, head: { hold: 500, after: "rest", blend: 300 }, larm: arm(), rarm: arm(), lhand: { curl: 1, splay: 1 }, rhand: { curl: 1, splay: 1 } };
+	app.fx = {};
+}
+const chainSide = c => c[0] === "l" ? 0 : 1, sideName = c => c[0] === "l" ? "left" : "right";
+const clamp01 = v => Math.max(0, Math.min(1, v)), sstep = (a, b, x) => { const k = clamp01((x - a) / (b - a)); return k * k * (3 - 2 * k); };
+/* the source pose's confidence for one arm on the shown frame */
+function conf(i) {
+	if (noExt()) return 0;
+	if (i === 0 && lostNow()) return Math.max(0, 0.92 * (1 - lostAge() / Math.max(app.ch.larm.hold / 1000, 0.001)));
+	return i ? 0.90 + wob(3, 0.03) : 0.92 + wob(2, 0.03);
+}
+/* a parameter can be a plain value or a function over the source pose (the fx toggle). The expression text is inert in the mockup. */
+const FX = {
+	ik: { expr: c => `smoothstep(0.3, 0.7, source.${sideName(c)}Hand.confidence)`, fn: c => sstep(0.3, 0.7, conf(chainSide(c))) },
+	reach: { expr: c => `1.0`, fn: c => 1 },
+	pole: { expr: c => `clamp(source.${sideName(c)}LowerArm.confidence / 0.5, 0, 1)`, fn: c => clamp01(conf(chainSide(c)) * 0.9 / 0.5) },
+	curl: { expr: c => `0.9 + 0.2 * source.${sideName(c)}Hand.confidence`, fn: c => 0.9 + 0.2 * conf(chainSide(c)) },
+	splay: { expr: c => `1.0`, fn: c => 1 },
+};
+const P = (c, k) => app.fx[c + "." + k] ? FX[k].fn(c) : app.ch[c][k];
+function setP(c, k, v, rebuildAll) { app.ch[c][k] = v; if (rebuildAll) rebuildInspectors(); }
+function toggleFx(key) { app.fx[key] = !app.fx[key]; rebuildInspectors(); }
+const AFTER = { freeze: "freeze", rest: "ease to rest", release: "release" };
+function chainSummary(k) {
+	const c = app.ch[k];
+	if (k === "torso") return isMulti() ? "not measured, stays at rest" : "lean, limit 45 deg";
+	if (k === "head") return (app.setup === "dual" ? "not measured" : "full frame, limit 70 deg");
+	if (k.endsWith("hand")) return "palm frame, curl " + (app.fx[k + ".curl"] ? "fx" : c.curl.toFixed(2)) + ", follows its arm";
+	return (c.mode === "ik" ? "IK " + (app.fx[k + ".ik"] ? "fx" : (+c.ik).toFixed(2)) : "bone angles") + ", " + (c.earned ? "earned hold" : c.hold + " ms") + " then " + AFTER[c.after];
+}
+
+/* ============================ stage definitions ============================ */
+const META = {
+	capture: ["Capture", "Per-camera frames and the models that run on them: video capture and undistortion, the hand models, the optional body model, and the lift into camera and world space."],
+	video: ["Video", "Frame capture, conversion to BGR, undistortion with the camera's intrinsics, and the luminance flicker check."],
+	hands: ["Hand models", "Palm detection and hand landmarks on this camera's frame, producing 2D landmarks per hand slot."],
+	bodym: ["Body model", "Person detection and the RTMPose-family landmark model on this camera, on its own frame divider."],
+	lift: ["Lift", "2D landmarks lifted to camera space, then moved to world space when the camera has extrinsics."],
+	fusion: ["Fusion", "Clusters every camera's world-space hands into one hand per side, triangulates where two cameras agree, and runs the hand state estimator."],
+	imu: ["IMU", "Wrist-strapped Joy-Con orientation filtered and anchored to the fused palm's yaw, giving the forearm orientation."],
+	body: ["Body solver", "Places shoulders, elbows and the head in the world from the body camera's 2D landmarks, the calibrated lengths and the fused wrists."],
+	direct: ["Direct solver", "Solves the torso, head and arm chains from one camera's landmark rays with no world calibration. Stands in for Fusion, IMU and Body solver."],
+	filters: ["Filters and gates", "One Euro filtering of pixels and depths, landmark visibility gates, and the 3-frame entry gate for an arm coming from rest."],
+	torso: ["Torso and head", "Shoulder depth from the known shoulder width, the lean from the neutral capture, and the head from the ears and nose or the phone."],
+	arm: ["Arm chain", "The wrist's distance along its ray, scored over the reachable interval, with the elbow on the bone circle."],
+	palm: ["Palm and fingers", "The camera-space palm with its depth mirror resolved by the forearm, and finger angles against each finger's metacarpal."],
+	hold: ["Hold and rest", "Each group holds its last solution for the hold it has earned, then eases to the rig's rest pose."],
+	source: ["Source pose", "The hand-off both pipelines share: a humanoid-indexed skeleton in the user's proportions with per-bone confidence, which of position, direction and roll were measured, and the finger angle table."],
+	retarget: ["Retarget", "Maps the source pose onto the avatar's skeleton, chain by chain, by bone angles or by IK toward a goal, and applies the loss policy."],
+	output: ["Output", "Turns the avatar pose into VMC bones and face values and sends them over UDP."],
+	rules: ["Delivery rules", "Confidence threshold and send rate. VMC has no tracked flag, so validity is expressed through which bones arrive."],
+	vmc: ["VMC stream", "The encoded OSC bundles: bones, blend values, the avatar announcement, and the target address."],
+	face: ["Face and mouth", "The phone face stream and the microphone visemes, evaluated through the avatar's active face profile."],
+	phone: ["Phone", "The iFacialMocap UDP stream: 52 ARKit blendshapes and the head rotation."],
+	mic: ["Microphone", "Audio capture and the mouth model that turns it into visemes."],
+	profile: ["Profile", "The active face profile's expressions evaluated over the phone and microphone sources into VRM expression and morph target values."],
+};
+const SUBS = { direct: ["filters", "torso", "arm", "palm", "hold"], face: ["phone", "mic", "profile"], output: ["rules", "vmc"] };
+const topRow = () => isMulti() ? ["capture", "fusion", "imu", "body", "source", "retarget", "output"] : ["capture", "direct", "source", "retarget", "output"];
+const leaf = id => id.split(".").pop();
+const isCam = id => id.split(".").length === 2 && id.startsWith("capture.");
+const descOf = id => isCam(id) ? "One camera's device, video mode and calibration, and the per-camera stages that run on its frames." : META[leaf(id)][1];
+const parentOf = id => id.split(".")[0];
+const cam = id => SETUPS[app.setup].cams.find(c => c.id === id.split(".")[1]);
+function nameOf(id) {
+	const p = id.split(".");
+	return p[0] === "capture" && p.length > 1 ? (p.length === 2 ? cam(id).label : cam(id).label + " / " + META[p[2]][0]) : META[leaf(id)][0];
+}
+
+/* status of one stage on the shown frame: st is run, deg, off or cfg */
+function S(id) {
+	const p = id.split("."), su = SETUPS[app.setup], lost = lostNow(), age = lostAge();
+	const R = (val, why) => ({ st: "run", val, why: why || "" });
+	const D = (val, why) => ({ st: "deg", val, why });
+	const OFF = (val, why) => ({ st: "off", val, why });
+	const CFG = (val, why) => ({ st: "cfg", val, why });
+	const fps = (30 - Math.abs(wob(3, 0.4))).toFixed(1);
+	switch (p[0]) {
+	case "capture": {
+		const nc = su.cams.length + (su.cams.length > 1 ? " cams, " : " cam, ");
+		if (p.length === 1) return noExt() ? D(nc + "no world", "No camera has extrinsics, so nothing is lifted to world space.")
+			: lost ? D(nc + "1 hand", "The left hand is not detected on any camera.") : R(nc + fps + " fps");
+		const c = cam(id);
+		if (p.length === 2) return S(id + ".hands");
+		if (p[2] === "video") return R(fps + " fps");
+		if (p[2] === "hands") return lost ? D("1 hand", "No palm detection for the left hand on this camera.") : R("2 hands");
+		if (p[2] === "bodym") return c.body ? R(c.body + " 0.8" + (4 + Math.round(wob(2, 2)))) : OFF("off", "Body pose is not enabled on this camera.");
+		if (p[2] === "lift") return !isMulti() ? R("camera space", "Direct mode has no world. The camera is the world.")
+			: noExt() ? CFG("camera space", "This camera has no extrinsics. Run the extrinsics wizard to lift into world space.") : R("world");
+		break; }
+	case "fusion":
+		if (noExt()) return CFG("passthrough", "No camera has a world pose, so camera 0's camera-space result passes through unchanged. Run the extrinsics wizard.");
+		if (lost) return D("L lost", "The left hand has no fresh observation from any camera.");
+		return R("conf " + (0.92 + wob(2, 0.03)).toFixed(2));
+	case "imu":
+		if (!su.imu) return OFF("no IMUs", "This project has no wrist IMUs.");
+		if (imuGone()) return CFG("0 of 2", "Two Joy-Cons are configured and neither is connected. Close Steam or BetterJoy if the HID open fails.");
+		if (noExt()) return D("no yaw anchor", "The filter anchors yaw to the fused palm, which needs a world pose.");
+		return app.mode === "replay" ? R("recorded", "The IMU filter is not replayed. The recorded forearm output is overlaid.") : R("200 Hz");
+	case "body":
+		if (app.setup === "dual") return OFF("no body camera", "No camera in this project runs the body model.");
+		if (noExt()) return OFF("no wrists", "The solve is anchored to world-space wrists, and there are none without extrinsics.");
+		if (lost) return D("L dead reckon", "The left wrist is lost, so the left elbow is inferred from the last direction.");
+		return imuGone() ? R("elbows 0.81", "Forearms come from this solver because no IMU claims them.") : R("elbows 0.84");
+	case "direct": {
+		const resting = lost && age > 0.5;
+		if (p.length === 1) return lost ? D(resting ? "L arm resting" : "L arm held", "The left wrist landmark is below the visibility bar.") : R("depth " + (0.62 + wob(1, 0.02)).toFixed(2) + " m");
+		if (p[1] === "filters") return lost ? D("L wrist gated", "Left wrist visibility is under 0.5.") : R("9 landmarks");
+		if (p[1] === "torso") return R("lean " + Math.abs(wob(1, 6)).toFixed(0) + " deg");
+		if (p[1] === "arm") return lost ? D("1 chain", "No left chain: the wrist has no ray this frame.") : R("elbow miss 4 px");
+		if (p[1] === "palm") return lost ? D("L held", "The left hand slot is lost, so its palm and fingers hold.") : R("2 palms");
+		if (p[1] === "hold") return lost ? D(resting ? "L easing to rest" : "L hold " + Math.round(age * 1000) + " ms", "The left arm is past its last measurement.") : R("all live");
+		break; }
+	case "source": {
+		if (noExt()) return D("face only", "No world-anchored hands, so no arm bones are measured.");
+		const n = isMulti() ? (app.setup === "tri" ? 40 : 34) : 44;
+		return lost ? D((n - 17) + " of 55 bones", "The left arm and hand are lost.") : R(n + " of 55 bones");
+	}
+	case "retarget":
+		if (!app.avatar) return CFG("no avatar", "No avatar is loaded, so the measured-length chain streams as it is. Load a VRM to retarget.");
+		if (noExt()) return OFF("nothing to pose", "The source pose has no arm bones.");
+		if (lost) return D({ held: "L held", frozen: "L frozen", rest: "L ease to rest", released: "L released" }[arms().arms[0].mode], "The left arm chain is following its loss policy.");
+		return R(app.ch.larm.mode !== app.ch.rarm.mode ? "arms mixed" : app.ch.larm.mode === "ik" ? "arms IK" : "arms angle");
+	case "output":
+		if (p.length === 1 || p[1] === "vmc") return noExt() ? D("face only, 60 Hz", "A hand needs a world-anchored palm to be streamed, so only face values go out.") : R("60 Hz to :39539");
+		return R("min conf 0.30");
+	case "face":
+		if (p.length === 1) return R(app.setup === "dual" ? "mic only" : "phone and mic");
+		if (p[1] === "phone") return app.setup === "dual" ? OFF("not streaming", "No phone face stream is arriving.") : R("60 Hz");
+		if (p[1] === "mic") return R("aa " + Math.abs(wob(4, 0.6)).toFixed(2));
+		return R(app.avatar ? "Auto, 52 targets" : "Auto, ARKit names");
+	}
+	return R("");
+}
+const STLABEL = { run: "Running", deg: "Degraded", off: "Inactive", cfg: "Not configured" };
+
+/* ================================ strip UI ================================ */
+const $ = id => document.getElementById(id);
+function stageEl(id, cls) {
+	const s = S(id), e = document.createElement("div");
+	e.className = "stage " + (cls || "") + (s.st === "off" ? " off" : "");
+	e.dataset.id = id;
+	const nm = cls && cls.includes("sub") && !isCam(id) ? META[leaf(id)][0] : nameOf(id);
+	e.innerHTML = cls && (cls.includes("sub") || cls.includes("side") || cls.includes("pill"))
+		? `<i class="dot ${s.st}"></i><span class="n">${nm}</span><span class="v">${s.val}</span>`
+		: `<span class="n">${nm}</span><span class="v"><i class="dot ${s.st}"></i><span>${s.val}</span></span>`;
+	return e;
+}
+function arrowEl(cls) { const a = document.createElement("div"); a.className = "arrow " + (cls || ""); return a; }
+
+function buildStrip() {
+	const top = $("top"), row = topRow();
+	top.innerHTML = "";
+	top.style.gridTemplateColumns = row.map((_, i) => i ? "26px auto" : "auto").join(" ");
+	row.forEach((id, i) => {
+		if (i) { const a = arrowEl(); a.style.gridRow = 1; a.style.gridColumn = 2 * i; top.appendChild(a); }
+		const e = stageEl(id, id === "source" ? "pill" : "");
+		e.style.gridRow = 1; e.style.gridColumn = 2 * i + 1;
+		if (id === "source") e.style.alignSelf = "center";
+		top.appendChild(e);
+	});
+	const ri = row.indexOf("retarget");
+	const f = stageEl("face", "side"); f.style.gridRow = 2; f.style.gridColumn = 2 * ri + 1; top.appendChild(f);
+	const el = document.createElement("div"); el.className = "elbow"; el.style.gridRow = 2; el.style.gridColumn = 2 * ri + 2; top.appendChild(el);
+
+	const sub = $("subrow"); sub.innerHTML = "";
+	const par = app.sel ? parentOf(app.sel) : null;
+	if (par === "capture") {
+		SETUPS[app.setup].cams.forEach(c => {
+			const lane = document.createElement("div"); lane.className = "lane";
+			const l = stageEl("capture." + c.id, "sub camlbl"); lane.appendChild(l); lane.appendChild(arrowEl("sm"));
+			["video", "hands", "bodym", "lift"].forEach((k, i) => { if (i) lane.appendChild(arrowEl("sm")); lane.appendChild(stageEl("capture." + c.id + "." + k, "sub")); });
+			sub.appendChild(lane);
+		});
+	} else if (par && SUBS[par]) {
+		const lane = document.createElement("div"); lane.className = "lane";
+		const l = document.createElement("span"); l.className = "lbl"; l.textContent = META[par][0]; lane.appendChild(l);
+		SUBS[par].forEach((k, i) => {
+			if (i && par !== "face") lane.appendChild(arrowEl("sm")); else if (i) { const g = document.createElement("span"); g.style.width = "10px"; lane.appendChild(g); }
+			lane.appendChild(stageEl(par + "." + k, "sub"));
+		});
+		sub.appendChild(lane);
+	} else {
+		const n = document.createElement("div"); n.className = "none";
+		n.textContent = par ? META[par][0] + " has no sub-stages." : "Select a stage. Stages with sub-stages open here. Double-click pins a stage into its own window.";
+		sub.appendChild(n);
+	}
+	document.querySelectorAll(".stage").forEach(e => {
+		const id = e.dataset.id;
+		if (id === app.sel) e.classList.add("sel");
+		else if (app.sel && id === parentOf(app.sel)) e.classList.add("par");
+	});
+}
+function refreshStrip() {
+	document.querySelectorAll(".stage").forEach(e => {
+		const s = S(e.dataset.id);
+		e.classList.toggle("off", s.st === "off");
+		e.querySelector(".dot").className = "dot " + s.st;
+		const v = e.querySelector(".v"); (v.querySelector("span") || v).textContent = s.val;
+	});
+}
+function select(id) {
+	app.sel = id === app.sel ? null : id;
+	buildStrip(); buildInspector();
+}
+document.addEventListener("click", e => {
+	const ch = e.target.closest(".chain");
+	if (ch) { app.chain = ch.dataset.chain; return rebuildInspectors(); }
+	const st = e.target.closest(".stage");
+	if (st) return select(st.dataset.id);
+	if (e.target.closest("#view canvas")) {
+		if (app.sel === "retarget") { const k = hitChain(e); if (k) { app.chain = k; rebuildInspectors(); } return; }
+		return select(app.sel);
+	}
+});
+document.addEventListener("dblclick", e => {
+	const st = e.target.closest(".stage"); if (!st) return;
+	if (app.sel !== st.dataset.id) select(st.dataset.id);
+	pinStage(st.dataset.id);
+});
+
+/* hover text */
+document.addEventListener("mousemove", e => {
+	const st = e.target.closest && e.target.closest(".stage"), tip = $("tip");
+	if (!st) { tip.style.display = "none"; return; }
+	const id = st.dataset.id, s = S(id);
+	tip.innerHTML = `<b>${nameOf(id)}</b>${descOf(id)}` + (s.why ? `<div class="r" style="color:${s.st === "run" ? "var(--dim)" : s.st === "cfg" ? "var(--error)" : "var(--warn)"}">${STLABEL[s.st]}: ${s.why}</div>` : "");
+	tip.style.display = "block";
+	tip.style.left = Math.min(e.clientX + 14, innerWidth - 340) + "px"; tip.style.top = (e.clientY + 18) + "px";
+});
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", 2200); }
+
+/* ============================ inspector widgets ============================ */
+/* rows are inert copies of today's controls. f may be a string or a function of the shown frame. */
+const w = {
+	chk: (l, on) => ({ t: "chk", l, on }), sl: (l, v, min, max, u) => ({ t: "sl", l, v, min, max, u: u || "" }),
+	cb: (l, opts, i) => ({ t: "cb", l, opts, i: i || 0 }), inp: (l, v) => ({ t: "inp", l, v }),
+	btn: (...ls) => ({ t: "btn", ls }), ro: (l, f) => ({ t: "ro", l, f }), bar: (l, f) => ({ t: "bar", l, f }),
+	note: x => ({ t: "note", x }), h: x => ({ t: "h", x }), cal: (l, f, btn) => ({ t: "cal", l, f, btn }),
+	tbl: (cols, rows) => ({ t: "tbl", cols, rows }),
+	grp: (title, rows, open) => ({ t: "grp", title, rows, open }), v3: (l, v, u) => ({ t: "v3", l, v, u }),
+	checks: (l, names) => ({ t: "checks", l, names }), radio: (l, opts, i) => ({ t: "radio", l, opts, i }),
+	chains: () => ({ t: "chains" }), bsl: (c, k, l, min, max, u) => ({ t: "bsl", c, k, l, min, max, u: u || "" }),
+	pick: (c, k, l, opts) => ({ t: "pick", c, k, l, opts }), bchk: (c, k, l) => ({ t: "bchk", c, k, l }),
+	fx: (c, k, l, min, max, u) => ({ t: "fx", c, k, l, min, max, u: u || "" }),
+};
+let liveRows = [], radioSeq = 0, lrPfx = "m";
+const val = f => typeof f === "function" ? f() : f;
+function renderRows(rows) {
+	return rows.filter(Boolean).map(r => {
+		const n = liveRows.length;
+		switch (r.t) {
+		case "grp": return `<details class="grp" ${r.open ? "open" : ""}><summary>${r.title}</summary>${renderRows(r.rows)}</details>`;
+		case "v3": return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="v3">${r.v.map(x => `<input type="text" value="${x.toFixed(r.u ? 3 : 2)}">`).join("")}<span class="dim">${r.u}</span></span></div>`;
+		case "checks": return `<div class="row"><span class="k">${r.l}</span><span class="cks">${r.names.map(x => `<label class="chk"><input type="checkbox" checked>${x}</label>`).join("")}</span></div>`;
+		case "radio": { const g = "rg" + (radioSeq++); return `<div class="row"><span class="k">${r.l}</span><span class="cks">${r.opts.map((x, i) => `<label class="chk"><input type="radio" name="${g}" ${i === r.i ? "checked" : ""}>${x}</label>`).join("")}</span></div>`; }
+		case "chains": return `<div class="chains">${CHAINS.map(([k, nm]) => `<div class="chain ${k === app.chain ? "on" : ""}" data-chain="${k}"><span class="n">${nm}</span><span class="dim">${chainSummary(k)}</span></div>`).join("")}</div>`;
+		case "bsl": case "fx": {
+			const key = r.c + "." + r.k, dec = (r.max - r.min) <= 2 ? 2 : 0, fxb = r.t === "fx" ? `<button class="fxb ${app.fx[key] ? "on" : ""}" title="Value or function" onclick="toggleFx('${key}')">fx</button>` : "";
+			if (r.t === "fx" && app.fx[key]) { liveRows.push({ t: "barv", f: () => FX[r.k].fn(r.c), max: r.max });
+				return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="sl"><input type="text" class="fxin" value="${FX[r.k].expr(r.c)}">${fxb}</span></div><div class="row"><span class="k dim">= value now</span><span class="ibar" id="${lrPfx}lr${n}"><i></i><b></b></span></div>`; }
+			return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="sl"><input type="range" min="${r.min}" max="${r.max}" step="${(r.max - r.min) / 200}" value="${app.ch[r.c][r.k]}" oninput="setP('${r.c}','${r.k}',+this.value);this.nextElementSibling.textContent=(+this.value).toFixed(${dec})+' ${r.u}'"><span class="num">${(+app.ch[r.c][r.k]).toFixed(dec)} ${r.u}</span>${fxb}</span></div>`; }
+		case "pick": return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><select onchange="setP('${r.c}','${r.k}',this.value,true)">${r.opts.map(o => `<option value="${o[0]}" ${app.ch[r.c][r.k] === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}</select></div>`;
+		case "bchk": return `<div class="row wide"><label class="chk"><input type="checkbox" ${app.ch[r.c][r.k] ? "checked" : ""} onchange="setP('${r.c}','${r.k}',this.checked,true)">${r.l}</label></div>`;
+		case "h": return `<div class="subh">${r.x}</div>`;
+		case "note": return `<div class="inote">${r.x}</div>`;
+		case "chk": return `<div class="row wide"><label class="chk"><input type="checkbox" ${r.on ? "checked" : ""}>${r.l}</label></div>`;
+		case "sl": { const dec = (r.max - r.min) <= 2 ? 2 : (r.max - r.min) <= 20 ? 1 : 0;
+			return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="sl"><input type="range" min="${r.min}" max="${r.max}" step="${(r.max - r.min) / 200}" value="${r.v}" oninput="this.nextElementSibling.textContent=(+this.value).toFixed(${dec})+' ${r.u}'"><span class="num">${(+r.v).toFixed(dec)} ${r.u}</span></span></div>`; }
+		case "cb": return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><select>${r.opts.map((o, i) => `<option ${i === r.i ? "selected" : ""}>${o}</option>`).join("")}</select></div>`;
+		case "inp": return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><input type="text" value="${r.v}"></div>`;
+		case "btn": return `<div class="btnrow">${r.ls.map(l => `<button>${l}</button>`).join("")}</div>`;
+		case "ro": liveRows.push(r); return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="ro" id="${lrPfx}lr${n}"></span></div>`;
+		case "bar": liveRows.push(r); return `<div class="row"><span class="k" title="${r.l}">${r.l}</span><span class="ibar" id="${lrPfx}lr${n}"><i></i><b></b></span></div>`;
+		case "cal": liveRows.push(r); return `<div class="calrow" id="${lrPfx}lr${n}"><i class="dot"></i><span><span>${r.l}</span> <span class="s"></span></span>${r.btn ? `<button>${r.btn}</button>` : "<span></span>"}</div>`;
+		case "tbl": liveRows.push(r); return `<table class="it" id="${lrPfx}lr${n}"><thead><tr>${r.cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody></tbody></table>`;
+		}
+		return "";
+	}).join("");
+}
+function refreshRows(I) {
+	I.live.forEach((r, n) => {
+		const e = $(I.pfx + "lr" + n); if (!e) return;
+		if (r.t === "barv") { const v = val(r.f); e.firstChild.style.width = (clamp01(v / r.max) * 100) + "%"; e.lastChild.textContent = v.toFixed(2); return; }
+		if (r.t === "ro") e.textContent = val(r.f);
+		else if (r.t === "bar") { const v = Math.max(0, Math.min(1, val(r.f))); e.firstChild.style.width = (v * 100) + "%"; e.lastChild.textContent = v.toFixed(2); }
+		else if (r.t === "cal") { const c = val(r.f); e.querySelector(".dot").className = "dot " + (c[0] ? "run" : "cfg"); e.querySelector(".s").textContent = c[1]; }
+		else if (r.t === "tbl") e.tBodies[0].innerHTML = val(r.rows).map(x => `<tr>${x.map(c => `<td>${c}</td>`).join("")}</tr>`).join("");
+	});
+}
+/* INSP[leaf] = ctx => ({ inputs, settings, diag }), filled in the inspector contents section */
+const INSP = {};
+
+/* ============================ inspector contents ============================ */
+/* Every row is a control or readout from today's Tracking, OSC, Avatar, Audio, Calibration or Device panel, unless marked (new). */
+const camIdx = c => SETUPS[app.setup].cams.indexOf(c);
+const tms = (b, k, a, d) => (b + Math.abs(wob(k, a))).toFixed(d == null ? 2 : d) + " ms";
+const calIntr = () => w.cal("Intrinsics", () => [true, "1280x720, reproj 0.412 px, hfov 78.3, vfov 49.6"], "Calibrate Intrinsics...");
+const calExtr = () => isMulti() ? w.cal("Extrinsics", () => noExt() ? [false, "not calibrated"] : [true, "camera height 1.17 m"]) : null;
+const calExtrAll = () => isMulti() ? [w.cal("Extrinsics (all cameras)", () => noExt() ? [false, "no camera is calibrated"] : [true, "one shared marker session"], "Calibrate Extrinsics..."),
+	w.note("All cameras are calibrated in one session against the same marker placement. That marker defines the world space fusion happens in. If it moves, recalibrate.")] : [];
+const sgn = x => (+x >= 0 ? "+" : "") + x;
+const fingerRows = i => () => { const a = arms().arms[i]; if (a.mode !== "live") return [["not tracked", "", "", "", ""]];
+	return ["Thumb", "Index", "Middle", "Ring", "Pinky"].map((n, f) => [n, sgn((f ? (f - 2) * 3 : 18).toFixed(0)), sgn((a.curl * (f ? 62 : 20)).toFixed(0)), sgn((a.curl * (f ? 70 : 28)).toFixed(0)), sgn((a.curl * (f ? 44 : 30)).toFixed(0))]); };
+const xyz = v => "(" + v.map(x => x.toFixed(3)).join(", ") + ") m";
+
+INSP.capture = c => ({
+	inputs: [w.btn("Rescan Devices", "Add Camera"), ...c.su.cams.map(k => w.cal(k.label, () => [!noExt(), "intrinsics calibrated" + (isMulti() ? (noExt() ? ", no extrinsics" : ", extrinsics calibrated") : "")])), ...calExtrAll()],
+	settings: [w.chk("Flip handedness", false), w.note("The hand model assumes a mirrored selfie view. Enable for a normal, non-mirrored camera.")],
+	diag: [w.ro("Inference (all cameras)", () => tms(c.su.cams.length * 6.2, 3, 1.5, 1)),
+		...c.su.cams.map((k, i) => w.ro("Camera " + (i + 1) + " EP", "DmlExecutionProvider")),
+		w.h("Capture timing"),
+		w.tbl(["Step", ...c.su.cams.map((k, i) => "Cam " + (i + 1))], () => [["Queue age", 1.8, 1], ["Raw to BGR", 0.62, 2], ["Undistort", 0.91, 2], ["Flicker", 0.08, 2], ["Hand inference", 5.4, 1], ["Body pose", 3.9, 1], ["ROI quality", 0.21, 2], ["3D lift", 0.12, 2], ["Preview copy", 0.33, 2], ["Total", 12.6, 1], ["Callback copy", 0.4, 2], ["Queued frames", 0, 0], ["Dropped frames", 0, 0]]
+			.map(r => [r[0], ...c.su.cams.map((k, i) => r[0] === "Body pose" && !k.body ? "-" : (r[1] * (1 + 0.06 * i) + Math.abs(wob(2 + i, r[1] * 0.08))).toFixed(r[2]) + (r[0].includes("frames") ? "" : " ms"))]))],
+});
+INSP.camera = c => ({
+	inputs: [w.cb("Device", ["AVerMedia PW315", "EMEET C960", "EMEET C960 (2)", "Logitech C920"], c.su.cams.length === 1 ? 3 : Math.min(camIdx(c.cam), 2)),
+		w.cb("Resolution", ["1280x720", "1920x1080", "640x480"]), w.cb("Frame Rate", ["30 fps", "60 fps", "15 fps"]), w.cb("Format", ["NV12", "YUY2", "MJPG"]),
+		w.btn("Stop Stream"), w.ro("Mode", "1280x720@30fps (NV12)"), w.ro("Device delivering", () => (30 - Math.abs(wob(3, 0.4))).toFixed(1) + " fps"),
+		calIntr(), calExtr(), camIdx(c.cam) > 0 ? w.btn("Remove Camera") : null],
+	settings: [w.chk("Body pose on this camera", !!c.cam.body), c.cam.body ? w.cb("Model", ["RTMPose body (2D)", "RTMW3D whole body (3D)"], c.cam.body === "RTMW3D" ? 1 : 0) : null],
+	diag: [w.ro("Total per frame", () => tms(12.6, 2, 1.1, 1)), w.ro("Dropped frames", "0")],
+});
+INSP.video = c => ({
+	inputs: [calIntr(), w.note("Undistortion runs only once intrinsics exist.")],
+	settings: [w.grp("Camera Settings", [w.sl("Exposure", -6, -11, -2), w.sl("Gain", 64, 0, 255), w.sl("Brightness", 128, 0, 255), w.sl("Contrast", 128, 0, 255), w.sl("Saturation", 128, 0, 255),
+		w.sl("Sharpness", 128, 0, 255), w.sl("White Balance", 4600, 2800, 6500), w.sl("Focus", 0, 0, 250), w.sl("Zoom", 100, 100, 500), w.btn("Reset Defaults", "Re-read"),
+		w.note("Dragging Exposure switches the camera to manual exposure. Auto exposure in dim light can halve the frame rate.")], true)],
+	diag: [w.h("Image quality, worst tracked hand, 1 s average"),
+		w.tbl(["Metric", "Value", "Good"], () => [["Luminance", (128 + wob(1, 6)).toFixed(0), "90 to 180"], ["Highlight clip", "0.3%", "under 1%"], ["Shadow clip", (camIdx(c.cam) === 0 ? 7.2 : 2.1).toFixed(1) + "%", "under 5%"],
+			["Contrast", "41", "30 or more"], ["Separation", "27", "20 or more"], ["Sharpness", "1840", "1000 or more"], ["Noise", (2.6 + Math.abs(wob(4, 0.3))).toFixed(1), "under 4"], ["Flicker", "0.8%", "under 2%"]]),
+		w.h("Timing"), w.ro("Queue age", () => tms(1.8, 2, 0.4, 1)), w.ro("Raw to BGR", () => tms(0.62, 3, 0.05)), w.ro("Undistort", () => tms(0.91, 2, 0.06)), w.ro("Flicker", () => tms(0.08, 2, 0.01)),
+		w.ro("Preview copy", () => tms(0.33, 3, 0.03)), w.ro("Callback copy", () => tms(0.4, 2, 0.03)), w.ro("Queued frames", "0"), w.ro("Dropped frames", "0")],
+});
+INSP.hands = c => ({
+	settings: [w.h("View"), w.chk("Show skeleton overlay", true), w.chk("Show detection boxes", false), !c.multi ? w.chk("Show every hand slot", false) : null],
+	diag: [w.ro("Execution provider", "DmlExecutionProvider"), w.ro("Hand inference", () => tms(5.4, 2, 0.5, 1)), w.ro("ROI quality", () => tms(0.21, 3, 0.02)),
+		w.ro("Hand slots (new)", () => lostNow() ? "R tracked, L free" : "L tracked, R tracked")],
+});
+INSP.bodym = c => ({
+	settings: [w.chk("Body pose on this camera", !!c.cam.body), w.cb("Model", ["RTMPose body (2D)", "RTMW3D whole body (3D)"], c.cam.body === "RTMW3D" ? 1 : 0),
+		w.note("Opt-in per camera. Use it on a camera that sees the user upright. Leave overhead cameras off."), w.h("View"), w.chk("Show body landmarks", true)],
+	diag: c.cam.body ? [w.ro("Body pose", () => tms(3.9, 2, 0.4, 1)), w.ro("Person box (new)", "tracked from last keypoints"), w.ro("Mean keypoint score (new)", () => (0.84 + wob(2, 0.02)).toFixed(2))] : [],
+});
+INSP.lift = c => ({
+	inputs: [calIntr(), calExtr()],
+	diag: [w.ro("3D lift", () => tms(0.12, 2, 0.01)), w.ro("Output space (new)", () => !isMulti() || noExt() ? "camera" : "world")],
+});
+INSP.fusion = c => ({
+	inputs: [...calExtrAll(),
+		w.cal("Hand bones", () => [true, "L yes, R yes"]), w.cal("Rest pose", () => [true, "L yes, R yes"]), w.btn("Calibrate Hands...", "Clear Hand Calibration"),
+		w.ro("Hand scale seed", "8.9 cm (auto-measured from stereo)")],
+	settings: [w.h("View"), w.chk("3D: per-camera skeletons", true)],
+	diag: [w.ro("Dominant camera", () => noExt() ? "L: -  R: -" : lostNow() ? "L: -  R: 2" : "L: 1  R: 2"),
+		w.tbl(["", "Left", "Right"], () => c.su.cams.map((k, i) => ["Camera " + (i + 1), noExt() || lostNow() ? "-" : (0.9 - i * 0.07 + wob(2 + i, 0.03)).toFixed(2), noExt() ? "-" : (0.86 + i * 0.03 + wob(1 + i, 0.03)).toFixed(2)])),
+		w.ro("Hand scale measured", () => noExt() ? "-" : (8.9 + wob(1, 0.05)).toFixed(2) + " cm (x1.012)"),
+		w.h("Fused hands"),
+		w.ro("Left palm", () => { const a = arms().arms[0]; return a.mode === "live" ? xyz(a.wr) : "not tracked"; }),
+		w.ro("Right palm", () => { const a = arms().arms[1]; return a.mode === "live" ? xyz(a.wr) : "not tracked"; }),
+		w.h("Hold-still jitter test"), w.btn("Hold-Still Jitter Test"), w.ro("Jitter", "L: 3.3 mm  R: 1.7 mm")],
+});
+INSP.imu = c => ({
+	inputs: [w.cal("Mounting calibration", () => [!imuGone() && c.su.imu, c.su.imu ? (imuGone() ? "devices not connected" : "L and R calibrated") : "no devices"], "Calibrate Mounting...")],
+	settings: [w.chk("Enable wrist IMU", c.su.imu), w.chk("Swap wrists", false), w.sl("Forearm length", 0.26, 0.10, 0.40, "m")],
+	diag: [w.tbl(["Wrist", "Device", "Rate", "Yaw drift", "Roll error"], () => !c.su.imu || imuGone() ? [["Left", "none", "-", "-", "-"], ["Right", "none", "-", "-", "-"]]
+		: [["Left", "Joy-Con (L)", "200 Hz  78%", (0.35 + wob(2, 0.02)).toFixed(2) + " deg/s", "+3 deg"], ["Right", "Joy-Con (R)", "200 Hz  64%", (0.40 + wob(3, 0.02)).toFixed(2) + " deg/s", "-2 deg"]]),
+		w.h("Forearm and wrist"),
+		w.ro("Left wrist bend", () => S("imu").st === "run" ? (12 + wob(2, 8)).toFixed(0) + " deg" : "no measured forearm"),
+		w.ro("Right wrist bend", () => S("imu").st === "run" ? (9 + wob(3, 6)).toFixed(0) + " deg" : "no measured forearm"),
+		w.ro("Left forearm quat", () => S("imu").st === "run" ? "(0.021, 0.188, -0.064, 0.980)" : "-"), w.ro("Left wrist quat", () => S("imu").st === "run" ? "(0.010, 0.104, 0.012, 0.994)" : "-"),
+		w.ro("Right forearm quat", () => S("imu").st === "run" ? "(-0.018, 0.172, 0.071, 0.982)" : "-"), w.ro("Right wrist quat", () => S("imu").st === "run" ? "(0.008, 0.079, -0.015, 0.997)" : "-")],
+});
+INSP.body = c => ({
+	inputs: [w.cal("Body camera", () => [app.setup === "tri", app.setup === "tri" ? "cam2 front, RTMPose" : "no camera runs the body model"]),
+		w.cal("Body measurements", () => [true, "measured with the wizard"], "Measure My Body..."),
+		w.note("Only lengths are assumed. Every direction is measured. The lengths are landmark-space, not anatomical.")],
+	settings: [w.chk("Upper arm from shoulder width", true), w.sl("Upper arm ratio", 0.98, 0.80, 1.40, "x"), w.ro("Resulting upper arm", "35.3 cm"),
+		w.sl("Shoulder width", 0.36, 0.25, 0.60, "m"), w.sl("Head width", 0.15, 0.10, 0.22, "m"), w.sl("Nose forward", 0.10, 0.05, 0.18, "m")],
+	diag: [w.ro("Left elbow", () => S("body").st === "off" ? "-" : xyz(arms().arms[0].el)), w.ro("Right elbow", () => S("body").st === "off" ? "-" : xyz(arms().arms[1].el)),
+		w.ro("Elbow source (new)", () => S("body").st === "off" ? "-" : lostNow() ? "L dead reckoned, R measured" : "both measured"),
+		w.ro("Shoulder confidence (new)", () => S("body").st === "off" ? "-" : (0.88 + wob(2, 0.03)).toFixed(2))],
+});
+INSP.direct = c => ({
+	inputs: [w.cb("Camera", ["Camera 1"]), calIntr(),
+		w.cal("Neutral pose", () => [true, "captured"], "Capture neutral pose"), w.btn("Clear neutral"),
+		w.note("One camera, no world calibration. The avatar's own bone lengths set the scale and the camera is the world."),
+		w.note("Direct mode measures no hand bones and needs no finger zero.")],
+	settings: [w.chk("Direct retarget", true), w.sl("Camera tilt", 10, -30, 60, "deg")],
+	diag: [w.ro("Shoulder depth (new)", () => (0.62 + wob(1, 0.02)).toFixed(2) + " m"), w.ro("Lean (new)", () => Math.abs(wob(1, 6)).toFixed(0) + " deg")],
+});
+INSP.filters = c => ({ diag: [w.ro("Usable landmarks (new)", () => lostNow() ? "8 of 9" : "9 of 9"), w.ro("Left wrist visibility (new)", () => lostNow() ? "0.31" : (0.62 + wob(3, 0.05)).toFixed(2)),
+	w.ro("Right wrist visibility (new)", () => (0.66 + wob(2, 0.04)).toFixed(2)), w.ro("Entry gate (new)", () => lostNow() ? "L closed, 0 of 3 frames" : "both open"),
+	w.note("Pixels filter at 2.5 Hz, depths at 0.6 Hz, palm axes and finger angles at 1.5 Hz.")] });
+INSP.torso = c => ({ inputs: [w.cal("Neutral pose", () => [true, "captured"], "Capture neutral pose")],
+	diag: [w.ro("Shoulder depth (new)", () => (0.62 + wob(1, 0.02)).toFixed(2) + " m"), w.ro("Lean (new)", () => Math.abs(wob(1, 6)).toFixed(0) + " deg of 45"),
+		w.ro("Head source (new)", "phone"), w.ro("Head rotation (new)", () => Math.abs(wob(2, 14)).toFixed(0) + " deg of 70")] });
+INSP.arm = c => ({ diag: [w.tbl(["", "Left", "Right"], () => [["Reach interval", lostNow() ? "-" : "0.21 to 0.58", "0.20 to 0.57"], ["Chosen depth", lostNow() ? "-" : (0.41 + wob(2, 0.03)).toFixed(2) + " m", (0.43 + wob(3, 0.03)).toFixed(2) + " m"],
+	["Elbow miss", lostNow() ? "-" : "4 px", "6 px"], ["Model depth prior", lostNow() ? "-" : "0.38 m", "0.44 m"], ["Hand lift distance", lostNow() ? "-" : "0.40 m", "0.45 m"], ["Lift scale", "1.02", "0.97"]]),
+	w.note("All rows here are new. Today they are only in the F9 dump's solve state.")] });
+INSP.palm = c => ({ diag: [w.ro("Left palm (new)", () => lostNow() ? "held" : "lifted, continues the forearm"), w.ro("Right palm (new)", "mirrored, continues the forearm"),
+	w.ro("Wrist rotation L / R (new)", () => (lostNow() ? "held" : (14 + wob(2, 6)).toFixed(0)) + " / " + (11 + wob(3, 5)).toFixed(0) + " deg of 80"),
+	w.h("Finger angles, metacarpal zero (new)"), w.tbl(["Left", "Lat", "Prox", "Inter", "Dist"], fingerRows(0)), w.tbl(["Right", "Lat", "Prox", "Inter", "Dist"], fingerRows(1))] });
+INSP.hold = c => ({ diag: [w.tbl(["Group", "State (new)"], () => [["Torso", "live"], ["Head", "live"], ["Left arm", lostNow() ? (lostAge() < 0.5 ? "held " + Math.round(lostAge() * 1000) + " ms" : "easing to rest " + Math.round(Math.min((lostAge() - 0.5) / 0.3, 1) * 100) + "%") : "live"], ["Right arm", "live"]]),
+	w.note("The hold duration and what happens after it are the Retarget stage's loss policy.")] });
+const yn = b => b ? "yes" : "-";
+INSP.source = c => ({
+	settings: [w.cb("Finger zero (new)", ["Captured rest pose", "Metacarpal"], c.multi ? 0 : 1), w.note("Set by the pipeline that fills the pose. Retarget reads it to know what zero angles mean."),
+		w.note("Palm +X toward the fingers, +Z out of the palm. Angles in degrees.")],
+	data: [w.h("Bones (new)"), w.tbl(["Bone", "Pos", "Dir", "Roll", "Conf", "State"], () => {
+		const tri = app.setup === "tri", dir = !c.multi, ne = noExt(), st = arms().arms, rows = [];
+		rows.push(["Head", yn(app.setup !== "dual"), yn(app.setup !== "dual"), yn(app.setup !== "dual"), app.setup === "dual" ? "-" : (0.86 + wob(1, 0.03)).toFixed(2), app.setup === "dual" ? "absent" : "measured"]);
+		rows.push(["Spine to Neck", "-", yn(dir), "-", dir ? "0.80" : "-", dir ? "measured" : "absent"]);
+		[["Left", 0], ["Right", 1]].forEach(([n, i]) => {
+			const lost = st[i].mode !== "live", state = ne ? "absent" : lost ? (st[i].mode === "held" ? "held" : "lost") : "measured", cf = ne ? "-" : conf(i).toFixed(2), sh = tri || dir;
+			rows.push([n + "Shoulder", yn(sh && !ne), yn(sh && !ne), "-", sh && !ne ? (0.88 + wob(2, 0.02)).toFixed(2) : "-", sh && !ne ? "measured" : "absent"]);
+			rows.push([n + "UpperArm", yn(sh && !ne), yn(sh && !ne), "-", sh ? cf : "-", sh ? state : "absent"]);
+			rows.push([n + "LowerArm", yn(sh && !ne), yn(!ne), yn(!ne && (app.setup === "tri" ? !imuGone() : true)), cf, state]);
+			rows.push([n + "Hand", yn(!ne), yn(!ne), yn(!ne), cf, state]);
+			rows.push([n + " fingers (15)", "-", "angles", "-", cf, state]);
+		});
+		return rows; }),
+		w.h("Left finger angles"), w.tbl(["Finger", "Lat", "Prox", "Inter", "Dist"], fingerRows(0)),
+		w.h("Right finger angles"), w.tbl(["Finger", "Lat", "Prox", "Inter", "Dist"], fingerRows(1))],
+});
+const lossRows = (k, direct) => [w.h("Loss policy"),
+	direct && k.endsWith("arm") ? w.bchk(k, "earned", "Hold only as long as the arm was placed") : null,
+	w.bsl(k, "hold", direct && k.endsWith("arm") ? "Longest hold" : "Hold", 0, 1000, "ms"),
+	w.pick(k, "after", "Then", [["freeze", "Freeze the last bones"], ["rest", "Ease to the rest pose"], ["release", "Release (receiver's rest)"]]),
+	app.ch[k].after === "rest" ? w.bsl(k, "blend", "Rest blend", 0, 1000, "ms") : null];
+function chainRows(k) {
+	const c = app.ch[k], direct = !isMulti();
+	if (k === "torso") return direct ? [w.sl("Lean limit", 45, 0, 90, "deg"), w.cb("Carry the lean to", ["Spine through Neck", "Spine only"]), ...lossRows(k, direct)]
+		: [w.note("The multi-camera pipeline measures no torso, so this chain stays at the avatar's rest. The root follows the measured shoulders instead (Placement).")];
+	if (k === "head") return [w.cb("Source", ["Phone while it streams, else camera", "Camera only"]), w.v3("Head trim", [0, 0, 0], "deg"), w.sl("Rotation limit", 70, 0, 120, "deg"), ...lossRows(k, direct)];
+	if (k.endsWith("hand")) return [w.v3("Hand trim", [0, 0, 0], "deg"), w.sl("Wrist limit", 80, 0, 120, "deg"), w.chk("Automatic thumb pronation", true), w.sl("Thumb pronation", 0, -180, 180, "deg"),
+		w.fx(k, "curl", "Curl gain", 0, 2), w.fx(k, "splay", "Splay gain", 0, 2), w.checks("Fingers driven", ["Thumb", "Index", "Middle", "Ring", "Little"]),
+		w.note("A lost hand follows its arm's loss policy."), w.btn("Reset hand")];
+	return [w.pick(k, "mode", "Mapping", [["angle", "Bone angles"], ["ik", "Bone angles, then IK to a goal"]]),
+		...(c.mode === "ik" ? [w.fx(k, "ik", "IK weight", 0, 1), w.fx(k, "reach", "Reach scale", 0, 1), w.note("Reach scale 1 scales the user's reach onto the avatar's arm. 0 keeps the measured offset from the shoulder."),
+			w.v3("Goal offset", [0, 0, 0], "m")] : [w.note("The avatar's bones take the source bones' directions. Its wrist lands where its own lengths put it.")]),
+		w.h("Elbow"), w.v3("Elbow hint", [-0.15, 0, -0.30], "m"), w.fx(k, "pole", "Measured elbow blend", 0, 1), w.chk("Show gizmo in 3D scene", false),
+		w.h("Forearm"), w.sl("Roll trim", 0, -180, 180, "deg"),
+		...lossRows(k, direct),
+		c.after === "rest" ? w.grp("Rest pose", [w.v3("Rest elbow", [0.05, 0, -0.28], "m"), w.v3("Rest wrist", [0.28, 0, -0.34], "m"), w.v3("Rest palm", [0, 0, -1], ""), w.sl("Rest finger curl", 15, 0, 90, "deg")], false) : null,
+		w.btn("Reset arm", "Copy to the other arm")];
+}
+INSP.retarget = c => ({
+	inputs: [w.cal("Avatar", () => [app.avatar, app.avatar ? "Seed-san.vrm (VRM 1.0)" : "No avatar loaded"], app.avatar ? "Unload" : "Load VRM..."),
+		...(app.avatar ? [w.grp("Model", [w.ro("Model", "Seed-san, 214 nodes, 1 skin, 68k triangles, 9 images"), w.ro("Author / license", "VRoid sample, CC0"), w.ro("Humanoid bones", "53 of 55 mapped"),
+			w.ro("Arm", "avatar 21 + 23 cm, you 27 + 27 cm"), w.ro("Shoulder width", "avatar 33 cm, you 38 cm"), w.ro("Rig settings", "Seed-san.mikanrig.json"), w.ro("Rig warnings", "none")], false),
+			w.cal("Source pose", () => [S("source").st === "run", S("source").val])] : [])],
+	settings: !app.avatar ? [] : [
+		w.grp("Placement", [w.chk("Show in 3D scene", true), w.chk("Follow measured shoulders", true), w.v3("Root position", [0, 0, 0], "m"), w.sl("Root yaw", 0, -180, 180, "deg"), w.btn("Reset placement")], false),
+		w.grp("Mapping", [w.radio("View", ["Body", "Head", "Left Hand", "Right Hand"], 0), w.note("The schematic figure with a dot per bone draws in the central view."), w.btn("Reset all to file"), w.inp("Filter nodes", ""),
+			w.tbl(["Bone", "Node"], [["Hips", "J_Bip_C_Hips"], ["Head", "J_Bip_C_Head"], ["LeftLowerArm", "J_Bip_L_LowerArm"], ["LeftHand", "J_Bip_L_Hand"], ["...", ""]]),
+			w.note("Trims moved to the chain they correct: head, hand, and the forearm's roll.")], false),
+		w.radio("Preview pose", ["Live", "Rest", "Demo"], 0),
+		w.h("Chains"), w.chains(), w.note("Click a chain here or a bone in the view."),
+		w.h(CHAINS.find(x => x[0] === app.chain)[1]), ...chainRows(app.chain)],
+	diag: !app.avatar ? [] : [w.tbl(["Chain", "State", "IK weight", "Wrist error"], () => { const st = arms().arms; return [["Left arm", 0, "larm"], ["Right arm", 1, "rarm"]].map(([n, i, k]) => {
+		const r = st[i].mode === "none" || st[i].mode === "released" ? null : solveArm([0, i ? -0.165 : 0.165, 1.34], st[i], k);
+		return [n, st[i].mode === "none" ? "absent" : st[i].mode, app.ch[k].mode === "ik" ? (+P(k, "ik")).toFixed(2) : "-", r && r.goal ? (len(sub(r.wr, r.goal)) * 100).toFixed(1) + " cm" : "-"]; }); }),
+		w.note("Wrist error is the distance from the avatar's wrist to the IK goal. It is zero at IK weight 1.")],
+});
+INSP.output = c => ({ settings: [w.chk("Enabled", true)], diag: [w.ro("Send rate (new)", "60 Hz"), w.ro("Bundles per frame (new)", "3, largest 1340 bytes")] });
+INSP.rules = c => ({
+	settings: [w.sl("Max rate", 60, 10, 120, "Hz"), w.sl("Min confidence", 0.30, 0, 1),
+		w.note("Dropout hold and Freeze on loss are now each Retarget chain's loss policy.")],
+	diag: [w.ro("Left hand", () => noExt() ? "not streamed, no world pose" : lostNow() ? "WITHHELD, below 0.30" : "sent, confidence " + (0.92 + wob(2, 0.03)).toFixed(2)),
+		w.ro("Right hand", () => noExt() ? "not streamed, no world pose" : "sent, confidence " + (0.90 + wob(3, 0.03)).toFixed(2))],
+});
+INSP.vmc = c => ({
+	settings: [w.inp("Target IP", "127.0.0.1"), w.inp("Port", "39539"), !app.avatar ? w.sl("Head offset", 0.12, 0, 0.25, "m") : null,
+		w.note(app.avatar ? "Bones: head, torso when placed, clavicles, arms, hands, fingers. Positions are the avatar's rest offsets." : "Bones: head, clavicles, arms, hands, fingers (39). The avatar takes the measured bone lengths.")],
+	diag: [w.ro("Avatar announcement (new)", () => app.avatar ? "/VMC/Ext/VRM once a second" : "none")],
+});
+INSP.face = c => ({ diag: [w.ro("Mouth owner", () => app.setup === "dual" ? "microphone" : "phone face"), w.ro("Active profile", "Auto (built-in)")] });
+INSP.phone = c => ({
+	settings: [w.chk("Enable face stream", app.setup !== "dual"), w.inp("Port", "49983"), w.inp("Phone address", "255.255.255.255"), w.btn("Align head to camera", "Reset alignment")],
+	diag: [w.ro("Stream", () => app.setup === "dual" ? "Waiting for the app" : "Streaming, 60 datagrams/s"), w.ro("Unknown names / parse failures", "0 / 0"), w.ro("Last unknown name", "-"),
+		w.ro("Head rotation", () => app.setup === "dual" ? "-" : wob(1, 8).toFixed(1) + "  " + wob(2, 12).toFixed(1) + "  " + wob(3, 3).toFixed(1) + " deg"), w.ro("Alignment", "Head aligned to the camera")],
+});
+INSP.mic = c => ({
+	inputs: [w.cb("Microphone", ["System default", "Blue Yeti", "Webcam mic"]), w.btn("Refresh"), w.cal("Voice profile", () => [true, "brendan_vowels.json"], "Calibrate..."), w.btn("Import...", "Clear profile")],
+	settings: [w.chk("Enable microphone mouth", true), w.sl("Gate", -45, -80, 0, "dBFS"), w.sl("Gain", 0, -20, 20, "dB"), w.cb("Model", ["Simple Loudness", "MFCC (uLipSync)", "Oculus LipSync"], 1), w.sl("Smoothing", 50, 0, 200, "ms"),
+		w.note("Engine smoothing (1 to 100) shows here when the model is Oculus LipSync.")],
+	diag: [w.bar("Level", () => 0.35 + Math.abs(wob(4, 0.45))), w.ro("Device", "Blue Yeti at 48000 Hz"), w.ro("Model", "MFCC, 0.6 ms per run"), w.ro("Mouth", () => app.setup === "dual" ? "microphone" : "phone face"),
+		w.ro("Dropped capture blocks", "0"), w.h("Viseme weights"),
+		...["aa", "E", "I", "O", "U", "PP", "SS", "TH", "DD", "FF", "kk", "nn", "RR", "CH", "sil"].map((n, i) => w.bar(n, () => i < 5 ? Math.abs(Math.sin(app.t * W * (1 + i % 3) + i)) * 0.8 : i === 14 ? 0.1 : 0.05))],
+});
+INSP.profile = c => ({
+	inputs: [w.cb("Active profile", ["Auto (built-in)", "Stream profile"]), w.btn("New", "Duplicate to edit", "Delete"), w.cb("Assign from library", ["(choose)", "Singing profile"]),
+		w.ro("Assigned profiles", "Stream profile  [Unassign]"), w.inp("Name", "Auto (built-in)"),
+		w.note("Auto is generated from the avatar and is read-only. Duplicate it to edit a copy.")],
+	settings: [w.h("Variables"), w.tbl(["Name", "Function", "Value"], () => [["mouthOpen", "max(phone.jawOpen, viseme.aa)", Math.abs(wob(4, 0.6)).toFixed(3)]]), w.btn("Add variable"),
+		w.h("VRM expression bindings"), w.tbl(["Target", "Function", "Value"], () => [["aa", "select(phone.tracked, phone.jawOpen, viseme.aa)", Math.abs(wob(4, 0.6)).toFixed(2)], ["blink", "phone.eyeBlinkLeft", Math.abs(wob(5, 0.2)).toFixed(2)], ["happy", "smooth(phone.mouthSmileLeft, 0.05)", Math.abs(wob(1, 0.4)).toFixed(2)]]),
+		w.btn("Add binding"), w.note("Each row keeps its Edit and Remove buttons. Edit opens the expression editor window, as today.")],
+	diag: [w.ro("Avatar mouth expressions", () => app.avatar ? "5 mouth targets, from the ARKit face and the microphone's visemes" : "No avatar loaded")],
+});
+
+/* ================================ inspector ================================ */
+function allIds() {
+	const ids = [];
+	topRow().concat(["face"]).forEach(id => {
+		ids.push(id);
+		if (id === "capture") SETUPS[app.setup].cams.forEach(c => ids.push("capture." + c.id));
+		if (id === "capture") SETUPS[app.setup].cams.forEach(c => ["video", "hands", "bodym", "lift"].forEach(k => ids.push("capture." + c.id + "." + k)));
+		else (SUBS[id] || []).forEach(k => ids.push(id + "." + k));
+	});
+	return ids;
+}
+/* an inspector instance: I = { el, pfx, sel, live }. The main inspector and every pinned window have one. */
+const MAIN = { el: null, pfx: "m", sel: null, live: [] };
+function buildInsp(I) {
+	const b = I.el, keep = b.scrollTop;
+	if (!I.sel) {
+		const su = SETUPS[app.setup];
+		b.innerHTML = `<h2>${su.name}</h2><div class="desc">Nothing is selected. The central view shows the whole scene.</div>
+			<div class="kv"><span class="k">Cameras</span><span>${su.cams.map(c => c.label).join(", ")}</span>
+			<span class="k">Wrist IMUs</span><span>${su.imu ? "2 Joy-Cons" : "none"}</span>
+			<span class="k">Avatar</span><span>${app.avatar ? "Seed-san.vrm" : "none loaded"}</span>
+			<span class="k">Pipeline</span><span>${isMulti() ? "Multi-camera, metric world" : "Single camera, direct"}</span></div>
+			<details class="sec" open><summary>Needs attention</summary><div class="issues"></div></details>`;
+	} else {
+		const id = I.sel, par = parentOf(id);
+		b.innerHTML = `${par !== id ? `<div class="crumb">${META[par][0]}${id.split(".").length === 3 ? " / " + cam(id).label : ""}</div>` : ""}
+			<h2><span>${isCam(id) ? cam(id).label : META[leaf(id)][0]}</span><span class="chip iChip"></span></h2>
+			<div class="desc">${descOf(id)}</div>
+			<details class="sec" open><summary>Status</summary><div class="iStatus"></div></details>
+			<div class="iSecs"></div>`;
+		liveRows = I.live = []; lrPfx = I.pfx;
+		const key = isCam(id) ? "camera" : leaf(id);
+		const c = INSP[key] ? INSP[key]({ id, su: SETUPS[app.setup], cam: par === "capture" && id !== "capture" ? cam(id) : null, multi: isMulti() }) : {};
+		const sec = (title, rows, open) => rows && rows.filter(Boolean).length ? `<details class="sec" ${open ? "open" : ""}><summary>${title}</summary>${renderRows(rows)}</details>` : "";
+		b.querySelector(".iSecs").innerHTML = sec("Inputs and calibration", c.inputs, true) + sec("Data", c.data, true) + sec("Settings", c.settings, true) + sec("Diagnostics", c.diag, false);
+	}
+	refreshInsp(I); b.scrollTop = keep;
+}
+function refreshInsp(I) {
+	const frame = Math.round(app.t * FPS), shown = app.mode === "live" ? "live" : "replay, frame " + frame;
+	if (!I.sel) {
+		const el = I.el.querySelector(".issues"); if (!el) return;
+		const bad = allIds().filter(id => { const s = S(id).st; return s === "deg" || s === "cfg"; });
+		const key = bad.map(id => id + S(id).st).join("|");
+		if (el.dataset.key === key) return; el.dataset.key = key;
+		el.innerHTML = bad.length ? bad.map(id => `<div class="issue" data-go="${id}"><i class="dot ${S(id).st}"></i><span>${nameOf(id)}</span><span class="dim">${S(id).val}</span></div>`).join("")
+			: `<div class="todo" style="font-style:normal">Every active stage is running.</div>`;
+		el.querySelectorAll(".issue").forEach(n => n.onclick = ev => { ev.stopPropagation(); app.sel = null; select(n.dataset.go); });
+		return;
+	}
+	const s = S(I.sel);
+	const chip = I.el.querySelector(".iChip"); chip.className = "chip iChip " + s.st; chip.textContent = STLABEL[s.st];
+	I.el.querySelector(".iStatus").innerHTML = `<div class="kv"><span class="k">State</span><span>${STLABEL[s.st]}</span>
+		<span class="k">Now</span><span class="mono">${s.val || "-"}</span>
+		<span class="k">Shown frame</span><span>${shown}</span></div>` + (s.why ? `<div class="why ${s.st}">${s.why}</div>` : "");
+	refreshRows(I);
+}
+function buildInspector() { MAIN.el = $("inspBody"); MAIN.sel = app.sel; buildInsp(MAIN); }
+function refreshInspector() { MAIN.sel = app.sel; refreshInsp(MAIN); }
+function rebuildInspectors() { buildInspector(); pins.forEach(p => buildInsp(p.I)); buildStrip(); }
+
+/* ============================== pinned windows ============================== */
+const pins = []; let pinSeq = 0, zTop = 100;
+function pinStage(id) {
+	const have = pins.find(p => p.I.sel === id);
+	if (have) { have.el.style.zIndex = ++zTop; return; }
+	const n = pinSeq++, el = document.createElement("div");
+	el.className = "pin"; el.style.left = (140 + (n % 5) * 36) + "px"; el.style.top = (250 + (n % 5) * 30) + "px"; el.style.zIndex = ++zTop;
+	el.innerHTML = `<div class="ptitle"><span>${nameOf(id)}</span><span class="dim" style="font-weight:400">pinned, follows the shown frame</span><span class="spacer"></span><span class="x" title="Close">x</span></div>
+		<div class="pb"><div class="pv"><canvas></canvas></div><div class="pi"></div></div>`;
+	document.body.appendChild(el);
+	const p = { el, canvas: el.querySelector("canvas"), I: { el: el.querySelector(".pi"), pfx: "p" + n + "_", sel: id, live: [] } };
+	pins.push(p); buildInsp(p.I);
+	el.querySelector(".x").onclick = ev => { ev.stopPropagation(); el.remove(); pins.splice(pins.indexOf(p), 1); };
+	el.addEventListener("mousedown", () => el.style.zIndex = ++zTop);
+	el.querySelector(".ptitle").addEventListener("mousedown", ev => {
+		if (ev.target.classList.contains("x")) return;
+		const ox = ev.clientX - el.offsetLeft, oy = ev.clientY - el.offsetTop;
+		const mv = m => { el.style.left = Math.max(0, m.clientX - ox) + "px"; el.style.top = Math.max(0, m.clientY - oy) + "px"; };
+		const up = () => { removeEventListener("mousemove", mv); removeEventListener("mouseup", up); };
+		addEventListener("mousemove", mv); addEventListener("mouseup", up); ev.preventDefault();
+	});
+}
+
+/* ================================= drawing ================================= */
+const mainCv = $("cv"); let cx = mainCv.getContext("2d"), hit = null;
+const len = a => Math.hypot(a[0], a[1], a[2]), norm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }, dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k], mix = (a, b, k) => add(mul(a, 1 - k), mul(b, k));
+/* world: +X toward the desk and cameras, +Y the user's left, +Z up */
+function poseAt(t) {
+	const w = k => t * W * k;
+	const sh = [[0, 0.19, 1.35], [0, -0.19, 1.35]];
+	const wr = [[0.36 + 0.05 * Math.sin(w(1)), 0.17 + 0.07 * Math.sin(w(2)), 1.02 + 0.10 * Math.sin(w(1) + 1)],
+		[0.38 + 0.04 * Math.sin(w(2) + 2), -0.18 + 0.06 * Math.sin(w(1) + 1), 1.00 + 0.08 * Math.sin(w(3))]];
+	const curl = [0.5 + 0.4 * Math.sin(w(2)), 0.5 + 0.4 * Math.sin(w(3) + 1)];
+	return { sh, wr, curl, head: [0.02, 0.03 * Math.sin(w(1)), 1.58], lean: 0.02 * Math.sin(w(1)) };
+}
+const REST_WR = [[0.27, 0.2, 0.93], [0.27, -0.2, 0.93]];
+/* arm state on the shown frame: live, held, frozen, rest (direct eases to rest), or none before retarget */
+function arms() {
+	const p = poseAt(app.t), out = [0, 1].map(i => ({ sh: p.sh[i], wr: p.wr[i], curl: p.curl[i], mode: "live" }));
+	if (noExt()) out.forEach(a => a.mode = "none");
+	if (lostNow()) {
+		const f = poseAt(2), a = out[0], age = lostAge();
+		a.wr = f.wr[0]; a.curl = f.curl[0];
+		const c = app.ch.larm, hold = c.hold / 1000;
+		if (age < hold) a.mode = "held";
+		else if (c.after === "freeze") a.mode = "frozen";
+		else if (c.after === "release") a.mode = "released";
+		else { const k = Math.min((age - hold) / Math.max(c.blend / 1000, 0.001), 1), e = k * k * (3 - 2 * k); a.wr = mix(f.wr[0], REST_WR[0], e); a.curl = f.curl[0] * (1 - e) + 0.26 * e; a.mode = "rest"; }
+	}
+	out.forEach((a, i) => { a.el = add(mix(a.sh, a.wr, 0.5), [-0.10, (i ? -1 : 1) * 0.07, -0.13]); });
+	return { p, arms: out };
+}
+function proj(V, v) { return [V.x + (-v[1] + v[0] * 0.38) * V.s, V.y - (v[2] - 1.15 - v[0] * 0.16) * V.s]; }
+function line(V, a, b, col, wd, dash) {
+	const A = proj(V, a), B = proj(V, b);
+	cx.strokeStyle = col; cx.lineWidth = wd; cx.setLineDash(dash || []); cx.lineCap = "round";
+	cx.beginPath(); cx.moveTo(A[0], A[1]); cx.lineTo(B[0], B[1]); cx.stroke(); cx.setLineDash([]);
+}
+function dotAt(V, a, col, r) { const A = proj(V, a); cx.fillStyle = col; cx.beginPath(); cx.arc(A[0], A[1], r, 0, 7); cx.fill(); }
+function label(x, y, txt, col) { cx.fillStyle = col || "#99a6b3"; cx.font = "12px Segoe UI, sans-serif"; cx.fillText(txt, x, y); }
+function drawGrid(V) {
+	for (let i = 0; i <= 8; i++) {
+		line(V, [0.1 + i * 0.1, -0.5, 0.78], [0.1 + i * 0.1, 0.5, 0.78], "#2a303d", 1);
+		line(V, [0.1, -0.5 + i * 0.125, 0.78], [0.9, -0.5 + i * 0.125, 0.78], "#2a303d", 1);
+	}
+}
+const CAMPOS = { tri: [[0.45, 0.32, 1.95], [0.45, -0.32, 1.95], [0.95, 0, 1.3]], dual: [[0.45, 0.32, 1.95], [0.45, -0.32, 1.95]], direct: [[0.95, 0, 1.38]] };
+function drawCams(V, hi) {
+	CAMPOS[app.setup].forEach((c, i) => {
+		const tgt = SETUPS[app.setup].cams[i].kind === "over" ? [0.45, 0, 0.78] : [0, 0, 1.3];
+		const col = hi === i ? "#80a6e6" : "#4f5d7a", tip = mix(c, tgt, 0.16);
+		[[0.05, 0.04], [0.05, -0.04], [-0.05, 0.04], [-0.05, -0.04]].forEach(o => line(V, c, add(tip, SETUPS[app.setup].cams[i].kind === "over" ? [o[0], o[1], 0] : [0, o[0], o[1]]), col, 1.2));
+		const P = proj(V, c); label(P[0] + 8, P[1] - 6, "cam" + i, col);
+	});
+}
+function fingers(V, a, side, col, wd, dash) {
+	for (let f = 0; f < 5; f++) {
+		const base = add(a.wr, [0.075, side * (f - 2) * 0.017, 0]);
+		const c = f ? a.curl : a.curl * 0.5, tip = add(base, [0.07 * Math.cos(c * 1.5), side * (f ? 0 : 0.03), -0.07 * Math.sin(c * 1.5)]);
+		line(V, a.wr, base, col, wd, dash); line(V, base, tip, col, wd, dash);
+	}
+}
+/* the measured skeleton. opt: {col, wd, torso, headOn, shoulders, elbows, markLost} */
+function drawSkel(V, st, opt) {
+	const col = opt.col || "#e6edf3", wd = opt.wd || 2, p = st.p;
+	if (opt.shoulders !== false) line(V, p.sh[0], p.sh[1], col, wd, opt.inferTorso ? [4, 4] : null);
+	if (opt.hi) (chainSegs(st)[opt.hi] || []).forEach(sg => { cx.globalAlpha = 0.35; line(V, sg[0], sg[1], "#80a6e6", wd + 9); cx.globalAlpha = 1; });
+	if (opt.torso) { line(V, [0, 0, 1.35], [0, 0, 0.95], col, wd, isMulti() ? [4, 4] : null); }
+	if (opt.headOn !== false) { line(V, [0, 0, 1.35], p.head, col, wd); const H = proj(V, p.head); cx.strokeStyle = col; cx.lineWidth = wd; cx.beginPath(); cx.arc(H[0], H[1] - 0.07 * V.s, 0.09 * V.s, 0, 7); cx.stroke(); }
+	st.arms.forEach((a, i) => {
+		const side = i ? -1 : 1;
+		if (a.mode === "none") return;
+		const lost = a.mode !== "live";
+		if (lost && !opt.markLost) return;
+		const c = lost ? "#ff6666" : opt.conf ? (conf(i) >= 0.8 ? "#7fd48a" : conf(i) >= 0.5 ? "#ffcc66" : "#ff9a66") : col, d = lost ? [3, 5] : null;
+		cx.globalAlpha = lost ? 0.55 : 1;
+		if (opt.elbows !== false) { line(V, a.sh, a.el, c, wd, d || opt.elbowDash); line(V, a.el, a.wr, c, wd, d || opt.elbowDash); dotAt(V, a.el, c, wd + 1); }
+		fingers(V, a, side, c, Math.max(1, wd - 0.6), d); dotAt(V, a.wr, c, wd + 1.5);
+		cx.globalAlpha = 1;
+	});
+}
+/* the measured skeleton's segments per retarget chain, for the highlight and for picking */
+function chainSegs(st) {
+	const p = st.p, A = st.arms, hand = a => [a.wr, add(a.wr, [0.15, 0, -0.03])];
+	return { torso: [[[0, 0, 1.35], [0, 0, 0.95]], [p.sh[0], p.sh[1]]], head: [[[0, 0, 1.35], add(p.head, [0, 0, 0.1])]],
+		larm: [[A[0].sh, A[0].el], [A[0].el, A[0].wr]], rarm: [[A[1].sh, A[1].el], [A[1].el, A[1].wr]], lhand: [hand(A[0])], rhand: [hand(A[1])] };
+}
+function hitChain(e) {
+	if (!hit) return null;
+	const r = mainCv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top; let best = null, bd = 16;
+	Object.entries(hit.segs).forEach(([k, segs]) => segs.forEach(sg => {
+		const A = proj(hit.V, sg[0]), B = proj(hit.V, sg[1]), dx = B[0] - A[0], dy = B[1] - A[1], t = clamp01(((mx - A[0]) * dx + (my - A[1]) * dy) / (dx * dx + dy * dy || 1));
+		const d = Math.hypot(mx - A[0] - dx * t, my - A[1] - dy * t); if (d < bd) { bd = d; best = k; }
+	}));
+	return best;
+}
+/* the avatar's arm for one chain: bone angles first, then pulled toward the IK goal by the chain's weight */
+const AL = [0.21, 0.23];
+function solveArm(s, a, ck) {
+	const c = app.ch[ck], elA = add(s, mul(norm(sub(a.el, a.sh)), AL[0])), wrA = add(elA, mul(norm(sub(a.wr, a.el)), AL[1]));
+	if (c.mode !== "ik") return { el: elA, wr: wrA };
+	const wgt = clamp01(P(ck, "ik")), user = len(sub(a.el, a.sh)) + len(sub(a.wr, a.el)), ratio = 1 + ((AL[0] + AL[1]) / user - 1) * clamp01(P(ck, "reach"));
+	let g = add(s, mul(sub(a.wr, a.sh), ratio)), d = len(sub(g, s)); const maxR = (AL[0] + AL[1]) * 0.999;
+	if (d > maxR) { g = add(s, mul(sub(g, s), maxR / d)); d = maxR; }
+	const ax = mul(sub(g, s), 1 / d), along = (AL[0] * AL[0] - AL[1] * AL[1] + d * d) / (2 * d), rad = Math.sqrt(Math.max(AL[0] * AL[0] - along * along, 0)), cen = add(s, mul(ax, along));
+	const pole = mix(add(s, [-0.15, 0, -0.30]), elA, clamp01(P(ck, "pole")));
+	let b = sub(pole, cen); b = sub(b, mul(ax, dot3(b, ax))); b = len(b) > 1e-5 ? norm(b) : [0, 0, -1];
+	return { el: mix(elA, add(cen, mul(b, rad)), wgt), wr: mix(wrA, g, wgt), goal: g };
+}
+/* the avatar, drawn as thick limbs in its own proportions */
+function drawAvatar(V, st, alpha, showGoal) {
+	const col = "#8f9fd0"; cx.globalAlpha = alpha == null ? 0.5 : alpha;
+	const ash = [[0, 0.165, 1.34], [0, -0.165, 1.34]], goals = [];
+	line(V, [0, 0, 1.36], [0, 0, 0.92], col, 0.2 * V.s); line(V, ash[0], ash[1], col, 0.1 * V.s);
+	const H = proj(V, st.p.head); cx.fillStyle = col; cx.beginPath(); cx.arc(H[0], H[1] - 0.08 * V.s, 0.115 * V.s, 0, 7); cx.fill();
+	st.arms.forEach((a, i) => {
+		const side = i ? -1 : 1, T = a.mode === "none" || a.mode === "released";
+		const r = T ? { el: [0, side * (0.165 + AL[0]), 1.34], wr: [0, side * (0.165 + AL[0] + AL[1]), 1.34] } : solveArm(ash[i], a, i ? "rarm" : "larm");
+		line(V, ash[i], r.el, col, 0.07 * V.s); line(V, r.el, r.wr, col, 0.06 * V.s);
+		line(V, r.wr, add(r.wr, T ? [0, side * 0.12, 0] : [0.12, 0, -0.03 * a.curl]), col, 0.07 * V.s);
+		if (r.goal) goals.push(r.goal);
+	});
+	cx.globalAlpha = 1;
+	if (showGoal) goals.forEach(g => { const G = proj(V, g); cx.strokeStyle = "#ffcc66"; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(G[0], G[1], 7, 0, 7); cx.moveTo(G[0] - 11, G[1]); cx.lineTo(G[0] + 11, G[1]); cx.moveTo(G[0], G[1] - 11); cx.lineTo(G[0], G[1] + 11); cx.stroke(); });
+}
+/* one camera's frame with its 2D overlays */
+function drawCamFrame(r, c, st, opt) {
+	cx.fillStyle = "#1a1d24"; cx.fillRect(r.x, r.y, r.w, r.h); cx.strokeStyle = "#3a4252"; cx.lineWidth = 1; cx.strokeRect(r.x + .5, r.y + .5, r.w, r.h);
+	const over = c.kind === "over";
+	const px = v => over ? [r.x + r.w * (0.5 - v[1] * 1.15), r.y + r.h * (0.92 - v[0] * 1.5)] : [r.x + r.w * (0.5 + v[1] * 0.95), r.y + r.h * (0.5 - (v[2] - 1.22) * 1.25)];
+	if (over) { cx.fillStyle = "#20242d"; cx.fillRect(r.x + r.w * 0.06, r.y + r.h * 0.12, r.w * 0.88, r.h * 0.8); }
+	const seg = (a, b, col, wd, dash) => { const A = px(a), B = px(b); cx.strokeStyle = col; cx.lineWidth = wd; cx.setLineDash(dash || []); cx.beginPath(); cx.moveTo(A[0], A[1]); cx.lineTo(B[0], B[1]); cx.stroke(); cx.setLineDash([]); };
+	const pt = (a, col, rad) => { const A = px(a); cx.fillStyle = col; cx.beginPath(); cx.arc(A[0], A[1], rad, 0, 7); cx.fill(); };
+	if (!over && opt.body && c.body) {
+		const p = st.p; seg(p.sh[0], p.sh[1], "#7fd48a", 2); pt(p.head, "#7fd48a", 4); pt(add(p.head, [0, 0.08, 0.02]), "#7fd48a", 3); pt(add(p.head, [0, -0.08, 0.02]), "#7fd48a", 3);
+		st.arms.forEach(a => { if (a.mode === "live" || opt.chain) { seg(a.sh, a.el, "#7fd48a", 2, a.mode === "live" ? null : [3, 4]); seg(a.el, a.wr, "#7fd48a", 2, a.mode === "live" ? null : [3, 4]); } pt(a.sh, "#7fd48a", 4); if (a.mode === "live") pt(a.el, "#7fd48a", 4); });
+	}
+	if (opt.hands) st.arms.forEach((a, i) => {
+		if (a.mode !== "live" && !(a.mode === "none")) return;
+		const side = i ? -1 : 1, col = i ? "#ffcc66" : "#80a6e6", W0 = px(a.wr);
+		for (let f = 0; f < 5; f++) {
+			const base = add(a.wr, [0.075, side * (f - 2) * 0.017, 0.01 * (f - 2)]), tip = add(base, [0.07 * Math.cos(a.curl * 1.5), 0, over ? 0 : -0.06]);
+			seg(a.wr, base, col, 1.5); seg(base, tip, col, 1.5); pt(base, col, 2.5); pt(tip, col, 2.5);
+		}
+		pt(a.wr, col, 3.5);
+		if (opt.roi) { cx.strokeStyle = col; cx.globalAlpha = .6; cx.strokeRect(W0[0] - r.w * 0.09, W0[1] - r.h * 0.2, r.w * 0.2, r.h * 0.3); cx.globalAlpha = 1; label(W0[0] - r.w * 0.09, W0[1] - r.h * 0.2 - 4, i ? "R" : "L", col); }
+	});
+	label(r.x + 8, r.y + 16, c.label + "  1280x720  " + (opt.tag || ""), "#99a6b3");
+}
+function fitRect(Wd, H, n) {
+	const pad = 16, cols = n > 1 ? 2 : 1, rows = Math.ceil(n / cols);
+	const cw = (Wd - pad * (cols + 1)) / cols, ch = (H - pad * (rows + 1)) / rows, w = Math.min(cw, ch * 16 / 9), h = w * 9 / 16;
+	return i => ({ x: pad + (i % cols) * (cw + pad) + (cw - w) / 2, y: pad + Math.floor(i / cols) * (ch + pad) + (ch - h) / 2, w, h });
+}
+function draw() { const r = drawView(mainCv, app.sel); $("viewTitle").textContent = r.title; $("camView").style.display = r.cam ? "none" : ""; $("sbs").style.display = r.par === "retarget" ? "" : "none"; }
+function drawView(cv, sel) {
+	cx = cv.getContext("2d");
+	const dpr = devicePixelRatio || 1, Wd = cv.clientWidth, H = cv.clientHeight;
+	if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(H * dpr); }
+	cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, Wd, H);
+	const st = arms(), par = sel ? parentOf(sel) : null, lf = sel ? leaf(sel) : null;
+	const V = { x: Wd * 0.46, y: H * 0.5, s: Math.min(Wd / 2.4, H / 1.75) };
+	let title = "3D Scene", note = "";
+	const su = SETUPS[app.setup];
+	if (par === "capture") {
+		const cams = sel.split(".").length > 1 ? [cam(sel)] : su.cams, fr = fitRect(Wd, H, cams.length);
+		const opt = { hands: lf !== "video", body: lf === "capture" || lf === "bodym" || sel.split(".").length === 2, roi: lf === "hands", tag: lf === "video" ? "undistorted" : lf === "lift" ? (noExt() || !isMulti() ? "camera space" : "world") : "" };
+		cams.forEach((c, i) => drawCamFrame(fr(i), c, st, opt));
+		title = "Camera view: " + (sel.split(".").length > 1 ? nameOf(sel) : "all cameras");
+	} else if (par === "direct") {
+		const fr = fitRect(Wd, H, 1);
+		drawCamFrame(fr(0), su.cams[0], st, { hands: lf === "palm" || lf === "direct" || lf === "filters", body: true, chain: lf === "hold", tag: "landmark rays and solved chain" });
+		title = "Camera view: " + nameOf(sel);
+	} else if (par === "face") {
+		const names = ["jawOpen", "mouthSmileLeft", "mouthSmileRight", "eyeBlinkLeft", "eyeBlinkRight", "browInnerUp", "aa", "ih", "ou", "ee", "oh"];
+		const x0 = Wd * 0.2, bw = Wd * 0.5;
+		names.forEach((n, i) => {
+			const phone = i < 6, live = phone ? app.setup !== "dual" : true, v = live ? Math.abs(Math.sin(app.t * W * (1 + i % 4) + i)) * (phone ? 0.7 : 0.9) : 0, y = 50 + i * 30;
+			if ((lf === "phone" && !phone) || (lf === "mic" && phone)) return;
+			label(x0 - 130, y + 13, (phone ? "phone." : "viseme.") + n, live ? "#c7d2e0" : "#5d6675");
+			cx.fillStyle = "#33384a"; cx.fillRect(x0, y, bw, 18); cx.fillStyle = "#5a86c7"; cx.fillRect(x0, y, bw * v, 18);
+			label(x0 + bw + 8, y + 13, v.toFixed(2));
+		});
+		title = "Face values: " + nameOf(sel);
+	} else if (par === "retarget") {
+		const sbs = app.sbs && app.avatar, VS = sbs ? { x: Wd * 0.26, y: V.y, s: V.s * 0.92 } : V, VA = sbs ? { x: Wd * 0.70, y: V.y, s: V.s * 0.92 } : V;
+		drawGrid(VS); if (sbs) drawGrid(VA);
+		if (app.avatar) drawAvatar(VA, st, sbs ? 0.85 : 0.5, true);
+		drawSkel(VS, st, { wd: 2.4, conf: true, torso: true, markLost: true, hi: app.chain, shoulders: app.setup !== "dual", headOn: app.setup !== "dual", elbows: true });
+		if (cv === mainCv) hit = { V: VS, segs: chainSegs(st) };
+		if (sbs) { label(VS.x - 40, 40, "Source pose", "#c7d2e0"); label(VA.x - 20, 40, "Avatar", "#c7d2e0"); }
+		title = "Retarget view"; note = "";
+		label(12, H - 44, "Source: solid measured, dashed inferred, red lost. Green to amber is confidence. Blue halo is the selected chain.");
+		label(12, H - 26, app.avatar ? "Avatar: the yellow target is each arm's IK goal. Click a bone to select its chain." : "No avatar is loaded.");
+		if (noExt()) label(Wd / 2 - 150, H - 66, "No camera has extrinsics, so there are no world-space hands to draw.", "#ffcc66");
+	} else {
+		drawGrid(V);
+		const showAvatar = app.avatar && (!sel || par === "retarget" || par === "output");
+		const showSkel = par !== "output";
+		drawCams(V, -1);
+		if (showAvatar) drawAvatar(V, st, par === "output" ? 0.85 : 0.5);
+		if (par === "fusion") { [[0.012, 0.01, 0.008], [-0.01, -0.012, -0.006]].forEach((o, i) => { cx.globalAlpha = 0.35; drawSkel({ x: V.x + o[0] * V.s * 2, y: V.y + o[1] * V.s * 2, s: V.s }, st, { col: i ? "#ffcc66" : "#80a6e6", wd: 1.2, shoulders: false, headOn: false, elbows: false }); cx.globalAlpha = 1; }); }
+		if (showSkel) drawSkel(V, st, {
+			col: par === "source" ? "#7fd48a" : "#e6edf3", wd: par === "source" ? 2.6 : 2, conf: par === "source",
+			shoulders: !(par === "fusion" || par === "imu") && app.setup !== "dual", headOn: !(par === "fusion" || par === "imu") && app.setup !== "dual",
+			elbows: par !== "fusion" && !(app.setup === "dual"), torso: par === "source" || par === "retarget", markLost: par === "source" || par === "retarget" || !sel,
+		});
+		if (par === "imu" && S("imu").st === "run") st.arms.forEach(a => { if (a.mode === "none") return; const m = mix(a.el, a.wr, 0.7); line(V, m, add(m, [0, 0, 0.08]), "#5a86c7", 2.5); line(V, m, add(m, [0, 0.08, 0]), "#7fd48a", 2.5); line(V, m, add(m, mul(sub(a.wr, a.el), 0.3)), "#ff6666", 2.5); });
+		if (par === "body" && S("body").st !== "off") { const c = CAMPOS[app.setup][2]; [st.p.sh[0], st.p.sh[1], st.arms[0].el, st.arms[1].el, st.p.head].forEach(j => { line(V, c, j, "#7fd48a", 0.8, [2, 5]); dotAt(V, j, "#7fd48a", 4.5); }); }
+		title = !sel ? "3D Scene" : META[par][0] + " view";
+		note = !sel ? "avatar with the measured skeleton over it" : par === "fusion" ? "fused hands, with each camera's hands dimmed"
+			: par === "imu" ? "forearm frames from the wrist IMUs" : par === "body" ? "shoulders, elbows and head on the body camera's rays"
+			: par === "source" ? "source skeleton: solid measured, dashed inferred, red lost, green to amber is confidence"
+			: par === "output" ? "the pose a receiver is sent" : "";
+		if (sel && noExt() && par !== "output") label(Wd / 2 - 150, H - 44, "No camera has extrinsics, so there are no world-space hands to draw.", "#ffcc66");
+		if (S(sel || "capture").st === "off" && sel) label(Wd / 2 - 120, H - 24, "This stage is inactive in this project.", "#99a6b3");
+	}
+	if (note) label(12, 20, note);
+	return { title, par, cam: par === "capture" || par === "direct" || par === "face" };
+}
+
+/* ================================ performance ============================== */
+const PERF_COL = { capture: "#5a86c7", fusion: "#7fd48a", imu: "#c79a5a", body: "#b07fd4", direct: "#7fd4c8", face: "#d47fa6", retarget: "#ffcc66", output: "#99a6b3" };
+function stageMs(id, f) {
+	const n = SETUPS[app.setup].cams.length, j = Math.sin(f * 0.7 + id.length) * 0.5 + Math.sin(f * 0.23) * 0.3;
+	const base = { capture: n * 5.6 + (SETUPS[app.setup].cams.some(c => c.body) ? 3.9 : 0), fusion: 0.9, imu: 0.25, body: 0.45, direct: 1.2, face: 0.3, retarget: 0.25, output: 0.35 }[id];
+	if (S(id).st === "off") return 0;
+	return Math.max(0, base * (1 + 0.08 * j)) + (id === "capture" && f === 95 ? 46 : 0);
+}
+function drawPerf() {
+	const cv = $("perfCv"); cx = cv.getContext("2d");
+	const dpr = devicePixelRatio || 1, Wd = cv.clientWidth, H = cv.clientHeight;
+	if (cv.width !== Math.round(Wd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(H * dpr); }
+	cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, Wd, H);
+	const ids = topRow().filter(x => x !== "source").concat(["face"]), f = Math.round(app.t * FPS) % 180, x0 = 330, gw = Wd - x0 - 12, top = 18, gh = H - top - 4, scale = gh / 70;
+	ids.forEach((id, i) => { const ms = stageMs(id, f), y = 4 + i * 16; cx.fillStyle = PERF_COL[id]; cx.fillRect(110, y + 2, Math.min(ms * 6, 150), 10);
+		label(6, y + 12, META[id][0], "#c7d2e0"); label(266, y + 12, ms.toFixed(1) + " ms", "#99a6b3"); });
+	for (let k = 0; k < 180; k++) { let y = top + gh; ids.forEach(id => { const h = stageMs(id, k) * scale; cx.fillStyle = PERF_COL[id]; cx.fillRect(x0 + k * gw / 180, y - h, gw / 180 + 0.5, h); y -= h; }); }
+	const hy = top + gh - 50 * scale; cx.strokeStyle = "#ff6666"; cx.setLineDash([4, 4]); cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x0, hy); cx.lineTo(x0 + gw, hy); cx.stroke(); cx.setLineDash([]);
+	label(x0 + 4, hy - 4, "50 ms hitch threshold", "#ff6666");
+	label(x0 + gw - 560, 12, "Frame loop hitches: 1 (worst Capture, frame 095). Milliseconds per stage over the last 180 frames.", "#99a6b3");
+	const px = x0 + f * gw / 180; cx.strokeStyle = "#e6edf3"; cx.beginPath(); cx.moveTo(px, top); cx.lineTo(px, top + gh); cx.stroke();
+}
+
+/* ================================ timeline ================================ */
+function setMode(m) {
+	app.mode = m; app.playing = true;
+	document.querySelectorAll("#mode span").forEach(s => s.classList.toggle("on", s.dataset.m === m));
+	const l = $("modeLbl"); l.className = m; l.textContent = m === "live" ? "LIVE" : "REPLAY";
+	$("recName").textContent = m === "live" ? "Live tracking. Scrubbing switches to replay of the last few seconds." : "Recording: take_2026-11-04_1532.jsonl, 180 frames, tri-camera with cam2 body pose.";
+	$("play").textContent = "Pause";
+}
+$("mode").onclick = e => { if (e.target.dataset.m) setMode(e.target.dataset.m); };
+$("play").onclick = () => { app.playing = !app.playing; $("play").textContent = app.playing ? "Pause" : "Play"; };
+$("scrub").oninput = e => { if (app.mode === "live") setMode("replay"); app.playing = false; $("play").textContent = "Play"; app.t = +e.target.value; };
+$("dockTabs").onclick = e => {
+	const t = e.target.dataset.tab; if (!t) return;
+	document.querySelectorAll("#dockTabs .tab").forEach(x => x.classList.toggle("on", x.dataset.tab === t));
+	["tl", "log", "perf"].forEach(k => $(k).style.display = k === t ? "" : "none");
+};
+function buildLog() {
+	const L = [["", "[info] Project '" + SETUPS[app.setup].name + "' activated, " + SETUPS[app.setup].cams.length + " camera(s) opened"],
+		["", "[info] Avatar " + (app.avatar ? "Seed-san.vrm loaded, rig sidecar applied" : "not loaded")]];
+	if (noExt()) L.push(["w", "[warn] No camera has extrinsics: fusion passes camera 0 through, nothing hand-side is streamed"]);
+	if (imuGone()) L.push(["e", "[error] Joy-Con (L): HID open failed"], ["e", "[error] Joy-Con (R): HID open failed"]);
+	if (app.scenario === "dropout") L.push(["w", "[warn] Left hand lost at frame 60, reacquired at frame 120"]);
+	$("log").innerHTML = L.map(l => `<div class="${l[0]}">${l[1]}</div>`).join("");
+}
+
+/* ================================== wiring ================================= */
+function rebuild() {
+	if (app.sel && !allIds().includes(app.sel)) app.sel = null;
+	pins.slice().forEach(p => { if (!allIds().includes(p.I.sel)) { p.el.remove(); pins.splice(pins.indexOf(p), 1); } else buildInsp(p.I); });
+	$("projName").textContent = "Project: " + SETUPS[app.setup].name;
+	$("scna").textContent = !isMulti() && (app.scenario === "noext" || app.scenario === "noimu") ? "This scenario does not apply to direct mode."
+		: app.setup === "dual" && app.scenario === "noimu" ? "This project has no IMUs, so nothing changes." : "";
+	$("miLoadAvatar").className = app.avatar ? "off" : ""; $("miUnloadAvatar").className = app.avatar ? "" : "off";
+	buildStrip(); buildInspector(); buildLog();
+}
+$("setup").onchange = e => { app.setup = e.target.value; chainDefaults(); rebuild(); };
+$("sbsChk").onchange = e => { app.sbs = e.target.checked; };
+$("scenario").onchange = e => { app.scenario = e.target.value; rebuild(); };
+$("mFile").onclick = e => { e.stopPropagation(); const m = $("fileMenu"); m.style.display = m.style.display === "none" ? "" : "none"; $("mFile").classList.toggle("open"); };
+document.addEventListener("click", () => { $("fileMenu").style.display = "none"; $("mFile").classList.remove("open"); });
+$("miLoadAvatar").onclick = () => { if (!app.avatar) { app.avatar = true; rebuild(); } };
+$("miUnloadAvatar").onclick = () => { if (app.avatar) { app.avatar = false; rebuild(); } };
+
+let last = performance.now();
+function tick(now) {
+	const dt = Math.min((now - last) / 1000, 0.1); last = now;
+	if (app.playing) app.t = (app.t + dt) % LOOP;
+	$("scrub").value = app.t;
+	$("tlbl").textContent = "frame " + String(Math.round(app.t * FPS)).padStart(3, "0") + " / 180   " + app.t.toFixed(2) + " s";
+	refreshStrip(); refreshInspector(); draw();
+	pins.forEach(p => { drawView(p.canvas, p.I.sel); refreshInsp(p.I); });
+	if ($("perf").style.display !== "none") drawPerf();
+	requestAnimationFrame(tick);
+}
+chainDefaults(); setMode("live"); rebuild(); requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -30,6 +30,26 @@ float wrapAngle(float radians);
 eHumanoidBone sideBone(int sideIndex, eHumanoidBone left, eHumanoidBone right);
 eHumanoidBone fingerBone(int sideIndex, int finger, int phalanx);
 
+// The elbow of a two-bone arm whose wrist is at the given point: on the
+// circle where the upper-arm sphere about the shoulder meets the forearm
+// sphere about the wrist, at the point nearest the pole, or along the
+// fallback direction when the pole sits on the arm's axis. A wrist at or
+// beyond full reach straightens the arm, so a caller clamps the reach first.
+glm::vec3 solveTwoBoneElbow(const glm::vec3& shoulder, const glm::vec3& wrist, float upperArm, float forearm,
+							const glm::vec3& polePoint, const glm::vec3& fallbackPoleDirection,
+							const glm::vec3& restDirection);
+
+// An arm part way from its angle mapping to its IK: the wrist is the
+// angle-mapped wrist moved toward the goal (already clamped to the reach) by
+// the IK weight, the pole the angle-mapped elbow moved toward the IK's pole
+// by the same weight, and the elbow the two-bone solve between them. Both
+// move together so the arm meets the angle mapping as the weight goes to 0
+// and the IK as it goes to 1, whatever pole the IK takes.
+void pullArmTowardGoal(const glm::vec3& shoulder, const glm::vec3& angleElbow, const glm::vec3& angleWrist,
+					   const glm::vec3& goal, const glm::vec3& polePoint, float ikWeight, float upperArm, float forearm,
+					   const glm::vec3& fallbackPoleDirection, const glm::vec3& restDirection, glm::vec3& outElbow,
+					   glm::vec3& outWrist);
+
 // A bone whose own twist is not measured: swing the parent-posed rest
 // direction onto the measured one and chain the result
 glm::quat swingTo(const glm::quat& parentDelta, const glm::vec3& rootedRestDirection, const glm::vec3& worldDirection);

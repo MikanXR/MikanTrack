@@ -69,9 +69,12 @@ struct Unit
 class Compiler
 {
 public:
-	explicit Compiler(const FaceProfile& profile)
+	Compiler(const FaceProfile& profile, const ExprInputTable& table)
 		: m_profile(profile)
-	{}
+		, m_table(table)
+	{
+		m_program.inputCount= table.getCount();
+	}
 
 	FaceExprCompileResult run()
 	{
@@ -84,7 +87,7 @@ public:
 		const std::vector<int> letOrder= orderLets();
 
 		collectConstants();
-		m_program.constantBase= FaceExprInputs::k_count;
+		m_program.constantBase= m_program.inputCount;
 		m_program.registerCount= m_program.constantBase + (int)m_program.constants.size();
 
 		for (int letIndex : letOrder)
@@ -181,7 +184,7 @@ private:
 		{
 			if (node.text.find('.') != std::string::npos)
 			{
-				const int slot= FaceExprInputs::fromName(node.text);
+				const int slot= m_table.findSlot(node.text);
 				if (slot < 0)
 					fail(unit, node.span, eFaceExprErrorCode::UnknownInput, {node.text}, "unknown input '" + node.text + "'");
 				else
@@ -273,10 +276,10 @@ private:
 		for (size_t index= 0; index < m_program.constants.size(); ++index)
 		{
 			if (memcmp(&m_program.constants[index], &value, sizeof(float)) == 0)
-				return FaceExprInputs::k_count + (int)index;
+				return m_program.inputCount + (int)index;
 		}
 		m_program.constants.push_back(value);
-		return FaceExprInputs::k_count + (int)m_program.constants.size() - 1;
+		return m_program.inputCount + (int)m_program.constants.size() - 1;
 	}
 
 	void emitUnit(Unit& unit)
@@ -317,7 +320,7 @@ private:
 		case eFaceExprNode::Identifier:
 		{
 			if (node.text.find('.') != std::string::npos)
-				return FaceExprInputs::fromName(node.text);
+				return m_table.findSlot(node.text);
 			const auto found= m_letsByName.find(toLower(node.text));
 			if (found == m_letsByName.end())
 				return -1;
@@ -442,6 +445,7 @@ private:
 	}
 
 	const FaceProfile& m_profile;
+	const ExprInputTable& m_table;
 	std::vector<Unit> m_units;
 	std::map<std::string, int> m_letsByName;
 	std::vector<FaceExprCompileError> m_errors;
@@ -449,10 +453,15 @@ private:
 };
 } // namespace
 
+FaceExprCompileResult compileFaceProfile(const FaceProfile& profile, const ExprInputTable& table)
+{
+	Compiler compiler(profile, table);
+	return compiler.run();
+}
+
 FaceExprCompileResult compileFaceProfile(const FaceProfile& profile)
 {
-	Compiler compiler(profile);
-	return compiler.run();
+	return compileFaceProfile(profile, FaceExprInputs::table());
 }
 
 bool isFaceExprFunctionName(const std::string& name)

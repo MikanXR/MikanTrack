@@ -13,63 +13,68 @@ CalibrationPanel::CalibrationPanel(AppConfig* config)
 {
 }
 
-CalibrationPanel::DrawResult CalibrationPanel::draw(bool* pOpen, bool bWizardActive)
+CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraIndex, bool bWizardActive,
+																	  bool bWithHeader)
 {
 	DrawResult result;
-
-	if (!ImGui::Begin(locWindowTitle("windows.calibration"), pOpen))
-	{
-		ImGui::End();
+	if (cameraIndex < 0 || cameraIndex >= (int)m_config->cameraCount())
 		return result;
-	}
 
-	for (int cameraIndex= 0; cameraIndex < (int)m_config->cameraCount(); ++cameraIndex)
+	const CameraProfile& profile= m_config->camera(cameraIndex);
+
+	ImGui::PushID(cameraIndex);
+
+	bool bOpen= true;
+	if (bWithHeader)
 	{
-		const CameraProfile& profile= m_config->camera(cameraIndex);
-
-		ImGui::PushID(cameraIndex);
-
 		const std::string headerLabel= locFormat("calibrationPanel.cameraHeaderFmt", cameraIndex + 1);
-		if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
-		{
-			ImGui::SeparatorText(locText("calibrationPanel.intrinsicsHeader"));
-			if (profile.intrinsics.present)
-			{
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
-				ImGui::Text(locText("calibrationPanel.intrinsicsSummaryFmt"),
-							profile.intrinsics.intrinsics.pixel_width,
-							profile.intrinsics.intrinsics.pixel_height,
-							profile.intrinsics.reprojectionError);
-				ImGui::Text(locText("calibrationPanel.fovFmt"),
-							profile.intrinsics.intrinsics.hfov,
-							profile.intrinsics.intrinsics.vfov);
-			}
-			else
-			{
-				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
-			}
-			ImGui::BeginDisabled(bWizardActive);
-			if (ImGui::Button(locLabel("calibrationPanel.calibrateIntrinsicsButton"), ImVec2(-1, 0)))
-			{
-				result.bLaunchIntrinsicsWizard= true;
-				result.cameraIndex= cameraIndex;
-			}
-			ImGui::EndDisabled();
-
-			ImGui::SeparatorText(locText("calibrationPanel.extrinsicsHeader"));
-			if (profile.extrinsics.present)
-			{
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
-				ImGui::Text(locText("calibrationPanel.cameraHeightFmt"), profile.extrinsics.markerFromCamera[3].z);
-			}
-			else
-			{
-				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
-			}
-		}
-
-		ImGui::PopID();
+		bOpen= ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 	}
+	if (bOpen)
+	{
+		ImGui::SeparatorText(locText("calibrationPanel.intrinsicsHeader"));
+		if (profile.intrinsics.present)
+		{
+			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
+			ImGui::Text(locText("calibrationPanel.intrinsicsSummaryFmt"),
+						profile.intrinsics.intrinsics.pixel_width,
+						profile.intrinsics.intrinsics.pixel_height,
+						profile.intrinsics.reprojectionError);
+			ImGui::Text(locText("calibrationPanel.fovFmt"),
+						profile.intrinsics.intrinsics.hfov,
+						profile.intrinsics.intrinsics.vfov);
+		}
+		else
+		{
+			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
+		}
+		ImGui::BeginDisabled(bWizardActive);
+		if (ImGui::Button(locLabel("calibrationPanel.calibrateIntrinsicsButton"), ImVec2(-1, 0)))
+		{
+			result.bLaunchIntrinsicsWizard= true;
+			result.cameraIndex= cameraIndex;
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SeparatorText(locText("calibrationPanel.extrinsicsHeader"));
+		if (profile.extrinsics.present)
+		{
+			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
+			ImGui::Text(locText("calibrationPanel.cameraHeightFmt"), profile.extrinsics.markerFromCamera[3].z);
+		}
+		else
+		{
+			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
+		}
+	}
+
+	ImGui::PopID();
+	return result;
+}
+
+CalibrationPanel::DrawResult CalibrationPanel::drawExtrinsicsSection(bool bWizardActive)
+{
+	DrawResult result;
 
 	ImGui::SeparatorText(locText("calibrationPanel.extrinsicsAllHeader"));
 	bool bAllIntrinsics= true;
@@ -86,10 +91,12 @@ CalibrationPanel::DrawResult CalibrationPanel::draw(bool* pOpen, bool bWizardAct
 	if (!bAllIntrinsics)
 		ImGui::TextDisabled("%s", locText("calibrationPanel.needsIntrinsicsFirstText"));
 
+	return result;
+}
+
+void CalibrationPanel::drawHandScaleSection()
+{
 	ImGui::SeparatorText(locText("calibrationPanel.handScaleHeader"));
 	ImGui::Text(locText("calibrationPanel.handScaleSeedFmt"),
 				m_config->handScale.refLengthMeters * 100.0);
-
-	ImGui::End();
-	return result;
 }

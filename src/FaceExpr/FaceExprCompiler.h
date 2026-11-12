@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "ExprInputTable.h"
 #include "FaceExprLexer.h"
 #include "FaceExprProgram.h"
 #include "FaceProfile.h"
@@ -43,6 +44,11 @@ struct FaceExprCompileResult
 // hysteresis) get one slot per call site, advanced every frame whichever
 // select branch reads them. A value counts as true above 0.5; comparisons
 // and logic yield 0 or 1.
+//
+// The dotted names resolve against table, and the program's input registers
+// are its slots. The one-argument form compiles against the face table
+// (FaceExprInputs).
+FaceExprCompileResult compileFaceProfile(const FaceProfile& profile, const ExprInputTable& table);
 FaceExprCompileResult compileFaceProfile(const FaceProfile& profile);
 
 // Whether a name is a built-in function (case ignored)

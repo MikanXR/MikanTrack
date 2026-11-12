@@ -284,6 +284,24 @@ The arm followed, from the first held pose: hands up open, palms to the camera, 
 
 Learned: the lengths that make a landmark chain consistent are the landmark-space ones the body solver already carries, and an avatar's lengths in their place are not a harmless scale but a depth error the elbow's reprojection cannot see. The price is the premise: with the chain in the user's proportions the avatar's elbow and wrist leave the landmarks by 60 to 170 px, so the 2D match is now the shoulders and the directions, and a receiver that overlays the avatar on the video will need the wrist put back on its ray by an IK over the avatar's lengths (plan.md).
 
+## 22. The palm mirror: a tiebreak decided with no evidence
+
+A webcam take of palms held to the camera and turned 180 degrees about the wrist and back, three times, showed the avatar's palms popping as each hand passed edge-on. The hand model's own palm was smooth there. Re-solving single frames with `--pose-report` put the pops in the direct solver: the forearm twist stepped about 170 degrees between adjacent frames while the lifted palm moved under 15.
+
+The solver chose between the lifted palm and its mirror along the view ray by which finger axis better continued the forearm, with zero as the bar. The difference between the two is twice the finger axis's lean along the view ray times the forearm's. With the fingers upright that lean is near zero, so the choice followed its sign: it changed 22 and 21 times on the two hands, on exactly the frames where the twist jumped. The mirror leaves a palm that faces the camera as it is and turns an edge-on palm's normal by up to 176 degrees, so the choice was least informed where it cost most. The 60 degree hold adopted any flip that lasted two frames.
+
+`--gate-direct` gained a count of twist steps over 90 degrees between frames that read the hand, and the per-frame gain in its CSV. On the take the count was 8 of 406 frame pairs on the left hand and 6 of 407 on the right. With the mirror taken above a gain of 0.25 and kept above 0.15 the count went to 0, but the right hand still took the mirror for six frames at a gain of 0.29, a 68 degree step under the count's bar. The gain over the whole take, which needs no mirror anywhere, has a p99 of 0.21 and a maximum of 0.29. At 0.5 and 0.3 no frame takes the mirror and no twist step exceeds 45 degrees, and the twist runs from +22 to -114 degrees on the left hand and -35 to +139 on the right through each turn. Under the old rule the first part of each turn was solved on the mirror, at +110 to +137 degrees on the left.
+
+Learned: a rule that picks between two hypotheses needs a bar set by what the evidence can tell apart, not zero, and the place to look for the failure is where the rule's evidence is weakest and its effect largest. What remains on the take is the hand model's own palm jumping 40 to 63 degrees a frame on the left hand's second pass through edge-on (plan.md).
+
+## 23. The hand crop's cost followed the hand's size
+
+A single-webcam take showed hand inference drifting between 6 and 28 ms with both hands tracked, smooth over seconds rather than spiking. It did not follow the body-pose cadence or the palm detector's interval. It followed hand size: against the pre-crop's pixel count it fit 5 ms plus 8.4 ms per megapixel at a correlation of 0.73. The `mp_handpose.py` port built its crop in stages at source resolution. It took the palm box enlarged 4x and padded to its diagonal, converted it to RGB, rotated it with a full-size `warpAffine`, cropped again and shrank the result to 224. A hand near the camera made that pre-crop most of the frame's height, up to a megapixel per hand.
+
+The crop is now one warp straight from the frame into the model input, at twice the model resolution and box filtered down for a large hand. On the take's raw frames through `--replay-hands`, the estimate went from 3.0 ms per hand at the median (1.9 to 4.1 ms by size) to 1.3 to 1.6 ms flat. Against the recorded landmarks the median difference rose from 0.5 px (JPEG alone) to 1.4 px, but the 90th percentile rose to 13 px. Those frames were hands low in the frame. There the old crop blacked out image content outside its axis-aligned pre-crop and re-centered a final box it had clipped. Overlays of the worst of them put the new landmarks on the hand and the old ones off it, and in one the old crop scored a plainly visible hand at 0.00 presence where the new one scored 0.97.
+
+Learned: a staged image pipeline ported from a demo carries the demo's intermediate buffers, and their cost and their clipping are both invisible until a hand fills the frame. Compose the geometry and resample once.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

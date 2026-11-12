@@ -1,5 +1,6 @@
 #include "TrackingRecording.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "TrackingJson.h"
@@ -144,6 +145,8 @@ json cameraInputToJson(const RecordedCameraInput& camera)
 	};
 	if (camera.bHaveBodyPose)
 		out["body"]= bodyPoseToJson(camera.body);
+	if (camera.bHaveCaptureTimings)
+		out["timings"]= captureTimingsToJson(camera.captureTimings);
 	return out;
 }
 
@@ -173,7 +176,228 @@ bool cameraInputFromJson(const json& j, RecordedCameraInput& outCamera)
 		outCamera.bHaveBodyPose= true;
 		bodyPoseFromJson(j["body"], outCamera.body);
 	}
+	// A camera input without the block (every recording before it was
+	// carried) has no capture timings
+	if (j.contains("timings") && j["timings"].is_object())
+	{
+		outCamera.bHaveCaptureTimings= true;
+		captureTimingsFromJson(j["timings"], outCamera.captureTimings);
+	}
 	return true;
+}
+
+// Type-tolerant reads for the display-only telemetry block: a missing key, a
+// null (a non-finite float) or a value of another type reads as the default,
+// and keys this build does not know are ignored
+const json* findMember(const json& j, const char* key)
+{
+	const auto it= j.find(key);
+	return it != j.end() ? &*it : nullptr;
+}
+
+float readFloat(const json& j, const char* key, float defaultValue)
+{
+	const json* value= findMember(j, key);
+	return value != nullptr && value->is_number() ? value->get<float>() : defaultValue;
+}
+
+int readInt(const json& j, const char* key, int defaultValue)
+{
+	const json* value= findMember(j, key);
+	return value != nullptr && value->is_number_integer() ? value->get<int>() : defaultValue;
+}
+
+bool readBool(const json& j, const char* key, bool defaultValue)
+{
+	const json* value= findMember(j, key);
+	return value != nullptr && value->is_boolean() ? value->get<bool>() : defaultValue;
+}
+
+const json& readObject(const json& j, const char* key)
+{
+	static const json k_emptyObject= json::object();
+	const json* value= findMember(j, key);
+	return value != nullptr && value->is_object() ? *value : k_emptyObject;
+}
+
+const json& readArray(const json& j, const char* key)
+{
+	static const json k_emptyArray= json::array();
+	const json* value= findMember(j, key);
+	return value != nullptr && value->is_array() ? *value : k_emptyArray;
+}
+
+float numberOr(const json& value, float defaultValue)
+{
+	return value.is_number() ? value.get<float>() : defaultValue;
+}
+
+json telemetryToJson(const RecordedTelemetry& telemetry)
+{
+	const int cameraCount= std::clamp(telemetry.cameraCount, 0, RecordedTelemetry::k_maxCameras);
+
+	json phaseMs= json::array();
+	for (float phase : telemetry.phaseMs)
+		phaseMs.push_back(phase);
+
+	json confidence= json::array();
+	json cameras= json::array();
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		confidence.push_back(json::array({telemetry.observationConfidence[cameraIndex][0],
+										  telemetry.observationConfidence[cameraIndex][1]}));
+		const RecordedTelemetry::Camera& camera= telemetry.cameras[cameraIndex];
+		cameras.push_back({
+			{"open", camera.deviceOpen},
+			{"streaming", camera.streaming},
+			{"fps", camera.deviceFrameRate},
+			{"dropped", camera.droppedFrames},
+			{"queued", camera.queuedFrames},
+			{"copyMs", camera.callbackCopyMs},
+			{"tracking", camera.trackingEnabled},
+			{"handReady", camera.handPipelineReady},
+			{"bodyModel", camera.bodyModelLoaded},
+		});
+	}
+
+	json imu= json::array();
+	for (const RecordedImuStatus& status : telemetry.imu)
+	{
+		imu.push_back({
+			{"connected", status.deviceConnected},
+			{"streaming", status.streaming},
+			{"calibrated", status.calibrated},
+			{"orientationValid", status.orientationValid},
+			{"rateHz", status.sampleRateHz},
+			{"battery", status.batteryLevel},
+			{"yawDrift", status.yawDriftDegPerSecond},
+			{"rollError", status.rollErrorDegrees},
+		});
+	}
+
+	json out= {
+		{"path", telemetry.path},
+		{"phaseMs", phaseMs},
+		{"totalMs", telemetry.totalMs},
+		{"dominant", json::array({telemetry.dominantCamera[0], telemetry.dominantCamera[1]})},
+		{"obsConf", confidence},
+		{"autoScale", telemetry.autoHandScaleFactor},
+		{"cameras", cameras},
+		{"imuEnabled", telemetry.imuEnabled},
+		{"imu", imu},
+	};
+	out["osc"]= {
+		{"running", telemetry.oscRunning},
+		{"rateHz", telemetry.oscSendRateHz},
+		{"packets", telemetry.oscLastPacketCount},
+		{"bytes", telemetry.oscLastFrameBytes},
+	};
+	out["face"]= {
+		{"enabled", telemetry.face.enabled},
+		{"bound", telemetry.face.bound},
+		{"streaming", telemetry.face.streaming},
+		{"tracked", telemetry.face.faceTracked},
+		{"rateHz", telemetry.face.datagramsPerSecond},
+	};
+	out["audio"]= {
+		{"enabled", telemetry.audio.enabled},
+		{"deviceOpen", telemetry.audio.deviceOpen},
+		{"backendReady", telemetry.audio.backendReady},
+		{"gateOpen", telemetry.audio.gateOpen},
+		{"levelDbfs", telemetry.audio.levelDbfs},
+		{"inferMs", telemetry.audio.inferMsEma},
+	};
+	return out;
+}
+
+void telemetryFromJson(const json& j, RecordedTelemetry& outTelemetry)
+{
+	outTelemetry= RecordedTelemetry();
+	if (!j.is_object())
+		return;
+	const RecordedTelemetry defaults;
+	outTelemetry.present= true;
+	outTelemetry.path= readInt(j, "path", defaults.path);
+	const json& phaseMs= readArray(j, "phaseMs");
+	for (int phase= 0; phase < RecordedTelemetry::k_phaseCount && phase < (int)phaseMs.size(); ++phase)
+		outTelemetry.phaseMs[phase]= numberOr(phaseMs[phase], 0.f);
+	outTelemetry.totalMs= readFloat(j, "totalMs", defaults.totalMs);
+
+	const json& osc= readObject(j, "osc");
+	outTelemetry.oscRunning= readBool(osc, "running", defaults.oscRunning);
+	outTelemetry.oscSendRateHz= readFloat(osc, "rateHz", defaults.oscSendRateHz);
+	outTelemetry.oscLastPacketCount= readInt(osc, "packets", defaults.oscLastPacketCount);
+	outTelemetry.oscLastFrameBytes= readInt(osc, "bytes", defaults.oscLastFrameBytes);
+
+	const json& dominant= readArray(j, "dominant");
+	for (int sideIndex= 0; sideIndex < 2 && sideIndex < (int)dominant.size(); ++sideIndex)
+	{
+		if (dominant[sideIndex].is_number_integer())
+			outTelemetry.dominantCamera[sideIndex]= dominant[sideIndex].get<int>();
+	}
+	const json& confidence= readArray(j, "obsConf");
+	for (int cameraIndex= 0; cameraIndex < RecordedTelemetry::k_maxCameras && cameraIndex < (int)confidence.size();
+		 ++cameraIndex)
+	{
+		const json& sides= confidence[cameraIndex];
+		for (int sideIndex= 0; sides.is_array() && sideIndex < 2 && sideIndex < (int)sides.size(); ++sideIndex)
+			outTelemetry.observationConfidence[cameraIndex][sideIndex]= numberOr(sides[sideIndex], -1.f);
+	}
+	outTelemetry.autoHandScaleFactor= readFloat(j, "autoScale", defaults.autoHandScaleFactor);
+
+	const json& cameras= readArray(j, "cameras");
+	outTelemetry.cameraCount= std::min((int)cameras.size(), RecordedTelemetry::k_maxCameras);
+	for (int cameraIndex= 0; cameraIndex < outTelemetry.cameraCount; ++cameraIndex)
+	{
+		const json& camera= cameras[cameraIndex];
+		if (!camera.is_object())
+			continue;
+		const RecordedTelemetry::Camera cameraDefaults;
+		RecordedTelemetry::Camera& outCamera= outTelemetry.cameras[cameraIndex];
+		outCamera.deviceOpen= readBool(camera, "open", cameraDefaults.deviceOpen);
+		outCamera.streaming= readBool(camera, "streaming", cameraDefaults.streaming);
+		outCamera.deviceFrameRate= readFloat(camera, "fps", cameraDefaults.deviceFrameRate);
+		outCamera.droppedFrames= readInt(camera, "dropped", cameraDefaults.droppedFrames);
+		outCamera.queuedFrames= readInt(camera, "queued", cameraDefaults.queuedFrames);
+		outCamera.callbackCopyMs= readFloat(camera, "copyMs", cameraDefaults.callbackCopyMs);
+		outCamera.trackingEnabled= readBool(camera, "tracking", cameraDefaults.trackingEnabled);
+		outCamera.handPipelineReady= readBool(camera, "handReady", cameraDefaults.handPipelineReady);
+		outCamera.bodyModelLoaded= readBool(camera, "bodyModel", cameraDefaults.bodyModelLoaded);
+	}
+
+	outTelemetry.imuEnabled= readBool(j, "imuEnabled", defaults.imuEnabled);
+	const json& imu= readArray(j, "imu");
+	for (int sideIndex= 0; sideIndex < 2 && sideIndex < (int)imu.size(); ++sideIndex)
+	{
+		const json& status= imu[sideIndex];
+		if (!status.is_object())
+			continue;
+		const RecordedImuStatus statusDefaults;
+		RecordedImuStatus& outStatus= outTelemetry.imu[sideIndex];
+		outStatus.deviceConnected= readBool(status, "connected", statusDefaults.deviceConnected);
+		outStatus.streaming= readBool(status, "streaming", statusDefaults.streaming);
+		outStatus.calibrated= readBool(status, "calibrated", statusDefaults.calibrated);
+		outStatus.orientationValid= readBool(status, "orientationValid", statusDefaults.orientationValid);
+		outStatus.sampleRateHz= readFloat(status, "rateHz", statusDefaults.sampleRateHz);
+		outStatus.batteryLevel= readFloat(status, "battery", statusDefaults.batteryLevel);
+		outStatus.yawDriftDegPerSecond= readFloat(status, "yawDrift", statusDefaults.yawDriftDegPerSecond);
+		outStatus.rollErrorDegrees= readFloat(status, "rollError", statusDefaults.rollErrorDegrees);
+	}
+
+	const json& face= readObject(j, "face");
+	outTelemetry.face.enabled= readBool(face, "enabled", defaults.face.enabled);
+	outTelemetry.face.bound= readBool(face, "bound", defaults.face.bound);
+	outTelemetry.face.streaming= readBool(face, "streaming", defaults.face.streaming);
+	outTelemetry.face.faceTracked= readBool(face, "tracked", defaults.face.faceTracked);
+	outTelemetry.face.datagramsPerSecond= readFloat(face, "rateHz", defaults.face.datagramsPerSecond);
+
+	const json& audio= readObject(j, "audio");
+	outTelemetry.audio.enabled= readBool(audio, "enabled", defaults.audio.enabled);
+	outTelemetry.audio.deviceOpen= readBool(audio, "deviceOpen", defaults.audio.deviceOpen);
+	outTelemetry.audio.backendReady= readBool(audio, "backendReady", defaults.audio.backendReady);
+	outTelemetry.audio.gateOpen= readBool(audio, "gateOpen", defaults.audio.gateOpen);
+	outTelemetry.audio.levelDbfs= readFloat(audio, "levelDbfs", defaults.audio.levelDbfs);
+	outTelemetry.audio.inferMsEma= readFloat(audio, "inferMs", defaults.audio.inferMsEma);
 }
 
 json poseOutputToJson(const RecordedPoseOutput& pose)
@@ -306,20 +530,43 @@ std::string makeFrameDirectoryPath(const std::string& recordingFilePath)
 	return stem + "_frames";
 }
 
-std::string makeAudioSidecarPath(const std::string& recordingFilePath)
+// The suffixes the sidecars take in place of the recording's extension
+static const char* k_audioSidecarSuffix= ".wav";
+static const char* k_faceSidecarSuffix= ".face.jsonl";
+static const char* k_recordingExtension= ".jsonl";
+
+static std::string makeSidecarPath(const std::string& recordingFilePath, const char* suffix)
 {
 	const size_t extension= recordingFilePath.find_last_of('.');
 	const std::string stem=
 		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
-	return stem + ".wav";
+	return stem + suffix;
+}
+
+static bool endsWith(const std::string& text, const char* suffix)
+{
+	const size_t suffixLength= std::strlen(suffix);
+	return text.size() >= suffixLength && text.compare(text.size() - suffixLength, suffixLength, suffix) == 0;
+}
+
+std::string makeAudioSidecarPath(const std::string& recordingFilePath)
+{
+	return makeSidecarPath(recordingFilePath, k_audioSidecarSuffix);
 }
 
 std::string makeFaceSidecarPath(const std::string& recordingFilePath)
 {
-	const size_t extension= recordingFilePath.find_last_of('.');
-	const std::string stem=
-		extension == std::string::npos ? recordingFilePath : recordingFilePath.substr(0, extension);
-	return stem + ".face.jsonl";
+	return makeSidecarPath(recordingFilePath, k_faceSidecarSuffix);
+}
+
+bool isRecordingSidecarFile(const std::string& path)
+{
+	return endsWith(path, k_faceSidecarSuffix) || endsWith(path, k_audioSidecarSuffix);
+}
+
+bool isRecordingFile(const std::string& path)
+{
+	return endsWith(path, k_recordingExtension) && !isRecordingSidecarFile(path);
 }
 
 json headerToJson(const RecordingHeader& header)
@@ -411,6 +658,8 @@ json frameToJson(const RecordedFrame& frame)
 			weights.push_back(weight);
 		out["mouth"]= {{"frameIndex", frame.mouth.audioFrameIndex}, {"w", weights}};
 	}
+	if (frame.telemetry.present)
+		out["telemetry"]= telemetryToJson(frame.telemetry);
 	return out;
 }
 
@@ -457,6 +706,10 @@ bool frameFromJson(const json& j, RecordedFrame& outFrame)
 				outFrame.mouth.frame.weights[viseme]= floatFromJson(weights[viseme]);
 		}
 	}
+	// A frame without the block (every recording before it was carried) has
+	// no stage state to show
+	if (j.contains("telemetry") && j["telemetry"].is_object())
+		telemetryFromJson(j["telemetry"], outFrame.telemetry);
 	outFrame.checksum= checksumFromHex(j.value("checksum", "0"));
 	return true;
 }

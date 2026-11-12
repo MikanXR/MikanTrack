@@ -25,7 +25,7 @@ struct TrackingFrameResult;
 
 // The expression editor: one window on one row of the active face profile,
 // a variable or a VRM expression binding, opened from the row's Edit button
-// in the Face tab and moved to another row by the next one or by its own
+// in the Profile stage and moved to another row by the next one or by its own
 // header's row picker. Its edits go to the
 // profile as the tab's do (the last good binding keeps running while an
 // edit does not compile), and Revert restores the text it opened with.

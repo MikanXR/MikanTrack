@@ -41,17 +41,14 @@ A panel dragged past the main window's edge becomes its own OS window, which ImG
 - `gui viewports` replies `<viewportId> <x>,<y> <width>x<height> <windowIds...>` per viewport, main viewport first. The rect is in desktop pixels when multi-viewports are on, and each window id is the stable part of a panel's ImGui name (the English title after `###`), quoted when it holds a space, so it pastes straight into `gui float`. A panel docked or floating inside the main window is listed under the main viewport, a torn-out one under its own OS window's viewport. The list reads the previous frame, so a `sleep:0.5` after a state change keeps a stale window out of it.
 
 - `gui float <windowId> <x> <y> [<width> <height>]` undocks a panel drawn last frame and moves it to a position, which is how a drive reaches the state a hand drag would produce. A position outside the main window gives the panel its own OS window. The move applies right after the next frame's `NewFrame`, so poll `gui viewports` after it. Docking back is the drag a hand does, scripted: `input press viewport <id>` on the torn-out title bar, a couple of `input move viewport <id>` steps, then `input move` steps in main-window coordinates onto the target dock node's center, and `input release` there (the main-window form of the drag is under the drive loop below). The ids are the panel titles:
-	- `"Video Preview"`
-	- `"3D Scene"`
-	- `Device`
+	- `"Stage View"`
 	- `Tracking`
 	- `Settings`
-	- `Audio`
-	- `Calibration`
-	- `"OSC Output"`
-	- `Avatar`
 	- `Log`
 	- `Timeline`
+	- `Pipeline`
+	- `Inspector`
+	- `Performance`
 
 ### Synthetic input (input)
 
@@ -68,7 +65,7 @@ The target is the main window, with positions in its client pixels. `input <verb
 - `input key <keyName> [modifiers...]` presses and releases a key, and `input keydown` / `input keyup` are its halves, so a drive can hold a modifier across a mouse press, move, and release (`input keydown ctrl ctrl`, then `input keyup ctrl`; the modifier key names are `ctrl`, `shift`, `alt`). Names are `return`/`enter`, `tab`, `escape`, `backspace`, `delete`, `space`, the arrows, `home`, `end`, `pageup`, `pagedown`, `insert`, `f1` to `f12`, or a single printable character. Modifiers are `shift`, `ctrl`, `alt`, `gui`.
 - `input text <text...>` commits text the way typing does, taking the raw untokenized rest of the line
 
-Two things a warp cannot fake. A warped move often reports a zero relative delta, so anything driven by relative motion rather than by cursor position is unreliable under synthetic input. The 3D Scene's orbit reads ImGui's per-frame mouse delta, which is computed from successive cursor positions, so a `press`, a `move`, and a `release` across frames do orbit it. A `input key` press and release land in the same frame, so held-key behavior never accumulates.
+Two things a warp cannot fake. A warped move often reports a zero relative delta, so anything driven by relative motion rather than by cursor position is unreliable under synthetic input. The Stage View's scene orbit reads ImGui's per-frame mouse delta, which is computed from successive cursor positions, so a `press`, a `move`, and a `release` across frames do orbit it. A `input key` press and release land in the same frame, so held-key behavior never accumulates.
 
 After a drive works in one OS window (the main window or a torn-out panel), a click into another that follows a single `input move` is lost. Move twice in the new window (`input move`, `sleep:0.5`, `input move` a pixel over, `sleep:0.5`) before the first click there.
 
@@ -92,7 +89,7 @@ One caveat worth knowing when a click seems to vanish: an ImGui window's capture
 
 ### Face profiles and the expression editor (face)
 
-Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the owning subsystem. Every value reads the frame the scene shows, under the Face tab's live rule (a value is `none` until a frame of the current binding's generation arrives).
+Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the owning subsystem. Every value reads the frame the scene shows, under the Profile stage's live rule (a value is `none` until a frame of the current binding's generation arrives).
 
 - `face profile`: the active profile's name, id, whether it is Auto, its variable and binding counts, and its compile error count
 - `face rows`: one line per variable (`let <i> <name> = <expr> -> <value>`) and per binding (`out <i> <target> = <expr> -> <value>`), with ` error: <message>` appended to a row that does not compile
@@ -103,6 +100,41 @@ Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the 
 
 The commands after `edit` need the editor open and answer an error otherwise.
 
+### Performance panel (performance)
+
+- `performance source`: `live` or `recording`, the number of samples charted and the newest or playhead sample's total (`recording samples 600 total 8.22`)
+- `performance source live|recording`: sets the source, with an error when no replay is shown or the shown take carries no telemetry
+
+### Pipeline panel (pipeline)
+
+The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `output.vmc`, `face.mic`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
+
+- `pipeline stages`: a first line `shape multi|direct cameras <n> shown live|replay`, then every stage of the project in pipeline order
+- `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
+- `pipeline selected`: the selected stage's line, or `none`
+- `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
+- `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, or in the split mode the camera part then the scene part (`camera all scene none`), then `mode follow|cameras|scene|split`, then on a scene `pov free` or `pov <cameraIndex>`, then `layout overlay|sidebyside` on the Retarget view, then `wizard` while a camera calibration wizard forces the cameras
+- `pipeline view follow|cameras|scene|split`: sets the Stage View's mode and answers the same line
+- `pipeline view overlay|sidebyside`: sets the Retarget view's layout, whatever the view shows, and answers the same line. A synthetic `input click` on a source bone in the Retarget view selects its chain, which `pipeline chain` then answers
+- `pipeline pin <stage>`: pins the stage as a double-click on its box does and answers its window id, `pin.<stage>`, which `gui float` and `gui viewports` use
+- `pipeline unpin <stage>|all`: closes that stage's pinned window, or all of them
+- `pipeline pinned`: one pinned stage per line, or `none`
+- `pipeline pov`: the scene's point of view (`pov free|<cameraIndex> matched yes|no`, the index counted from 0) and every choice with its availability (`choices free 0:available 1:noExtrinsics ...`)
+- `pipeline pov free|<cameraIndex>`: sets it, with an error naming the reason for a camera that cannot be looked through
+- `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
+- `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
+- `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
+- `pipeline loss <chain> after <release|freeze|easeToRest>`, `pipeline loss <chain> hold <ms>`, `pipeline loss <chain> blend <ms>`: set that field of the chain's stored policy. A hold on the head also makes its hold timed
+- `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note when the arm maps by bone angles, which has no goal) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)
+- `pipeline goal <arm> <x> <y> <z>`: sets the goal offset, meters in the rooted torso frame
+- `pipeline limit <head|spine|leftWrist|rightWrist>`: that joint limit of the loaded avatar's rig in degrees, with a note when the project's pipeline applies none
+- `pipeline limit <name> <degrees>`: sets it, 0 to 180, through the rig's edit path, which writes the avatar's sidecar file about three seconds later
+- `pipeline mapping <leftArm|rightArm>`: the arm chain's stored mapping (`mapping boneAngles|boneAnglesThenIk`) and the weight the shown frame's solve ran at (`shown ikWeight <w>`, or `shown none`)
+- `pipeline mapping <arm> <boneAngles|boneAnglesThenIk>`: sets it
+- `pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight>`: three lines: the setting (`setting function|value value <v> expr <text>`), the text's compile state (`compile ok` or `compile error at <begin>..<end>: <message>`), and what the shown frame's solve took (`shown weight <w> raw <r> from function|value compiled yes|no`, or `shown none`)
+- `pipeline fx <arm> <parameter> value <number>`: sets a plain value in 0 to 1
+- `pipeline fx <arm> <parameter> expr <text...>`: sets the function to the rest of the line. A plain value with no text answers its `compile` line as an error on the empty text, which is not in force. The answer's `shown` line is the frame shown before the edit lands
+
 ## Client helper
 
 `tools/automate.py` is the checked-in client: it connects (retrying a refused port until `--wait` seconds, default 20), sends each argument as one command, prints each framed reply, and exits nonzero on a connection failure or timeout. `--port` overrides the default 21140, `--delay` sets the pause between commands (default 0.1 s), and `--timeout` bounds each reply and `until` poll (default 60 s).
@@ -110,7 +142,7 @@ The commands after `edit` need the editor open and answer an error otherwise.
 ```
 python tools/automate.py "app info"
 python tools/automate.py "app resume" "until:app info:state Project" "screenshot window"
-python tools/automate.py "gui viewports" "gui float \"3D Scene\" 2000 100"
+python tools/automate.py "gui viewports" "gui float \"Stage View\" 2000 100"
 ```
 
 Three arguments run client-side instead of being sent:
@@ -134,7 +166,7 @@ python tools/automate.py "input click 400 300" "log tail 20 error" "app quit"
 The tear-out round trip, the drive that checks the multi-viewport pass: float a panel outside the main window, capture and click its OS window, close it from its own close box, reopen it from the View menu, and drag it back onto the center dock. The viewport id is the one `gui viewports` reports after the float, and the menu item and dock target positions are read from a `screenshot window`.
 
 ```
-python tools/automate.py "app resume" "until:app info:state Project" "sleep:1" "gui float \"3D Scene\" 1800 200 640 480" "sleep:1" "gui viewports"
+python tools/automate.py "app resume" "until:app info:state Project" "sleep:1" "gui float \"Stage View\" 1800 200 640 480" "sleep:1" "gui viewports"
 python tools/automate.py "screenshot viewport <id> C:/tmp/scene.png" "input move viewport <id> 320 240" "sleep:0.5" "input move viewport <id> 321 240" "input click viewport <id> 321 240"
 python tools/automate.py "input move viewport <id> 622 14" "sleep:0.5" "input move viewport <id> 623 14" "input click viewport <id> 623 14" "sleep:1" "gui viewports"
 python tools/automate.py "input move 167 14" "sleep:0.5" "input move 168 14" "input click 168 14" "sleep:0.5" "screenshot window C:/tmp/menu.png"

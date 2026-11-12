@@ -60,6 +60,8 @@ json armToJson(const DirectRetarget::SolveState::Arm& arm)
 		{"twist", arm.twist},
 		{"wristRotation", quatToJson(arm.wristRotation)},
 		{"filteredPalm", quatToJson(arm.filteredPalm)},
+		{"palmMirrored", arm.bPalmMirrored},
+		{"palmMirrorGain", arm.palmMirrorGain},
 		{"measuredFingers", fingersToJson(arm.measuredFingers)},
 		{"fingers", fingersToJson(arm.fingers)},
 	};
@@ -108,6 +110,7 @@ json directSolveStateToJson(const DirectRetarget::SolveState& state)
 		{"spineDelta", quatToJson(state.spineDelta)},
 		{"headMeasured", state.headMeasured},
 		{"headDelta", quatToJson(state.headDelta)},
+		{"handednessSwapped", state.bHandednessSwapped},
 		{"arms", json::array({armToJson(state.arms[0]), armToJson(state.arms[1])})},
 	};
 	if (state.torsoValid)

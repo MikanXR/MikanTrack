@@ -104,7 +104,8 @@ static int runRenderAvatarTool(const TestArgs& args)
 				const AvatarRetargetConfig retargetConfig= makeAvatarRetargetConfig(placement, rig);
 				AvatarRetarget retarget;
 				AvatarPose pose;
-				retarget.solve(frame, user, skeleton, retargetConfig, pose);
+				retarget.solve(frame, user, skeleton, retargetConfig, pose,
+							   {rig.sides[0].elbowHintConfidence, rig.sides[1].elbowHintConfidence});
 				computePosedGlobals(*loaded.model, skeleton, pose, globals);
 			}
 

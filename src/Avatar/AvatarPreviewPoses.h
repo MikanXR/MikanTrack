@@ -5,8 +5,8 @@
 
 class AvatarSkeleton;
 
-// Canned tracked frames for posing an avatar without cameras: the Avatar
-// panel's Rest and Demo previews and the headless render tool. Both take the
+// Canned tracked frames for posing an avatar without cameras: the
+// Retarget stage's Rest and Demo previews and the headless render tool. Both take the
 // user's lengths to be the avatar's own, so reach maps 1:1.
 namespace AvatarPreviewPoses
 {

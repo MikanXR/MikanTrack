@@ -15,6 +15,22 @@ static const ImVec4 k_colorGood(0.4f, 1.f, 0.5f, 1.f);
 static const ImVec4 k_colorWarn(1.f, 0.85f, 0.3f, 1.f);
 static const ImVec4 k_colorBad(1.f, 0.4f, 0.4f, 1.f);
 
+void TimelinePanel::update(float deltaSeconds)
+{
+	// Playback advances the playhead against recorded time
+	if (m_bPlaying && m_bLoaded && m_replay.didRun())
+	{
+		const int frameCount= m_replay.getFrameCount();
+		m_playheadMs+= (double)(deltaSeconds * 1000.f) * m_playSpeed;
+		while (m_currentFrame + 1 < frameCount &&
+			   m_replay.getFrame(m_currentFrame + 1).recorded->nowTimestampMs <= m_playheadMs)
+			++m_currentFrame;
+		if (m_currentFrame >= frameCount - 1)
+			m_bPlaying= false;
+	}
+	rebuildDisplayFrame();
+}
+
 void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThread)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.timeline"), pOpen))
@@ -100,8 +116,10 @@ void TimelinePanel::refreshRecordingList(const AppConfig* config)
 	for (const auto& entry :
 		 std::filesystem::directory_iterator(config->getRecordingsDirectoryPath(), ec))
 	{
-		if (entry.is_regular_file() && entry.path().extension() == ".jsonl")
-			m_recordingFiles.push_back(entry.path().string());
+		// The take's sidecars sit beside it in the same folder
+		const std::string path= entry.path().string();
+		if (entry.is_regular_file() && TrackingRecording::isRecordingFile(path))
+			m_recordingFiles.push_back(path);
 	}
 	std::sort(m_recordingFiles.begin(), m_recordingFiles.end());
 	if (m_selectedRecording >= (int)m_recordingFiles.size())
@@ -142,10 +160,24 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 	if (ImGui::Button(locLabel("timelinePanel.loadButton"), ImVec2(-1, 0)))
 	{
 		std::string error;
+		// The load replaces the frames these point into
+		m_frameTelemetry.clear();
+		m_bHasTelemetry= false;
+		++m_takeGeneration;
 		if (m_replay.load(m_recordingFiles[m_selectedRecording], error))
 		{
+			for (int frameIndex= 0; frameIndex < m_replay.getFrameCount(); ++frameIndex)
+			{
+				const RecordedTelemetry& telemetry= m_replay.getFrame(frameIndex).recorded->telemetry;
+				m_frameTelemetry.push_back(telemetry.present ? &telemetry : nullptr);
+				m_bHasTelemetry= m_bHasTelemetry || telemetry.present;
+			}
+			// The Fusion stage's detail table reads every frame's fusion
+			// diagnostics, a few hundred bytes a frame
+			m_replay.setCaptureDiagnostics(true);
 			m_replay.runAll();
 			m_bLoaded= true;
+			++m_timelineGeneration;
 			m_bWhatIfSeeded= false;
 			m_whatIfStatus.clear();
 			m_builtFrame= -1;
@@ -197,17 +229,6 @@ void TimelinePanel::drawTransportSection()
 {
 	const int frameCount= m_replay.getFrameCount();
 	const double firstMs= m_replay.getFrame(0).recorded->nowTimestampMs;
-
-	// Playback advances the playhead against recorded time
-	if (m_bPlaying)
-	{
-		m_playheadMs+= (double)(ImGui::GetIO().DeltaTime * 1000.f) * m_playSpeed;
-		while (m_currentFrame + 1 < frameCount &&
-			   m_replay.getFrame(m_currentFrame + 1).recorded->nowTimestampMs <= m_playheadMs)
-			++m_currentFrame;
-		if (m_currentFrame >= frameCount - 1)
-			m_bPlaying= false;
-	}
 
 	// Frame slider with divergence tick marks overlaid on the track
 	int sliderFrame= m_currentFrame;
@@ -376,6 +397,7 @@ void TimelinePanel::drawWhatIfSection()
 	if (ImGui::Button(locLabel("timelinePanel.resimulateButton"), ImVec2(-1, 0)))
 	{
 		m_replay.runWhatIf(m_whatIfParams);
+		++m_timelineGeneration;
 		m_viewMode= 2;
 		m_builtFrame= -1;
 
@@ -523,6 +545,20 @@ void TimelinePanel::rebuildDisplayFrame()
 
 	m_perCameraCopies= frame.perCamera;
 	m_perCameraCopyValid.assign(frame.perCameraValid.begin(), frame.perCameraValid.end());
+	m_displayTelemetry= frame.recorded->telemetry;
+
+	// The what-if view reads the what-if pass's own diagnostics, falling back
+	// with the fused result. A frame that ran no fuse has nothing to report.
+	m_bDisplayDiagnosticsValid= true;
+	if (m_viewMode == 2 && frame.bHasWhatIf && frame.bHasWhatIfDiagnostics)
+		m_displayDiagnostics= frame.whatIfDiagnostics;
+	else if ((m_viewMode != 2 || !frame.bHasWhatIf) && frame.bHasDiagnostics)
+		m_displayDiagnostics= frame.diagnostics;
+	else if (!frame.recorded->bFused)
+		m_displayDiagnostics= FusionDiagnostics();
+	else
+		m_bDisplayDiagnosticsValid= false;
+
 	m_builtFrame= m_currentFrame;
 	m_builtViewMode= m_viewMode;
 }
@@ -561,9 +597,47 @@ void TimelinePanel::rebuildDisplayFace()
 	m_faceFrame= m_currentFrame;
 }
 
+int TimelinePanel::getReplayTimelineId() const
+{
+	return m_timelineGeneration * 3 + m_viewMode;
+}
+
+double TimelinePanel::getFrameTimeMs(int frameIndex) const
+{
+	return m_replay.getFrame(frameIndex).recorded->nowTimestampMs;
+}
+
+void TimelinePanel::getRetargetInputs(int frameIndex, TrackingFrameResult& outFused,
+									  std::vector<const TrackingFrameResult*>& outPerCamera) const
+{
+	const TrackingReplay::ReplayFrame& frame= m_replay.getFrame(frameIndex);
+	if (m_viewMode == 0)
+		buildRecordedResult(*frame.recorded, outFused);
+	else if (m_viewMode == 2 && frame.bHasWhatIf)
+		outFused= frame.whatIfFused;
+	else
+		outFused= frame.replayedFused;
+	outPerCamera.clear();
+	for (size_t cameraIndex= 0; cameraIndex < frame.perCamera.size(); ++cameraIndex)
+	{
+		const bool bValid= cameraIndex < frame.perCameraValid.size() && frame.perCameraValid[cameraIndex];
+		outPerCamera.push_back(bValid ? &frame.perCamera[cameraIndex] : nullptr);
+	}
+}
+
 std::vector<SceneCameraView> TimelinePanel::getSceneCameras() const
 {
 	return makeSceneCameraViews(m_replay.getRecordedConfig());
+}
+
+const RecordedTelemetry* TimelinePanel::getDisplayTelemetry() const
+{
+	return isReplayViewActive() && m_displayTelemetry.present ? &m_displayTelemetry : nullptr;
+}
+
+const FusionDiagnostics* TimelinePanel::getDisplayFusionDiagnostics() const
+{
+	return isReplayViewActive() && m_bDisplayDiagnosticsValid ? &m_displayDiagnostics : nullptr;
 }
 
 std::vector<const TrackingFrameResult*> TimelinePanel::getPerCameraResults() const

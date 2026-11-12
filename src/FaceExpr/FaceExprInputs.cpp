@@ -20,6 +20,14 @@ std::string expandSideSuffix(const std::string& lowerName)
 		return lowerName.substr(0, length - 2) + (lowerName[length - 1] == 'l' ? "left" : "right");
 	return lowerName;
 }
+
+class FaceInputTable final : public ExprInputTable
+{
+public:
+	int getCount() const override { return FaceExprInputs::k_count; }
+	int findSlot(const std::string& name) const override { return FaceExprInputs::fromName(name); }
+	std::string getName(int slot) const override { return FaceExprInputs::name(slot); }
+};
 } // namespace
 
 namespace FaceExprInputs
@@ -85,5 +93,11 @@ void fill(const FaceSources& sources, float* outInputs)
 	for (int index= 0; index < VISEME_COUNT; ++index)
 		outInputs[k_visemeBase + index]= sources.viseme.present ? sources.viseme.weights[index] : 0.f;
 	outInputs[k_visemePresent]= sources.viseme.present ? 1.f : 0.f;
+}
+
+const ExprInputTable& table()
+{
+	static const FaceInputTable s_table;
+	return s_table;
 }
 } // namespace FaceExprInputs

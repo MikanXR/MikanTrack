@@ -72,6 +72,51 @@ bool projectCameraMatched(const glm::mat4& viewProjection, const glm::vec3& worl
 	return true;
 }
 
+bool projectToViewImage(const glm::mat4& viewProjection, const glm::ivec4& viewport, const glm::vec2& imageMin,
+						float imageHeight, const glm::vec3& world, glm::vec2& outPixel)
+{
+	const glm::vec4 clip= viewProjection * k_displayFromWorld * glm::vec4(world, 1.f);
+	if (clip.w <= 1e-6f)
+		return false;
+	const glm::vec2 ndc= glm::vec2(clip) / clip.w;
+	// The image shows the framebuffer flipped, so NDC +Y is the image top,
+	// and the viewport sits inside it from the bottom up
+	const float viewportTop= imageHeight - (float)(viewport.y + viewport.w);
+	outPixel= imageMin +
+		glm::vec2((float)viewport.x + (ndc.x * 0.5f + 0.5f) * (float)viewport.z,
+				  viewportTop + (0.5f - ndc.y * 0.5f) * (float)viewport.w);
+	return true;
+}
+
+void splitSideBySideLayers(const SceneLayers& layers, SceneLayers& outSource, SceneLayers& outAvatar)
+{
+	outSource= layers;
+	outSource.bAvatar= false;
+	outSource.bDirectSolve= false;
+	outSource.bGizmos= false;
+	outSource.bIkGoals= false;
+
+	outAvatar= layers;
+	outAvatar.bCameraFrustums= false;
+	outAvatar.bFusedSkeleton= false;
+	outAvatar.bPerCameraSkeletons= false;
+	outAvatar.bSourcePose= false;
+}
+
+// The pick: how near a click lands to a bone or a joint, and how far the
+// mouse may move between the press and the release for it to be a click
+// rather than the start of an orbit drag (below ImGui's drag threshold, at
+// which the orbit starts turning)
+static constexpr float kSourcePickTolerancePixels= 6.f;
+static constexpr float kClickSlopPixels= 4.f;
+// The selected chain's halo: a ring of lines this far around each bone,
+// meters, and its color
+static constexpr float kHaloRadius= 0.004f;
+static const glm::vec3 k_haloColor(0.45f, 0.75f, 1.f);
+// The IK goal's marker: a cross of this half size, meters
+static constexpr float kIkGoalHalfSize= 0.025f;
+static const glm::vec3 k_ikGoalColor(1.f, 0.3f, 0.85f);
+
 // Distinct tint per camera for frustums + dimmed per-camera skeletons
 static const glm::vec3 k_cameraColors[4]= {
 	glm::vec3(1.f, 0.9f, 0.3f),  // yellow
@@ -80,13 +125,19 @@ static const glm::vec3 k_cameraColors[4]= {
 	glm::vec3(0.6f, 1.f, 0.5f),  // green
 };
 
-Scene3dPanel::Scene3dPanel()
-	: m_frameBuffer(std::make_unique<GlFrameBuffer>())
-	, m_captureBuffer(std::make_unique<GlFrameBuffer>())
-	, m_lineRenderer(std::make_unique<GlLineRenderer>())
-	, m_camera(std::make_unique<OrbitCamera>())
+SceneViewState::SceneViewState()
+	: frameBuffer(std::make_unique<GlFrameBuffer>())
+	, camera(std::make_unique<OrbitCamera>())
 {
-	m_camera->setOrbitLocation(30.f, -40.f, 1.8f);
+	camera->setOrbitLocation(30.f, -40.f, 1.8f);
+}
+
+SceneViewState::~SceneViewState()= default;
+
+Scene3dPanel::Scene3dPanel()
+	: m_captureBuffer(std::make_unique<GlFrameBuffer>())
+	, m_lineRenderer(std::make_unique<GlLineRenderer>())
+{
 }
 
 void Scene3dPanel::setAvatar(std::shared_ptr<const AvatarModel> model, std::shared_ptr<const AvatarSkeleton> skeleton,
@@ -119,6 +170,50 @@ void Scene3dPanel::setDirectSolve(const DirectRetarget::SolveState* state, const
 		m_directSolve= *state;
 		m_solveToWorld= solveToWorld;
 	}
+	// The direct source pose is placed by the same transform
+	m_bSourceSkeletonDirty= true;
+}
+
+void Scene3dPanel::setSourcePose(const RetargetResult* result, const glm::vec3* headAnchorWorld)
+{
+	m_bHasSourcePose= result != nullptr && result->source.pipeline != SourcePose::ePipeline::None;
+	if (m_bHasSourcePose)
+	{
+		m_sourcePose= result->source;
+		m_sourceHands= result->hands;
+		m_sourceGoals= result->goals;
+	}
+	m_bHasHeadAnchor= headAnchorWorld != nullptr;
+	if (m_bHasHeadAnchor)
+		m_headAnchorWorld= *headAnchorWorld;
+	m_bSourceSkeletonDirty= true;
+}
+
+const SourceSkeleton& Scene3dPanel::getSourceSkeleton()
+{
+	if (m_bSourceSkeletonDirty)
+	{
+		m_bSourceSkeletonDirty= false;
+		SourceSkeletonInputs inputs;
+		if (m_bHasSourcePose)
+		{
+			inputs.source= &m_sourcePose;
+			inputs.hands= &m_sourceHands;
+			inputs.directToWorld= m_bHasDirectSolve ? &m_solveToWorld : nullptr;
+			inputs.headAnchorWorld= m_bHasHeadAnchor ? &m_headAnchorWorld : nullptr;
+		}
+		buildSourceSkeleton(inputs, m_sourceSkeleton);
+	}
+	return m_sourceSkeleton;
+}
+
+bool Scene3dPanel::consumePickedChain(eRetargetChain& outChain)
+{
+	if (!m_bHasPickedChain)
+		return false;
+	m_bHasPickedChain= false;
+	outChain= m_pickedChain;
+	return true;
 }
 
 Scene3dPanel::~Scene3dPanel()= default;
@@ -130,108 +225,208 @@ bool Scene3dPanel::startRenderers()
 	return m_bLineRendererInitialized;
 }
 
-void Scene3dPanel::draw(bool* pOpen, const TrackingFrameResult& fusedResult,
-						const std::vector<SceneCameraView>& cameras,
-						const std::vector<const TrackingFrameResult*>& perCameraResults, SceneGizmos& gizmos)
+bool Scene3dPanel::renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height,
+								  const glm::ivec4& viewport, const glm::mat4& viewProjection,
+								  const SceneLayers& layers, const TrackingFrameResult& fusedResult,
+								  const std::vector<SceneCameraView>& cameras,
+								  const std::vector<const TrackingFrameResult*>& perCameraResults,
+								  const SceneGizmos& gizmos)
+{
+	ScenePass pass;
+	pass.viewport= viewport;
+	pass.viewProjection= viewProjection;
+	pass.layers= layers;
+	return renderToTarget(target, width, height, std::vector<ScenePass>{pass}, fusedResult, cameras, perCameraResults,
+						  gizmos);
+}
+
+bool Scene3dPanel::renderToTarget(GlFrameBuffer& target, uint16_t width, uint16_t height,
+								  const std::vector<ScenePass>& passes, const TrackingFrameResult& fusedResult,
+								  const std::vector<SceneCameraView>& cameras,
+								  const std::vector<const TrackingFrameResult*>& perCameraResults,
+								  const SceneGizmos& gizmos)
+{
+	if (width == 0 || height == 0 || !startRenderers())
+		return false;
+	if (!target.getIsValid() ? !target.init(width, height) : !target.resize(width, height))
+		return false;
+
+	target.bindFrameBuffer();
+	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	for (const ScenePass& pass : passes)
+	{
+		glViewport(pass.viewport.x, pass.viewport.y, pass.viewport.z, pass.viewport.w);
+		renderScene(fusedResult, cameras, perCameraResults, gizmos, pass.viewProjection, pass.layers);
+	}
+	target.unbindFrameBuffer();
+	return true;
+}
+
+void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+							const std::vector<const TrackingFrameResult*>& perCameraResults, SceneGizmos& gizmos,
+							const SceneLayers& layers, const SceneViewOptions& options)
 {
 	for (SceneGizmos::ElbowHint& hint : gizmos.elbowHints)
 		hint.bDragging= false;
 
-	if (!ImGui::Begin(locWindowTitle("windows.scene3d"), pOpen))
+	const bool bCameraView= isPovMatched();
+	// Side by side needs an avatar for its second half
+	const bool bSideBySide= options.bSideBySide && layers.bAvatar && m_avatarModel != nullptr;
+	glm::vec2 imageMin, imageSize;
+	if (!drawViewImage(m_mainView, bCameraView, bSideBySide, layers, fusedResult, cameras, perCameraResults, gizmos,
+					   imageMin, imageSize))
 	{
-		ImGui::End();
+		m_bPickPressArmed= false;
 		return;
 	}
 
+	// The gizmos and the orbit belong to the orbit view: the camera view is
+	// a fixed viewpoint
+	bool bGizmoOwnsMouse= false;
+	if (bCameraView || !layers.bGizmos)
+		m_draggedElbowHint= -1;
+	else
+		bGizmoOwnsMouse= updateGizmoDrag(gizmos, imageMin, imageSize);
+	// After the gizmos, so a press a gizmo took is not a click
+	if (options.bPickSourceChains && layers.bSourcePose)
+		updateSourcePick(imageMin, imageSize);
+	else
+		m_bPickPressArmed= false;
+	if (!bCameraView)
+		updateOrbit(*m_mainView.camera, !bGizmoOwnsMouse);
+}
+
+void Scene3dPanel::drawViewBody(SceneViewState& view, const TrackingFrameResult& fusedResult,
+								const std::vector<SceneCameraView>& cameras,
+								const std::vector<const TrackingFrameResult*>& perCameraResults,
+								const SceneLayers& layers)
+{
+	SceneLayers viewLayers= layers;
+	viewLayers.bGizmos= false;
+	const SceneGizmos noGizmos;
+	glm::vec2 imageMin, imageSize;
+	if (drawViewImage(view, false, false, viewLayers, fusedResult, cameras, perCameraResults, noGizmos, imageMin,
+					  imageSize))
+		updateOrbit(*view.camera, true);
+}
+
+void Scene3dPanel::frameRegion(SceneViewState& view, bool bCameraView, const glm::ivec4& region,
+							   glm::ivec4& outViewport, glm::mat4& outViewProjection) const
+{
+	if (bCameraView)
+	{
+		const float frameAspect= (float)m_povMatch.camera.width / (float)m_povMatch.camera.height;
+		int viewWidth= region.z;
+		int viewHeight= (int)((float)region.z / frameAspect);
+		if (viewHeight > region.w)
+		{
+			viewHeight= region.w;
+			viewWidth= (int)((float)region.w * frameAspect);
+		}
+		outViewport= glm::ivec4(region.x + (region.z - viewWidth) / 2, region.y + (region.w - viewHeight) / 2,
+								viewWidth, viewHeight);
+		glm::mat4 viewMatrix, projection;
+		makeCameraMatchedView(m_povMatch.camera, m_povMatch.cameraToWorld, 0.01f, 100.f, viewMatrix, projection);
+		outViewProjection= projection * viewMatrix;
+	}
+	else
+	{
+		outViewport= region;
+		view.camera->setPerspectiveProjection(50.f, (float)region.z / (float)region.w, 0.01f, 100.f);
+		outViewProjection= view.camera->getViewProjection();
+	}
+}
+
+bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bSideBySide, const SceneLayers& layers,
+								 const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
+								 const std::vector<const TrackingFrameResult*>& perCameraResults,
+								 const SceneGizmos& gizmos, glm::vec2& outImageMin, glm::vec2& outImageSize)
+{
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const uint16_t fbWidth= (uint16_t)std::max(64.f, panelSize.x);
 	const uint16_t fbHeight= (uint16_t)std::max(64.f, panelSize.y);
 
-	if (!m_bRenderInitialized)
+	// The orbit view fills its region; the camera view letterboxes the
+	// frame's aspect inside it. Side by side, the source half is the left
+	// one and the avatar half, which keeps the view's own viewport for the
+	// gizmos, the right, both framed from the one camera.
+	std::vector<ScenePass> passes;
+	if (bSideBySide)
 	{
-		m_bRenderInitialized= m_frameBuffer->init(fbWidth, fbHeight) && startRenderers();
-		if (!m_bRenderInitialized)
-		{
-			ImGui::TextDisabled("%s", locText("scene3dPanel.rendererInitFailedText"));
-			ImGui::End();
-			return;
-		}
-	}
-	m_frameBuffer->resize(fbWidth, fbHeight);
-
-	// The orbit view fills the panel; the camera view letterboxes the
-	// frame's aspect inside it
-	const bool bCameraView= m_bViewFromCamera && m_cameraMatch.valid && m_cameraMatch.camera.width > 0 &&
-		m_cameraMatch.camera.height > 0;
-	m_frameBuffer->bindFrameBuffer();
-	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	if (bCameraView)
-	{
-		const float frameAspect= (float)m_cameraMatch.camera.width / (float)m_cameraMatch.camera.height;
-		int viewWidth= fbWidth;
-		int viewHeight= (int)((float)fbWidth / frameAspect);
-		if (viewHeight > fbHeight)
-		{
-			viewHeight= fbHeight;
-			viewWidth= (int)((float)fbHeight * frameAspect);
-		}
-		m_viewport[0]= (fbWidth - viewWidth) / 2;
-		m_viewport[1]= (fbHeight - viewHeight) / 2;
-		m_viewport[2]= viewWidth;
-		m_viewport[3]= viewHeight;
-		glViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]);
-		glm::mat4 view, projection;
-		makeCameraMatchedView(m_cameraMatch.camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
-		m_viewProjection= projection * view;
+		const int leftWidth= fbWidth / 2;
+		ScenePass sourcePass, avatarPass;
+		splitSideBySideLayers(layers, sourcePass.layers, avatarPass.layers);
+		frameRegion(view, bCameraView, glm::ivec4(0, 0, leftWidth, fbHeight), view.sourceViewport,
+					view.sourceViewProjection);
+		frameRegion(view, bCameraView, glm::ivec4(leftWidth, 0, fbWidth - leftWidth, fbHeight), view.viewport,
+					view.viewProjection);
+		sourcePass.viewport= view.sourceViewport;
+		sourcePass.viewProjection= view.sourceViewProjection;
+		avatarPass.viewport= view.viewport;
+		avatarPass.viewProjection= view.viewProjection;
+		passes.push_back(sourcePass);
+		passes.push_back(avatarPass);
 	}
 	else
 	{
-		m_viewport[0]= 0;
-		m_viewport[1]= 0;
-		m_viewport[2]= fbWidth;
-		m_viewport[3]= fbHeight;
-		m_camera->setPerspectiveProjection(50.f, (float)fbWidth / (float)fbHeight, 0.01f, 100.f);
-		m_viewProjection= m_camera->getViewProjection();
+		frameRegion(view, bCameraView, glm::ivec4(0, 0, fbWidth, fbHeight), view.viewport, view.viewProjection);
+		view.sourceViewport= view.viewport;
+		view.sourceViewProjection= view.viewProjection;
+		ScenePass pass;
+		pass.viewport= view.viewport;
+		pass.viewProjection= view.viewProjection;
+		pass.layers= layers;
+		passes.push_back(pass);
 	}
-	renderScene(fusedResult, cameras, perCameraResults, gizmos, m_viewProjection);
-	m_frameBuffer->unbindFrameBuffer();
+	if (!renderToTarget(*view.frameBuffer, fbWidth, fbHeight, passes, fusedResult, cameras, perCameraResults, gizmos))
+	{
+		ImGui::TextDisabled("%s", locText("scene3dPanel.rendererInitFailedText"));
+		return false;
+	}
 
 	// FBO textures are bottom-up; flip V
 	ImGui::Image(
-		(ImTextureID)(intptr_t)m_frameBuffer->getColorTextureId(),
+		(ImTextureID)(intptr_t)view.frameBuffer->getColorTextureId(),
 		ImVec2((float)fbWidth, (float)fbHeight),
 		ImVec2(0, 1), ImVec2(1, 0));
 	const ImVec2 imageMin= ImGui::GetItemRectMin();
-	// The gizmos and the orbit belong to the orbit view: the camera view is
-	// a fixed viewpoint
-	bool bGizmoOwnsMouse= false;
-	if (bCameraView)
-		m_draggedElbowHint= -1;
-	else
-		bGizmoOwnsMouse= updateGizmoDrag(gizmos, glm::vec2(imageMin.x, imageMin.y),
-										 glm::vec2((float)fbWidth, (float)fbHeight));
+	outImageMin= glm::vec2(imageMin.x, imageMin.y);
+	outImageSize= glm::vec2((float)fbWidth, (float)fbHeight);
 
-	// Orbit interaction on the image item
-	if (ImGui::IsItemHovered() && !bCameraView)
+	// Each half's name at its top left, drawn over the image rather than as
+	// items, so the image stays the last item for the orbit and the picks
+	if (bSideBySide)
 	{
-		ImGuiIO& io= ImGui::GetIO();
+		ImDrawList* drawList= ImGui::GetWindowDrawList();
+		const ImU32 textColor= ImGui::GetColorU32(ImGuiCol_Text);
+		const float inset= ImGui::GetStyle().ItemSpacing.x;
+		drawList->AddText(ImVec2(imageMin.x + inset, imageMin.y + inset), textColor,
+						  locText("scene3dPanel.sourcePoseHalfLabel"));
+		drawList->AddText(ImVec2(imageMin.x + (float)(fbWidth / 2) + inset, imageMin.y + inset), textColor,
+						  locText("scene3dPanel.avatarHalfLabel"));
+	}
+	return true;
+}
 
-		if (!bGizmoOwnsMouse && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-			m_camera->adjustOrbitAngles(io.MouseDelta.x * 0.4f, -io.MouseDelta.y * 0.4f);
+void Scene3dPanel::updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits)
+{
+	if (!ImGui::IsItemHovered())
+		return;
+	ImGuiIO& io= ImGui::GetIO();
 
-		if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-		{
-			// Pan in the display-space horizontal plane
-			const float panScale= m_camera->getOrbitRadius() * 0.002f;
-			m_camera->adjustOrbitTargetPosition(glm::vec3(-io.MouseDelta.x * panScale, io.MouseDelta.y * panScale, 0.f));
-		}
+	if (bLeftDragOrbits && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+		camera.adjustOrbitAngles(io.MouseDelta.x * 0.4f, -io.MouseDelta.y * 0.4f);
 
-		if (io.MouseWheel != 0.f)
-			m_camera->adjustOrbitRadius(-io.MouseWheel * 0.15f);
+	if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+	{
+		// Pan in the display-space horizontal plane
+		const float panScale= camera.getOrbitRadius() * 0.002f;
+		camera.adjustOrbitTargetPosition(glm::vec3(-io.MouseDelta.x * panScale, io.MouseDelta.y * panScale, 0.f));
 	}
 
-	ImGui::End();
+	if (io.MouseWheel != 0.f)
+		camera.adjustOrbitRadius(-io.MouseWheel * 0.15f);
 }
 
 void Scene3dPanel::drawSkeleton(const TrackingFrameResult& result, float brightness, const glm::vec3* colorOverride)
@@ -316,7 +511,7 @@ void Scene3dPanel::drawSkeleton(const TrackingFrameResult& result, float brightn
 	}
 }
 
-bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
+bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection, bool bShow)
 {
 	if (m_avatarModel == nullptr || m_avatarSkeleton == nullptr)
 	{
@@ -324,7 +519,7 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection)
 		m_meshView.clear();
 		return false;
 	}
-	if (!m_bShowAvatar)
+	if (!bShow)
 		return false;
 
 	// The pose carries the root placement, so the model matrix is only the
@@ -379,42 +574,36 @@ void Scene3dPanel::drawDirectSolve()
 bool Scene3dPanel::projectToImage(const glm::vec3& world, const glm::vec2& imageMin, const glm::vec2& imageSize,
 								  glm::vec2& outPixel) const
 {
-	const glm::vec4 clip= m_viewProjection * k_displayFromWorld * glm::vec4(world, 1.f);
-	if (clip.w <= 1e-6f)
-		return false;
-	const glm::vec2 ndc= glm::vec2(clip) / clip.w;
-	// The image shows the framebuffer flipped, so NDC +Y is the image top,
-	// and the viewport sits inside it from the bottom up
-	const float viewportTop= imageSize.y - (float)(m_viewport[1] + m_viewport[3]);
-	outPixel= imageMin +
-		glm::vec2((float)m_viewport[0] + (ndc.x * 0.5f + 0.5f) * (float)m_viewport[2],
-				  viewportTop + (0.5f - ndc.y * 0.5f) * (float)m_viewport[3]);
-	return true;
+	return projectToViewImage(m_mainView.viewProjection, m_mainView.viewport, imageMin, imageSize.y, world, outPixel);
 }
 
 bool Scene3dPanel::captureFromCamera(const TrackingFrameResult& fusedResult,
 									 const std::vector<SceneCameraView>& cameras,
 									 const std::vector<const TrackingFrameResult*>& perCameraResults, cv::Mat& outBgr)
 {
-	const DirectCameraModel& camera= m_cameraMatch.camera;
-	if (!m_cameraMatch.valid || camera.width <= 0 || camera.height <= 0 || camera.width > 0xFFFF ||
+	const DirectCameraModel& camera= m_captureMatch.camera;
+	if (!m_captureMatch.valid || camera.width <= 0 || camera.height <= 0 || camera.width > 0xFFFF ||
 		camera.height > 0xFFFF || !startRenderers())
 		return false;
 	const uint16_t width= (uint16_t)camera.width;
 	const uint16_t height= (uint16_t)camera.height;
-	if (!m_captureBuffer->getIsValid() ? !m_captureBuffer->init(width, height) : !m_captureBuffer->resize(width, height))
-		return false;
 
 	glm::mat4 view, projection;
-	makeCameraMatchedView(camera, m_cameraMatch.cameraToWorld, 0.01f, 100.f, view, projection);
+	makeCameraMatchedView(camera, m_captureMatch.cameraToWorld, 0.01f, 100.f, view, projection);
 
-	m_captureBuffer->bindFrameBuffer();
-	glClearColor(0.05f, 0.05f, 0.07f, 1.f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	// What the scene drew before it had layers: everything but the gizmos,
+	// the avatar and the per-camera skeletons as their settings say
+	SceneLayers layers;
+	layers.bAvatar= m_bShowAvatar;
+	layers.bPerCameraSkeletons= m_bShowPerCameraSkeletons;
+	layers.bGizmos= false;
 	const SceneGizmos noGizmos;
-	renderScene(fusedResult, cameras, perCameraResults, noGizmos, projection * view);
+	if (!renderToTarget(*m_captureBuffer, width, height, glm::ivec4(0, 0, width, height), projection * view, layers,
+						fusedResult, cameras, perCameraResults, noGizmos))
+		return false;
 
 	// Read back and flip: GL rows run bottom-up
+	m_captureBuffer->bindFrameBuffer();
 	cv::Mat rgba(height, width, CV_8UC4);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data);
@@ -456,7 +645,7 @@ bool Scene3dPanel::updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMi
 		if (m_draggedElbowHint >= 0)
 		{
 			m_dragPlanePoint= glm::vec3(k_displayFromWorld * glm::vec4(gizmos.elbowHints[m_draggedElbowHint].hintWorld, 1.f));
-			m_dragPlaneNormal= glm::normalize(m_camera->getCameraPosition() - m_dragPlanePoint);
+			m_dragPlaneNormal= glm::normalize(m_mainView.camera->getCameraPosition() - m_dragPlanePoint);
 		}
 	}
 	if (m_draggedElbowHint < 0)
@@ -466,10 +655,15 @@ bool Scene3dPanel::updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMi
 	SceneGizmos::ElbowHint& hint= gizmos.elbowHints[m_draggedElbowHint];
 	hint.bDragging= true;
 	hint.draggedHintWorld= hint.hintWorld;
-	const float ndcX= (mousePixel.x - imageMin.x) / imageSize.x * 2.f - 1.f;
-	const float ndcY= 1.f - (mousePixel.y - imageMin.y) / imageSize.y * 2.f;
+	// The ray through the mouse within the view's viewport, which side by
+	// side is the avatar half
+	const glm::ivec4& viewport= m_mainView.viewport;
+	const float viewportLeft= imageMin.x + (float)viewport.x;
+	const float viewportTop= imageMin.y + imageSize.y - (float)(viewport.y + viewport.w);
+	const float ndcX= (mousePixel.x - viewportLeft) / (float)viewport.z * 2.f - 1.f;
+	const float ndcY= 1.f - (mousePixel.y - viewportTop) / (float)viewport.w * 2.f;
 	glm::vec3 rayOrigin, rayDirection;
-	m_camera->unprojectRay(ndcX, ndcY, rayOrigin, rayDirection);
+	m_mainView.camera->unprojectRay(ndcX, ndcY, rayOrigin, rayDirection);
 	const float denominator= glm::dot(rayDirection, m_dragPlaneNormal);
 	if (std::fabs(denominator) > 1e-6f)
 	{
@@ -488,7 +682,7 @@ void Scene3dPanel::drawGizmos(const SceneGizmos& gizmos)
 	// Rings face the camera: the circle helper draws in its local XZ plane,
 	// so local Y goes along the view direction (the orbit camera's: the
 	// gizmos are not drawn in the camera view)
-	const glm::mat3 cameraRotation= glm::transpose(glm::mat3(m_camera->getViewMatrix()));
+	const glm::mat3 cameraRotation= glm::transpose(glm::mat3(m_mainView.camera->getViewMatrix()));
 	const glm::mat3 facing(cameraRotation[0], cameraRotation[2], cameraRotation[1]);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
@@ -505,21 +699,119 @@ void Scene3dPanel::drawGizmos(const SceneGizmos& gizmos)
 	}
 }
 
+void Scene3dPanel::updateSourcePick(const glm::vec2& imageMin, const glm::vec2& imageSize)
+{
+	// Press and release positions alone, never the per-frame mouse delta, so
+	// an injected click picks as a real one does
+	const ImVec2 mouse= ImGui::GetIO().MousePos;
+	const glm::vec2 mousePixel(mouse.x, mouse.y);
+	if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		m_bPickPressArmed= m_draggedElbowHint < 0;
+		m_pickPressPixel= mousePixel;
+	}
+	if (!m_bPickPressArmed || !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+		return;
+	m_bPickPressArmed= false;
+	if (glm::length(mousePixel - m_pickPressPixel) > kClickSlopPixels)
+		return;
+	eRetargetChain chain;
+	if (pickSourceSkeleton(getSourceSkeleton(), m_mainView.sourceViewProjection, m_mainView.sourceViewport, imageMin,
+						   imageSize.y, mousePixel, kSourcePickTolerancePixels, chain))
+	{
+		m_bHasPickedChain= true;
+		m_pickedChain= chain;
+	}
+}
+
+void Scene3dPanel::drawSourceSkeleton()
+{
+	const SourceSkeleton& skeleton= getSourceSkeleton();
+	std::vector<std::array<glm::vec3, 2>> dashes;
+	for (const SourceSkeleton::Segment& segment : skeleton.segments)
+	{
+		const bool bSelected= segment.chain == m_selectedChain;
+		// The selected chain brighter, inside a ring of halo lines
+		const glm::vec3 color= bSelected ? segment.color + (Colors::White - segment.color) * 0.4f : segment.color;
+		dashes.clear();
+		if (segment.bDashed)
+			appendDashes(segment.start, segment.end, SourceSkeletonStyle::kDashLength, SourceSkeletonStyle::kGapLength,
+						 dashes);
+		else
+			dashes.push_back({segment.start, segment.end});
+
+		glm::vec3 haloA(0.f), haloB(0.f);
+		if (bSelected)
+		{
+			const glm::vec3 delta= segment.end - segment.start;
+			const float length= glm::length(delta);
+			if (length > 1e-6f)
+			{
+				const glm::vec3 direction= delta / length;
+				const glm::vec3 reference=
+					std::fabs(direction.z) < 0.9f ? glm::vec3(0.f, 0.f, 1.f) : glm::vec3(1.f, 0.f, 0.f);
+				haloA= glm::normalize(glm::cross(direction, reference)) * kHaloRadius;
+				haloB= glm::cross(direction, haloA);
+			}
+		}
+		for (const std::array<glm::vec3, 2>& dash : dashes)
+		{
+			drawSegment(*m_lineRenderer, k_displayFromWorld, dash[0], dash[1], color);
+			if (bSelected)
+			{
+				for (const glm::vec3& offset : {haloA, -haloA, haloB, -haloB})
+					drawSegment(*m_lineRenderer, k_displayFromWorld, dash[0] + offset, dash[1] + offset, k_haloColor);
+			}
+		}
+	}
+	for (const SourceSkeleton::Marker& marker : skeleton.markers)
+	{
+		const bool bSelected= marker.chain == m_selectedChain;
+		const glm::vec3 color= bSelected ? marker.color + (Colors::White - marker.color) * 0.4f : marker.color;
+		drawPoint(*m_lineRenderer, k_displayFromWorld, marker.position, color, bSelected ? marker.size + 3.f : marker.size);
+	}
+}
+
+void Scene3dPanel::drawIkGoals()
+{
+	// A cross along the world axes and a point where the solve aimed each
+	// arm's wrist
+	if (!m_bHasSourcePose)
+		return;
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		if (!m_sourceGoals.bHasWristGoal[sideIndex])
+			continue;
+		const glm::vec3& goal= m_sourceGoals.wristGoalWorld[sideIndex];
+		for (int axis= 0; axis < 3; ++axis)
+		{
+			glm::vec3 offset(0.f);
+			offset[axis]= kIkGoalHalfSize;
+			drawSegment(*m_lineRenderer, k_displayFromWorld, goal - offset, goal + offset, k_ikGoalColor);
+		}
+		drawPoint(*m_lineRenderer, k_displayFromWorld, goal, k_ikGoalColor, 6.f);
+	}
+}
+
 void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std::vector<SceneCameraView>& cameras,
 							   const std::vector<const TrackingFrameResult*>& perCameraResults,
-							   const SceneGizmos& gizmos, const glm::mat4& viewProjection)
+							   const SceneGizmos& gizmos, const glm::mat4& viewProjection,
+							   const SceneLayers& layers)
 {
 	glEnable(GL_DEPTH_TEST);
 
-	// Marker plane grid (world XY plane -> display XZ plane, which is what drawGrid expects)
-	drawGrid(*m_lineRenderer, glm::mat4(1.f), 2.f, 2.f, 20, 20, Colors::DarkGray);
+	if (layers.bGrid)
+	{
+		// Marker plane grid (world XY plane -> display XZ plane, which is what drawGrid expects)
+		drawGrid(*m_lineRenderer, glm::mat4(1.f), 2.f, 2.f, 20, 20, Colors::DarkGray);
 
-	// Marker axes at the world origin
-	drawTransformedAxes(*m_lineRenderer, k_displayFromWorld, 0.1f);
+		// Marker axes at the world origin
+		drawTransformedAxes(*m_lineRenderer, k_displayFromWorld, 0.1f);
+	}
 
 	// One frustum per calibrated camera (cameraToWorld maps CV-convention
 	// camera space to world; the frustum helper draws in GL convention)
-	for (size_t cameraIndex= 0; cameraIndex < cameras.size(); ++cameraIndex)
+	for (size_t cameraIndex= 0; layers.bCameraFrustums && cameraIndex < cameras.size(); ++cameraIndex)
 	{
 		const SceneCameraView& view= cameras[cameraIndex];
 		if (!view.bHasExtrinsics || view.intrinsics == nullptr)
@@ -536,7 +828,7 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 	}
 
 	// Dimmed per-camera skeletons (world-space agreement check across cameras)
-	if (m_bShowPerCameraSkeletons)
+	if (layers.bPerCameraSkeletons)
 	{
 		for (size_t cameraIndex= 0; cameraIndex < perCameraResults.size(); ++cameraIndex)
 		{
@@ -549,13 +841,20 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 	}
 
 	// Fused skeleton, full brightness
-	drawSkeleton(fusedResult, 1.f, nullptr);
-	drawDirectSolve();
-	drawGizmos(gizmos);
+	if (layers.bFusedSkeleton)
+		drawSkeleton(fusedResult, 1.f, nullptr);
+	if (layers.bSourcePose)
+		drawSourceSkeleton();
+	if (layers.bIkGoals)
+		drawIkGoals();
+	if (layers.bDirectSolve)
+		drawDirectSolve();
+	if (layers.bGizmos)
+		drawGizmos(gizmos);
 
 	// The avatar mesh first, then the lines over it with depth off when it is
 	// shown, so the tracked skeleton stays visible inside the character
-	const bool bAvatarDrawn= drawAvatar(viewProjection);
+	const bool bAvatarDrawn= drawAvatar(viewProjection, layers.bAvatar);
 	m_lineRenderer->render3d(viewProjection, bAvatarDrawn);
 }
 
@@ -572,4 +871,42 @@ std::vector<SceneCameraView> makeSceneCameraViews(const AppConfig& config)
 		cameras.push_back(view);
 	}
 	return cameras;
+}
+
+eScenePovAvailability getScenePovAvailability(const AppConfig& config, int cameraIndex)
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount())
+		return eScenePovAvailability::Missing;
+	const CameraProfile& profile= config.camera(cameraIndex);
+	if (!profile.intrinsics.present)
+		return eScenePovAvailability::NotCalibrated;
+	if (config.direct.enabled)
+	{
+		return cameraIndex == config.direct.cameraIndex ? eScenePovAvailability::Available
+														: eScenePovAvailability::NotDirectCamera;
+	}
+	return profile.extrinsics.present ? eScenePovAvailability::Available : eScenePovAvailability::NoExtrinsics;
+}
+
+void Scene3dPanel::setPovCameras(const std::vector<eScenePovAvailability>& cameras)
+{
+	m_povCameras= cameras;
+	if (m_povCamera >= (int)m_povCameras.size() ||
+		(m_povCamera >= 0 && m_povCameras[m_povCamera] != eScenePovAvailability::Available))
+		m_povCamera= -1;
+}
+
+bool Scene3dPanel::setPovCamera(int cameraIndex)
+{
+	if (cameraIndex >= 0 &&
+		(cameraIndex >= (int)m_povCameras.size() || m_povCameras[cameraIndex] != eScenePovAvailability::Available))
+		return false;
+	m_povCamera= cameraIndex < 0 ? -1 : cameraIndex;
+	return true;
+}
+
+bool Scene3dPanel::isPovMatched() const
+{
+	return m_povCamera >= 0 && m_povMatch.valid && m_povMatch.cameraIndex == m_povCamera &&
+		m_povMatch.camera.width > 0 && m_povMatch.camera.height > 0;
 }

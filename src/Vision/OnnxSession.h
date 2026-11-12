@@ -25,7 +25,8 @@ public:
 	OnnxSession& operator=(const OnnxSession&)= delete;
 
 	// Loads the model at modelPath.
-	// preferredEp: "directml" tries the DirectML EP (device 0) first with the
+	// preferredEp: "directml" tries the DirectML EP (on the
+	// highest-performance GPU, never the adapter index) first with the
 	// session options DML requires (mem pattern disabled, sequential
 	// execution); on ANY failure it logs and falls back to a plain CPU
 	// session. Anything else ("cpu", empty) goes straight to CPU.

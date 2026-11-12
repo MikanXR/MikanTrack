@@ -1,15 +1,23 @@
 #include "MainWindow.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 #include "imgui.h"
 #include "imgui_internal.h" // dock builder
 
 #include "glm/ext/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 #include "App.h"
 #include "AppConfig.h"
 #include "AudioPanel.h"
+#include "AudioService.h"
+#include "AutomationServer.h"
+#include "AvatarFaceTab.h"
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "AvatarPreviewPoses.h"
@@ -19,6 +27,8 @@
 #include "CalibrationPanel.h"
 #include "DevicePanel.h"
 #include "FaceExprEditorWindow.h"
+#include "FaceProfileBinding.h"
+#include "FaceService.h"
 #include "GlobalSettings.h"
 #include "HandOverlay.h"
 #include "LocText.h"
@@ -26,11 +36,22 @@
 #include "Logger.h"
 #include "MainMenuScreen.h"
 #include "PathUtils.h"
+#include "PerformancePanel.h"
+#include "PinnedStageWindows.h"
+#include "PipelinePanel.h"
+#include "PipelineText.h"
 #include "ProjectManager.h"
+#include "RetargetChains.h"
 #include "Scene3dPanel.h"
+#include "SourcePoseInputs.h"
 #include "SettingsPanels.h"
 #include "SetupFlow.h"
+#include "StageContent.h"
+#include "StageInspector.h"
+#include "StageView.h"
+#include "SteadyClock.h"
 #include "TimelinePanel.h"
+#include "TrackingRecording.h"
 #include "VideoModeUtils.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
@@ -49,8 +70,17 @@ MainWindow::MainWindow(App* app)
 	, m_timelinePanel(std::make_unique<TimelinePanel>())
 	, m_avatarPanel(std::make_unique<AvatarPanel>(app, app->getConfig()))
 	, m_faceExprEditor(std::make_unique<FaceExprEditorWindow>(app))
+	, m_faceTab(std::make_unique<AvatarFaceTab>())
 	, m_audioPanel(std::make_unique<AudioPanel>(app, app->getConfig()))
 	, m_mouthReadout(std::make_unique<AvatarMouthReadout>())
+	, m_pipelinePanel(std::make_unique<PipelinePanel>())
+	, m_stageInspector(std::make_unique<StageInspector>())
+	, m_stageView(std::make_unique<StageView>(m_videoPreviewPanel.get(), m_scene3dPanel.get()))
+	, m_pinnedWindows(std::make_unique<PinnedStageWindows>(m_videoPreviewPanel.get(), m_scene3dPanel.get()))
+	, m_performancePanel(std::make_unique<PerformancePanel>())
+	, m_stageContent(std::make_unique<StageContent>(app, m_devicePanel.get(), m_calibrationPanel.get(),
+												   m_audioPanel.get(), m_avatarPanel.get(), m_faceTab.get(),
+												   m_mouthReadout.get()))
 {
 	SetupFlow::WizardSet wizards;
 	wizards.intrinsics= m_wizardHost->getIntrinsicsWizard();
@@ -66,6 +96,63 @@ MainWindow::~MainWindow()= default;
 void MainWindow::registerAutomation(AutomationServer* server)
 {
 	m_faceExprEditor->registerAutomation(server);
+	server->registerCommandNamespace(
+		"pipeline",
+		{"pipeline stages", "pipeline status <stage>", "pipeline selected", "pipeline select <stage>|none",
+		 "pipeline view [follow|cameras|scene|split|overlay|sidebyside]", "pipeline pov [free|<cameraIndex>]",
+		 "pipeline pin <stage>",
+		 "pipeline unpin <stage>|all",
+		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
+		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
+		 "pipeline mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]",
+		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
+		 "pipeline limit <head|spine|leftWrist|rightWrist> [<degrees>]",
+		 "pipeline loss <torso|head|leftArm|rightArm>",
+		 "pipeline loss <torso|head|leftArm|rightArm> after <release|freeze|easeToRest>",
+		 "pipeline loss <torso|head|leftArm|rightArm> hold <ms>",
+		 "pipeline loss <torso|head|leftArm|rightArm> blend <ms>"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handlePipelineAutomation(args, outLines, outError);
+		});
+	server->registerCommandNamespace(
+		"performance", {"performance source", "performance source live|recording"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handlePerformanceAutomation(args, outLines, outError);
+		});
+}
+
+bool MainWindow::handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+											 std::string& outError)
+{
+	if (args.empty() || args[0] != "source")
+	{
+		outError= args.empty() ? "missing verb" : "unknown verb: " + args[0];
+		return false;
+	}
+	if (args.size() >= 2)
+	{
+		ePerformanceSource source;
+		if (!PerformancePanel::parseSource(args[1], source))
+		{
+			outError= "expected live or recording: " + args[1];
+			return false;
+		}
+		if (!m_performancePanel->setSource(source))
+		{
+			outError= m_shown.bReplay ? "recording is not available: the shown take carries no telemetry"
+									  : "recording is not available: no replay is shown";
+			return false;
+		}
+	}
+	// The series follows on the next frame's update
+	float markedTotalMs= 0.f;
+	const bool bMarked= m_performancePanel->getMarkedTotal(markedTotalMs);
+	char total[32];
+	snprintf(total, sizeof(total), "%.2f", markedTotalMs);
+	outLines.push_back(std::string(PerformancePanel::getSourceName(m_performancePanel->getSource())) + " samples " +
+					   std::to_string(m_performancePanel->getSeries().samples.size()) + " total " +
+					   (bMarked ? std::string(total) : std::string("none")));
+	return true;
 }
 
 bool MainWindow::restoreCameraDevice(int cameraIndex)
@@ -192,36 +279,56 @@ void MainWindow::drawDockspaceAndMenuBar()
 	ImGui::Begin("MikanTrackDockHost", nullptr, hostFlags);
 	ImGui::PopStyleVar();
 
-	const ImGuiID dockspaceId= ImGui::GetID("MikanTrackDockspace");
+	// The id names the layout's generation: an imgui.ini saved by a build
+	// whose default layout had no Pipeline strip holds no node under this id,
+	// so that install gets the new default once
+	const ImGuiID dockspaceId= ImGui::GetID("MikanTrackDockspace2");
 
-	// Default layout on first run
-	if (!m_bDockLayoutInitialized && ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+	// Default layout on first run, and again on View > Reset Layout
+	if (m_bResetDockLayout || (!m_bDockLayoutInitialized && ImGui::DockBuilderGetNode(dockspaceId) == nullptr))
 	{
+		m_bResetDockLayout= false;
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
 
 		ImGuiID centerId= dockspaceId;
+		// The Pipeline strip across the top: two rows of stages and three
+		// camera lanes
+		const float stripRatio= std::clamp(250.f / std::max(viewport->WorkSize.y, 1.f), 0.15f, 0.4f);
+		const ImGuiID topId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, stripRatio, nullptr, &centerId);
 		const ImGuiID leftId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
 		const ImGuiID rightId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.25f, nullptr, &centerId);
 		const ImGuiID bottomId= ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.22f, nullptr, &centerId);
 
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.videoPreview"), centerId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.scene3d"), centerId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.device"), leftId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.pipeline"), topId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageView"), centerId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.audio"), leftId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.calibration"), rightId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.oscOutput"), rightId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.avatar"), rightId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.timeline"), bottomId);
+		ImGui::DockBuilderDockWindow(locWindowTitle("windows.performance"), bottomId);
 		ImGui::DockBuilderFinish(dockspaceId);
+		// A node builds its tab bar a frame or two after its windows dock,
+		// then the front tabs are chosen one per frame
+		m_dockFrontTabsCountdown= 4 + 4;
 	}
 	m_bDockLayoutInitialized= true;
 
 	ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+
+	// A dock node fronts the tab of the window that holds the focus, and
+	// only one window holds it per frame, so the default layout fronts its
+	// tabs one frame apart once the windows exist, ending on the Stage View
+	if (m_dockFrontTabsCountdown > 0)
+	{
+		static const char* k_frontTabs[]= {"windows.stageView", "windows.stageInspector", "windows.tracking",
+										   "windows.timeline"};
+		--m_dockFrontTabsCountdown;
+		if (m_dockFrontTabsCountdown < IM_ARRAYSIZE(k_frontTabs))
+			ImGui::SetWindowFocus(locWindowTitle(k_frontTabs[m_dockFrontTabsCountdown]));
+	}
 
 	if (ImGui::BeginMenuBar())
 	{
@@ -243,6 +350,13 @@ void MainWindow::drawDockspaceAndMenuBar()
 			}
 			if (ImGui::MenuItem(locLabel("mainWindow.closeProject"), nullptr, false, !bWizardActive))
 				m_app->requestCloseProject();
+			ImGui::Separator();
+			// The Retarget stage's load controls run the same two actions
+			if (ImGui::MenuItem(locLabel("mainWindow.loadAvatar")))
+				m_avatarPanel->loadAvatarFromDialog();
+			const bool bAvatarLoaded= m_app->getAvatarModel() != nullptr;
+			if (ImGui::MenuItem(locLabel("mainWindow.unloadAvatar"), nullptr, false, bAvatarLoaded))
+				m_avatarPanel->unloadAvatar();
 			ImGui::Separator();
 			if (ImGui::MenuItem(locLabel("mainWindow.quit"), "Alt+F4"))
 				m_app->requestShutdown();
@@ -274,17 +388,23 @@ void MainWindow::drawDockspaceAndMenuBar()
 		}
 		if (ImGui::BeginMenu(locLabel("mainWindow.viewMenu")))
 		{
-			ImGui::MenuItem(locLabel("mainWindow.viewVideoPreviewPanel"), nullptr, &m_bShowVideoPreviewPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewScene3dPanel"), nullptr, &m_bShowScene3dPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewDevicePanel"), nullptr, &m_bShowDevicePanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewPipelinePanel"), nullptr, &m_bShowPipelinePanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewInspectorPanel"), nullptr, &m_bShowInspectorPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewStageViewPanel"), nullptr, &m_bShowStageViewPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewCalibrationPanel"), nullptr, &m_bShowCalibrationPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewOscPanel"), nullptr, &m_bShowOscPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewAvatarPanel"), nullptr, &m_bShowAvatarPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewAudioPanel"), nullptr, &m_bShowAudioPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
+			ImGui::MenuItem(locLabel("mainWindow.viewPerformancePanel"), nullptr, &m_bShowPerformancePanel);
+			ImGui::Separator();
+			// Every panel shown again in the default arrangement
+			if (ImGui::MenuItem(locLabel("mainWindow.resetLayout")))
+			{
+				m_bResetDockLayout= true;
+				m_bShowStageViewPanel= m_bShowTrackingPanel= true;
+				m_bShowTimelinePanel= m_bShowLogPanel= m_bShowSettingsPanel= true;
+				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
+			}
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -340,7 +460,7 @@ void MainWindow::performDiagnosticDump(const std::vector<SceneCameraView>& camer
 	// here where the GL context is, saved by the vision thread beside the
 	// frame it should match
 	cv::Mat avatarRender;
-	if (m_scene3dPanel->hasCameraMatch())
+	if (m_scene3dPanel->hasCaptureMatch())
 		m_scene3dPanel->captureFromCamera(m_latestFused, cameras, perCameraResults, avatarRender);
 	m_app->getVisionThread()->requestDiagnosticDump(m_app->getConfig()->makeDumpDirectoryPath(), avatarRender);
 }
@@ -362,6 +482,10 @@ void MainWindow::update(float deltaSeconds)
 {
 	if (m_app->getAppState() == App::eAppState::MainMenu)
 	{
+		// A closed project's pinned stages close with it, and the scene's
+		// camera choice returns to the free camera
+		m_pinnedWindows->unpinAll();
+		m_scene3dPanel->setPovCamera(-1);
 		drawMainMenu();
 		return;
 	}
@@ -388,7 +512,21 @@ void MainWindow::update(float deltaSeconds)
 			m_videoPreviewPanel->setFrame(cameraIndex, m_latestPreviews[cameraIndex].bgr);
 		}
 	}
-	visionThread->fetchFusedResult(m_latestFused, &m_latestDirectPose, &m_latestDirectState);
+	visionThread->fetchFusedResult(m_latestFused, &m_latestRetarget, &m_latestFusionDiagnostics);
+
+	// Newest per-camera results, for the preview overlays and the 3D scene
+	std::vector<const TrackingFrameResult*> perCameraResults;
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		perCameraResults.push_back(
+			m_latestPreviews[cameraIndex].valid ? &m_latestPreviews[cameraIndex].result : nullptr);
+	}
+
+	// The Timeline advances before anything reads the shown frame, whether
+	// or not its panel is drawn this frame
+	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
+	m_timelinePanel->update(deltaSeconds);
+	updateShownFrame(perCameraResults);
 
 	handleHotkeys();
 
@@ -397,14 +535,29 @@ void MainWindow::update(float deltaSeconds)
 	const bool bWizardActive= m_wizardHost->isAnyActive() || m_setupFlow->isActive();
 
 	// Panels
-	if (m_bShowDevicePanel)
-		m_devicePanel->draw(&m_bShowDevicePanel);
+	TrackingSectionContext trackingContext;
+	trackingContext.config= config;
+	trackingContext.visionThread= visionThread;
+	trackingContext.videoCapture= m_app->getVideoCapture();
+	trackingContext.previewPanel= m_videoPreviewPanel.get();
+	trackingContext.scene3dPanel= m_scene3dPanel.get();
+	trackingContext.state= &m_trackingPanelState;
+	trackingContext.latestPreviews= &m_latestPreviews;
+	trackingContext.fusedResult= &m_latestFused;
+	trackingContext.fusion= &m_fusionReadout;
+	trackingContext.imu= &m_imuReadout;
+	// The tracking panel's countdowns, captures and readouts run whether or
+	// not any of its sections is drawn this frame
+	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
+	OscSectionContext oscContext;
+	oscContext.config= config;
+	oscContext.visionThread= visionThread;
+	// The stage sections the Inspector draws read this frame's contexts
+	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
+							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
+							   m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowTrackingPanel)
-	{
-		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, config, visionThread, m_app->getVideoCapture(),
-										  m_videoPreviewPanel.get(), m_scene3dPanel.get(), m_trackingPanelState,
-										  m_latestPreviews, m_latestFused);
-	}
+		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
 	if (m_trackingPanelState.bDumpRequested)
 	{
 		m_trackingPanelState.bDumpRequested= false;
@@ -415,37 +568,13 @@ void MainWindow::update(float deltaSeconds)
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
 	}
-	if (m_bShowOscPanel)
-	{
-		SettingsPanels::drawOscPanel(&m_bShowOscPanel, config, visionThread, m_latestFused, *m_mouthReadout,
-									 m_app->getAvatarModel(), m_app->getFaceBinding());
-	}
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
-	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
 	if (m_bShowTimelinePanel)
+	{
 		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread);
-	{
-		// The Face tab and the expression editor read the frame the scene
-		// shows; a row's Edit button opens the editor on it
-		const bool bReplayView= m_timelinePanel->isReplayViewActive();
-		const TrackingFrameResult& shownFrame= bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused;
-		if (m_bShowAvatarPanel)
-		{
-			const std::optional<FaceExprEditTarget> editRequest=
-				m_avatarPanel->draw(&m_bShowAvatarPanel, shownFrame.face, m_faceExprEditor->getTarget());
-			if (editRequest.has_value())
-				m_faceExprEditor->open(*editRequest);
-		}
-		m_faceExprEditor->update(shownFrame);
-	}
-	AudioPanel::DrawResult audioAction;
-	if (m_bShowAudioPanel)
-	{
-		// The weights block reads the face the scene shows
-		const bool bReplayView= m_timelinePanel->isReplayViewActive();
-		audioAction= m_audioPanel->draw(&m_bShowAudioPanel, bWizardActive,
-										bReplayView ? m_timelinePanel->getDisplayFused() : m_latestFused, bReplayView);
+		// A scrub or a view switch in the panel changes the shown frame
+		updateShownFrame(perCameraResults);
 	}
 
 	// Launch requests raised by the panels this frame
@@ -459,27 +588,17 @@ void MainWindow::update(float deltaSeconds)
 	m_trackingPanelState.bLaunchBodyCalibrationWizard= false;
 	m_trackingPanelState.bLaunchHandCalibrationWizard= false;
 
-	CalibrationPanel::DrawResult calibrationAction;
-	if (m_bShowCalibrationPanel)
-		calibrationAction= m_calibrationPanel->draw(&m_bShowCalibrationPanel, bWizardActive);
-	if (calibrationAction.bLaunchIntrinsicsWizard)
-		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
-	if (calibrationAction.bLaunchExtrinsicsWizard)
-		launchWizard(eWizardKind::Extrinsics);
-	if (audioAction.bLaunchAudioWizard)
-		launchWizard(eWizardKind::AudioCalibration);
-
 	// Guided setup chain: draws its prompt modals on top of the panels, and
 	// launches/watches the wizards updated below
 	m_setupFlow->update();
 
-	// Bring the Video Preview tab forward when a camera calibration wizard
-	// starts: the pattern feed is the wizard's whole UI, and the 3D Scene tab
-	// may be the selected one in the shared center dock, or the panel closed
+	// Show and front the Stage View when a camera calibration wizard starts:
+	// the pattern feed is the wizard's whole UI, and the view may be closed or
+	// behind another tab of its dock node
 	if (m_wizardHost->consumeCameraWizardStarted())
 	{
-		m_bShowVideoPreviewPanel= true;
-		ImGui::SetWindowFocus(locWindowTitle("windows.videoPreview"));
+		m_bShowStageViewPanel= true;
+		ImGui::SetWindowFocus(locWindowTitle("windows.stageView"));
 	}
 
 	// Pin the preview highlight to the intrinsics wizard's camera while it is
@@ -488,41 +607,26 @@ void MainWindow::update(float deltaSeconds)
 	if (intrinsicsCamera >= 0)
 		m_videoPreviewPanel->setActiveCamera(intrinsicsCamera);
 
-	// Newest per-camera results, for the preview overlays and the 3D scene
-	std::vector<const TrackingFrameResult*> perCameraResults;
+	// The camera view's per-camera inputs, from the live output
+	std::vector<const char*> executionProviders;
+	std::vector<ForearmOverlay> forearmOverlays;
 	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
 	{
-		perCameraResults.push_back(
-			m_latestPreviews[cameraIndex].valid ? &m_latestPreviews[cameraIndex].result : nullptr);
+		executionProviders.push_back(visionThread->getActiveExecutionProvider(cameraIndex));
+		// The fused (world-space) forearm projected back into this camera:
+		// the UI is what holds both the fused result and every camera's
+		// calibration
+		forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
+			config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
 	}
+	// Direct mode: which of the direct camera's hand slots the solver took
+	m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
+									{m_latestRetarget.directState.arms[0].bHandSeen,
+									 m_latestRetarget.directState.arms[1].bHandSeen});
 
-	// Central: side-by-side previews with per-camera overlays
-	if (!m_bShowVideoPreviewPanel)
-	{
-		m_videoPreviewPanel->clearLastDrawList();
-	}
-	else
-	{
-		std::vector<const char*> executionProviders;
-		std::vector<ForearmOverlay> forearmOverlays;
-		for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
-		{
-			executionProviders.push_back(visionThread->getActiveExecutionProvider(cameraIndex));
-			// The fused (world-space) forearm projected back into this camera:
-			// the UI is what holds both the fused result and every camera's
-			// calibration
-			forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
-				config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
-		}
-		// Direct mode: which of the direct camera's hand slots the solver took
-		m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
-										{m_latestDirectState.arms[0].bHandSeen, m_latestDirectState.arms[1].bHandSeen});
-		m_videoPreviewPanel->draw(&m_bShowVideoPreviewPanel, perCameraResults, executionProviders, &forearmOverlays);
-	}
-
-	// 3D scene: fused skeleton + all calibrated camera frustums. In replay
-	// view the whole feed comes from the timeline's scrub position instead,
-	// with the frustums built from the RECORDING's config snapshot.
+	// The 3D scene's inputs. In replay view the whole feed comes from the
+	// timeline's scrub position instead, with the frustums built from the
+	// RECORDING's config snapshot.
 	m_scene3dPanel->setForearmLength(config->body.forearmLengthMeters);
 	m_scene3dPanel->setAvatar(m_app->getAvatarModel(), m_app->getAvatarSkeleton(), m_app->getAvatarGeneration());
 	m_scene3dPanel->setFaceBinding(m_app->getFaceBinding());
@@ -530,19 +634,90 @@ void MainWindow::update(float deltaSeconds)
 	SceneGizmos gizmos;
 	updateDisplayAvatar(gizmos);
 	const std::vector<SceneCameraView> sceneCameras= makeSceneCameraViews(*config);
-	if (m_bShowScene3dPanel)
-	{
-		if (m_timelinePanel->isReplayViewActive())
-		{
-			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_timelinePanel->getDisplayFused(),
-								 m_timelinePanel->getSceneCameras(), m_timelinePanel->getPerCameraResults(), gizmos);
-		}
-		else
-		{
-			m_scene3dPanel->draw(&m_bShowScene3dPanel, m_latestFused, sceneCameras, perCameraResults, gizmos);
-		}
-	}
+
+	// The Stage View, on the strip's selection as the strip last drew it, once
+	// the avatar is posed for the shown frame: the camera view or the scene
+	m_stageView->update(m_pipelinePanel->getSelected(), m_pipelineInputs.bDirect, m_pipelineInputs.directCameraIndex,
+						m_wizardHost->isCameraWizardActive());
+	// The frame both the Stage View and the pinned stages' windows draw
+	const std::vector<SceneCameraView> replayCameras=
+		m_shown.bReplay ? m_timelinePanel->getSceneCameras() : std::vector<SceneCameraView>();
+	StageView::Frame stageFrame;
+	stageFrame.cameraResults= &perCameraResults;
+	stageFrame.executionProviders= &executionProviders;
+	stageFrame.forearms= &forearmOverlays;
+	stageFrame.fused= m_shown.fused;
+	// The frustums come from the config the shown frame was made under
+	stageFrame.sceneCameras= m_shown.bReplay ? &replayCameras : &sceneCameras;
+	stageFrame.scenePerCamera= &m_shown.perCamera;
+	stageFrame.gizmos= &gizmos;
+	if (!m_bShowStageViewPanel)
+		m_videoPreviewPanel->clearLastDrawList();
+	else
+		m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
 	applyGizmoDrags(gizmos);
+	// A click on the Retarget view's source pose selects that chain, for the
+	// Inspector drawn below
+	eRetargetChain pickedChain;
+	if (m_scene3dPanel->consumePickedChain(pickedChain))
+		m_avatarPanel->setSelectedChain(pickedChain);
+
+	// The pipeline, once the avatar is posed for the shown frame: the strip,
+	// the inspector on the strip's selection, and the frame loop's timings
+	gatherPipelineInputs();
+	if (m_bShowPipelinePanel)
+		m_pipelinePanel->draw(&m_bShowPipelinePanel, m_pipelineInputs);
+	const PipelineStageId pinRequest= m_pipelinePanel->consumePinRequest();
+	if (pinRequest.isValid())
+		m_pinnedWindows->pin(pinRequest);
+	if (m_bShowInspectorPanel)
+	{
+		const PipelineStageId requested= m_stageInspector->draw(&m_bShowInspectorPanel, m_pipelineInputs,
+																m_pipelinePanel->getSelected(), m_stageContent.get());
+		if (requested.isValid())
+			m_pipelinePanel->setSelected(requested);
+	}
+	// The pinned stages' windows, after the Inspector on the same inputs and
+	// sections, and before the launch requests their sections raise are read
+	// below. Their scenes render from the pose the Stage View's did.
+	{
+		const PipelineStageId requested= m_pinnedWindows->draw(m_pipelineInputs, stageFrame, m_stageContent.get());
+		if (requested.isValid())
+			m_pipelinePanel->setSelected(requested);
+	}
+	// After the menu bar, the Inspector and the pinned windows, the draws
+	// that can unload the avatar, so the preview pose is back to Live before
+	// the next frame's scene reads it. This frame's scenes were posed before
+	// the Inspector drew.
+	m_avatarPanel->update();
+	// The calibration wizards the stage sections drawn this frame asked for
+	const CalibrationPanel::DrawResult& calibrationAction= m_stageContent->getCalibrationAction();
+	if (calibrationAction.bLaunchIntrinsicsWizard)
+		launchWizard(eWizardKind::Intrinsics, calibrationAction.cameraIndex);
+	if (calibrationAction.bLaunchExtrinsicsWizard)
+		launchWizard(eWizardKind::Extrinsics);
+	if (m_stageContent->getAudioAction().bLaunchAudioWizard)
+		launchWizard(eWizardKind::AudioCalibration);
+	// A face profile row's Edit button opens the expression editor on the
+	// row. The editor runs every frame, after the Inspector so the open lands
+	// this frame, and reads the frame the scene shows.
+	if (m_stageContent->getFaceEditRequest().has_value())
+		m_faceExprEditor->open(*m_stageContent->getFaceEditRequest());
+	m_faceExprEditor->update(*m_shown.fused);
+	// The frame loop's timings, live or the shown take's, followed whether or
+	// not the panel is drawn
+	PerformancePanel::RecordingInput performanceRecording;
+	performanceRecording.bShown= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		performanceRecording.takeId= m_timelinePanel->getTakeId();
+		performanceRecording.frames= &m_timelinePanel->getFrameTelemetry();
+		performanceRecording.playheadFrame= m_timelinePanel->getCurrentFrameIndex();
+		performanceRecording.bHasTelemetry= m_timelinePanel->hasTelemetry();
+	}
+	m_performancePanel->update(*visionThread, performanceRecording);
+	if (m_bShowPerformancePanel)
+		m_performancePanel->draw(&m_bShowPerformancePanel, *visionThread);
 
 	// The dump, once the avatar is posed for this frame
 	const bool bCountdownDone= m_trackingPanelState.dumpCountdown.update(deltaSeconds);
@@ -559,11 +734,236 @@ void MainWindow::update(float deltaSeconds)
 		LogPanel::getInstance().draw(&m_bShowLogPanel);
 }
 
+void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>& livePerCamera)
+{
+	m_shown.bReplay= m_timelinePanel->isReplayViewActive();
+	if (m_shown.bReplay)
+	{
+		m_shown.fused= &m_timelinePanel->getDisplayFused();
+		m_shown.perCamera= m_timelinePanel->getPerCameraResults();
+		m_shown.config= &m_timelinePanel->getRecordedConfig();
+	}
+	else
+	{
+		m_shown.fused= &m_latestFused;
+		m_shown.perCamera= livePerCamera;
+		m_shown.config= m_app->getConfig();
+	}
+	updateFusionReadout();
+	updateImuReadout();
+	updateFaceReadouts();
+	updateOscReadout();
+}
+
+void MainWindow::updateFusionReadout()
+{
+	FusionReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	readout.cameraCount= (int)m_shown.config->cameraCount();
+	readout.fused= m_shown.fused;
+	if (m_shown.bReplay)
+	{
+		// A take made before stage state was recorded has no readouts, but
+		// the replay regenerates its diagnostics
+		readout.diagnostics= m_timelinePanel->getDisplayFusionDiagnostics();
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			readout.dominantCamera[0]= recorded->dominantCamera[0];
+			readout.dominantCamera[1]= recorded->dominantCamera[1];
+			for (int cameraIndex= 0; cameraIndex < FusionReadout::k_maxCameras; ++cameraIndex)
+			{
+				const bool bRecordedSlot= cameraIndex < RecordedTelemetry::k_maxCameras;
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					readout.observationConfidence[cameraIndex][sideIndex]=
+						bRecordedSlot ? recorded->observationConfidence[cameraIndex][sideIndex] : -1.f;
+				}
+			}
+			readout.autoHandScaleFactor= recorded->autoHandScaleFactor;
+		}
+	}
+	else
+	{
+		const VisionThread* visionThread= m_app->getVisionThread();
+		readout.bAvailable= true;
+		readout.diagnostics= &m_latestFusionDiagnostics;
+		readout.dominantCamera[0]= visionThread->getDominantCamera(eHandSide::Left);
+		readout.dominantCamera[1]= visionThread->getDominantCamera(eHandSide::Right);
+		for (int cameraIndex= 0; cameraIndex < FusionReadout::k_maxCameras; ++cameraIndex)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				readout.observationConfidence[cameraIndex][sideIndex]=
+					visionThread->getObservationConfidence(cameraIndex, (eHandSide)sideIndex);
+			}
+		}
+		readout.autoHandScaleFactor= visionThread->getAutoHandScaleFactor();
+	}
+	m_fusionReadout= readout;
+}
+
+void MainWindow::updateImuReadout()
+{
+	ImuReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		// A recording carries the status the device table reads, but not the
+		// device name or the time since the last sample
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const RecordedImuStatus& recordedSide= recorded->imu[sideIndex];
+				ImuSideStatus& status= readout.sides[sideIndex];
+				status.deviceConnected= recordedSide.deviceConnected;
+				status.streaming= recordedSide.streaming;
+				status.calibrated= recordedSide.calibrated;
+				status.orientationValid= recordedSide.orientationValid;
+				status.sampleRateHz= recordedSide.sampleRateHz;
+				status.batteryLevel= recordedSide.batteryLevel;
+				status.gyroBiasDegreesPerSecond.z= recordedSide.yawDriftDegPerSecond;
+				status.wristAxialTwistDegrees= recordedSide.rollErrorDegrees;
+			}
+		}
+	}
+	else
+	{
+		const VisionThread* visionThread= m_app->getVisionThread();
+		readout.bAvailable= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			readout.sides[sideIndex]= visionThread->getImuSideStatus((eHandSide)sideIndex);
+	}
+	m_imuReadout= readout;
+}
+
+void MainWindow::updateFaceReadouts()
+{
+	FaceReadout face;
+	MicrophoneReadout microphone;
+	face.bReplay= m_shown.bReplay;
+	microphone.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		// A recording carries the phone stream's and the microphone's state,
+		// but not the parser's counts, the head, the device name or the
+		// backend's texts
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			face.bAvailable= true;
+			face.bEnabled= recorded->face.enabled;
+			face.bBound= recorded->face.bound;
+			face.bStreaming= recorded->face.streaming;
+			face.datagramsPerSecond= recorded->face.datagramsPerSecond;
+
+			microphone.bAvailable= true;
+			microphone.bEnabled= recorded->audio.enabled;
+			microphone.bDeviceOpen= recorded->audio.deviceOpen;
+			microphone.bBackendReady= recorded->audio.backendReady;
+			microphone.bGateOpen= recorded->audio.gateOpen;
+			microphone.levelDbfs= recorded->audio.levelDbfs;
+			microphone.bPhoneOwnsMouth=
+				recorded->face.enabled && recorded->face.streaming && recorded->face.faceTracked;
+		}
+	}
+	else
+	{
+		const AppConfig* config= m_app->getConfig();
+		face.bAvailable= true;
+		// The stream's switch as the config holds it
+		face.bEnabled= config->face.enabled;
+		if (const FaceService* faceService= m_app->getFaceService())
+		{
+			const FaceServiceStatus status= faceService->getStatus();
+			face.bBound= status.bound;
+			face.bStreaming= status.streaming;
+			face.datagramsPerSecond= status.datagramsPerSecond;
+			face.bSampleValid= status.latest.valid;
+			face.unknownNameCount= status.unknownNameCount;
+			face.parseFailures= status.parseFailures;
+			face.lastUnknownName= status.lastUnknownName;
+			face.bHasHead= status.latest.hasHead;
+			face.headEulerDegrees= status.latest.headEulerDegrees;
+
+			FaceSample sample;
+			microphone.bPhoneOwnsMouth= config->face.enabled && faceService->isStreaming(steadyNowMs()) &&
+										 faceService->getLatestSample(sample) && sample.faceTracked;
+		}
+
+		microphone.bAvailable= true;
+		AudioService* audioService= m_app->getAudioService();
+		microphone.bEnabled= audioService != nullptr && config->audio.enabled;
+		if (audioService != nullptr)
+		{
+			const AudioServiceStatus status= audioService->getStatus();
+			microphone.bDeviceOpen= status.deviceOpen;
+			microphone.bBackendReady= status.backendReady;
+			microphone.bGateOpen= status.gateOpen;
+			microphone.levelDbfs= status.levelDbfs;
+			microphone.deviceName= status.deviceName;
+			microphone.deviceSampleRate= status.deviceSampleRate;
+			microphone.backendInfo= status.backendInfo;
+			microphone.backendReason= status.backendReason;
+			microphone.inferMsEma= status.inferMsEma;
+			microphone.droppedBlocks= status.droppedBlocks;
+		}
+	}
+	m_faceReadout= face;
+	m_microphoneReadout= microphone;
+}
+
+void MainWindow::updateOscReadout()
+{
+	OscReadout readout;
+	readout.bReplay= m_shown.bReplay;
+	if (m_shown.bReplay)
+	{
+		const RecordedTelemetry* recorded= m_timelinePanel->getDisplayTelemetry();
+		if (recorded != nullptr)
+		{
+			readout.bAvailable= true;
+			readout.bRunning= recorded->oscRunning;
+			readout.framesPerSecond= recorded->oscSendRateHz;
+			readout.lastPacketCount= recorded->oscLastPacketCount;
+			readout.lastFrameBytes= recorded->oscLastFrameBytes;
+		}
+	}
+	else
+	{
+		// Before the vision thread's first iteration the stream reads as not
+		// running
+		const VisionThread::Telemetry telemetry= m_app->getVisionThread()->getTelemetry();
+		readout.bAvailable= true;
+		readout.bRunning= telemetry.bValid && telemetry.bOscRunning;
+		readout.framesPerSecond= telemetry.oscSendRateHz;
+		readout.lastPacketCount= telemetry.oscLastPacketCount;
+		readout.lastFrameBytes= telemetry.oscLastFrameBytes;
+	}
+	m_oscReadout= readout;
+}
+
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
+	updateDirectReadout(nullptr);
+	updateSourcePoseReadout(nullptr);
+	updateSceneSourcePose(nullptr, nullptr, nullptr);
+	m_avatarPanel->setShownResult(nullptr);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= m_app->getAvatarSkeleton();
 	if (skeleton == nullptr)
 	{
+		// Live, the vision thread's stage still fills the source the stream
+		// is built from. A replay runs the window's stage only to pose an
+		// avatar.
+		if (!m_shown.bReplay)
+		{
+			updateSourcePoseReadout(&m_latestRetarget);
+			updateSceneSourcePose(&m_latestRetarget, &m_shown.fused->head, nullptr);
+		}
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
 		updateSceneCameraMatch(nullptr, nullptr);
@@ -572,22 +972,24 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const AppConfig* config= m_app->getConfig();
 	const AvatarRigSettings& rig= m_app->getAvatarRig();
 
-	// The feed: a preview pose from the Avatar panel, else replay frames
-	// (with the recording's body lengths), else live ones (with the
-	// project's). Switching feeds resets the root follow so the filter never
-	// bridges two timelines.
+	// The feed: a preview pose from the Retarget stage, else replay frames,
+	// else the live output. Switching feeds starts the window's stage over,
+	// so nothing it holds or filters bridges two timelines.
 	const AvatarPanel::ePreviewPose preview= m_avatarPanel->getPreviewPose();
-	const bool bReplay= m_timelinePanel->isReplayViewActive();
+	const bool bReplay= m_shown.bReplay;
 	const int feed= preview != AvatarPanel::ePreviewPose::Live ? 1 + (int)preview : (bReplay ? 1 : 0);
 	if (feed != m_avatarPoseFeed)
 	{
-		m_avatarRetarget.reset();
-		m_directRetarget.reset();
+		m_displayStage.reset();
+		m_replayPlayhead.invalidate();
 		m_avatarPoseFeed= feed;
 	}
 
-	const AvatarRetargetConfig retargetConfig= makeAvatarRetargetConfig(*config, rig);
 	const DirectRetarget::SolveState* directState= nullptr;
+	// The direct Rest preview is posed from no source
+	const RetargetResult* shownResult= nullptr;
+	// The head the shown result's frame measured
+	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
 	if (preview != AvatarPanel::ePreviewPose::Live)
 	{
 		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
@@ -603,39 +1005,38 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
 			else
 				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-			m_avatarRetarget.solve(frame, user, *skeleton, retargetConfig, m_avatarPose);
+			RetargetStageConfig stageConfig= makeRetargetStageConfig(*config, rig, skeleton);
+			stageConfig.user= user;
+			m_displayStage.setConfig(stageConfig);
+			m_displayStage.solvePosition(frame, m_displayResult);
+			m_avatarPose= m_displayResult.pose;
+			shownResult= &m_displayResult;
+			shownHead= frame.head;
 		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
+	else if (bReplay)
+	{
+		directState= updateReplayRetarget(*config, rig, skeleton);
+		m_avatarPose= m_displayResult.pose;
+		shownResult= &m_displayResult;
+		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
+	}
 	else
 	{
-		const AppConfig& lengthsConfig= bReplay ? m_timelinePanel->getRecordedConfig() : *config;
-		const TrackingFrameResult& shownFused= bReplay ? m_timelinePanel->getDisplayFused() : m_latestFused;
-		// Direct mode: live, the vision thread's pose arrives with the result;
-		// in replay the window's own solver runs the recorded camera's frame
-		// under the recorded config. Either way the position retarget is
-		// skipped, so the scene shows exactly what the stream carries.
-		bool bDirectShown= false;
-		if (bReplay)
-		{
-			bDirectShown= solveReplayDirectPose(lengthsConfig, *skeleton, rig);
-			if (bDirectShown)
-				directState= &m_directRetarget.getSolveState();
-		}
-		else if (m_latestDirectPose.valid)
-		{
-			m_avatarPose= m_latestDirectPose;
-			bDirectShown= true;
-			directState= &m_latestDirectState;
-		}
-		if (!bDirectShown)
-		{
-			m_avatarRetarget.solve(shownFused, makeBodyDimensions(lengthsConfig), *skeleton, retargetConfig,
-								   m_avatarPose);
-		}
-		m_scene3dPanel->setAvatarFace(&shownFused.face);
+		// Live: the vision thread's retarget stage posed the avatar for the
+		// stream, through the same loss rules, so the scene shows exactly
+		// what the stream carries
+		m_avatarPose= m_latestRetarget.pose;
+		shownResult= &m_latestRetarget;
+		if (m_latestRetarget.bDirectState)
+			directState= &m_latestRetarget.directState;
+		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
+	m_avatarPanel->setShownResult(shownResult);
+	updateDirectReadout(directState);
+	updateSourcePoseReadout(shownResult);
 	updateSceneCameraMatch(directState, skeleton.get());
 
 	// The elbow hints where the solve put them: off the posed upper-arm
@@ -650,74 +1051,180 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		hint.shoulderWorld= posed[(int)upperArm].positionWorld;
 		hint.hintWorld= hint.shoulderWorld + m_avatarPose.rootRotationWorld * rig.sides[sideIndex].elbowHintOffset;
 	}
+
+	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
+	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
+}
+
+void MainWindow::updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,
+									   const glm::vec3* posedHeadWorld)
+{
+	m_scene3dPanel->setSelectedChain(m_avatarPanel->getSelectedChain());
+	if (result == nullptr || result->source.pipeline == SourcePose::ePipeline::None)
+	{
+		m_scene3dPanel->setSourcePose(nullptr, nullptr);
+		return;
+	}
+	const glm::vec3* headAnchor= nullptr;
+	if (result->source.pipeline == SourcePose::ePipeline::Position)
+		headAnchor= measuredHead != nullptr && measuredHead->valid ? &measuredHead->positionWorld : nullptr;
+	else
+		headAnchor= posedHeadWorld;
+	m_scene3dPanel->setSourcePose(result, headAnchor);
+}
+
+void MainWindow::updateDirectReadout(const DirectRetarget::SolveState* state)
+{
+	DirectReadout readout;
+	readout.state= state;
+	readout.bNeutralPresent= m_shown.config->direct.neutralPresent;
+	if (state != nullptr)
+	{
+		readout.shoulderDepth= glm::length(state->shoulderMidpoint);
+		readout.leanDegrees= glm::degrees(glm::angle(glm::normalize(state->spineDelta)));
+	}
+	m_directReadout= readout;
+}
+
+void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
+{
+	// A result no pipeline has filled yet carries no source
+	SourcePoseReadout readout;
+	if (result != nullptr && result->source.pipeline != SourcePose::ePipeline::None)
+	{
+		readout.source= &result->source;
+		readout.armParameters= &result->armParameters;
+	}
+	m_sourcePoseReadout= readout;
 }
 
 void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)
 {
-	SceneCameraMatch match;
+	// The cameras and their calibration come from the config the shown frame
+	// was made under, as the frustums do
+	const AppConfig& config= *m_shown.config;
+
+	// The direct solve's camera, placed at the measured shoulders. It is the
+	// camera the dump's annotated frame shows the posed avatar over, so the
+	// capture looks through it whatever the view's choice is.
+	SceneCameraMatch directMatch;
 	if (directState != nullptr && skeleton != nullptr && directState->torsoValid && directState->camera.width > 0 &&
 		directState->camera.height > 0)
 	{
-		match.valid= true;
-		match.camera= directState->camera;
-		match.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
+		directMatch.valid= true;
+		directMatch.cameraIndex= config.direct.cameraIndex;
+		directMatch.camera= directState->camera;
+		directMatch.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
 		// The chains live in the solve's world, the camera at the origin; the
 		// camera's translation carries them to the avatar's
 		m_scene3dPanel->setDirectSolve(directState,
-									   glm::translate(glm::mat4(1.f), glm::vec3(match.cameraToWorld[3])));
+									   glm::translate(glm::mat4(1.f), glm::vec3(directMatch.cameraToWorld[3])));
 	}
 	else
 	{
 		m_scene3dPanel->setDirectSolve(nullptr, glm::mat4(1.f));
-		const AppConfig* config= m_app->getConfig();
-		if (config->cameraCount() > 0 && !m_latestPreviews.empty() && m_latestPreviews[0].valid &&
-			!m_latestPreviews[0].bgr.empty())
-		{
-			const CameraProfile& profile= config->camera(0);
-			if (profile.extrinsics.present && profile.intrinsics.present)
-			{
-				const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
-				match.valid= true;
-				match.camera.fx= (float)cameraMatrix.x0;
-				match.camera.fy= (float)cameraMatrix.y1;
-				match.camera.cx= (float)cameraMatrix.z0;
-				match.camera.cy= (float)cameraMatrix.z1;
-				match.camera.width= m_latestPreviews[0].bgr.cols;
-				match.camera.height= m_latestPreviews[0].bgr.rows;
-				match.cameraToWorld= glm::mat4(profile.extrinsics.markerFromCamera);
-			}
-		}
 	}
-	m_scene3dPanel->setCameraMatch(match);
+	m_scene3dPanel->setCaptureMatch(directMatch);
+
+	// The view's choice, checked against the shown frame's cameras first. A
+	// project loaded in place of another starts at the free camera.
+	const std::filesystem::path projectDirectory= m_app->getConfig()->getProjectDirectory();
+	if (projectDirectory != m_povProjectDirectory)
+	{
+		m_povProjectDirectory= projectDirectory;
+		m_scene3dPanel->setPovCamera(-1);
+	}
+	std::vector<eScenePovAvailability> povCameras;
+	for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
+		povCameras.push_back(getScenePovAvailability(config, cameraIndex));
+	m_scene3dPanel->setPovCameras(povCameras);
+	const int povCamera= m_scene3dPanel->getPovCamera();
+	SceneCameraMatch povMatch;
+	if (povCamera >= 0 && config.direct.enabled)
+	{
+		// Only the direct camera is available, placed by the solve
+		povMatch= directMatch;
+	}
+	else if (povCamera >= 0)
+	{
+		// Placed by its extrinsics, at the size it was calibrated at, or live
+		// at the size its frames arrive at
+		const MikanMonoIntrinsics& intrinsics= config.camera(povCamera).intrinsics.intrinsics;
+		const MikanMatrix3d& cameraMatrix= intrinsics.undistorted_camera_matrix;
+		povMatch.camera.fx= (float)cameraMatrix.x0;
+		povMatch.camera.fy= (float)cameraMatrix.y1;
+		povMatch.camera.cx= (float)cameraMatrix.z0;
+		povMatch.camera.cy= (float)cameraMatrix.z1;
+		povMatch.camera.width= (int)intrinsics.pixel_width;
+		povMatch.camera.height= (int)intrinsics.pixel_height;
+		if ((povMatch.camera.width <= 0 || povMatch.camera.height <= 0) && !m_shown.bReplay &&
+			povCamera < (int)m_latestPreviews.size() && m_latestPreviews[povCamera].valid)
+		{
+			povMatch.camera.width= m_latestPreviews[povCamera].bgr.cols;
+			povMatch.camera.height= m_latestPreviews[povCamera].bgr.rows;
+		}
+		povMatch.valid= povMatch.camera.width > 0 && povMatch.camera.height > 0;
+		povMatch.cameraIndex= povCamera;
+		povMatch.cameraToWorld= glm::mat4(config.camera(povCamera).extrinsics.markerFromCamera);
+	}
+	m_scene3dPanel->setPovMatch(povMatch);
 }
 
-bool MainWindow::solveReplayDirectPose(const AppConfig& recordedConfig, const AvatarSkeleton& skeleton,
-									   const AvatarRigSettings& rig)
+const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
+	const AppConfig& liveConfig, const AvatarRigSettings& rig, const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	if (!recordedConfig.direct.enabled)
-		return false;
-	const int cameraIndex= recordedConfig.direct.cameraIndex;
-	const std::vector<const TrackingFrameResult*> perCamera= m_timelinePanel->getPerCameraResults();
-	if (cameraIndex < 0 || cameraIndex >= (int)perCamera.size() || perCamera[cameraIndex] == nullptr ||
-		cameraIndex >= (int)recordedConfig.cameraCount() || !recordedConfig.camera(cameraIndex).intrinsics.present)
-		return false;
+	// The recording's lengths, direct settings and retarget chains (its loss
+	// rules and elbow weights), the project's avatar placement, and the live
+	// rig. A take from before chain settings migrates its chains from its own
+	// legacy settings and the live rig.
+	const AppConfig& recordedConfig= m_timelinePanel->getRecordedConfig();
+	const RetargetChains recordedChains= resolveRetargetChains(recordedConfig, rig);
+	RetargetStageConfig stageConfig= makeRetargetStageConfig(recordedConfig, rig, recordedChains, skeleton);
+	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig);
+	m_displayStage.setConfig(stageConfig);
 
-	// The recording's undistorted pinhole, the space its landmarks live in
-	const TrackingFrameResult& frame= *perCamera[cameraIndex];
-	const MikanMatrix3d& cameraMatrix=
-		recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
-	DirectCameraModel cameraModel;
-	cameraModel.fx= (float)cameraMatrix.x0;
-	cameraModel.fy= (float)cameraMatrix.y1;
-	cameraModel.cx= (float)cameraMatrix.z0;
-	cameraModel.cy= (float)cameraMatrix.z1;
-	cameraModel.width= frame.frameWidth;
-	cameraModel.height= frame.frameHeight;
-	// No phone head in a replay: the recording carries the camera inputs
-	const TrackingFrameResult::HeadPose noPhoneHead;
-	m_directRetarget.solve(frame, cameraModel, noPhoneHead, frame.timestampMs, skeleton,
-						   makeDirectRetargetConfig(recordedConfig, rig), m_avatarPose);
-	return m_avatarPose.valid;
+	// A direct-mode recording's camera and its undistorted pinhole, the
+	// space its landmarks live in
+	const int cameraIndex= recordedConfig.direct.cameraIndex;
+	const bool bDirect= recordedConfig.direct.enabled && cameraIndex >= 0 &&
+		cameraIndex < (int)recordedConfig.cameraCount() && recordedConfig.camera(cameraIndex).intrinsics.present;
+	DirectCameraModel pinhole;
+	if (bDirect)
+	{
+		const MikanMatrix3d& cameraMatrix=
+			recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
+		pinhole.fx= (float)cameraMatrix.x0;
+		pinhole.fy= (float)cameraMatrix.y1;
+		pinhole.cx= (float)cameraMatrix.z0;
+		pinhole.cy= (float)cameraMatrix.z1;
+	}
+
+	// One recorded frame through the stage the way the vision thread ran it.
+	// No phone head in a replay: the recording carries the camera inputs.
+	const TimelinePanel& timeline= *m_timelinePanel;
+	auto solveFrame= [&](int frameIndex, RetargetStage& stage, RetargetResult& ioResult) {
+		TrackingFrameResult fused;
+		std::vector<const TrackingFrameResult*> perCamera;
+		timeline.getRetargetInputs(frameIndex, fused, perCamera);
+		if (bDirect && cameraIndex < (int)perCamera.size() && perCamera[cameraIndex] != nullptr)
+		{
+			const TrackingFrameResult& frame= *perCamera[cameraIndex];
+			DirectCameraModel cameraModel= pinhole;
+			cameraModel.width= frame.frameWidth;
+			cameraModel.height= frame.frameHeight;
+			const TrackingFrameResult::HeadPose noPhoneHead;
+			if (stage.solveDirect(frame, cameraModel, noPhoneHead, frame.timestampMs, ioResult))
+				return;
+		}
+		stage.solvePosition(fused, ioResult);
+	};
+	auto frameTimeMs= [&timeline](int frameIndex) { return timeline.getFrameTimeMs(frameIndex); };
+
+	const bool bSolved= m_replayPlayhead.seek(m_displayStage, timeline.getReplayTimelineId(),
+											  timeline.getCurrentFrameIndex(), frameTimeMs, solveFrame, m_displayResult);
+	if (!bSolved)
+		m_displayStage.resolveTarget(m_displayResult);
+	return m_displayResult.bDirectState ? &m_displayResult.directState : nullptr;
 }
 
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
@@ -733,4 +1240,868 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 			glm::inverse(m_avatarPose.rootRotationWorld) * (hint.draggedHintWorld - hint.shoulderWorld);
 		m_app->setAvatarRig(rig);
 	}
+}
+
+// -- Pipeline ---------------------------------------------------------------
+
+void MainWindow::gatherPipelineInputs()
+{
+	// The project's shape and calibration are the shown frame's: a replayed
+	// take keeps the cameras and the pipeline it was recorded with
+	const AppConfig* config= m_shown.config;
+	VisionThread* visionThread= m_app->getVisionThread();
+	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
+	const TrackingFrameResult& fused= *m_shown.fused;
+	const bool bReplay= m_shown.bReplay;
+	// The stage state of the shown frame: the vision thread's snapshot and
+	// the services live, the frame's own record in a replay. A take made
+	// before stage state was recorded has none.
+	const VisionThread::Telemetry telemetry= visionThread->getTelemetry();
+	const RecordedTelemetry* recorded= bReplay ? m_timelinePanel->getDisplayTelemetry() : nullptr;
+
+	PipelineStatusInputs in;
+	in.bDirect= config->direct.enabled;
+	in.cameraCount= (int)config->cameraCount();
+	in.directCameraIndex= config->direct.cameraIndex;
+	in.bReplay= bReplay;
+	in.bStageStateRecorded= !bReplay || recorded != nullptr;
+
+	for (int cameraIndex= 0; cameraIndex < std::min(in.cameraCount, PipelineStatusInputs::k_maxCameras); ++cameraIndex)
+	{
+		PipelineStatusInputs::Camera& camera= in.cameras[cameraIndex];
+		const CameraProfile& profile= config->camera(cameraIndex);
+		camera.bIntrinsics= profile.intrinsics.present;
+		camera.bExtrinsics= profile.extrinsics.present;
+		camera.bBodyEnabled= profile.bodyPose.enabled;
+		if (!bReplay)
+		{
+			camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
+			camera.bStreaming= videoCapture->isStreaming(cameraIndex);
+			camera.bHandPipelineReady= std::string(visionThread->getActiveExecutionProvider(cameraIndex)) != "none";
+			camera.bTrackingPaused= !visionThread->isTrackingEnabled(cameraIndex);
+			camera.bBodyModelLoaded=
+				cameraIndex < VisionThread::k_maxReportedCameras && telemetry.bBodyModelLoaded[cameraIndex];
+		}
+		else if (recorded != nullptr && cameraIndex < recorded->cameraCount)
+		{
+			const RecordedTelemetry::Camera& state= recorded->cameras[cameraIndex];
+			camera.bDeviceOpen= state.deviceOpen;
+			camera.bStreaming= state.streaming;
+			camera.bHandPipelineReady= state.handPipelineReady;
+			camera.bTrackingPaused= !state.trackingEnabled;
+			camera.bBodyModelLoaded= state.bodyModelLoaded;
+		}
+		else
+		{
+			// The take holds this camera's frames, so it was open and its
+			// models ran; nothing says otherwise
+			camera.bDeviceOpen= true;
+			camera.bStreaming= true;
+			camera.bHandPipelineReady= true;
+			camera.bBodyModelLoaded= profile.bodyPose.enabled;
+		}
+		const TrackingFrameResult* result=
+			cameraIndex < (int)m_shown.perCamera.size() ? m_shown.perCamera[cameraIndex] : nullptr;
+		if (result != nullptr)
+		{
+			camera.captureFps= result->captureFps;
+			camera.handsTracked= (result->hands[0].tracked ? 1 : 0) + (result->hands[1].tracked ? 1 : 0);
+			camera.bBodyValid= result->body.valid;
+			camera.bodyConfidence= result->body.confidence;
+			camera.bBodyHasDepth= result->body.hasDepth;
+		}
+	}
+
+	// What the iteration behind the shown frame did
+	using ePath= PipelineStatusInputs::ePath;
+	auto toPath= [](VisionThread::Telemetry::ePath path) {
+		switch (path)
+		{
+		case VisionThread::Telemetry::ePath::Idle:
+			return ePath::Idle;
+		case VisionThread::Telemetry::ePath::FaceOnly:
+			return ePath::FaceOnly;
+		case VisionThread::Telemetry::ePath::Fused:
+			return ePath::Fused;
+		case VisionThread::Telemetry::ePath::Passthrough:
+			return ePath::Passthrough;
+		case VisionThread::Telemetry::ePath::Direct:
+			return ePath::Direct;
+		}
+		return ePath::Unknown;
+	};
+	if (recorded != nullptr)
+	{
+		in.path= toPath((VisionThread::Telemetry::ePath)recorded->path);
+	}
+	else if (bReplay)
+	{
+		// Unrecorded: the frame's own world pose says which way it went
+		const bool bWorld= fused.poses[0].hasWorldPose || fused.poses[1].hasWorldPose;
+		in.path= in.bDirect ? ePath::Direct : (bWorld ? ePath::Fused : ePath::Unknown);
+	}
+	else if (telemetry.bValid)
+	{
+		in.path= toPath(telemetry.path);
+	}
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const HandPose& pose= fused.poses[sideIndex];
+		PipelineStatusInputs::Hand& hand= in.hands[sideIndex];
+		hand.bTracked= pose.tracked;
+		hand.bWorldPose= pose.hasWorldPose;
+		hand.confidence= pose.confidence;
+		hand.bForearmPose= pose.hasForearmPose;
+		hand.forearmConfidence= pose.forearmConfidence;
+		hand.bShoulder= pose.hasShoulder;
+
+		PipelineStatusInputs::Imu& imu= in.imu[sideIndex];
+		if (!bReplay)
+		{
+			hand.dominantCamera= visionThread->getDominantCamera((eHandSide)sideIndex);
+			const ImuSideStatus imuStatus= visionThread->getImuSideStatus((eHandSide)sideIndex);
+			imu.bConnected= imuStatus.deviceConnected;
+			imu.bStreaming= imuStatus.streaming;
+			imu.bCalibrated= imuStatus.calibrated;
+			imu.bOrientationValid= imuStatus.orientationValid;
+			imu.sampleRateHz= imuStatus.sampleRateHz;
+		}
+		else if (recorded != nullptr)
+		{
+			hand.dominantCamera= recorded->dominantCamera[sideIndex];
+			const RecordedImuStatus& imuStatus= recorded->imu[sideIndex];
+			imu.bConnected= imuStatus.deviceConnected;
+			imu.bStreaming= imuStatus.streaming;
+			imu.bCalibrated= imuStatus.calibrated;
+			imu.bOrientationValid= imuStatus.orientationValid;
+			imu.sampleRateHz= imuStatus.sampleRateHz;
+		}
+	}
+	in.bHeadValid= fused.head.valid;
+	in.bImuEnabled= config->imu.enabled;
+
+	// The direct solve behind the shown pose
+	if (in.bDirect && in.directCameraIndex >= 0 && in.directCameraIndex < in.cameraCount)
+		in.bDirectIntrinsics= config->camera(in.directCameraIndex).intrinsics.present;
+	in.bDirectNeutral= config->direct.neutralPresent;
+	if (m_directReadout.state != nullptr)
+	{
+		const DirectRetarget::SolveState& state= *m_directReadout.state;
+		in.bDirectTorso= state.torsoValid;
+		in.bDirectHeadMeasured= state.headMeasured;
+		in.bDirectHandednessSwapped= state.bHandednessSwapped;
+		in.directShoulderDepthMeters= m_directReadout.shoulderDepth;
+		in.directLeanDegrees= m_directReadout.leanDegrees;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+			PipelineStatusInputs::DirectArm& out= in.directArms[sideIndex];
+			out.bChain= arm.chain.valid;
+			out.bHandSeen= arm.bHandSeen;
+			out.bElbowSeen= arm.bElbowSeen;
+			out.bHandMeasured= arm.bHandMeasured;
+			out.bResting= arm.bResting;
+			out.restBlend= arm.restBlend;
+			out.elbowMissPx= arm.chosenElbowPx;
+		}
+	}
+
+	// The avatar is the one loaded now, whichever frame is shown
+	in.bAvatarLoaded= m_app->getAvatarSkeleton() != nullptr;
+	if (in.bAvatarLoaded)
+	{
+		in.bArmPlaced[0]= m_avatarPose.bones[(int)eHumanoidBone::LeftUpperArm].present;
+		in.bArmPlaced[1]= m_avatarPose.bones[(int)eHumanoidBone::RightUpperArm].present;
+	}
+
+	in.bOscEnabled= config->osc.enabled;
+	in.oscMinConfidence= config->osc.minConfidence;
+	in.oscPort= config->osc.port;
+	in.bFaceEnabled= config->face.enabled;
+	in.bAudioEnabled= config->audio.enabled;
+	if (!bReplay)
+	{
+		in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;
+		in.oscSendRateHz= telemetry.oscSendRateHz;
+		if (FaceService* faceService= m_app->getFaceService())
+		{
+			const FaceServiceStatus faceStatus= faceService->getStatus();
+			in.bFaceBound= faceStatus.bound;
+			in.bFaceStreaming= faceStatus.streaming;
+			in.bFaceTracked= faceStatus.latest.valid && faceStatus.latest.faceTracked;
+			in.faceDatagramsPerSecond= faceStatus.datagramsPerSecond;
+		}
+		if (AudioService* audioService= m_app->getAudioService())
+		{
+			const AudioServiceStatus audioStatus= audioService->getStatus();
+			in.bAudioDeviceOpen= audioStatus.deviceOpen;
+			in.bAudioBackendReady= audioStatus.backendReady;
+			in.bAudioGateOpen= audioStatus.gateOpen;
+			in.audioLevelDbfs= audioStatus.levelDbfs;
+		}
+	}
+	else if (recorded != nullptr)
+	{
+		in.bOscRunning= recorded->oscRunning;
+		in.oscSendRateHz= recorded->oscSendRateHz;
+		in.bFaceBound= recorded->face.bound;
+		in.bFaceStreaming= recorded->face.streaming;
+		in.bFaceTracked= recorded->face.faceTracked;
+		in.faceDatagramsPerSecond= recorded->face.datagramsPerSecond;
+		in.bAudioDeviceOpen= recorded->audio.deviceOpen;
+		in.bAudioBackendReady= recorded->audio.backendReady;
+		in.bAudioGateOpen= recorded->audio.gateOpen;
+		in.audioLevelDbfs= recorded->audio.levelDbfs;
+	}
+
+	// The face profile is the live one, which a replay is evaluated through
+	in.bProfileAuto= m_app->isActiveFaceProfileAuto();
+	if (const std::shared_ptr<const FaceProfileBinding>& binding= m_app->getFaceBinding())
+	{
+		in.profileTargetCount= (int)binding->getWireNames().size();
+		for (const eFaceTargetProblem problem : binding->getOutputProblemCodes())
+			in.profileProblemCount+= problem != eFaceTargetProblem::None ? 1 : 0;
+	}
+
+	m_pipelineInputs= in;
+}
+
+bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+										  std::string& outError)
+{
+	if (args.empty())
+	{
+		outError= "missing verb";
+		return false;
+	}
+	const std::string& verb= args[0];
+	const PipelineStatusInputs& inputs= m_pipelineInputs;
+	// One stage as "<id> <state> | <value> | <reason>", the texts as shown
+	auto describe= [&](const PipelineStageId& stage) {
+		const StageStatus status= PipelineModel::computeStatus(inputs, stage);
+		static const char* k_states[]= {"running", "degraded", "inactive", "not-configured"};
+		return PipelineModel::toString(stage) + " " + k_states[(int)status.state] + " | " +
+			PipelineText::format(status.value) + " | " + PipelineText::format(status.reason);
+	};
+
+	if (verb == "stages")
+	{
+		outLines.push_back(std::string("shape ") + (inputs.bDirect ? "direct" : "multi") + " cameras " +
+						   std::to_string(inputs.cameraCount) + " shown " + (inputs.bReplay ? "replay" : "live"));
+		for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount))
+			outLines.push_back(describe(stage));
+		return true;
+	}
+	if (verb == "selected")
+	{
+		const PipelineStageId& selected= m_pipelinePanel->getSelected();
+		outLines.push_back(selected.isValid() ? describe(selected) : std::string("none"));
+		return true;
+	}
+	if (verb == "view")
+	{
+		// A mode, or the Retarget view's layout, which is kept whatever the
+		// view shows
+		if (args.size() >= 2)
+		{
+			eStageViewMode mode;
+			eRetargetLayout layout;
+			if (StageView::parseMode(args[1], mode))
+				m_stageView->setMode(mode);
+			else if (StageView::parseRetargetLayout(args[1], layout))
+				m_stageView->setRetargetLayout(layout);
+			else
+			{
+				outError= "unknown view mode or layout: " + args[1];
+				return false;
+			}
+		}
+		outLines.push_back(m_stageView->describe());
+		return true;
+	}
+	if (verb == "pov")
+	{
+		// The scene's camera: the free camera or a configured camera of the
+		// shown frame's config that can be looked through
+		if (args.size() >= 2)
+		{
+			int cameraIndex= -1;
+			if (!StageView::parsePov(args[1], cameraIndex))
+			{
+				outError= "expected free or a camera index: " + args[1];
+				return false;
+			}
+			if (!m_scene3dPanel->setPovCamera(cameraIndex))
+			{
+				const std::vector<eScenePovAvailability>& cameras= m_scene3dPanel->getPovCameras();
+				outError= "camera " + args[1] + " cannot be looked through: " +
+					StageView::getPovAvailabilityName(cameraIndex < (int)cameras.size()
+														  ? cameras[cameraIndex]
+														  : eScenePovAvailability::Missing);
+				return false;
+			}
+		}
+		// The match follows on the next frame's update
+		outLines.push_back("pov " + StageView::describePov(m_scene3dPanel->getPovCamera()) + " matched " +
+						   (m_scene3dPanel->isPovMatched() ? "yes" : "no"));
+		std::string choices= "choices free";
+		const std::vector<eScenePovAvailability>& cameras= m_scene3dPanel->getPovCameras();
+		for (int cameraIndex= 0; cameraIndex < (int)cameras.size(); ++cameraIndex)
+			choices+= " " + std::to_string(cameraIndex) + ":" + StageView::getPovAvailabilityName(cameras[cameraIndex]);
+		outLines.push_back(choices);
+		return true;
+	}
+	if (verb == "chain")
+	{
+		// The Retarget stage's selected chain, by the id of its block in the
+		// project's chain settings. Without an avatar only an arm selects.
+		if (args.size() >= 2)
+		{
+			eRetargetChain chain;
+			if (!AvatarPanel::parseChainId(args[1], chain))
+			{
+				outError= "unknown chain: " + args[1];
+				return false;
+			}
+			if (!m_avatarPanel->setSelectedChain(chain))
+			{
+				outError= "no avatar loaded, only leftArm and rightArm select: " + args[1];
+				return false;
+			}
+		}
+		outLines.push_back(AvatarPanel::getChainId(m_avatarPanel->getSelectedChain()));
+		return true;
+	}
+	if (verb == "fx")
+		return handleFxAutomation(args, outLines, outError);
+	if (verb == "goal")
+		return handleGoalAutomation(args, outLines, outError);
+	if (verb == "mapping")
+		return handleMappingAutomation(args, outLines, outError);
+	if (verb == "limit")
+		return handleLimitAutomation(args, outLines, outError);
+	if (verb == "loss")
+		return handleLossAutomation(args, outLines, outError);
+	if (verb == "pinned")
+	{
+		const std::vector<PipelineStageId> pinned= m_pinnedWindows->getPinned();
+		for (const PipelineStageId& stage : pinned)
+			outLines.push_back(PipelineModel::toString(stage));
+		if (pinned.empty())
+			outLines.push_back("none");
+		return true;
+	}
+	if (verb == "unpin")
+	{
+		if (args.size() < 2)
+		{
+			outError= "missing stage";
+			return false;
+		}
+		if (args[1] == "all")
+		{
+			m_pinnedWindows->unpinAll();
+			outLines.push_back("none");
+			return true;
+		}
+		PipelineStageId stage;
+		if (!PipelineModel::fromString(args[1], stage) || !m_pinnedWindows->unpin(stage))
+		{
+			outError= "not pinned: " + args[1];
+			return false;
+		}
+		outLines.push_back(PipelineModel::toString(stage));
+		return true;
+	}
+	if (verb == "status" || verb == "select" || verb == "pin")
+	{
+		if (args.size() < 2)
+		{
+			outError= "missing stage";
+			return false;
+		}
+		if (verb == "select" && args[1] == "none")
+		{
+			m_pipelinePanel->setSelected(PipelineStageId());
+			outLines.push_back("none");
+			return true;
+		}
+		PipelineStageId stage;
+		const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount);
+		if (!PipelineModel::fromString(args[1], stage) || std::find(all.begin(), all.end(), stage) == all.end())
+		{
+			outError= "no such stage in this project: " + args[1];
+			return false;
+		}
+		if (verb == "pin")
+		{
+			// The window opens on the next draw; the reply is the id the gui
+			// namespace addresses it by
+			m_pinnedWindows->pin(stage);
+			outLines.push_back(PinnedStageWindows::getWindowId(stage));
+			return true;
+		}
+		if (verb == "select")
+			m_pipelinePanel->setSelected(stage);
+		outLines.push_back(describe(stage));
+		return true;
+	}
+	outError= "unknown verb: " + verb;
+	return false;
+}
+
+bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									   std::string& outError)
+{
+	// limit <head|spine|leftWrist|rightWrist> [<degrees>]
+	if (args.size() < 2 || args.size() > 3)
+	{
+		outError= "usage: limit <head|spine|leftWrist|rightWrist> [<degrees>]";
+		return false;
+	}
+	if (m_app->getAvatarModel() == nullptr)
+	{
+		outError= "no avatar loaded";
+		return false;
+	}
+	AvatarRigSettings rig= m_app->getAvatarRig();
+	float* degrees= nullptr;
+	if (args[1] == "head")
+		degrees= &rig.headLimitDegrees;
+	else if (args[1] == "spine")
+		degrees= &rig.spineLimitDegrees;
+	else if (args[1] == "leftWrist")
+		degrees= &rig.sides[0].wristLimitDegrees;
+	else if (args[1] == "rightWrist")
+		degrees= &rig.sides[1].wristLimitDegrees;
+	if (degrees == nullptr)
+	{
+		outError= "unknown limit: " + args[1];
+		return false;
+	}
+
+	if (args.size() == 3)
+	{
+		// The slider's range: zero locks the joint, 180 never clamps
+		char* end= nullptr;
+		const double parsed= std::strtod(args[2].c_str(), &end);
+		if (end == args[2].c_str() || *end != '\0' || !(parsed >= 0.0 && parsed <= 180.0))
+		{
+			outError= "not a number of degrees in [0, 180]: " + args[2];
+			return false;
+		}
+		*degrees= (float)parsed;
+		// The rig's one edit path, the panel's: the vision thread takes it
+		// between frames and the sidecar is written by the rig's auto-save
+		m_app->setAvatarRig(rig);
+	}
+
+	char text[64];
+	std::snprintf(text, sizeof(text), "%s %.6g", args[1].c_str(), *degrees);
+	std::string line= text;
+	// Only the direct placement applies the limits
+	if (!m_pipelineInputs.bDirect)
+		line+= " (unused: the position pipeline applies no joint limit)";
+	outLines.push_back(line);
+	return true;
+}
+
+// A loss rule as "hold <kind> <ms> after <kind> blend <ms>"
+static std::string formatLoss(eLossHold hold, float holdMs, eLossAfter after, float restBlendMs)
+{
+	char text[128];
+	std::snprintf(text, sizeof(text), "hold %s %.6g after %s blend %.6g", lossHoldName(hold), holdMs,
+				  lossAfterName(after), restBlendMs);
+	return text;
+}
+
+static const char* groupStateName(SourcePose::eGroupState state)
+{
+	switch (state)
+	{
+	case SourcePose::eGroupState::Lost:
+		return "lost";
+	case SourcePose::eGroupState::Measured:
+		return "measured";
+	case SourcePose::eGroupState::Held:
+		return "held";
+	case SourcePose::eGroupState::Frozen:
+		return "frozen";
+	case SourcePose::eGroupState::Resting:
+		return "resting";
+	}
+	return "";
+}
+
+bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									  std::string& outError)
+{
+	// loss <chain> [after <kind> | hold <ms> | blend <ms>]
+	if (args.size() != 2 && args.size() != 4)
+	{
+		outError= "usage: loss <torso|head|leftArm|rightArm> [after <release|freeze|easeToRest>|hold <ms>|blend <ms>]";
+		return false;
+	}
+	eRetargetChain chain;
+	if (!AvatarPanel::parseChainId(args[1], chain) || chain == eRetargetChain::LeftHand ||
+		chain == eRetargetChain::RightHand)
+	{
+		outError= "not a chain with a loss policy: " + args[1];
+		return false;
+	}
+	const int sideIndex= chain == eRetargetChain::LeftArm ? 0 : chain == eRetargetChain::RightArm ? 1 : -1;
+	RetargetChains chains= m_app->getRetargetChains();
+	RetargetChains::Loss* storedLoss= &chains.head.loss;
+	if (sideIndex >= 0)
+		storedLoss= &chains.arms[sideIndex].loss;
+	else if (chain == eRetargetChain::Torso)
+		storedLoss= &chains.torso.loss;
+	RetargetChains::Loss& loss= *storedLoss;
+
+	if (args.size() == 4)
+	{
+		const std::string& field= args[2];
+		const std::string& value= args[3];
+		if (field == "after")
+		{
+			bool bFound= false;
+			for (eLossAfter after : {eLossAfter::Release, eLossAfter::Freeze, eLossAfter::EaseToRest})
+			{
+				if (value == lossAfterName(after))
+				{
+					loss.after= after;
+					bFound= true;
+				}
+			}
+			if (!bFound)
+			{
+				outError= "unknown after: " + value;
+				return false;
+			}
+		}
+		else if (field == "hold" || field == "blend")
+		{
+			char* end= nullptr;
+			const double parsed= std::strtod(value.c_str(), &end);
+			if (end == value.c_str() || *end != '\0' || !std::isfinite(parsed) || parsed < 0.0)
+			{
+				outError= "not a number of milliseconds of at least 0: " + value;
+				return false;
+			}
+			if (field == "blend")
+			{
+				loss.restBlendMs= (float)parsed;
+			}
+			else
+			{
+				loss.holdMs= (float)parsed;
+				// As the head's slider does: a length the head holds for, which
+				// a block stored as holding nothing would not take
+				if (chain == eRetargetChain::Head)
+					loss.hold= eLossHold::Timed;
+			}
+		}
+		else
+		{
+			outError= "unknown field: " + field;
+			return false;
+		}
+		// The chains' one edit path, the panel's
+		m_app->setRetargetChains(chains);
+	}
+	outLines.push_back("stored " + formatLoss(loss.hold, loss.holdMs, loss.after, loss.restBlendMs));
+
+	// What the project's pipeline performs: the direct one with an avatar in
+	// a direct project, the position one otherwise
+	const AppConfig* config= m_app->getConfig();
+	const bool bAvatar= m_app->getAvatarSkeleton() != nullptr;
+	const bool bDirect= config->direct.enabled && bAvatar;
+	const LossPolicy policy= makeChainLossPolicy(
+		chains, bDirect ? SourcePose::ePipeline::Direct : SourcePose::ePipeline::Position, config->osc.minConfidence,
+		bAvatar);
+	const ChainLossPolicy* resolvedPolicy= &policy.head;
+	if (sideIndex >= 0)
+		resolvedPolicy= &policy.arms[sideIndex];
+	else if (chain == eRetargetChain::Torso)
+		resolvedPolicy= &policy.torso;
+	const ChainLossPolicy& resolved= *resolvedPolicy;
+	std::string line= std::string("resolved ") + (bDirect ? "direct " : "position ");
+	if (resolved.bFollowsParent)
+		line+= "follows the arms";
+	else
+		line+= formatLoss(resolved.hold, resolved.holdMs, resolved.after, resolved.restBlendMs);
+	outLines.push_back(line);
+
+	// The chain's group state on the frame the scene shows
+	const SourcePose* source= m_sourcePoseReadout.source;
+	if (source == nullptr)
+	{
+		outLines.push_back("shown none");
+		return true;
+	}
+	SourcePose::eGroupState state= SourcePose::eGroupState::Lost;
+	float restBlend= 0.f;
+	if (sideIndex >= 0)
+	{
+		state= source->arms[sideIndex].state;
+		restBlend= source->arms[sideIndex].restBlend;
+	}
+	else if (chain == eRetargetChain::Torso)
+	{
+		state= source->torso.state;
+		restBlend= source->torso.restBlend;
+	}
+	else
+	{
+		state= source->head.state;
+		restBlend= source->head.restBlend;
+	}
+	line= std::string("shown ") + groupStateName(state);
+	if (state == SourcePose::eGroupState::Resting)
+	{
+		char text[32];
+		std::snprintf(text, sizeof(text), " blend %.3f", restBlend);
+		line+= text;
+	}
+	outLines.push_back(line);
+	return true;
+}
+
+// The side index of an arm chain's id, -1 for anything else
+static int parseArmSide(const std::string& id)
+{
+	if (id == "leftArm")
+		return 0;
+	if (id == "rightArm")
+		return 1;
+	return -1;
+}
+
+bool MainWindow::handleFxAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									std::string& outError)
+{
+	// fx <arm> <parameter> [value <number> | expr <text...>]
+	if (args.size() < 3)
+	{
+		outError= "usage: fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]";
+		return false;
+	}
+	const int sideIndex= parseArmSide(args[1]);
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+	enum class eParameter
+	{
+		ElbowWeight,
+		ReachScale,
+		IkWeight,
+	};
+	eParameter parameter;
+	if (args[2] == "elbowWeight")
+		parameter= eParameter::ElbowWeight;
+	else if (args[2] == "reachScale")
+		parameter= eParameter::ReachScale;
+	else if (args[2] == "ikWeight")
+		parameter= eParameter::IkWeight;
+	else
+	{
+		outError= "unknown parameter: " + args[2];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	RetargetChains::Arm& chainArm= chains.arms[sideIndex];
+	ExprParameter& weight= parameter == eParameter::ElbowWeight ? chainArm.elbowWeight
+		: parameter == eParameter::ReachScale                  ? chainArm.reachScale
+															   : chainArm.ikWeight;
+	if (args.size() >= 4)
+	{
+		const std::string& form= args[3];
+		if (form == "value")
+		{
+			if (args.size() != 5)
+			{
+				outError= "value takes one number";
+				return false;
+			}
+			char* end= nullptr;
+			const double parsed= std::strtod(args[4].c_str(), &end);
+			if (end == args[4].c_str() || *end != '\0' || !(parsed >= 0.0 && parsed <= 1.0))
+			{
+				outError= "not a number in [0, 1]: " + args[4];
+				return false;
+			}
+			weight.value= (float)parsed;
+			weight.bUseExpression= false;
+		}
+		else if (form == "expr")
+		{
+			if (args.size() < 5)
+			{
+				outError= "missing expression text";
+				return false;
+			}
+			// The rest of the line is the text
+			std::string text= args[4];
+			for (size_t index= 5; index < args.size(); ++index)
+				text+= " " + args[index];
+			weight.expression= text;
+			weight.bUseExpression= true;
+		}
+		else
+		{
+			outError= "unknown form: " + form;
+			return false;
+		}
+		m_app->setRetargetChains(chains);
+	}
+
+	auto format= [](float value) {
+		char text[32];
+		std::snprintf(text, sizeof(text), "%.6g", value);
+		return std::string(text);
+	};
+	std::string settingLine= std::string("setting ") + (weight.bUseExpression ? "function" : "value") + " value " +
+		format(weight.value) + " expr " + weight.expression;
+	// Only an arm that pulls toward its goal reads its weight
+	if (parameter == eParameter::IkWeight && chainArm.mapping == eArmMapping::BoneAngles)
+		settingLine+= " (unused: the arm maps by bone angles)";
+	outLines.push_back(settingLine);
+	const FaceExprCompileResult compiled= compileExprParameter(weight.expression, SourcePoseInputs::table());
+	if (compiled.errors.empty())
+	{
+		outLines.push_back("compile ok");
+	}
+	else
+	{
+		const FaceExprCompileError& error= compiled.errors.front();
+		outLines.push_back("compile error at " + std::to_string(error.span.begin) + ".." +
+						   std::to_string(error.span.end) + ": " + error.message);
+	}
+	// The frame the scene shows, solved before this setting reached it
+	const RetargetArmReadout& shownArm= m_avatarPanel->getShownArmParameters()[sideIndex];
+	const RetargetParameterReadout& shown= parameter == eParameter::ElbowWeight ? shownArm.elbowWeight
+		: parameter == eParameter::ReachScale                                    ? shownArm.reachScale
+																				 : shownArm.ikWeight;
+	if (!shown.bEvaluated)
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		outLines.push_back("shown weight " + format(shown.value) + " raw " + format(shown.rawValue) + " from " +
+						   (shown.bExpression && shown.bCompiled ? "function" : "value") + " compiled " +
+						   (shown.bCompiled ? "yes" : "no"));
+	}
+	return true;
+}
+
+bool MainWindow::handleGoalAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									  std::string& outError)
+{
+	// goal <arm> [<x> <y> <z>]
+	if (args.size() != 2 && args.size() != 5)
+	{
+		outError= "usage: goal <leftArm|rightArm> [<x> <y> <z>]";
+		return false;
+	}
+	const int sideIndex= parseArmSide(args[1]);
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	glm::vec3& offset= chains.arms[sideIndex].goalOffset;
+	if (args.size() == 5)
+	{
+		glm::vec3 parsed;
+		for (int axis= 0; axis < 3; ++axis)
+		{
+			const std::string& text= args[2 + axis];
+			char* end= nullptr;
+			const double value= std::strtod(text.c_str(), &end);
+			if (end == text.c_str() || *end != '\0' || !std::isfinite(value))
+			{
+				outError= "not a number of meters: " + text;
+				return false;
+			}
+			parsed[axis]= (float)value;
+		}
+		offset= parsed;
+		m_app->setRetargetChains(chains);
+	}
+
+	char text[128];
+	std::snprintf(text, sizeof(text), "offset %.6g %.6g %.6g", offset.x, offset.y, offset.z);
+	std::string line= text;
+	// Only an arm that pulls toward its goal places one
+	if (chains.arms[sideIndex].mapping == eArmMapping::BoneAngles)
+		line+= " (unused: the arm maps by bone angles)";
+	outLines.push_back(line);
+	// The frame the scene shows, solved before this setting reached it
+	const AvatarRetargetGoals& goals= m_avatarPanel->getShownGoals();
+	if (!goals.bHasWristGoal[sideIndex])
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		const glm::vec3& goal= goals.wristGoalWorld[sideIndex];
+		std::snprintf(text, sizeof(text), "shown goal %.6g %.6g %.6g", goal.x, goal.y, goal.z);
+		outLines.push_back(text);
+	}
+	return true;
+}
+
+bool MainWindow::handleMappingAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+										 std::string& outError)
+{
+	// mapping <arm> [boneAngles|boneAnglesThenIk]
+	if (args.size() != 2 && args.size() != 3)
+	{
+		outError= "usage: mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]";
+		return false;
+	}
+	const int sideIndex= parseArmSide(args[1]);
+	if (sideIndex < 0)
+	{
+		outError= "unknown arm: " + args[1];
+		return false;
+	}
+
+	RetargetChains chains= m_app->getRetargetChains();
+	eArmMapping& mapping= chains.arms[sideIndex].mapping;
+	if (args.size() == 3)
+	{
+		if (args[2] == armMappingName(eArmMapping::BoneAngles))
+			mapping= eArmMapping::BoneAngles;
+		else if (args[2] == armMappingName(eArmMapping::BoneAnglesThenIk))
+			mapping= eArmMapping::BoneAnglesThenIk;
+		else
+		{
+			outError= "unknown mapping: " + args[2];
+			return false;
+		}
+		m_app->setRetargetChains(chains);
+	}
+
+	outLines.push_back(std::string("mapping ") + armMappingName(mapping));
+	// The frame the scene shows, solved before this setting reached it
+	const RetargetArmReadout& shownArm= m_avatarPanel->getShownArmParameters()[sideIndex];
+	if (!shownArm.bPosed)
+	{
+		outLines.push_back("shown none");
+	}
+	else
+	{
+		char text[64];
+		std::snprintf(text, sizeof(text), "shown ikWeight %.6g", shownArm.effectiveIkWeight);
+		outLines.push_back(text);
+	}
+	return true;
 }

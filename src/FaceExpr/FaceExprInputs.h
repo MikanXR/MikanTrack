@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "ExprInputTable.h"
 #include "FaceSources.h"
 
 // The raw input namespaces a face expression reads, as one flat slot table.
@@ -31,4 +32,8 @@ std::string name(int slot);
 // Writes every slot from the sources; outInputs holds k_count floats.
 // Booleans are 0 and 1.
 void fill(const FaceSources& sources, float* outInputs);
+
+// This table as an ExprInputTable (fromName, name and k_count), the one a
+// face profile compiles against
+const ExprInputTable& table();
 } // namespace FaceExprInputs

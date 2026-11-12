@@ -4,11 +4,13 @@
 
 #include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/quaternion_float.hpp"
+#include "glm/ext/scalar_constants.hpp"
 #include "glm/ext/vector_float3.hpp"
 
 #include "AvatarRetarget.h"
 #include "HandPoseModel.h"
 #include "OneEuroFilter.h"
+#include "SourcePose.h"
 #include "TrackingTypes.h"
 
 class AvatarSkeleton;
@@ -84,8 +86,18 @@ struct DirectRetargetConfig
 	// the rest pose is where a lost arm goes)
 	std::array<AvatarRetargetConfig::Side, 2> sides{};
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
-	// snaps
+	// snaps. The left arm chain's, carried with the direct pipeline's settings
+	// for a caller that builds the loss stage's arm policy from this config
+	// alone (makeDirectLossPolicy): the solver does not read it, and the
+	// retarget stage takes each arm's from its chain.
 	float restBlendMs= 300.f;
+	// The rig's joint limits on the relative rotations, radians: the head
+	// against the neutral head, the spine (the lean and the shoulder line's
+	// turn) against the neutral torso, and each wrist (the palm in the
+	// forearm frame), left then right
+	float headLimitRadians= 70.f * glm::pi<float>() / 180.f;
+	float spineLimitRadians= 45.f * glm::pi<float>() / 180.f;
+	std::array<float, 2> wristLimitRadians{80.f * glm::pi<float>() / 180.f, 80.f * glm::pi<float>() / 180.f};
 };
 
 class DirectRetarget
@@ -107,14 +119,51 @@ public:
 	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 
+	// Forgets every filter and hold, and starts a new epoch on the source
+	// pose clock
 	void reset();
 
-	// camera: the per-camera result (hands with image points and camera-space
-	// palm poses, the body observation). phoneHead: valid while the phone
-	// face stream drives the head, already in the canonical head frame.
-	void solve(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
-			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
-			   const DirectRetargetConfig& config, AvatarPose& outPose);
+	// The measurement half: one camera's frame into the source pose, in the
+	// avatar's units, and the solve state (getSolveState) but for what the
+	// placement decides. camera: the per-camera result (hands with image
+	// points and camera-space palm poses, the body observation). phoneHead:
+	// valid while the phone face stream drives the head, already in the
+	// canonical head frame. Owns the clock: a timestamp regression or a gap
+	// past the hold restarts the solver and advances the epoch. Owns the
+	// holds: a torso, a head or an arm within its hold reads as held, with
+	// its last values.
+	void measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+				 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
+				 const DirectRetargetConfig& config, SourcePose& outSource);
+
+	// The placement half: a direct source pose into the avatar's bones. The
+	// head and the wrist take their joint limits and the rig's trims here.
+	// Every arm the source carries is placed from its placement, a resting
+	// one (the loss stage's ease into the rig's rest pose) like a measured
+	// one; a lost arm is left out. A head at rest is the identity, one easing
+	// there the rotation the source carries. A lost torso leaves the spine
+	// bones out and a lost head the head bone, each then at the avatar's
+	// rest. Writes the solve state's head delta. Holds no state across frames.
+	// Every arm by its bone angles alone.
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+			   AvatarPose& outPose);
+
+	// The same with each arm's IK weight, reach scale and goal offset (by
+	// eHandSide; the elbow weight is not read, the source's elbow is the
+	// pole). An arm at an IK weight of exactly 0 is placed by its bone angles
+	// as above. Above it, the arm's wrist is pulled from where its bone
+	// angles put it toward a goal in the posed avatar's world: the avatar's
+	// shoulder plus the source's shoulder-to-wrist offset (the chain's, or
+	// for a resting arm its directions at the source's bone lengths) scaled
+	// by the reach scale's factor on the avatar-to-source arm length ratio,
+	// plus the goal offset, clamped to the avatar's reach, the arm bending
+	// toward the source's elbow scaled the same way. The forearm's twist, the
+	// wrist and the fingers ride on the posed forearm as the bone angles
+	// place them. outGoals, when given, receives each arm's goal (above
+	// weight 0) and the weight it was solved at.
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+			   const std::array<AvatarRetargetArm, 2>& arms, AvatarPose& outPose,
+			   AvatarRetargetGoals* outGoals= nullptr);
 
 	// The current filtered measurements as a neutral pose. False when no
 	// torso has been solved yet.
@@ -168,10 +217,20 @@ public:
 			float twist= 0.f;
 			glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
 			glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
+			// The palm read this frame is the lifted palm's mirror along the
+			// view ray, and how much better the mirror's finger axis
+			// continues the forearm than the lifted one's (zero with no hand
+			// read)
+			bool bPalmMirrored= false;
+			float palmMirrorGain= 0.f;
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
-			bool bResting= false; // no chain to place: the arm is easing into, or at, the rest pose
-			float restBlend= 0.f; // how far into the rest pose, 1 at rest
+			// The loss stage's readout, which the retarget stage writes from
+			// the source pose it hands on (the solver leaves both at rest
+			// values): no chain to place, the arm is easing into, or at, the
+			// rest pose, and how far into it, 1 at rest
+			bool bResting= false;
+			float restBlend= 0.f;
 		};
 		DirectCameraModel camera;
 		float tiltRadians= 0.f;
@@ -184,6 +243,10 @@ public:
 		glm::quat headFrame{1.f, 0.f, 0.f, 0.f};
 		glm::quat headDelta{1.f, 0.f, 0.f, 0.f};
 		Arm arms[2];
+		// The hand slots have sat on the opposite side's body wrists, and
+		// none on its own, for a second: the hand model's left and right
+		// are the wrong way round for this camera
+		bool bHandednessSwapped= false;
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -207,6 +270,18 @@ public:
 		std::array<FingerAngles, FINGER_COUNT> fingers{};
 	};
 
+	// The rig's rest placement of one arm under the lean: the chain's
+	// directions from the rest offsets, the palm facing the rest normal
+	// through the same hand math as a measured palm, the four fingers at the
+	// rest curl and the thumb at the avatar's rest
+	static ArmPlacement makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+										  const AvatarRetargetConfig::Side& sideConfig);
+
+	// The placement part way from one to another: the directions and the
+	// finger angles linearly, the twist by the shorter way round, the wrist
+	// along the arc
+	static ArmPlacement blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t);
+
 	// Both arms at the rig's rest pose with the spine straight, the rest of
 	// the pose absent: what a lost arm has eased into, for the preview and
 	// the tests
@@ -224,6 +299,7 @@ public:
 
 private:
 	void configureFilters();
+	void resetMeasure();
 
 	struct ArmState
 	{
@@ -248,14 +324,6 @@ private:
 		bool bWristAccepted= false;
 		int handGateFrames= 0;
 		bool bHandAccepted= false;
-		// What the bones took last frame, and whether anything has placed
-		// them since the last reset: the ease into rest starts from here
-		bool bPlaced= false;
-		ArmPlacement lastPlacement;
-		// The ease into rest: when it began (negative while the chain
-		// places the arm) and the placement it started from
-		double easeStartMs= -1.0;
-		ArmPlacement easeFrom;
 		// The hand as last measured, held while the hand model loses it
 		bool bHandMeasured= false;
 		float twist= 0.f;                            // palm normal roll about the forearm vs the rest palm
@@ -269,6 +337,8 @@ private:
 		bool bPalmFiltered= false;
 		glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
 		int palmJumpFrames= 0;
+		// The lifted palm's mirror along the view ray is the one in force
+		bool bPalmMirrored= false;
 		// Pixels lightly, the depth heavily, the palm axes as directions
 		OneEuroFilterVec2 elbowPixelFilter;
 		OneEuroFilterVec2 wristPixelFilter;
@@ -297,9 +367,14 @@ private:
 		OneEuroFilter depthFilter;
 	};
 
+	// The source clock, owned by measure; the epoch survives a reset
+	uint32_t m_resetEpoch= 0;
 	bool m_bHasTime= false;
 	double m_lastTimestampMs= 0.0;
 	bool m_bFiltersConfigured= false;
+	// When the current run of frames with swapped hand labels began,
+	// negative outside one
+	double m_handednessSwapStartMs= -1.0;
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

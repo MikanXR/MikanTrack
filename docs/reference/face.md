@@ -81,7 +81,7 @@ An ARKit column reads the phone while it sees a face and otherwise the visemes t
 - An expression target drives its morph binds times the bind weight, a morph target its morphs at weight 1, and a morph driven by several targets takes their max.
 - A target the avatar lacks is reported and skipped, never fatal, so one profile stays portable across similar faces.
 
-The vision thread evaluates the binding once per output frame in `runOutputStage`, before the OSC rate gate, through its `FaceProfileRunner`, so the stateful functions advance exactly once per frame. The values go into `frame.face.outputs` with the binding's generation. The streamer sends one `/VMC/Ext/Blend/Val` per target name ([wire-protocol.md](./wire-protocol.md)). The 3D scene, the OSC panel's mouth readout and the Face tab read the values off the frame, matched to the binding of the same generation, and the 3D scene resolves morphs through that binding. A frame from an older generation shows the rest face until the next arrives. The 3D scene applies the values only while the binding's morph count per mesh matches the loaded model's.
+The vision thread evaluates the binding once per output frame in `runOutputStage`, before the OSC rate gate, through its `FaceProfileRunner`, so the stateful functions advance exactly once per frame. The values go into `frame.face.outputs` with the binding's generation. The streamer sends one `/VMC/Ext/Blend/Val` per target name ([wire-protocol.md](./wire-protocol.md)). The 3D scene, the Profile stage's mouth readout and its bindings rows read the values off the frame, matched to the binding of the same generation, and the 3D scene resolves morphs through that binding. A frame from an older generation shows the rest face until the next arrives. The 3D scene applies the values only while the binding's morph count per mesh matches the loaded model's.
 
 The binding reaches the vision thread through `VisionThread::setAvatarIdentity`, applied between frames. The evaluator state carries over by call site, so editing one output does not restart the smoothing of the others. An edit that does not compile leaves the last good binding running and shows its errors.
 
@@ -99,7 +99,11 @@ Names compare without case, the input namespaces and the variable names alike:
 - `viseme.present`
 - the profile's variable names
 
-An unknown name is a compile error. The input table (`FaceExprInputs`) is the one place a new namespace is added.
+An unknown name is a compile error. The face input table (`FaceExprInputs`) is the one place a new face namespace is added.
+
+The language itself is not tied to that table. The compiler takes an `ExprInputTable` (`src/FaceExpr/ExprInputTable.h`: a slot count, a slot by name without case, a name by slot), and `compileFaceProfile(profile)` is the form that passes the face table, `FaceExprInputs::table()`. A program records the input count it was compiled against, and `FaceExprEvaluator::evaluate` over a caller-filled array of that many floats is the general entry, the `FaceSources` form filling the face table's values and calling it. A count that does not match runs nothing, writes zeros and returns false. `ExprNameTable` is a table built from a list of names.
+
+`ExprParameter` (`src/FaceExpr/ExprParameter.h`) is a setting that is a plain value or a function over some table: the value, the expression text and which of the two is in force. It saves as a bare JSON number while it is a plain value with no text, so a numeric setting that becomes one reads and writes existing files unchanged, and otherwise as an object of `value`, `expression` and `useExpression`. `ExprParameterRunner` evaluates one such setting at one site: it compiles the text as a one-output profile, again only when the text or the table changes, and returns the expression's value clamped to the parameter's range, or the plain value clamped when the setting is a plain value, the text did not compile, or the result is not finite. It keeps the compile error and the last raw value for an editor. The arm chains' elbow weight is the first setting of the type, over the `source.*` table. `compileExprParameter` compiles one text against a table for the runner and for an editor alike. The Inspector edits one through `drawExprParameterField` (`src/UI/ExprParameterField.h`): a slider with an `fx` button in the value form, and in the function form a single-line text with the face rows' error underline and message, and a thin bar with the value the solve used on the shown frame, marked as the fallback when the text did not compile and with the raw value beside it when the clamp changed it. A slider move, the `fx` toggle and a text committed with Enter or by leaving the field write the setting, typing alone does not, and switching to the value keeps the text. A marker lists the table's names.
 
 Operators, loosest first, all left associative:
 
@@ -150,9 +154,9 @@ The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and ev
 - `std::string phoneAddress` (default `255.255.255.255`)
 - `glm::quat headAnchor` with `headAnchorPresent`, written as `headAnchor` `[x, y, z, w]` only once captured
 
-The Tracking panel's Face section, after Wrist IMU, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
+The Phone stage in the Inspector, under Face and mouth, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
 
-The Avatar panel's Face tab (`AvatarFaceTab`) edits the profiles:
+The Profile stage (`AvatarFaceTab`) edits the profiles:
 
 - The profile bar: the assigned profiles with a missing id shown as such, the active picker, assignment from the library, new, duplicate, rename and delete. Every assigned profile, a missing id included, has its own unassign control. Auto shows read-only with "Duplicate to edit".
 
@@ -186,7 +190,7 @@ The Expression Editor window (`FaceExprEditorWindow`) edits one row of the activ
 
 - The `face` automation namespace drives all of this without the mouse ([automation.md](./automation.md)).
 
-The OSC panel's mouth section is a filtered view of the same values: the mouth targets of the active binding, the targets whose outputs read a mouth input. Its header counts them, and its source line says what they read this frame: the phone, the visemes, or both.
+The Profile stage's Diagnostics is a filtered view of the same values: the mouth targets of the active binding, the targets whose outputs read a mouth input. Its header counts them, and its source line says what they read this frame: the phone, the visemes, or both.
 
 ## Test
 
