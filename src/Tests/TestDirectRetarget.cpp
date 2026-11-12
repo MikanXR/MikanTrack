@@ -1429,6 +1429,25 @@ static int runDirectRetargetTest(const TestArgs&)
 				  glm::length(direct.neutralShoulderMidpoint - config.direct.neutralShoulderMidpoint) < 1e-5f &&
 				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f),
 			  "(i) the direct section round-trips through the project JSON");
+		check(!direct.neutralFacePresent, "(i) a neutral captured with the face unseen loads with no face neutral");
+
+		// The face neutral rides the neutral capture behind its own flag
+		config.direct.neutralFacePresent= true;
+		config.direct.neutralFace.valid= true;
+		config.direct.neutralFace.eyeOpenness[0]= 0.31f;
+		config.direct.neutralFace.eyeOpenness[1]= 0.27f;
+		config.direct.neutralFace.mouthWidth= 0.56f;
+		config.direct.neutralFace.mouthCornerLift[1]= 0.03f;
+		config.direct.neutralFace.browHeight[0]= 0.21f;
+		config.direct.neutralFace.browInnerHeight= 0.19f;
+		AppConfig withFace;
+		const bool bFaceLoaded= withFace.loadFromJsonString(config.toJsonString());
+		const WholeBodyFaceRatios& face= withFace.direct.neutralFace;
+		check(bFaceLoaded && withFace.direct.neutralFacePresent && face.valid &&
+				  nearlyEqual(face.eyeOpenness[0], 0.31f, 1e-6f) && nearlyEqual(face.eyeOpenness[1], 0.27f, 1e-6f) &&
+				  nearlyEqual(face.mouthWidth, 0.56f, 1e-6f) && nearlyEqual(face.mouthCornerLift[1], 0.03f, 1e-6f) &&
+				  nearlyEqual(face.browHeight[0], 0.21f, 1e-6f) && nearlyEqual(face.browInnerHeight, 0.19f, 1e-6f),
+			  "(i) the face neutral round-trips through the project JSON");
 		AppConfig fresh;
 		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f) &&
 				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f),

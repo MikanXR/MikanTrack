@@ -128,6 +128,10 @@ struct FaceReadout
 	std::string lastUnknownName;
 	bool bHasHead= false;
 	glm::vec3 headEulerDegrees{0.f};
+	// The webcam face source of the shown frame, and whether the frame's
+	// neutral capture holds the face
+	FaceSources::Webcam webcam;
+	bool bWebcamNeutral= false;
 };
 
 // The direct solve behind the shown avatar pose
@@ -262,6 +266,10 @@ void drawWristReadoutSection(const TrackingSectionContext& context);
 void drawFaceStreamControls(const TrackingSectionContext& context);
 void drawFaceHeadAlignControls(const TrackingSectionContext& context);
 void drawFaceStreamStatus(const TrackingSectionContext& context);
+// The webcam face source of the shown frame: whether the direct camera sees
+// the face, whether the neutral capture holds it, and the measured columns'
+// raw values
+void drawWebcamFaceReadout(const TrackingSectionContext& context);
 // The body pieces, no headers: the proportions intro with Measure My Body,
 // and the proportion controls, which edit the live config. The per-camera
 // enables are drawBodyPoseCameraControls.

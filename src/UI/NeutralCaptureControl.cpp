@@ -27,6 +27,8 @@ bool NeutralCaptureControl::update(float dtSeconds, VisionThread* visionThread, 
 	direct.neutralTorso= capture.neutral.torso;
 	direct.neutralShoulderMidpoint= capture.neutral.shoulderMidpoint;
 	direct.neutralHead= capture.neutral.head;
+	direct.neutralFacePresent= capture.neutral.facePresent;
+	direct.neutralFace= capture.neutral.face;
 	m_bCapturedThisSession= true;
 	return true;
 }

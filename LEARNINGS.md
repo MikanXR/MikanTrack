@@ -338,7 +338,9 @@ Two earlier readings were wrong. The points first showed 8 false blinks in the 2
 
 Decided: the whole-body points carry the blinks and no face model is added. face6-m is better, and 6.6 ms a frame for a third model is not worth the margin while the points find the blinks at the cadence they run at. The other three candidates do not beat the points. Not settled: which of the phone's stream and the camera's sides is mirrored, and how the points hold on a second person or without glasses.
 
-Learned: when unrelated estimators agree on the same false events, suspect the truth before the estimators, and look at the frames. A correlation cannot separate two columns that move together in the data.
+A third reading fell when the source was built on the points. The evaluation scored blink events at each pass's best threshold, against an open level taken from the frames the phone called open. With a neutral fixed at the capture, as a live source has, the points read the eyes over half shut on 26 to 81 percent of the take's frames outside its rest hold. The openness is the same with the lids lowered as with the eyes shut (0.201 both, against 0.306 open), and it sags as the head turns and the gaze drops. The decision above stands as the cost call it was, and what it buys is narrower than this section first said: the points give the mouth and the brows, and the built-in profile does not take its blinks from them. The blinks stay the phone's. face6-m tells a lowered lid from a shut eye by 1.5 deviations, which is better and still thin.
+
+Learned: when unrelated estimators agree on the same false events, suspect the truth before the estimators, and look at the frames. An event score at a tuned threshold says a signal can be thresholded on that window, not that a fixed threshold works across a session: test the rule the consumer will run, over the whole take. A correlation cannot separate two columns that move together in the data.
 
 ## Cross-cutting lessons
 

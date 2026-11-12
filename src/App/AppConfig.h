@@ -12,6 +12,7 @@
 #include "AudioTypes.h"
 #include "MikanVideoSourceTypes.h"
 #include "TrackingTypes.h"
+#include "WholeBodyFaceRatios.h"
 
 // Persisted per-project tracking settings, stored as JSON at the loaded
 // project file path (legacy location: %APPDATA%/MikanTrack/config.json)
@@ -348,6 +349,10 @@ struct DirectConfig
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};
 	glm::quat neutralHead{1.f, 0.f, 0.f, 0.f};
+	// The face shape ratios at the neutral capture, the webcam face source's
+	// zero. Absent on a neutral captured with the face unseen.
+	bool neutralFacePresent= false;
+	WholeBodyFaceRatios neutralFace;
 };
 
 struct FusionConfig

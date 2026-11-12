@@ -575,6 +575,18 @@ FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex) const
 	// The phone as the live stream saw it at the record
 	FaceSidecar::samplePhone(m_replay.getFaceSamples(), recorded.nowTimestampMs, FaceService::k_streamingWindowMs,
 							 sources.phone);
+	// The webcam from the direct camera's observation as the record holds
+	// it, under the take's own neutral
+	const DirectConfig& direct= m_replay.getRecordedConfig().direct;
+	const TrackingReplay::ReplayFrame& frame= m_replay.getFrame(frameIndex);
+	if (direct.enabled && direct.cameraIndex >= 0 && direct.cameraIndex < (int)frame.perCamera.size() &&
+		frame.perCameraValid[direct.cameraIndex])
+	{
+		const TrackingFrameResult& camera= frame.perCamera[direct.cameraIndex];
+		const bool bFresh= recorded.nowTimestampMs - camera.timestampMs <= k_webcamFaceFreshMs;
+		fillWebcamFaceSource(camera.body, bFresh, direct.neutralFacePresent ? &direct.neutralFace : nullptr,
+							 sources.webcam);
+	}
 	return sources;
 }
 

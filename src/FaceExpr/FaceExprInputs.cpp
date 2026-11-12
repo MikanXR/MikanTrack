@@ -41,17 +41,19 @@ int fromName(const std::string& name)
 	const std::string space= lower.substr(0, dot);
 	const std::string member= lower.substr(dot + 1);
 
-	if (space == "phone")
+	// The phone and the webcam carry the same ARKit columns and flags
+	if (space == "phone" || space == "webcam")
 	{
+		const bool bPhone= space == "phone";
 		if (member == "present")
-			return k_phonePresent;
+			return bPhone ? k_phonePresent : k_webcamPresent;
 		if (member == "tracked")
-			return k_phoneTracked;
+			return bPhone ? k_phoneTracked : k_webcamTracked;
 		const std::string expanded= expandSideSuffix(member);
 		for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
 		{
 			if (expanded == toLower(arkitBlendshapeName(index)))
-				return k_phoneBlendshapeBase + index;
+				return (bPhone ? k_phoneBlendshapeBase : k_webcamBlendshapeBase) + index;
 		}
 		return -1;
 	}
@@ -81,6 +83,12 @@ std::string name(int slot)
 		return std::string("viseme.") + visemeName(slot - k_visemeBase);
 	if (slot == k_visemePresent)
 		return "viseme.present";
+	if (slot >= k_webcamBlendshapeBase && slot < k_webcamPresent)
+		return std::string("webcam.") + arkitBlendshapeName(slot - k_webcamBlendshapeBase);
+	if (slot == k_webcamPresent)
+		return "webcam.present";
+	if (slot == k_webcamTracked)
+		return "webcam.tracked";
 	return "";
 }
 
@@ -93,6 +101,14 @@ void fill(const FaceSources& sources, float* outInputs)
 	for (int index= 0; index < VISEME_COUNT; ++index)
 		outInputs[k_visemeBase + index]= sources.viseme.present ? sources.viseme.weights[index] : 0.f;
 	outInputs[k_visemePresent]= sources.viseme.present ? 1.f : 0.f;
+	for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
+	{
+		const bool bMeasured= (sources.webcam.measuredMask >> index) & 1ull;
+		outInputs[k_webcamBlendshapeBase + index]=
+			sources.webcam.tracked && bMeasured ? sources.webcam.blendshapes[index] : 0.f;
+	}
+	outInputs[k_webcamPresent]= sources.webcam.present ? 1.f : 0.f;
+	outInputs[k_webcamTracked]= sources.webcam.tracked ? 1.f : 0.f;
 }
 
 const ExprInputTable& table()

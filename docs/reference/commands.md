@@ -72,7 +72,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-extrinsics`: Aruco marker pose + table-plane raycast
 - `--test-framerecorder`: raw frame recording: round trip, naming, overflow drops
 - `--test-face`: iFacialMocap receiver: datagram parser, receive filter, loopback socket
-- `--test-faceexpr`: face expressions: precedence, functions, names, variables, smooth, the time rule, hysteresis, state slots across a recompile, input sets, profile JSON, the library
+- `--test-faceexpr`: face expressions and the webcam face source: precedence, functions, names, variables, smooth, the time rule, hysteresis, state slots across a recompile, input sets, profile JSON, the library
 - `--test-fusion`: multi-camera fusion, clustering, triangulation, holds
 - `--test-handestimator`: angle-space multi-view hand state estimator
 - `--test-handpose`: palm frame, finger angles, FK round-trip, conventions

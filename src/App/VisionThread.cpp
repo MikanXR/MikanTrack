@@ -1358,11 +1358,29 @@ void VisionThread::applyMouthToOutput(TrackingFrameResult& output, double nowMs)
 	viseme.weights= mouth.frame.weights;
 }
 
+void VisionThread::applyWebcamToOutput(TrackingFrameResult& output, double nowMs)
+{
+	// The direct camera's face block as ARKit columns. A project with no
+	// direct camera has no webcam face.
+	output.face.webcam= FaceSources::Webcam();
+	if (!isDirectModeActive())
+		return;
+	const DirectConfig& direct= m_config->direct;
+	const CameraFrameResult& camera= m_cameras[direct.cameraIndex]->getLastResult();
+	const bool bFresh= camera.valid && nowMs - camera.timestampMs <= k_webcamFaceFreshMs;
+	fillWebcamFaceSource(camera.result.body, bFresh, direct.neutralFacePresent ? &direct.neutralFace : nullptr,
+						 output.face.webcam);
+	// The neutral capture reads its face ratios from the last frames
+	if (bFresh)
+		m_webcamNeutralAverager.add(camera.result.body, camera.timestampMs);
+}
+
 void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead)
 {
 	// Both sources side by side: which one drives which shape is the face
 	// profile's choice
 	applyMouthToOutput(output, nowMs);
+	applyWebcamToOutput(output, nowMs);
 
 	FaceSources::Phone& phone= output.face.phone;
 	phone= FaceSources::Phone();
@@ -1528,6 +1546,8 @@ void VisionThread::runCalibrationCaptures()
 		NeutralCapture capture;
 		if (m_retargetStage.captureNeutral(capture.neutral))
 		{
+			// The face's rest, when the camera saw it over the last frames
+			capture.neutral.facePresent= m_webcamNeutralAverager.average(steadyNowMs(), capture.neutral.face);
 			{
 				std::lock_guard<std::mutex> lock(m_neutralCaptureMutex);
 				m_capturedNeutral= capture;

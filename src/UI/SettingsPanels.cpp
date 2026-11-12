@@ -1087,6 +1087,36 @@ void SettingsPanels::drawFaceStreamStatus(const TrackingSectionContext& context)
 							face.headEulerDegrees.z);
 }
 
+void SettingsPanels::drawWebcamFaceReadout(const TrackingSectionContext& context)
+{
+	const FaceReadout& face= *context.face;
+	const FaceSources::Webcam& webcam= face.webcam;
+	if (!webcam.present)
+	{
+		ImGui::TextDisabled("%s", locText("trackingPanel.webcamFaceNone"));
+		return;
+	}
+	if (webcam.tracked)
+		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("trackingPanel.webcamFaceTracked"));
+	else
+		ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.webcamFaceLost"));
+	if (!face.bWebcamNeutral)
+		ImGui::TextWrapped("%s", locText("trackingPanel.webcamFaceNeutralMissing"));
+
+	// The columns the source measures, raw
+	ImGui::SeparatorText(locText("trackingPanel.webcamFaceValuesHeader"));
+	for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
+	{
+		if (((webcam.measuredMask >> index) & 1ull) == 0)
+			continue;
+		char overlay[16];
+		snprintf(overlay, sizeof(overlay), "%.2f", webcam.blendshapes[(size_t)index]);
+		ImGui::ProgressBar(webcam.blendshapes[(size_t)index], ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(arkitBlendshapeName(index));
+	}
+}
+
 void SettingsPanels::drawBodyPoseIntro()
 {
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
@@ -1322,6 +1352,8 @@ void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& cont
 			direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
 			direct.neutralShoulderMidpoint= glm::vec3(0.f);
 			direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+			direct.neutralFacePresent= false;
+			direct.neutralFace= WholeBodyFaceRatios();
 			bChanged= true;
 		}
 	}

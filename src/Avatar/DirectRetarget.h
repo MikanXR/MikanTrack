@@ -12,6 +12,7 @@
 #include "OneEuroFilter.h"
 #include "SourcePose.h"
 #include "TrackingTypes.h"
+#include "WholeBodyFaceRatios.h"
 
 class AvatarSkeleton;
 
@@ -55,6 +56,11 @@ struct DirectNeutralPose
 	// could not see the face (looking straight at the camera). The hands
 	// carry no reference: a straight wrist is the avatar's rest wrist.
 	glm::quat head{1.f, 0.f, 0.f, 0.f};
+	// The face shape ratios at rest, the zero of the webcam face source.
+	// Absent when the capture did not see the face. The solver reads none
+	// of it.
+	bool facePresent= false;
+	WholeBodyFaceRatios face;
 };
 
 struct DirectRetargetConfig

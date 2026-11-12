@@ -913,6 +913,25 @@ void MainWindow::updateFaceReadouts()
 			microphone.droppedBlocks= status.droppedBlocks;
 		}
 	}
+	// The webcam face of the shown frame: the output's own while live, and
+	// in a replay the direct camera's recorded observation under the take's
+	// neutral
+	if (m_shown.config != nullptr)
+	{
+		const DirectConfig& direct= m_shown.config->direct;
+		face.bWebcamNeutral= direct.neutralFacePresent;
+		if (!m_shown.bReplay)
+		{
+			if (m_shown.fused != nullptr)
+				face.webcam= m_shown.fused->face.webcam;
+		}
+		else if (direct.enabled && direct.cameraIndex >= 0 && direct.cameraIndex < (int)m_shown.perCamera.size() &&
+				 m_shown.perCamera[direct.cameraIndex] != nullptr)
+		{
+			fillWebcamFaceSource(m_shown.perCamera[direct.cameraIndex]->body, true,
+								 direct.neutralFacePresent ? &direct.neutralFace : nullptr, face.webcam);
+		}
+	}
 	m_faceReadout= face;
 	m_microphoneReadout= microphone;
 }
@@ -1420,6 +1439,9 @@ void MainWindow::gatherPipelineInputs()
 	in.oscPort= config->osc.port;
 	in.bFaceEnabled= config->face.enabled;
 	in.bAudioEnabled= config->audio.enabled;
+	in.bWebcamPresent= m_faceReadout.webcam.present;
+	in.bWebcamTracked= m_faceReadout.webcam.tracked;
+	in.bWebcamNeutral= m_faceReadout.bWebcamNeutral;
 	if (!bReplay)
 	{
 		in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;

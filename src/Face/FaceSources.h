@@ -31,6 +31,18 @@ struct FaceSources
 		// Post-filter; all zero unless present
 		VisemeWeights weights{};
 	};
+	// The direct camera's whole-body face block as ARKit columns
+	struct Webcam
+	{
+		// The direct camera's last whole-body observation is fresh
+		bool present= false;
+		// present, and the face block's scores clear the gate
+		bool tracked= false;
+		// Raw, in ARKit order; all zero unless tracked
+		std::array<float, ARKIT_BLENDSHAPE_COUNT> blendshapes{};
+		// A bit per column the source measures. A column outside it reads zero.
+		uint64_t measuredMask= 0;
+	};
 	// The face profile evaluated over the sources for this frame. Empty until
 	// a profile has run on the frame.
 	struct Outputs
@@ -47,8 +59,9 @@ struct FaceSources
 
 	Phone phone;
 	Viseme viseme;
+	Webcam webcam;
 	Outputs outputs;
 
-	// The face is present while either source is
-	bool isPresent() const { return phone.present || viseme.present; }
+	// The face is present while any source is
+	bool isPresent() const { return phone.present || viseme.present || webcam.present; }
 };
