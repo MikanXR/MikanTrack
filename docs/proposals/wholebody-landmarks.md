@@ -155,17 +155,20 @@ Dropped on piece 4's numbers. A head from the face block was to replace the ear 
 
 On a camera running the whole-body backend, a whole-body hand whose wrist and MCPs clear a score gate, with no tracked hand slot near it, becomes a `HandSearchHint`:
 
-- center: the hand block's points' center
+- center: the palm center, the midpoint of the wrist and the middle MCP, which is what a hint's center means to the redundancy test and the crop
 - direction: the wrist to middle MCP, as `HandRoi::fromLandmarks` takes it
-- palm size: the wrist to middle MCP length scaled as the landmark ROI does
+- palm size: the wrist to middle MCP length
+- the hand's own seven palm keypoints, so the seeded crop is exactly the ROI `HandRoi::fromLandmarks` gives those landmarks
 
-The hint takes the existing path: speculative, dropped on a first pass with no confident hand, rejected by `isSeedRedundant` on a tracked hand. `HandSeedStats` gains a source field so the funnel separates body hints from cross-camera ones.
+The hint takes the existing path: speculative, dropped on a first pass with no confident hand, rejected by `isSeedRedundant` on a tracked hand. `HandSeedStats` carries the body hints' funnel apart from the cross-camera one.
 
-A body hint can also evict. `applySearchHints` (`HandTrackingPipeline.cpp:245`) seeds free slots only and counts the rest as `skippedNoFreeSlot`, which is the case the plan.md item describes: the palm detector's scene false positives hold the slots and the real hand has to win one back. A body hint that finds no free slot replaces a slot that sits on neither whole-body hand, measured as the slot's box against each scored whole-body hand's box with a margin. A slot on a whole-body hand is never evicted, and a cross-camera hint never evicts. `HandSeedStats` counts the evictions.
+A body hint can also evict. `applySearchHints` seeded free slots only and counted the rest as `skippedNoFreeSlot`, which is the case the plan.md item describes: the palm detector's scene false positives hold the slots and the real hand has to win one back. A body hint that finds no free slot replaces a slot that sits on neither whole-body hand, measured as the slot's box against each whole-body hand's box with a margin. Both hands' boxes count whether or not the hand scores, which errs toward leaving a slot alone. A slot on a whole-body hand is never evicted, and a cross-camera hint never evicts. The funnel counts the evictions.
 
-This answers plan.md's "Direct mode's hand pipeline runs blind" item. Body hints run on the direct camera only. They need the direct mode's camera index to reach `CameraContext`, which today knows nothing of the mode. Multi-camera projects are out of scope (Decisions).
+This answers plan.md's "Direct mode's hand pipeline runs blind" item. Body hints run on the direct camera only: the vision thread tells each `CameraContext` whether it is the direct camera, and there the body hints replace the cross-camera path. Multi-camera projects are out of scope (Decisions).
 
 The gate from piece 4: the whole-body hand's box contains the stereo hand on most frames where the hand is in view, and in the tool's raw-frame re-run of the hand pipeline with hints on, slots return sooner after a dropout and the full-frame palm detector's scene false positives no longer hold a slot against a hint.
+
+Built, and the gate is met on the 2026-11-12 take. The box holds the triangulated palm on 95 and 98 percent of frames (left, right). In the re-run with no cross-camera hints, a slot is on the left hand on 97 percent of frames without body hints and 99 with, on the right 90 and 97, and the longest dropout falls from 204 frames to 10. Of 129 seeds 15 were evictions, and the slot frames off both whole-body hands fall from 220 to 126. The pipeline's time does not move. The live check on a direct camera is owed (plan.md).
 
 ### 8. The hand side check from hand shape
 

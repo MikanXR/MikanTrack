@@ -4,6 +4,7 @@
 #include "glm/matrix.hpp"
 
 #include "AppConfig.h"
+#include "BodyHandHints.h"
 #include "BodyPoseTracker.h"
 #include "CVVideoFrameProcessor.h"
 #include "FrameRecorder.h"
@@ -266,6 +267,32 @@ void CameraContext::seedSearchHints(const TrackingFrameResult& lastFused, float 
 	}
 }
 
+void CameraContext::seedBodyHandHints()
+{
+	if (m_pipeline == nullptr || !m_bTrackingEnabled)
+		return;
+
+	if (m_hintCooldownFrames > 0)
+	{
+		m_hintCooldownFrames--;
+		return;
+	}
+
+	// The last frame's observation: the hand pipeline runs ahead of the body
+	// tracker on each frame, and the tracker holds a result between its model
+	// frames, so the hands a hint names are one or more frames old, as a
+	// cross-camera hint's are
+	const TrackingFrameResult& last= m_lastResult.result;
+	std::vector<HandSearchHint> hints;
+	std::vector<HandBox> handBoxes;
+	makeBodyHandHints(last.body, last.frameWidth, last.frameHeight, hints, handBoxes);
+	if (!hints.empty())
+	{
+		m_pipeline->setSearchHints(hints, handBoxes);
+		m_hintCooldownFrames= 2; // retry every ~3 frames, as the cross-camera hints do
+	}
+}
+
 bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFrameResult* seedFromFused,
 								float autoScaleFactor, bool bRecordingInputs, FrameRecorder* frameRecorder)
 {
@@ -342,7 +369,11 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		// queue, so hints handed over on an iteration where this camera had no
 		// frame were overwritten unseen. Measured before this moved: 4425
 		// offered against 1659 that ever reached a decision.
-		if (seedFromFused != nullptr)
+		// The two sources never meet: the direct camera has no fused world
+		// result, so its hints come from its own body observation
+		if (m_bBodyHandHints)
+			seedBodyHandHints();
+		else if (seedFromFused != nullptr)
 			seedSearchHints(*seedFromFused, autoScaleFactor);
 
 		m_pipeline->process(*activeFrame, result);

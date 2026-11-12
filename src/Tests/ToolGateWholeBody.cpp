@@ -4,6 +4,7 @@
 
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
+#include "BodyHandHints.h"
 #include "DirectRetarget.h"
 #include "DirectStageSolver.h"
 #include "FaceHead.h"
@@ -1061,6 +1062,230 @@ void reportHeadMethod(const char* tag, const char* name, const std::vector<HeadS
 	}
 }
 
+// -- The hand pipeline with body hints --------------------------------------
+
+// One run of the hand pipeline over the camera's stored frames, as the
+// direct camera runs it: no cross-camera hints, and with body hints the
+// previous frame's observation seeding the slots under the live retry
+// throttle
+struct HintRunStats
+{
+	// Per body side: frames with the triangulated hand in view, those with a
+	// tracked slot on it, and the runs of frames without one
+	int truthFrames[2]= {0, 0};
+	int coveredFrames[2]= {0, 0};
+	Stats dropoutFrames[2];
+	// Tracked slots on neither triangulated hand, on frames with both in view
+	int strayFrames= 0;
+	int bothTruthFrames= 0;
+	// Against the body model alone, which needs no rig: tracked slots whose
+	// box touches neither whole-body hand's, and per side the frames with the
+	// whole-body hand scored and those with a slot's box touching it
+	int slotFrames= 0;
+	int offBodySlotFrames= 0;
+	int bodyHandFrames[2]= {0, 0};
+	int bodyHandSlotFrames[2]= {0, 0};
+	Stats pipelineMs;
+	HandSeedStats seedStats;
+};
+
+bool runHintPass(const char* tag, const TrackingReplay& replay, const std::string& frameDirectory, int cameraIndex,
+				 const std::vector<FrameObservation>& frames, const CameraGeometry* truthGeometry, bool bBodyHints,
+				 HintRunStats& outStats)
+{
+	const AppConfig& config= replay.getRecordedConfig();
+	HandTrackingPipelineConfig pipelineConfig;
+	pipelineConfig.flipHandedness= config.tracking.flipHandedness;
+	pipelineConfig.detectorIntervalFrames= config.tracking.detectorIntervalFrames;
+	pipelineConfig.palmScoreThresholdRelaxed= config.tracking.palmScoreThresholdRelaxed;
+	pipelineConfig.preferredEp= config.tracking.onnxEp;
+	HandTrackingPipeline pipeline;
+	if (!pipeline.startup(pipelineConfig))
+	{
+		MIKAN_LOG_ERROR(tag) << "Failed to start the hand pipeline";
+		return false;
+	}
+
+	BodyPoseObservation lastBody;
+	int lastWidth= 0;
+	int lastHeight= 0;
+	int hintCooldownFrames= 0;
+	int dropoutRun[2]= {0, 0};
+	std::vector<HandSearchHint> hints;
+	std::vector<HandBox> handBoxes;
+	for (const FrameObservation& frame : frames)
+	{
+		const cv::Mat image=
+			cv::imread(FrameRecorder::makeFramePath(frameDirectory, cameraIndex, frame.frameIndex), cv::IMREAD_COLOR);
+		if (image.empty())
+			continue;
+
+		if (bBodyHints)
+		{
+			if (hintCooldownFrames > 0)
+			{
+				hintCooldownFrames--;
+			}
+			else
+			{
+				makeBodyHandHints(lastBody, lastWidth, lastHeight, hints, handBoxes);
+				if (!hints.empty())
+				{
+					pipeline.setSearchHints(hints, handBoxes);
+					hintCooldownFrames= 2;
+				}
+			}
+		}
+
+		TrackingFrameResult result;
+		pipeline.process(image, result);
+		outStats.pipelineMs.add(result.inferenceMs);
+		lastBody= frame.body;
+		lastWidth= image.cols;
+		lastHeight= image.rows;
+
+		// Against this frame's whole-body hands. One slot's box off both of
+		// them is what chooseSlotToEvict reports for a pair of that slot.
+		std::vector<HandSearchHint> frameHints;
+		std::vector<HandBox> frameHandBoxes;
+		makeBodyHandHints(frame.body, image.cols, image.rows, frameHints, frameHandBoxes);
+		if (frameHandBoxes.size() == 2)
+		{
+			HandBox slotBoxes[2];
+			for (int slotIndex= 0; slotIndex < 2; ++slotIndex)
+			{
+				const TrackedHand& hand= result.hands[slotIndex];
+				if (!hand.tracked)
+					continue;
+				const Box box= boxOf(hand.imagePoints);
+				slotBoxes[slotIndex]= {box.min, box.max};
+				outStats.slotFrames++;
+				outStats.offBodySlotFrames+=
+					HandTrackingPipeline::chooseSlotToEvict({slotBoxes[slotIndex], slotBoxes[slotIndex]}, {1.f, 1.f},
+															frameHandBoxes) >= 0
+					? 1
+					: 0;
+			}
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				bool bScored= true;
+				for (int landmark : kSharedLandmarks)
+				{
+					bScored= bScored &&
+						frame.body.wholeBody.handScores[sideIndex][landmark] >= k_bodyHandHintScoreGate;
+				}
+				if (!bScored)
+					continue;
+				outStats.bodyHandFrames[sideIndex]++;
+				bool bSlotOnIt= false;
+				for (int slotIndex= 0; slotIndex < 2; ++slotIndex)
+				{
+					bSlotOnIt= bSlotOnIt ||
+						(result.hands[slotIndex].tracked &&
+						 HandTrackingPipeline::chooseSlotToEvict({slotBoxes[slotIndex], slotBoxes[slotIndex]},
+																 {1.f, 1.f}, {frameHandBoxes[sideIndex]}) < 0);
+				}
+				outStats.bodyHandSlotFrames[sideIndex]+= bSlotOnIt ? 1 : 0;
+			}
+		}
+
+		if (truthGeometry == nullptr)
+			continue;
+		const TrackingReplay::ReplayFrame& replayFrame= replay.getFrame(frame.replayFrameIndex);
+		TruthHand truth[2];
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			truth[sideIndex]=
+				makeTruthHand(replayFrame.replayedFused.poses[sideIndex], *truthGeometry, image.cols, image.rows);
+		}
+
+		// A slot is on a triangulated hand within a palm length over the
+		// shared points
+		auto slotOn= [&](const TrackedHand& hand, int sideIndex) {
+			if (!hand.tracked || !truth[sideIndex].valid)
+				return false;
+			float sum= 0.f;
+			for (int index= 0; index < kSharedPointCount; ++index)
+			{
+				sum+= glm::length(glm::vec2(hand.imagePoints[kSharedLandmarks[index]]) -
+								  truth[sideIndex].points[index]);
+			}
+			return sum / (float)kSharedPointCount <= truth[sideIndex].palmLengthPx;
+		};
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			if (!truth[sideIndex].valid)
+			{
+				// The hand left the rig's view: the run ends unmeasured
+				dropoutRun[sideIndex]= 0;
+				continue;
+			}
+			outStats.truthFrames[sideIndex]++;
+			if (slotOn(result.hands[0], sideIndex) || slotOn(result.hands[1], sideIndex))
+			{
+				outStats.coveredFrames[sideIndex]++;
+				if (dropoutRun[sideIndex] > 0)
+					outStats.dropoutFrames[sideIndex].add((float)dropoutRun[sideIndex]);
+				dropoutRun[sideIndex]= 0;
+			}
+			else
+			{
+				dropoutRun[sideIndex]++;
+			}
+		}
+		if (truth[0].valid && truth[1].valid)
+		{
+			outStats.bothTruthFrames++;
+			for (const TrackedHand& hand : result.hands)
+				outStats.strayFrames+= hand.tracked && !slotOn(hand, 0) && !slotOn(hand, 1) ? 1 : 0;
+		}
+	}
+	outStats.seedStats= pipeline.getSeedStats();
+	return true;
+}
+
+void logHintRun(const char* tag, const char* name, const HintRunStats& stats)
+{
+	static const char* kSideNames[2]= {"left", "right"};
+	MIKAN_LOG_INFO(tag) << "  " << name << ": pipeline p50 " << stats.pipelineMs.p50() << " ms p90 "
+						<< stats.pipelineMs.p90() << ", slots off both whole-body hands " << stats.offBodySlotFrames
+						<< " of " << stats.slotFrames << " slot frames ("
+						<< percent(stats.offBodySlotFrames, stats.slotFrames) << "%)";
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		MIKAN_LOG_INFO(tag) << "    " << kSideNames[sideIndex] << " whole-body hand: a slot on it for "
+							<< stats.bodyHandSlotFrames[sideIndex] << " of " << stats.bodyHandFrames[sideIndex]
+							<< " scored frames (" << percent(stats.bodyHandSlotFrames[sideIndex], stats.bodyHandFrames[sideIndex])
+							<< "%)";
+	}
+	if (stats.truthFrames[0] + stats.truthFrames[1] > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    against the triangulated hands: slots on neither " << stats.strayFrames
+							<< " over the " << stats.bothTruthFrames << " frames with both in view";
+	}
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		if (stats.truthFrames[sideIndex] == 0)
+			continue;
+		const Stats& dropouts= stats.dropoutFrames[sideIndex];
+		MIKAN_LOG_INFO(tag) << "    " << kSideNames[sideIndex] << ": a slot on the hand for "
+							<< stats.coveredFrames[sideIndex] << " of " << stats.truthFrames[sideIndex] << " frames ("
+							<< percent(stats.coveredFrames[sideIndex], stats.truthFrames[sideIndex]) << "%), "
+							<< dropouts.count() << " dropouts that ended, frames to the slot's return p50 "
+							<< dropouts.p50() << " p90 " << dropouts.p90() << " longest " << dropouts.percentile(1.f);
+	}
+	const HandBodySeedStats& body= stats.seedStats.body;
+	if (body.offered > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    body hints: offered " << body.offered << ", on a tracked hand "
+							<< body.skippedRedundant << ", too small " << body.skippedTooSmall << ", no slot to take "
+							<< body.skippedNoFreeSlot << ", seeded " << body.applied << " (" << body.evicted
+							<< " by eviction), the model kept " << body.accepted << " and dropped "
+							<< body.rejectedByModel;
+	}
+}
+
 // -- Per-frame CSV ---------------------------------------------------------
 
 void writeCsv(const std::string& path, const std::vector<ModelSample>& samples,
@@ -1492,6 +1717,22 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		geometry.cameraFromWorld= glm::inverse(profile.extrinsics.markerFromCamera);
 		replay.runAll();
 		reportHands(tag, replay, divided, geometry);
+	}
+
+	// -- The hand pipeline as the direct camera runs it, without and with
+	// the body model's hints ------------------------------------------------
+	{
+		const bool bHaveTruth= profile.intrinsics.present && profile.extrinsics.present;
+		HintRunStats withoutHints;
+		HintRunStats withHints;
+		if (!runHintPass(tag, replay, frameDirectory, cameraIndex, dividedFrames, bHaveTruth ? &geometry : nullptr,
+						 false, withoutHints) ||
+			!runHintPass(tag, replay, frameDirectory, cameraIndex, dividedFrames, bHaveTruth ? &geometry : nullptr,
+						 true, withHints))
+			return 1;
+		MIKAN_LOG_INFO(tag) << "hand pipeline re-run over the raw frames with no cross-camera hints:";
+		logHintRun(tag, "without body hints", withoutHints);
+		logHintRun(tag, "with body hints", withHints);
 	}
 
 	if (!csvPath.empty())

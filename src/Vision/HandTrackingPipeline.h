@@ -49,14 +49,25 @@ struct HandTrackingPipelineConfig
 	int slotDuplicateKillFrames= 6;
 };
 
-// Cross-camera search hint: another camera tracks a hand this camera lost;
-// its fused world pose projected into this camera's image seeds a direct
-// landmark-model attempt (no palm detection needed)
+// Search hint: where a hand this camera lost should be, seeding a direct
+// landmark-model attempt (no palm detection needed). Two sources. A
+// cross-camera hint is another camera's tracked hand, its fused world pose
+// projected into this camera's image. A body hint is the whole-body model's
+// own hand on this camera, for a camera with no extrinsics to project through.
 struct HandSearchHint
 {
-	glm::vec2 centerPx{0.f};   // projected palm center
-	glm::vec2 dirPx{0.f, -1.f}; // projected wrist->fingers direction (unit)
-	float palmSizePx= 0.f;     // projected wrist->middle-MCP distance
+	glm::vec2 centerPx{0.f};   // palm center
+	glm::vec2 dirPx{0.f, -1.f}; // wrist->fingers direction (unit)
+	float palmSizePx= 0.f;     // wrist->middle-MCP distance
+
+	// From the body model. A body hint may evict a slot when none is free
+	// (chooseSlotToEvict).
+	bool bFromBody= false;
+	// The palm keypoints the landmark crop is built from, when the source has
+	// the hand's own landmarks. Without them the crop's keypoints are
+	// synthesized around the center.
+	bool bHasPalmKeypoints= false;
+	std::array<glm::vec2, 7> palmKeypoints{};
 };
 
 // One camera's landmark ROI box, for the seed redundancy test
@@ -66,12 +77,27 @@ struct HandBox
 	glm::vec2 max{0.f};
 };
 
+// Where the body model's hints go, the same funnel the cross-camera hints
+// have below, with the evictions a body hint alone can make
+struct HandBodySeedStats
+{
+	int offered= 0;
+	int skippedTooSmall= 0;
+	int skippedRedundant= 0;
+	int skippedNoFreeSlot= 0; // no free slot and no slot off both whole-body hands
+	int applied= 0;           // a slot was seeded, an evicted one included
+	int evicted= 0;           // a slot on neither whole-body hand gave way to the hint
+	int rejectedByModel= 0;
+	int accepted= 0;
+};
+
 // Where cross-camera seeds go, cumulative since startup. Seeding runs UPSTREAM
 // of the tracking recording (recordings capture post-model results), so it
 // cannot be replayed offline and a counter is the only way to see which gate
-// is consuming the hints.
+// is consuming the hints. The body model's hints are counted apart in body.
 struct HandSeedStats
 {
+	HandBodySeedStats body;
 	int candidates= 0;        // fused hands the vision thread tried to seed here
 	int skippedProjection= 0; // behind the camera or outside the image
 	int offered= 0;           // hints handed to the pipeline
@@ -118,13 +144,38 @@ public:
 	// for the --test-fusion self test.
 	static int preferredSlotOrder(float rightProbA, float presenceA, float rightProbB, float presenceB);
 
-	// Queues cross-camera search hints for the next process() call (same
-	// thread as process; hints landing on an already-tracked hand are ignored)
-	void setSearchHints(const std::vector<HandSearchHint>& hints)
+	// Queues search hints for the next process() call, replacing any queued
+	// (same thread as process; hints landing on an already-tracked hand are
+	// ignored). bodyHandBoxes: with body hints, the boxes of both whole-body
+	// hands, which a slot has to be off to be evicted.
+	void setSearchHints(const std::vector<HandSearchHint>& hints, const std::vector<HandBox>& bodyHandBoxes= {})
 	{
 		m_searchHints= hints;
-		m_seedStats.offered+= (int)hints.size();
+		m_bodyHandBoxes= bodyHandBoxes;
+		for (const HandSearchHint& hint : hints)
+		{
+			if (hint.bFromBody)
+				m_seedStats.body.offered++;
+			else
+				m_seedStats.offered++;
+		}
 	}
+
+	// The palm detection a hint seeds its slot with: the hint's own palm
+	// keypoints when it carries them, else keypoints synthesized around its
+	// center. Exposed for the --test-seeding self test.
+	static PalmDetection makeSeedDetection(const HandSearchHint& hint);
+
+	// The slot a body hint takes when none is free: one whose box touches
+	// neither whole-body hand's box (each inflated about its centre, as
+	// isSeedRedundant inflates), the lower presence of two. -1 when every
+	// slot is on a whole-body hand, or when there is no whole-body hand to
+	// judge by. POSITIONAL like the redundancy test: the body model places a
+	// hand by the whole figure, so a slot nowhere near either hand is the palm
+	// detector on something hand-shaped in the scene. Exposed for the
+	// --test-seeding self test.
+	static int chooseSlotToEvict(const std::array<HandBox, 2>& slotBoxes, const std::array<float, 2>& slotPresences,
+								 const std::vector<HandBox>& bodyHandBoxes);
 
 	// Whether a hint duplicates a hand this camera already tracks. POSITIONAL
 	// on purpose: a camera can track the right physical hand under the wrong
@@ -153,9 +204,11 @@ private:
 		bool active= false;
 		// a palm detection is pending until the first landmark pass consumes it
 		bool hasPendingDetection= false;
-		// pending detection came from a cross-camera hint (speculative): if the
+		// pending detection came from a search hint (speculative): if the
 		// first landmark pass doesn't find a confident hand, drop immediately
 		bool bSeededFromHint= false;
+		// and that hint was the body model's
+		bool bSeededFromBody= false;
 		PalmDetection pendingDetection;
 
 		std::array<glm::vec3, HAND_LANDMARK_COUNT> imagePoints{};
@@ -179,6 +232,7 @@ private:
 			active= false;
 			hasPendingDetection= false;
 			bSeededFromHint= false;
+			bSeededFromBody= false;
 			presence= 0.f;
 			handednessScore= 0.5f;
 			rightProb= 0.5f;
@@ -215,6 +269,8 @@ private:
 	int64_t m_lastSlotLossFrame= -1;
 
 	std::vector<HandSearchHint> m_searchHints;
+	// Both whole-body hands' boxes, set with the body hints they came with
+	std::vector<HandBox> m_bodyHandBoxes;
 	HandSeedStats m_seedStats;
 	// scratch for isSeedRedundant, so the per-frame path allocates nothing
 	std::vector<HandBox> m_activeBoxes;

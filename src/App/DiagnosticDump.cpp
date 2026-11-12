@@ -458,6 +458,17 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 				{"applied", seed.applied},
 				{"rejectedByModel", seed.rejectedByModel},
 				{"accepted", seed.accepted},
+				{"body",
+				 {
+					 {"offered", seed.body.offered},
+					 {"skippedTooSmall", seed.body.skippedTooSmall},
+					 {"skippedRedundant", seed.body.skippedRedundant},
+					 {"skippedNoFreeSlot", seed.body.skippedNoFreeSlot},
+					 {"applied", seed.body.applied},
+					 {"evicted", seed.body.evicted},
+					 {"rejectedByModel", seed.body.rejectedByModel},
+					 {"accepted", seed.body.accepted},
+				 }},
 			};
 		}
 
