@@ -1,6 +1,7 @@
 #include "TestCommon.h"
 
 #include <cfloat>
+#include <iomanip>
 
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
@@ -11,6 +12,8 @@
 #include "FaceRecorder.h"
 #include "FaceTypes.h"
 #include "FrameRecorder.h"
+#include "OnnxSession.h"
+#include "RtmPoseModel.h"
 #include "SyntheticAvatar.h"
 #include "WholeBodyFaceRatios.h"
 
@@ -45,6 +48,9 @@
 //            closed levels and their separation, then the phone's blinks as
 //            events and how many the openness finds at the threshold that
 //            scores best, with the false ones, at both cadences
+//   models   the same blink numbers for each face model found in models/
+//            (RTMPose face6, MediaPipe Face Landmarker), run on a crop the
+//            face block places, with its time
 // Hands, on a camera with extrinsics (the stereo rig's triangulated hands as
 // truth, projected into the camera):
 //   position  the whole-body hand's wrist and knuckles against the fused
@@ -66,6 +72,13 @@ constexpr double kPhoneStaleMs= 200.0;
 constexpr float kPhoneBlinkOnLevel= 0.6f;
 constexpr float kPhoneBlinkOffLevel= 0.3f;
 constexpr float kPhoneOpenLevel= 0.1f;
+// A lesser closure of the phone's column, under its blink level
+constexpr float kPhonePartialOnLevel= 0.35f;
+constexpr float kPhonePartialOffLevel= 0.25f;
+// The phone has one eye shut and the other open with its blink columns this
+// far apart, and a signal is judged on this many such frames or more
+constexpr float kPhoneOneEyeGap= 0.4f;
+constexpr int kMinOneEyeFrames= 8;
 // A blink shorter than this is a fast one
 constexpr double kFastBlinkMs= 150.0;
 // How far outside a phone blink the camera's may start or end and still be it
@@ -138,6 +151,9 @@ struct FrameObservation
 	int replayFrameIndex= -1;
 	int64_t frameIndex= -1;
 	BodyPoseObservation body;
+	double timestampMs= 0.0;
+	// The model ran on this frame
+	bool bModelFrame= false;
 };
 
 // outAllFrames, when given, receives every stored frame in order with the
@@ -182,7 +198,10 @@ bool runModelPass(const char* tag, const TrackingReplay& replay, const std::stri
 			const float elapsedMs=
 				(float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			if (outAllFrames != nullptr)
-				outAllFrames->push_back({frameIndex, fresh.frameIndex, observation});
+			{
+				outAllFrames->push_back({frameIndex, fresh.frameIndex, observation, fresh.timestampMs,
+											observation.valid && observation.modelFrameIndex != lastModelFrameIndex});
+			}
 			// A divided-out frame re-emits the held result
 			if (!observation.valid || observation.modelFrameIndex == lastModelFrameIndex)
 				continue;
@@ -312,10 +331,21 @@ float pearson(const std::vector<float>& a, const std::vector<float>& b)
 	return denominator > 1e-12 ? (float)(covariance / denominator) : 0.f;
 }
 
-// The shape against the phone's column, at the lag (the phone's clock ahead of
-// the camera's, ms) where the correlation is strongest
-Correlation correlate(const std::vector<ModelSample>& samples, const std::vector<RecordedFaceSample>& faceSamples,
-					  ShapeGetter getter, int column)
+// One reading of the two eyes, side 0 the person's left, higher the more open
+struct EyeSample
+{
+	double timestampMs= 0.0;
+	bool bValid= false;
+	// The body model ran on this frame
+	bool bModelFrame= false;
+	float openness[2]= {0.f, 0.f};
+};
+using EyeSeries= std::vector<EyeSample>;
+
+// Values at their times against the phone's column, at the lag (the phone's
+// clock ahead of the camera's, ms) where the correlation is strongest
+Correlation correlateValues(const std::vector<double>& timesMs, const std::vector<float>& values,
+							const std::vector<RecordedFaceSample>& faceSamples, int column)
 {
 	Correlation best;
 	std::vector<float> shape;
@@ -324,12 +354,12 @@ Correlation correlate(const std::vector<ModelSample>& samples, const std::vector
 	{
 		shape.clear();
 		phone.clear();
-		for (const ModelSample& sample : samples)
+		for (size_t index= 0; index < timesMs.size(); ++index)
 		{
 			float value= 0.f;
-			if (!sample.ratios.valid || !phoneValueAt(faceSamples, sample.timestampMs + lagMs, column, value))
+			if (!phoneValueAt(faceSamples, timesMs[index] + lagMs, column, value))
 				continue;
-			shape.push_back(getter(sample.ratios));
+			shape.push_back(values[index]);
 			phone.push_back(value);
 		}
 		const float r= pearson(shape, phone);
@@ -343,6 +373,36 @@ Correlation correlate(const std::vector<ModelSample>& samples, const std::vector
 		}
 	}
 	return best;
+}
+
+Correlation correlate(const std::vector<ModelSample>& samples, const std::vector<RecordedFaceSample>& faceSamples,
+					  ShapeGetter getter, int column)
+{
+	std::vector<double> timesMs;
+	std::vector<float> values;
+	for (const ModelSample& sample : samples)
+	{
+		if (!sample.ratios.valid)
+			continue;
+		timesMs.push_back(sample.timestampMs);
+		values.push_back(getter(sample.ratios));
+	}
+	return correlateValues(timesMs, values, faceSamples, column);
+}
+
+Correlation correlateEye(const EyeSeries& series, int sideIndex, const std::vector<RecordedFaceSample>& faceSamples,
+						 int column)
+{
+	std::vector<double> timesMs;
+	std::vector<float> values;
+	for (const EyeSample& sample : series)
+	{
+		if (!sample.bValid)
+			continue;
+		timesMs.push_back(sample.timestampMs);
+		values.push_back(sample.openness[sideIndex]);
+	}
+	return correlateValues(timesMs, values, faceSamples, column);
 }
 
 void logCorrelation(const char* tag, const char* shapeName, const char* columnName, const Correlation& correlation)
@@ -359,7 +419,7 @@ struct BlinkEvent
 
 // The phone's blink column as events, in the phone's own time
 std::vector<BlinkEvent> phoneBlinkEvents(const std::vector<RecordedFaceSample>& faceSamples, int column,
-										 double firstMs, double lastMs)
+										 double firstMs, double lastMs, float onLevel, float offLevel)
 {
 	std::vector<BlinkEvent> events;
 	bool bClosed= false;
@@ -369,12 +429,12 @@ std::vector<BlinkEvent> phoneBlinkEvents(const std::vector<RecordedFaceSample>& 
 		if (sample.timestampMs < firstMs || sample.timestampMs > lastMs)
 			continue;
 		const float value= sample.bTracked ? sample.blendshapes[(size_t)column] : 0.f;
-		if (!bClosed && value >= kPhoneBlinkOnLevel)
+		if (!bClosed && value >= onLevel)
 		{
 			bClosed= true;
 			current.startMs= sample.timestampMs;
 		}
-		else if (bClosed && value <= kPhoneBlinkOffLevel)
+		else if (bClosed && value <= offLevel)
 		{
 			bClosed= false;
 			current.endMs= sample.timestampMs;
@@ -384,21 +444,21 @@ std::vector<BlinkEvent> phoneBlinkEvents(const std::vector<RecordedFaceSample>& 
 	return events;
 }
 
-void reportBlinks(const char* tag, const char* passName, const char* eyeName, const std::vector<ModelSample>& samples,
+void reportBlinks(const char* tag, const char* passName, const char* eyeName, const EyeSeries& samples,
 				  const std::vector<RecordedFaceSample>& faceSamples, int sideIndex, int column, double lagMs)
 {
 	// The openness while the phone reads the eye open and closed
 	Stats open;
 	Stats closed;
-	for (const ModelSample& sample : samples)
+	for (const EyeSample& sample : samples)
 	{
 		float value= 0.f;
-		if (!sample.ratios.valid || !phoneValueAt(faceSamples, sample.timestampMs + lagMs, column, value))
+		if (!sample.bValid || !phoneValueAt(faceSamples, sample.timestampMs + lagMs, column, value))
 			continue;
 		if (value <= kPhoneOpenLevel)
-			open.add(sample.ratios.eyeOpenness[sideIndex]);
+			open.add(sample.openness[sideIndex]);
 		else if (value >= kPhoneBlinkOnLevel)
-			closed.add(sample.ratios.eyeOpenness[sideIndex]);
+			closed.add(sample.openness[sideIndex]);
 	}
 	if (open.count() < 10 || samples.empty())
 	{
@@ -416,12 +476,22 @@ void reportBlinks(const char* tag, const char* passName, const char* eyeName, co
 						<< " deviations";
 
 	// The phone's blinks, carried into the camera's time
+	const double firstMs= samples.front().timestampMs + lagMs;
+	const double lastMs= samples.back().timestampMs + lagMs;
 	std::vector<BlinkEvent> truth=
-		phoneBlinkEvents(faceSamples, column, samples.front().timestampMs + lagMs, samples.back().timestampMs + lagMs);
-	for (BlinkEvent& event : truth)
+		phoneBlinkEvents(faceSamples, column, firstMs, lastMs, kPhoneBlinkOnLevel, kPhoneBlinkOffLevel);
+	// The phone's lesser closures too. A camera closure on one is neither a
+	// found blink nor a false one: the phone's column peaks under its blink
+	// level on closures the camera sees as full.
+	std::vector<BlinkEvent> partial=
+		phoneBlinkEvents(faceSamples, column, firstMs, lastMs, kPhonePartialOnLevel, kPhonePartialOffLevel);
+	for (std::vector<BlinkEvent>* events : {&truth, &partial})
 	{
-		event.startMs-= lagMs;
-		event.endMs-= lagMs;
+		for (BlinkEvent& event : *events)
+		{
+			event.startMs-= lagMs;
+			event.endMs-= lagMs;
+		}
 	}
 	if (truth.empty())
 	{
@@ -438,7 +508,10 @@ void reportBlinks(const char* tag, const char* passName, const char* eyeName, co
 		float threshold= 0.f;
 		int detected= 0;
 		int detectedFast= 0;
+		int partialEvents= 0;
 		int falseEvents= 0;
+		// False events seen on one frame alone
+		int falseOneFrame= 0;
 		float f1= -1.f;
 		Stats onsetDelayMs;
 	};
@@ -448,9 +521,9 @@ void reportBlinks(const char* tag, const char* passName, const char* eyeName, co
 		std::vector<BlinkEvent> found;
 		bool bClosed= false;
 		BlinkEvent current;
-		for (const ModelSample& sample : samples)
+		for (const EyeSample& sample : samples)
 		{
-			const bool bBelow= sample.ratios.valid && sample.ratios.eyeOpenness[sideIndex] < threshold * openLevel;
+			const bool bBelow= sample.bValid && sample.openness[sideIndex] < threshold * openLevel;
 			if (bBelow && !bClosed)
 				current.startMs= sample.timestampMs;
 			if (bBelow)
@@ -488,7 +561,18 @@ void reportBlinks(const char* tag, const char* passName, const char* eyeName, co
 			bool bMatched= false;
 			for (const BlinkEvent& phone : truth)
 				bMatched= bMatched || overlaps(phone, camera);
-			score.falseEvents+= bMatched ? 0 : 1;
+			if (bMatched)
+				continue;
+			bool bPartial= false;
+			for (const BlinkEvent& phone : partial)
+				bPartial= bPartial || overlaps(phone, camera);
+			if (bPartial)
+			{
+				score.partialEvents++;
+				continue;
+			}
+			score.falseEvents++;
+			score.falseOneFrame+= camera.endMs == camera.startMs ? 1 : 0;
 		}
 		const int missed= (int)truth.size() - score.detected;
 		score.f1= 2.f * (float)score.detected / (float)(2 * score.detected + missed + score.falseEvents);
@@ -499,9 +583,415 @@ void reportBlinks(const char* tag, const char* passName, const char* eyeName, co
 	const double minutes= (samples.back().timestampMs - samples.front().timestampMs) / 60000.0;
 	MIKAN_LOG_INFO(tag) << "    blinks at " << best.threshold << " of the open level: found " << best.detected << " of "
 						<< truth.size() << " (" << percent(best.detected, (int)truth.size()) << "%), fast ones "
-						<< best.detectedFast << " of " << fastCount << ", false " << best.falseEvents << " ("
-						<< (minutes > 0.0 ? (float)(best.falseEvents / minutes) : 0.f)
-						<< " a minute), onset after the phone's p50 " << best.onsetDelayMs.p50() << " ms";
+						<< best.detectedFast << " of " << fastCount << ", on a lesser phone closure "
+						<< best.partialEvents << ", false " << best.falseEvents << " ("
+						<< (minutes > 0.0 ? (float)(best.falseEvents / minutes) : 0.f) << " a minute, "
+						<< best.falseOneFrame << " of one frame), onset after the phone's p50 "
+						<< best.onsetDelayMs.p50() << " ms";
+}
+
+struct NamedEyeSeries
+{
+	const char* passName;
+	const EyeSeries* series;
+};
+
+// One eye signal over its passes: each eye against the phone blink column it
+// follows best on the first pass, at that lag, with the other column's
+// correlation beside it, since a signal that follows both alike cannot tell
+// a wink's eye
+void reportBlinkSignal(const char* tag, const std::vector<NamedEyeSeries>& passes,
+					   const std::vector<RecordedFaceSample>& faceSamples)
+{
+	static const char* kEyeNames[2]= {"left eye", "right eye"};
+	const int blinkColumns[2]= {arkitBlendshapeFromName("eyeBlinkLeft"), arkitBlendshapeFromName("eyeBlinkRight")};
+
+	// The frames where the phone has one eye shut and the other open say
+	// which camera eye is which phone column, and whether the signal tells
+	// the eyes apart at all. A blink of both eyes cannot.
+	int oneEyeFrames= 0;
+	int sameSideLower= 0;
+	for (const EyeSample& sample : *passes.front().series)
+	{
+		float phoneLeft= 0.f;
+		float phoneRight= 0.f;
+		if (!sample.bValid || !phoneValueAt(faceSamples, sample.timestampMs, blinkColumns[0], phoneLeft) ||
+			!phoneValueAt(faceSamples, sample.timestampMs, blinkColumns[1], phoneRight) ||
+			std::fabs(phoneLeft - phoneRight) < kPhoneOneEyeGap)
+			continue;
+		oneEyeFrames++;
+		const int phoneClosedSide= phoneLeft > phoneRight ? 0 : 1;
+		sameSideLower+= sample.openness[phoneClosedSide] < sample.openness[1 - phoneClosedSide] ? 1 : 0;
+	}
+	const bool bSame= oneEyeFrames >= kMinOneEyeFrames && sameSideLower * 4 >= oneEyeFrames * 3;
+	const bool bCrossed= oneEyeFrames >= kMinOneEyeFrames && sameSideLower * 4 <= oneEyeFrames;
+	MIKAN_LOG_INFO(tag) << "  one-eye frames (the phone's blink columns " << kPhoneOneEyeGap << " apart): " << oneEyeFrames
+						<< ", the camera eye on the phone's closed side reads the lower on "
+						<< percent(sameSideLower, oneEyeFrames) << "%: "
+						<< (bSame ? "the signal tells the eyes apart, same sides as the phone"
+								  : bCrossed ? "the signal tells the eyes apart, sides crossed against the phone"
+											 : "the eyes are not told apart, each paired by correlation");
+
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		Correlation chosen;
+		Correlation other;
+		int chosenColumn= blinkColumns[sideIndex];
+		if (bSame || bCrossed)
+		{
+			chosenColumn= blinkColumns[bSame ? sideIndex : 1 - sideIndex];
+			chosen= correlateEye(*passes.front().series, sideIndex, faceSamples, chosenColumn);
+			other= correlateEye(*passes.front().series, sideIndex, faceSamples,
+								blinkColumns[bSame ? 1 - sideIndex : sideIndex]);
+		}
+		else
+		{
+			for (int candidate : blinkColumns)
+			{
+				const Correlation correlation= correlateEye(*passes.front().series, sideIndex, faceSamples, candidate);
+				if (-correlation.r > -chosen.r)
+				{
+					other= chosen;
+					chosen= correlation;
+					chosenColumn= candidate;
+				}
+				else
+				{
+					other= correlation;
+				}
+			}
+		}
+		MIKAN_LOG_INFO(tag) << "  " << kEyeNames[sideIndex] << " against the phone's " << arkitBlendshapeName(chosenColumn)
+							<< " (r " << chosen.r << ", lag " << chosen.lagMs << " ms), the other column r " << other.r;
+		for (const NamedEyeSeries& pass : passes)
+		{
+			reportBlinks(tag, pass.passName, kEyeNames[sideIndex], *pass.series, faceSamples, sideIndex, chosenColumn,
+						 chosen.lagMs);
+		}
+	}
+}
+
+EyeSeries eyeSeriesFromRatios(const std::vector<ModelSample>& samples)
+{
+	EyeSeries series;
+	for (const ModelSample& sample : samples)
+	{
+		EyeSample eye;
+		eye.timestampMs= sample.timestampMs;
+		eye.bValid= sample.ratios.valid;
+		eye.bModelFrame= true;
+		eye.openness[0]= sample.ratios.eyeOpenness[0];
+		eye.openness[1]= sample.ratios.eyeOpenness[1];
+		series.push_back(eye);
+	}
+	return series;
+}
+
+// -- The blink evaluation's face models --------------------------------------
+
+// A candidate gives up to two eye signals from one run (the MediaPipe mesh's
+// eye points and its blendshape model's blink columns)
+constexpr int kMaxEyeSignals= 2;
+using EyeSignals= std::array<std::array<float, 2>, kMaxEyeSignals>;
+
+// The face on the frame as the whole-body face block places it: the 68
+// points' extent, which runs from the brows to the chin, and the roll of the
+// line between the outer eye corners
+struct FaceBox
+{
+	glm::vec2 center{0.f};
+	float side= 0.f;
+	float rollRadians= 0.f;
+};
+
+bool faceBoxFromBlock(const WholeBodyExtras& extras, FaceBox& outBox)
+{
+	if (!computeWholeBodyFaceRatios(extras).valid)
+		return false;
+	glm::vec2 boxMin(FLT_MAX);
+	glm::vec2 boxMax(-FLT_MAX);
+	for (const glm::vec3& point : extras.face)
+	{
+		boxMin= glm::min(boxMin, glm::vec2(point));
+		boxMax= glm::max(boxMax, glm::vec2(point));
+	}
+	outBox.center= 0.5f * (boxMin + boxMax);
+	outBox.side= std::max(boxMax.x - boxMin.x, boxMax.y - boxMin.y);
+	// iBUG 36 and 45, the outer corners of the person's right and left eyes
+	const glm::vec2 eyeLine= glm::vec2(extras.face[45]) - glm::vec2(extras.face[36]);
+	outBox.rollRadians= std::atan2(eyeLine.y, eyeLine.x);
+	return outBox.side > 8.f;
+}
+
+// A closed ring of eyelid points as an openness: its area over the square of
+// its longest span, which needs no knowledge of where the ring starts
+float ringOpenness(const glm::vec2* ring, int count)
+{
+	float area= 0.f;
+	float span= 0.f;
+	for (int index= 0; index < count; ++index)
+	{
+		const glm::vec2& a= ring[index];
+		const glm::vec2& b= ring[(index + 1) % count];
+		area+= a.x * b.y - b.x * a.y;
+		for (int other= index + 1; other < count; ++other)
+			span= std::max(span, glm::distance(a, ring[other]));
+	}
+	return span > 1e-3f ? 0.5f * std::fabs(area) / (span * span) : 0.f;
+}
+
+// An RTMPose face model, 106 points in the LaPa layout
+struct RtmFaceCandidate
+{
+	RtmPoseModel model;
+
+	bool load(const std::string& path) { return model.load(path, "directml"); }
+	const char* activeEp() const { return model.activeEp(); }
+	int signalCount() const { return 1; }
+	const char* signalName(int) const { return "eyelid ring area over its span squared"; }
+
+	bool estimate(const cv::Mat& image, const FaceBox& box, EyeSignals& outSignals)
+	{
+		// The model was trained on a face detector's box, which holds the
+		// forehead the 68 points stop short of
+		const float halfSide= 0.5f * 1.2f * box.side;
+		const glm::vec2 center= box.center - glm::vec2(0.f, 0.1f * box.side);
+		RtmPoseResult result;
+		model.estimate(image, center - glm::vec2(halfSide), center + glm::vec2(halfSide), result);
+		if (!result.valid || result.keypointCount != 106)
+			return false;
+
+		// LaPa's two eyelid rings, 66 to 73 and 75 to 82. The ring at the
+		// larger image x is the person's left eye.
+		static const int kRingStarts[2]= {66, 75};
+		float openness[2]= {0.f, 0.f};
+		float meanX[2]= {0.f, 0.f};
+		for (int ringIndex= 0; ringIndex < 2; ++ringIndex)
+		{
+			glm::vec2 ring[8];
+			for (int index= 0; index < 8; ++index)
+			{
+				ring[index]= glm::vec2(result.points[kRingStarts[ringIndex] + index]);
+				meanX[ringIndex]+= ring[index].x / 8.f;
+			}
+			openness[ringIndex]= ringOpenness(ring, 8);
+		}
+		const int leftRing= meanX[0] > meanX[1] ? 0 : 1;
+		outSignals[0][0]= openness[leftRing];
+		outSignals[0][1]= openness[1 - leftRing];
+		return true;
+	}
+};
+
+// MediaPipe Face Landmarker's mesh model (478 points with the irises) and
+// its blendshape model, which reads 146 of the mesh points
+struct MediaPipeFaceCandidate
+{
+	static constexpr int kInputSize= 256;
+	static constexpr int kLandmarkCount= 478;
+	static constexpr int kSubsetCount= 146;
+	// The blendshape model's outputs, in its own order
+	static constexpr int kEyeBlinkLeft= 9;
+	static constexpr int kEyeBlinkRight= 10;
+
+	OnnxSession mesh;
+	OnnxSession blendshapes;
+	int landmarkOutput= -1;
+	std::vector<float> inputBuffer;
+	std::array<float, kSubsetCount * 2> subsetBuffer{};
+	cv::Mat cropMat;
+	cv::Mat rgbMat;
+	// The mesh's outer eye corner span over the whole-body block's extent
+	Stats widthRatio;
+
+	bool load(const std::string& meshPath, const std::string& blendshapePath)
+	{
+		if (!mesh.create(meshPath, "directml") || !blendshapes.create(blendshapePath, "directml"))
+			return false;
+		landmarkOutput= mesh.findOutputByLastDim(kLandmarkCount * 3);
+		inputBuffer.resize((size_t)kInputSize * kInputSize * 3);
+		return landmarkOutput >= 0;
+	}
+	const char* activeEp() const { return mesh.activeEp(); }
+	int signalCount() const { return 2; }
+	const char* signalName(int signalIndex) const
+	{
+		return signalIndex == 0 ? "mesh eyelid gap over the eye's width" : "blendshape model, one minus eyeBlink";
+	}
+
+	bool estimate(const cv::Mat& image, const FaceBox& box, EyeSignals& outSignals)
+	{
+		// The landmark model's region: the face's box grown by half, square,
+		// turned upright by the eye line
+		const float scale= (float)kInputSize / (1.5f * box.side);
+		const float c= std::cos(box.rollRadians);
+		const float s= std::sin(box.rollRadians);
+		const float half= 0.5f * (float)kInputSize;
+		const cv::Matx23f imageToCrop(scale * c, scale * s, half - scale * (c * box.center.x + s * box.center.y),
+									  -scale * s, scale * c, half - scale * (-s * box.center.x + c * box.center.y));
+		cv::warpAffine(image, cropMat, imageToCrop, cv::Size(kInputSize, kInputSize), cv::INTER_LINEAR,
+					   cv::BORDER_CONSTANT);
+		cv::cvtColor(cropMat, rgbMat, cv::COLOR_BGR2RGB);
+		cv::Mat inputMat(kInputSize, kInputSize, CV_32FC3, inputBuffer.data());
+		rgbMat.convertTo(inputMat, CV_32FC3, 1.0 / 255.0);
+
+		const std::array<int64_t, 4> inputShape= {1, kInputSize, kInputSize, 3};
+		Ort::Value inputTensor= Ort::Value::CreateTensor<float>(OnnxSession::getCpuMemoryInfo(), inputBuffer.data(),
+																inputBuffer.size(), inputShape.data(),
+																inputShape.size());
+		std::vector<Ort::Value> outputs= mesh.run(&inputTensor, 1);
+		const float* landmarks= outputs[landmarkOutput].GetTensorData<float>();
+
+		// Crop px back to frame px
+		auto point= [&](int index) {
+			const float x= (landmarks[index * 3] - half) / scale;
+			const float y= (landmarks[index * 3 + 1] - half) / scale;
+			return box.center + glm::vec2(c * x - s * y, s * x + c * y);
+		};
+
+		// Side 0, the person's left eye: corners 263 and 362. Side 1: 33 and 133.
+		static const int kCorners[2][2]= {{263, 362}, {33, 133}};
+		static const int kUpper[2][3]= {{387, 386, 385}, {160, 159, 158}};
+		static const int kLower[2][3]= {{373, 374, 380}, {144, 145, 153}};
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float width= glm::distance(point(kCorners[sideIndex][0]), point(kCorners[sideIndex][1]));
+			float gap= 0.f;
+			for (int index= 0; index < 3; ++index)
+				gap+= glm::distance(point(kUpper[sideIndex][index]), point(kLower[sideIndex][index])) / 3.f;
+			outSignals[0][sideIndex]= width > 1e-3f ? gap / width : 0.f;
+		}
+		widthRatio.add(glm::distance(point(263), point(33)) / std::max(box.side, 1.f));
+
+		// The blendshape model reads the subset's x and y in frame px
+		static const int kSubset[kSubsetCount]= {
+			0,   1,   4,   5,   6,   7,   8,   10,  13,  14,  17,  21,  33,  37,  39,  40,  46,  52,  53,  54,  55,
+			58,  61,  63,  65,  66,  67,  70,  78,  80,  81,  82,  84,  87,  88,  91,  93,  95,  103, 105, 107, 109,
+			127, 132, 133, 136, 144, 145, 146, 148, 149, 150, 152, 153, 154, 155, 157, 158, 159, 160, 161, 162, 163,
+			168, 172, 173, 176, 178, 181, 185, 191, 195, 197, 234, 246, 249, 251, 263, 267, 269, 270, 276, 282, 283,
+			284, 285, 288, 291, 293, 295, 296, 297, 300, 308, 310, 311, 312, 314, 317, 318, 321, 323, 324, 332, 334,
+			336, 338, 356, 361, 362, 365, 373, 374, 375, 377, 378, 379, 380, 381, 382, 384, 385, 386, 387, 388, 389,
+			390, 397, 398, 400, 402, 405, 409, 415, 454, 466, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477};
+		for (int index= 0; index < kSubsetCount; ++index)
+		{
+			const glm::vec2 px= point(kSubset[index]);
+			subsetBuffer[(size_t)index * 2]= px.x;
+			subsetBuffer[(size_t)index * 2 + 1]= px.y;
+		}
+		const std::array<int64_t, 3> subsetShape= {1, kSubsetCount, 2};
+		Ort::Value subsetTensor= Ort::Value::CreateTensor<float>(OnnxSession::getCpuMemoryInfo(), subsetBuffer.data(),
+																 subsetBuffer.size(), subsetShape.data(),
+																 subsetShape.size());
+		std::vector<Ort::Value> scores= blendshapes.run(&subsetTensor, 1);
+		const float* blend= scores[0].GetTensorData<float>();
+		outSignals[1][0]= 1.f - blend[kEyeBlinkLeft];
+		outSignals[1][1]= 1.f - blend[kEyeBlinkRight];
+		return true;
+	}
+};
+
+struct FaceCandidatePass
+{
+	std::array<EyeSeries, kMaxEyeSignals> series;
+	Stats estimateMs;
+	int framesRead= 0;
+	int framesWithFace= 0;
+};
+
+// The candidate over the window's stored frames, each frame's crop from the
+// whole-body face block of the observation the list holds on it
+template <typename Candidate>
+void runFaceCandidatePass(Candidate& candidate, const std::string& frameDirectory, int cameraIndex,
+						  const std::vector<FrameObservation>& frames, double startMs, double endMs,
+						  FaceCandidatePass& outPass)
+{
+	for (const FrameObservation& frame : frames)
+	{
+		if (frame.timestampMs < startMs || frame.timestampMs > endMs)
+			continue;
+		const cv::Mat image=
+			cv::imread(FrameRecorder::makeFramePath(frameDirectory, cameraIndex, frame.frameIndex), cv::IMREAD_COLOR);
+		if (image.empty())
+			continue;
+		outPass.framesRead++;
+
+		EyeSignals signals{};
+		FaceBox box;
+		bool bRead= false;
+		if (frame.body.valid && faceBoxFromBlock(frame.body.wholeBody, box))
+		{
+			const auto start= std::chrono::steady_clock::now();
+			bRead= candidate.estimate(image, box, signals);
+			outPass.estimateMs.add(
+				(float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+		}
+		outPass.framesWithFace+= bRead ? 1 : 0;
+		for (int signalIndex= 0; signalIndex < candidate.signalCount(); ++signalIndex)
+		{
+			EyeSample sample;
+			sample.timestampMs= frame.timestampMs;
+			sample.bValid= bRead;
+			sample.bModelFrame= frame.bModelFrame;
+			sample.openness[0]= signals[signalIndex][0];
+			sample.openness[1]= signals[signalIndex][1];
+			outPass.series[signalIndex].push_back(sample);
+		}
+	}
+}
+
+// A candidate at the three cadences it could run at beside the body model:
+// every camera frame with the body model also on every frame, every camera
+// frame with the crop held from the body model's last frame at the divider,
+// and the divider's frames alone
+template <typename Candidate>
+void reportFaceCandidate(const char* tag, const char* name, Candidate& candidate, const std::string& frameDirectory,
+						 int cameraIndex, const std::vector<FrameObservation>& everyFrames,
+						 const std::vector<FrameObservation>& dividedFrames, double startMs, double endMs,
+						 const std::vector<RecordedFaceSample>& faceSamples, const std::string& seriesCsvPath)
+{
+	FaceCandidatePass fresh;
+	FaceCandidatePass held;
+	runFaceCandidatePass(candidate, frameDirectory, cameraIndex, everyFrames, startMs, endMs, fresh);
+	runFaceCandidatePass(candidate, frameDirectory, cameraIndex, dividedFrames, startMs, endMs, held);
+	if (!seriesCsvPath.empty())
+	{
+		// The every-frame pass, one row per frame
+		std::ofstream csv(seriesCsvPath, std::ios::trunc);
+		csv << "timestampMs,valid";
+		for (int signalIndex= 0; signalIndex < candidate.signalCount(); ++signalIndex)
+			csv << ",signal" << signalIndex << "Left,signal" << signalIndex << "Right";
+		csv << "\n";
+		for (size_t row= 0; row < fresh.series[0].size(); ++row)
+		{
+			csv << std::fixed << std::setprecision(3) << fresh.series[0][row].timestampMs << ","
+				<< (fresh.series[0][row].bValid ? 1 : 0) << std::setprecision(5);
+			for (int signalIndex= 0; signalIndex < candidate.signalCount(); ++signalIndex)
+			{
+				csv << "," << fresh.series[signalIndex][row].openness[0] << ","
+					<< fresh.series[signalIndex][row].openness[1];
+			}
+			csv << "\n";
+		}
+	}
+	MIKAN_LOG_INFO(tag) << name << " (" << candidate.activeEp() << "): read on "
+						<< percent(held.framesWithFace, held.framesRead) << "% of " << held.framesRead
+						<< " frames, crop and inference p50 " << held.estimateMs.p50() << " ms, p95 "
+						<< held.estimateMs.percentile(0.95f) << " ms";
+	for (int signalIndex= 0; signalIndex < candidate.signalCount(); ++signalIndex)
+	{
+		EyeSeries atDivider;
+		for (const EyeSample& sample : held.series[signalIndex])
+		{
+			if (sample.bModelFrame)
+				atDivider.push_back(sample);
+		}
+		MIKAN_LOG_INFO(tag) << " " << name << ", " << candidate.signalName(signalIndex) << ":";
+		reportBlinkSignal(tag,
+						  {{"every frame", &fresh.series[signalIndex]},
+						   {"every frame, crop held from the divider", &held.series[signalIndex]},
+						   {"at the divider", &atDivider}},
+						  faceSamples);
+	}
 }
 
 // -- Hands against the stereo rig ------------------------------------------
@@ -1418,7 +1908,9 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	Stats dividedInferenceMs;
 	int framesMissing= 0;
 	int dividedFramesMissing= 0;
-	if (!runModelPass(tag, replay, frameDirectory, cameraIndex, 1, everyFrame, inferenceMs, framesMissing) ||
+	std::vector<FrameObservation> everyFrames;
+	if (!runModelPass(tag, replay, frameDirectory, cameraIndex, 1, everyFrame, inferenceMs, framesMissing,
+					  &everyFrames) ||
 		!runModelPass(tag, replay, frameDirectory, cameraIndex, liveDivider, divided, dividedInferenceMs,
 					  dividedFramesMissing, &dividedFrames))
 		return 1;
@@ -1540,30 +2032,57 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		// Each eye against the phone column it follows best, at that lag
 		MIKAN_LOG_INFO(tag) << "blinks (a phone blink is its column past " << kPhoneBlinkOnLevel << ", a fast one under "
 							<< kFastBlinkMs << " ms):";
-		static const char* kEyeNames[2]= {"left eye", "right eye"};
-		const ShapeGetter eyeGetters[2]= {eyeLeft, eyeRight};
-		const int blinkColumns[2]= {column("eyeBlinkLeft"), column("eyeBlinkRight")};
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		MIKAN_LOG_INFO(tag) << " whole-body points, eyelid gap over the eye's width:";
+		const EyeSeries pointsEveryFrame= eyeSeriesFromRatios(shapesEveryFrame);
+		const EyeSeries pointsDivided= eyeSeriesFromRatios(shapesDivided);
+		reportBlinkSignal(tag, {{"every frame", &pointsEveryFrame}, {"at the divider", &pointsDivided}}, faceSamples);
+
+		// The face model candidates, each on a crop the face block places.
+		// A candidate whose model file is not beside the app is not run.
+		const double windowStartMs= takeStartMs + shapes.startSeconds * 1000.0;
+		const double windowEndMs= takeStartMs + std::min(shapes.endSeconds, 1e7) * 1000.0;
+		static const char* kRtmFaceNames[2]= {"RTMPose face6-m", "RTMPose face6-t"};
+		static const char* kRtmFacePaths[2]= {"models/rtmpose_face6_m.onnx", "models/rtmpose_face6_t.onnx"};
+		static const char* kRtmFaceSuffixes[2]= {"_rtmpose_m", "_rtmpose_t"};
+		// With a frames CSV, each candidate's every-frame series beside it
+		auto seriesCsvPath= [&](const char* suffix) {
+			if (csvPath.empty())
+				return std::string();
+			const std::filesystem::path path(csvPath);
+			return (path.parent_path() / (path.stem().string() + suffix + ".csv")).string();
+		};
+		for (int modelIndex= 0; modelIndex < 2; ++modelIndex)
 		{
-			// Chosen on the every-frame pass and held for the divided one
-			Correlation chosen;
-			int chosenColumn= blinkColumns[sideIndex];
-			for (int candidate : blinkColumns)
+			RtmFaceCandidate candidate;
+			if (!std::filesystem::exists(kRtmFacePaths[modelIndex]) || !candidate.load(kRtmFacePaths[modelIndex]))
 			{
-				const Correlation correlation= correlate(shapesEveryFrame, faceSamples, eyeGetters[sideIndex], candidate);
-				if (-correlation.r > -chosen.r)
-				{
-					chosen= correlation;
-					chosenColumn= candidate;
-				}
+				MIKAN_LOG_INFO(tag) << kRtmFaceNames[modelIndex] << ": " << kRtmFacePaths[modelIndex]
+									<< " not found or not loadable, not run";
+				continue;
 			}
-			MIKAN_LOG_INFO(tag) << "  " << kEyeNames[sideIndex] << " follows the phone's "
-								<< arkitBlendshapeName(chosenColumn) << " (r " << chosen.r << ", lag " << chosen.lagMs
-								<< " ms)";
-			reportBlinks(tag, "every frame", kEyeNames[sideIndex], shapesEveryFrame, faceSamples, sideIndex, chosenColumn,
-						 chosen.lagMs);
-			reportBlinks(tag, "at the divider", kEyeNames[sideIndex], shapesDivided, faceSamples, sideIndex, chosenColumn,
-						 chosen.lagMs);
+			reportFaceCandidate(tag, kRtmFaceNames[modelIndex], candidate, frameDirectory, cameraIndex, everyFrames,
+								dividedFrames, windowStartMs, windowEndMs, faceSamples,
+								seriesCsvPath(kRtmFaceSuffixes[modelIndex]));
+		}
+		{
+			const char* meshPath= "models/mediapipe_face_landmarks.onnx";
+			const char* blendshapePath= "models/mediapipe_face_blendshapes.onnx";
+			MediaPipeFaceCandidate candidate;
+			if (!std::filesystem::exists(meshPath) || !std::filesystem::exists(blendshapePath) ||
+				!candidate.load(meshPath, blendshapePath))
+			{
+				MIKAN_LOG_INFO(tag) << "MediaPipe Face Landmarker: " << meshPath << " and " << blendshapePath
+									<< " not found or not loadable, not run";
+			}
+			else
+			{
+				reportFaceCandidate(tag, "MediaPipe Face Landmarker", candidate, frameDirectory, cameraIndex,
+									everyFrames, dividedFrames, windowStartMs, windowEndMs, faceSamples,
+									seriesCsvPath("_mediapipe"));
+				MIKAN_LOG_INFO(tag) << " MediaPipe mesh eye corner span over the face block's extent p50 "
+									<< candidate.widthRatio.p50() << " (blendshape model on "
+									<< candidate.blendshapes.activeEp() << ")";
+			}
 		}
 	}
 

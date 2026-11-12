@@ -304,7 +304,7 @@ Learned: a staged image pipeline ported from a demo carries the demo's intermedi
 
 ## 24. A head from the face landmarks: three estimators, none closer to the phone
 
-The whole-body model emits 68 face landmarks, and the direct mode's head comes from three body keypoints, the ears and the nose. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 6) was to fit the head from the face instead, on the expectation that headphones and hair hide the ears. The measurement take was `2026-11-12_00-18-34`: the webcam-position camera, the phone's head rotation in the face sidecar as truth, a head sweep with the ears visible and a second one under over-ear headphones. `--gate-wholebody` compares each head as a turn from the rest pose, after the one rotation that best carries the phone's turns onto the method's.
+The whole-body model emits 68 face landmarks, and the direct mode's head comes from three body keypoints, the ears and the nose. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 6) was to fit the head from the face instead, on the expectation that headphones and hair hide the ears. The measurement take was made on 2026-11-12: the webcam-position camera, the phone's head rotation in the face sidecar as truth, a head sweep with the ears visible and a second one under over-ear headphones. `--gate-wholebody` compares each head as a turn from the rest pose, after the one rotation that best carries the phone's turns onto the method's.
 
 Over the two sweeps, p50 error against the phone:
 
@@ -319,6 +319,26 @@ Two earlier readings of the same take were wrong and are worth keeping as the le
 Dropped: no face head is closer to the phone than the ear and nose head by more than the comparison resolves. Not settled: whether 15 degrees is the true error of all three during a turn or a floor in the comparison, which has not been run against a known rotation.
 
 Learned: judge an estimator on the segment that exercises it. A whole-take median over a mostly still take measures the filter, and a freshness test built on "the value changed" fails on exactly the frames where nothing moves.
+
+## 25. Blinks from the webcam: a face model beat the whole-body points and was not worth its cost
+
+The webcam face source needs blinks, and an open eye is a few pixels tall in the whole-body model's input. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 4b) was to measure the whole-body eye points against a face-only model on a crop the face block places. Three candidates ran on the 2026-11-12 take against the phone's blink columns: RTMPose face6-m and face6-t, and MediaPipe Face Landmarker's mesh with its blendshape model. The take's blink window is 22 s with 10 phone blinks and one wink, the user in thick-rimmed glasses at a 98 px face width.
+
+The open and closed levels' separation in pooled deviations, and the crop and inference time:
+
+- the whole-body points: 2.2 to 2.9, at no added cost
+- RTMPose face6-m: 3.8, its closed level a third of its open level where the points' is two thirds, at 6.6 ms a frame
+- RTMPose face6-t: 2.5 to 3.0, at 4.2 ms
+- the MediaPipe mesh: 2.3 to 2.5, at 5.2 ms with the blendshape model
+- the MediaPipe blendshape model: 1.9 to 2.5, its blink output reading 0.25 to 0.37 where the phone reads over 0.6
+
+At the live divider the points find 8 of 8 and 9 of 10 of the phone's blinks with 3 and 0 false events. face6-m finds all of them with 3 false events per eye, the same at every cadence.
+
+Two earlier readings were wrong. The points first showed 8 false blinks in the 22 s, which read as a failure. Most were the truth: the phone's blink column peaks at 0.45 to 0.59 on five closures that every camera signal, and the frames, show as full. And the points appeared unable to tell a wink's eye, because each eye's openness correlated equally with both phone columns. Nearly every blink in the take closes both eyes, so that correlation says nothing about sides. On the 12 frames of the one wink every signal tells the eye, with the camera's sides crossed against the phone's columns.
+
+Decided: the whole-body points carry the blinks and no face model is added. face6-m is better, and 6.6 ms a frame for a third model is not worth the margin while the points find the blinks at the cadence they run at. The other three candidates do not beat the points. Not settled: which of the phone's stream and the camera's sides is mirrored, and how the points hold on a second person or without glasses.
+
+Learned: when unrelated estimators agree on the same false events, suspect the truth before the estimators, and look at the frames. A correlation cannot separate two columns that move together in the data.
 
 ## Cross-cutting lessons
 

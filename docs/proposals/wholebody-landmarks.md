@@ -117,6 +117,18 @@ The hint comparison has to re-run the hand models on the raw frames. A recording
 
 The gates come out of these numbers. Each consumer below lands only when its gate passes, and a gate that fails is recorded in LEARNINGS.md as a measured verdict.
 
+Measured on the 2026-11-12 take (the webcam at the monitor, the phone and the tri-camera rig, 92 s), at the live divider:
+
+- Face jitter: the points scatter 1 to 2 px at rest, at a 98 px face width.
+
+- Face shapes against the phone, as correlations: the mouth opening against `jawOpen` 0.88, the brows 0.74 to 0.83, the mouth width against the pucker -0.72, the corner lift against the smile 0.54 to 0.70.
+
+- Hands: the whole-body hand's box holds the triangulated palm on 95 and 98 percent of frames (left, right).
+
+- Hand side: the slot's side by shape is right on all 2174 slot frames against 98 percent by the wrist test. With the wrists within a shoulder width it is right on 23 of 23 frames, where the wrist test decides 15 of the 23.
+
+The blinks are under piece 4b, the head under piece 6 and the hint re-run under piece 7.
+
 ### 4b. The blink evaluation: whole-body points against a face model
 
 Blinks are required, and they are the hardest shape for the whole-body crop: an open eye is a few pixels tall in the model's input at the webcam's distance. The tool measures both candidates on the same take's raw frames, against the phone's `eyeBlinkLeft` and `eyeBlinkRight` as truth:
@@ -128,6 +140,22 @@ Blinks are required, and they are the hardest shape for the whole-body crop: an 
 	- an RTMPose face model (the 106-point face6 family), which shares the `RtmPoseModel` SimCC decode
 
 For the whole-body points and each face model the tool reports the blink detection rate and false blinks at a threshold, the open-eye level against the phone's, the latency of a blink edge, and the inference milliseconds on DirectML. Each is reported at two cadences: the model run on every camera frame, and on the frames the live `poseFrameDivider` leaves. The whole-body points run live at the divider, so they are enough only if they pass the blink gate there. If they do not, the best passing face model becomes a third ONNX model on the direct camera, and its output feeds piece 5 in place of the ratios for the shapes it measures better. Its cadence comes from the same numbers: the body model's if it passes there, otherwise every camera frame with the crop held from the last body model frame. Its output is then recorded per frame on the observation beside the block, so the timeline's replay still re-evaluates the source from the record. The decision and its numbers are a review stop, and the options that lose are recorded in LEARNINGS.md.
+
+Measured on the 2026-11-12 take, over its 22 s of blinks and mouth shapes (10 phone blinks, 12 frames of a one-eye wink, the user in thick-rimmed glasses, a 98 px face). All candidates pass the check: RTMPose face6 and MediaPipe Face Landmarker are Apache-2.0, OpenMMLab publishes face6 `-m` and `-t` as ONNX, MediaPipe's two TFLite graphs convert with tf2onnx at opset 17, and all four graphs run on DirectML. The numbers, as open and closed levels' separation in pooled deviations, the false events in the 22 s at the best threshold, and the crop and inference time p50:
+
+| Signal | Separation | False, at the divider | False, every frame | Time |
+|---|---|---|---|---|
+| Whole-body points | 2.2 to 2.9 | 0 and 3 | 7 and 11 | none added |
+| RTMPose face6-m | 3.8 | 3 and 3 | 4 and 6 | 6.6 ms |
+| RTMPose face6-t | 2.5 to 3.0 | 2 and 2 | 4 and 5 | 4.2 ms |
+| MediaPipe mesh | 2.3 to 2.5 | 3 and 5 | 7 and 10 | 5.2 ms with the blendshape model |
+| MediaPipe blendshape model | 1.9 to 2.5 | 6 and 6 | 10 and 11 | |
+
+Every signal but the blendshape model finds all of the phone's blinks at every cadence, where the whole-body points miss one of 10 on one eye at the divider. The blendshape model's blink output reads 0.25 to 0.37 where the phone reads over 0.6, and it finds 3 to 6 of the blinks with the crop held from the divider. face6-m's closed level is a third of its open level (0.074 against 0.21) where the whole-body points' is two thirds (0.20 against 0.32), and its numbers do not move between the three cadences. Every signal tells the wink's eye: the camera eye on the phone's closed side is the other one on 11 of the 12 frames for the whole-body points, 12 for face6-m and 9 for the rest. So the camera's sides are crossed against the phone's blink columns, on the frame the person's right eye is the one shut, and which stream is mirrored is not settled.
+
+Two limits of the phone as truth showed. Its blink column peaks at 0.45 to 0.59 on five closures the camera sees as full, so a camera closure on a lesser phone closure is counted apart. And face6-m's remaining false events are one-frame dips and a head dip with motion blur at 16.3 to 16.9 s, where the frames show the lids lowered and the phone reads a look down.
+
+Decided at the review stop: the whole-body points carry the blinks and no face model is added. face6-m is the one candidate that beats the points, and it would run as a third model at 6.6 ms a frame on top of a body model whose points cost nothing more. The points find the blinks at the divider, which is the cadence they run at live. Piece 5 takes its blink from the eye openness ratio, and the candidates stay in `--gate-wholebody` for a later take (LEARNINGS.md, section 25).
 
 ### 5. The `webcam.*` face source
 
@@ -183,7 +211,7 @@ The gate from piece 4: on the hands-crossing and clasping segments, the shape ma
 1. Pieces 1 to 3: the block, the recording key, the overlay and the dump. Self-contained, behavior-neutral, and the overlay alone shows the points on the rig.
 2. Pieces 4 and 4b: the take, the tool and the blink evaluation. Review stop: the numbers decide which of pieces 5, 7 and 8 go ahead, with what gates, and whether a face model is added.
 3. Pieces 7 and 8, the hand pair. They are independent of the face and answer two existing plan.md items.
-4. Piece 5, with the face model if 4b chose one.
+4. Piece 5, on the whole-body points, since 4b added no face model.
 
 Each piece ends with its self-test and a replay check (`--replay-verify` on recordings made before the change, which must still load and verify).
 

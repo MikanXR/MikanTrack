@@ -40,6 +40,21 @@ bool RtmPoseModel::load(const std::string& modelPath, const std::string& preferr
 	const int64_t simccY= (int64_t)(m_inputHeight * kSimccSplitRatio);
 	m_simccXOutputIndex= m_session.findOutputByLastDim(simccX);
 	m_simccYOutputIndex= m_session.findOutputByLastDim(simccY);
+	// A square input gives both planar axes one bin count, and the export
+	// orders them x then y
+	if (simccX == simccY && m_simccXOutputIndex >= 0)
+	{
+		m_simccYOutputIndex= -1;
+		for (size_t i= (size_t)m_simccXOutputIndex + 1; i < m_session.getOutputCount(); ++i)
+		{
+			const std::vector<int64_t>& shape= m_session.getOutputShape(i);
+			if (!shape.empty() && shape.back() == simccY)
+			{
+				m_simccYOutputIndex= (int)i;
+				break;
+			}
+		}
+	}
 	m_simccZOutputIndex= -1;
 	m_depthBins= 0;
 	for (size_t i= 0; i < m_session.getOutputCount(); ++i)
