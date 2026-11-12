@@ -77,6 +77,42 @@ struct HandBox
 	glm::vec2 max{0.f};
 };
 
+// The places the hand model has turned body seeds down. With a hand out of
+// view the body model still places it, at the frame's edge where the arm
+// leaves, and scores it as a hand. The hand model says no, and asking again
+// every few frames gets the same answer. So a place it turned down is closed
+// to body hints for a few frames, and for twice as long each time it turns
+// the same place down again, up to a cap. One refusal of a real hand, a
+// blurred frame, costs the short first wait. A place is the turned-down
+// seed's box as HandTrackingPipeline::isSeedRedundant measures it, so a hint
+// outside it is a hand that moved and is seeded at once.
+class BodySeedBackoff
+{
+public:
+	static constexpr int k_firstFrames= 3;
+	static constexpr int k_maxFrames= 60;
+	// A place not turned down again for this long after it reopens is forgotten
+	static constexpr int k_memoryFrames= 60;
+
+	// Once per frame
+	void tick();
+	bool isClosed(const glm::vec2& centerPx) const;
+	void noteRejected(const HandBox& seedBox);
+	// The hand model kept a seed here: the place is a hand's
+	void noteAccepted(const HandBox& seedBox);
+	void clear() { m_places.clear(); }
+
+private:
+	struct Place
+	{
+		HandBox box;
+		int closedFrames= 0;
+		int forgetFrames= 0;
+		int refusals= 0;
+	};
+	std::vector<Place> m_places;
+};
+
 // Where the body model's hints go, the same funnel the cross-camera hints
 // have below, with the evictions a body hint alone can make
 struct HandBodySeedStats
@@ -84,6 +120,7 @@ struct HandBodySeedStats
 	int offered= 0;
 	int skippedTooSmall= 0;
 	int skippedRedundant= 0;
+	int skippedBackoff= 0;    // on a place the hand model turned a body seed down within the backoff
 	int skippedNoFreeSlot= 0; // no free slot and no slot off both whole-body hands
 	int applied= 0;           // a slot was seeded, an evicted one included
 	int evicted= 0;           // a slot on neither whole-body hand gave way to the hint
@@ -271,6 +308,8 @@ private:
 	std::vector<HandSearchHint> m_searchHints;
 	// Both whole-body hands' boxes, set with the body hints they came with
 	std::vector<HandBox> m_bodyHandBoxes;
+	// The places closed to body hints for now
+	BodySeedBackoff m_bodySeedBackoff;
 	HandSeedStats m_seedStats;
 	// scratch for isSeedRedundant, so the per-frame path allocates nothing
 	std::vector<HandBox> m_activeBoxes;

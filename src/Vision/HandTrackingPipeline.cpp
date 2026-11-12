@@ -118,6 +118,7 @@ void HandTrackingPipeline::process(const cv::Mat& bgrFrame, TrackingFrameResult&
 	// nowhere to go (measured: 74 of 75 seeds during real gaps hit
 	// skippedNoFreeSlot). A wrong seed costs one frame: runHandLandmarkStage
 	// drops a speculative seed the same frame it fails the presence threshold.
+	m_bodySeedBackoff.tick();
 	applySearchHints();
 
 	// Recount AFTER seeding so a slot a seed just claimed suppresses the
@@ -261,6 +262,59 @@ bool HandTrackingPipeline::isSeedRedundant(const glm::vec2& centerPx, const std:
 	return false;
 }
 
+void BodySeedBackoff::tick()
+{
+	for (Place& place : m_places)
+	{
+		place.closedFrames--;
+		place.forgetFrames--;
+	}
+	m_places.erase(std::remove_if(m_places.begin(), m_places.end(),
+								  [](const Place& place) { return place.forgetFrames <= 0; }),
+				   m_places.end());
+}
+
+bool BodySeedBackoff::isClosed(const glm::vec2& centerPx) const
+{
+	for (const Place& place : m_places)
+	{
+		if (place.closedFrames > 0 && HandTrackingPipeline::isSeedRedundant(centerPx, {place.box}))
+			return true;
+	}
+	return false;
+}
+
+void BodySeedBackoff::noteRejected(const HandBox& seedBox)
+{
+	const glm::vec2 center= (seedBox.min + seedBox.max) * 0.5f;
+	for (Place& place : m_places)
+	{
+		if (!HandTrackingPipeline::isSeedRedundant(center, {place.box}))
+			continue;
+		// The same place again, within its memory: twice the wait
+		place.refusals++;
+		place.box= seedBox;
+		place.closedFrames= std::min(k_firstFrames << place.refusals, k_maxFrames);
+		place.forgetFrames= place.closedFrames + k_memoryFrames;
+		return;
+	}
+	Place place;
+	place.box= seedBox;
+	place.closedFrames= k_firstFrames;
+	place.forgetFrames= k_firstFrames + k_memoryFrames;
+	m_places.push_back(place);
+}
+
+void BodySeedBackoff::noteAccepted(const HandBox& seedBox)
+{
+	const glm::vec2 center= (seedBox.min + seedBox.max) * 0.5f;
+	m_places.erase(std::remove_if(m_places.begin(), m_places.end(),
+								  [&](const Place& place) {
+									  return HandTrackingPipeline::isSeedRedundant(center, {place.box});
+								  }),
+				   m_places.end());
+}
+
 int HandTrackingPipeline::chooseSlotToEvict(const std::array<HandBox, 2>& slotBoxes,
 											const std::array<float, 2>& slotPresences,
 											const std::vector<HandBox>& bodyHandBoxes)
@@ -312,6 +366,14 @@ void HandTrackingPipeline::applySearchHints()
 		if (isSeedRedundant(hint.centerPx, m_activeBoxes))
 		{
 			(bBody ? m_seedStats.body.skippedRedundant : m_seedStats.skippedRedundant)++;
+			continue;
+		}
+
+		// A place the hand model just turned a body seed down stays closed
+		// to body hints for the backoff
+		if (bBody && m_bodySeedBackoff.isClosed(hint.centerPx))
+		{
+			m_seedStats.body.skippedBackoff++;
 			continue;
 		}
 
@@ -378,9 +440,13 @@ void HandTrackingPipeline::runHandLandmarkStage(const cv::Mat& bgrFrame)
 		{
 			if (bSpeculativeSeed)
 				(slot.bSeededFromBody ? m_seedStats.body.rejectedByModel : m_seedStats.rejectedByModel)++;
+			if (bSpeculativeSeed && slot.bSeededFromBody)
+				m_bodySeedBackoff.noteRejected(HandBox{slot.roiBoxMin, slot.roiBoxMax});
 			slot.deactivate();
 			continue;
 		}
+		if (bSpeculativeSeed && slot.bSeededFromBody)
+			m_bodySeedBackoff.noteAccepted(HandBox{slot.roiBoxMin, slot.roiBoxMax});
 		if (bSpeculativeSeed)
 			(slot.bSeededFromBody ? m_seedStats.body.accepted : m_seedStats.accepted)++;
 		slot.bSeededFromHint= false;

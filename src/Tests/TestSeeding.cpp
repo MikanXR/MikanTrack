@@ -169,6 +169,56 @@ static int runSeedingTest(const TestArgs& args)
 	check(HandTrackingPipeline::chooseSlotToEvict({onLeftHand, onTheWall}, {0.9f, 0.9f}, {}) == -1,
 		  "no whole-body hand to judge by -> none gives way");
 
+	// -- The backoff: a place the hand model turned a body seed down -----
+	{
+		const HandBox place{glm::vec2(40.f, 600.f), glm::vec2(140.f, 700.f)};
+		const glm::vec2 inPlace(90.f, 650.f);
+		const glm::vec2 elsewhere(700.f, 300.f);
+		// The frames the place stays closed after a refusal, counted by ticks
+		auto closedFrames= [&](BodySeedBackoff& backoff) {
+			int frames= 0;
+			while (backoff.isClosed(inPlace) && frames < 1000)
+			{
+				backoff.tick();
+				frames++;
+			}
+			return frames;
+		};
+
+		BodySeedBackoff backoff;
+		check(!backoff.isClosed(inPlace), "no refusal, no closed place");
+		backoff.noteRejected(place);
+		check(backoff.isClosed(inPlace) && !backoff.isClosed(elsewhere),
+			  "a refused seed closes its own place and no other");
+		check(closedFrames(backoff) == BodySeedBackoff::k_firstFrames, "the first refusal closes the place for the first wait");
+
+		// Refused again while the place is remembered: twice the wait each time
+		backoff.noteRejected(place);
+		const int second= closedFrames(backoff);
+		backoff.noteRejected(place);
+		const int third= closedFrames(backoff);
+		check(second == 2 * BodySeedBackoff::k_firstFrames && third == 4 * BodySeedBackoff::k_firstFrames,
+			  "each refusal of the same place doubles the wait");
+		for (int repeat= 0; repeat < 8; ++repeat)
+		{
+			backoff.noteRejected(place);
+			closedFrames(backoff);
+		}
+		backoff.noteRejected(place);
+		check(closedFrames(backoff) == BodySeedBackoff::k_maxFrames, "the wait stops growing at its cap");
+
+		// A place left alone past its memory starts over
+		for (int frame= 0; frame < BodySeedBackoff::k_memoryFrames; ++frame)
+			backoff.tick();
+		backoff.noteRejected(place);
+		check(closedFrames(backoff) == BodySeedBackoff::k_firstFrames, "a place not refused for its memory is forgotten");
+
+		// A kept seed there says the place is a hand's
+		backoff.noteRejected(place);
+		backoff.noteAccepted(place);
+		check(!backoff.isClosed(inPlace), "a seed the hand model kept reopens the place");
+	}
+
 	// -- The hand side by shape: two whole-body hands on one wrist -----
 	// The hands share a wrist pixel and differ by their shape alone, the
 	// right the mirror of the left about the wrist

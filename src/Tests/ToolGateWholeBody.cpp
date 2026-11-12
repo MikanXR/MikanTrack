@@ -1818,7 +1818,8 @@ void logHintRun(const char* tag, const char* name, const HintRunStats& stats)
 	if (body.offered > 0)
 	{
 		MIKAN_LOG_INFO(tag) << "    body hints: offered " << body.offered << ", on a tracked hand "
-							<< body.skippedRedundant << ", too small " << body.skippedTooSmall << ", no slot to take "
+							<< body.skippedRedundant << ", on a place just turned down " << body.skippedBackoff
+							<< ", too small " << body.skippedTooSmall << ", no slot to take "
 							<< body.skippedNoFreeSlot << ", seeded " << body.applied << " (" << body.evicted
 							<< " by eviction), the model kept " << body.accepted << " and dropped "
 							<< body.rejectedByModel;
