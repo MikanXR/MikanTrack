@@ -61,9 +61,10 @@ struct HandLandmarkResult
 //   output Identity_1 [1,1]  presence/confidence (already 0..1)
 //   output Identity_2 [1,1]  handedness (0=left .. 1=right, model terms)
 //   output Identity_3 [1,63] 21x(x,y,z) world landmarks, meters, hand-centered
-// Crop math: pre-crop palm box enlarged 4x (diagonal-square padded), rotate by
-// wrist->middle-MCP angle, re-crop rotated keypoint bbox shifted [0,-0.4] and
-// enlarged 3x (square padded), resize to 224 with INTER_AREA.
+// Crop math: in a frame rotated by the wrist->middle-MCP angle, the rotated
+// palm keypoint bbox shifted [0,-0.4] and enlarged 3x, padded to a square.
+// The square is sampled straight from the source frame by one warp (at up to
+// twice 224 and box filtered down for a large hand), black outside the frame.
 class HandLandmarkModel
 {
 public:
@@ -84,9 +85,7 @@ private:
 
 	// Preallocated scratch (steady-state: no per-frame heap churn)
 	std::vector<float> m_inputBuffer;
-	cv::Mat m_cropMat;
-	cv::Mat m_rgbMat;
-	cv::Mat m_rotatedMat;
-	cv::Mat m_finalCropMat;
+	cv::Mat m_sampledMat;
 	cv::Mat m_resizedMat;
+	cv::Mat m_rgbMat;
 };

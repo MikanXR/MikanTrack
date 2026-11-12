@@ -109,6 +109,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
 - `--gate-direct`: whole-body 3D arm directions on one camera's raw frames against the stereo rig's output, the single-camera direct mode's gate, with the direct retarget and a Kalidokit-style baseline measured side by side (a direct-mode take runs their truth-free metrics alone), and the direct solve's twist jumps and mirrored-palm frames per hand
 - `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
+- `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
 - `--replay-extrinsics`: A/B a candidate extrinsics config against a recording
 - `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates

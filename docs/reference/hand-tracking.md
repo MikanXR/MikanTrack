@@ -25,11 +25,13 @@ Defaults are score threshold 0.5 and NMS IoU 0.3 (`m_scoreThreshold`, `m_nmsIouT
 
 `HandLandmarkModel` (`src/Vision/HandLandmarkModel.h`) ports `mp_handpose.py`. Contract for `hand_landmark.onnx`:
 
-- input `input_1` `[1,224,224,3]` NHWC RGB float divided by 255, a rotated palm crop (palm box enlarged 4x, rotated by the wrist to middle-MCP angle, re-cropped from the rotated keypoint bbox shifted [0,-0.4] and enlarged 3x, resized to 224 with `INTER_AREA`)
+- input `input_1` `[1,224,224,3]` NHWC RGB float divided by 255, a rotated palm crop: in a frame rotated by the wrist to middle-MCP angle, the rotated palm keypoint bbox shifted [0,-0.4], enlarged 3x and padded to a square
 - output `Identity` `[1,63]` 21 landmarks as (x,y,z), x/y in 224-px crop space, z relative to the wrist
 - output `Identity_1` `[1,1]` presence/confidence, already in [0,1]
 - output `Identity_2` `[1,1]` handedness, 0=left to 1=right in model terms (the model assumes a mirrored/selfie view)
 - output `Identity_3` `[1,63]` model-space "world" landmarks, meters, hand-centered
+
+The crop geometry is `mp_handpose.py`'s, but the image is resampled once. One `warpAffine` maps the square straight out of the source frame, black outside the frame, and no intermediate rotated image is built, so the cost is fixed by the model resolution rather than by the hand's size in the frame. A square larger than 224 px is sampled at twice the model resolution and box filtered down with `INTER_AREA`. Sampling at four times moves the landmarks under 0.1 px at the median, so twice is enough.
 
 `HandLandmarkResult` maps the crop-space landmarks back to full-frame pixels (`imagePoints`) and keeps the metric model landmarks (`modelPoints`). Both models preallocate their input buffers and OpenCV scratch mats, so the steady-state frame path does no heap allocation.
 
