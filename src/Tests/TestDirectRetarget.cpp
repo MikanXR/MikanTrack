@@ -849,6 +849,53 @@ static int runDirectRetargetTest(const TestArgs&)
 		putSlotsOnOppositeWrists(user);
 		run(user, 40);
 		check(!swapped(), "(k2) wrists held together are not a swap");
+		check(solver.getSolveState().oppositeWristRejections[0] > 0 &&
+				  solver.getSolveState().oppositeWristRejections[1] > 0,
+			  "(k2) the frames a slot was turned away on the other arm's wrist are counted");
+
+		// (k3) With the whole-body hands in the observation the slot's side
+		// is read from the hand's shape, which tells the hands apart where
+		// the wrists cannot. The slots still sit on the opposite wrists, with
+		// the wrists together.
+		auto runWithBlocks= [&](int frameCount, bool bBlocksCrossed, float score) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				// The synthetic slots carry a wrist alone: give each the rest
+				// of a hand, the right the mirror of the left
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					TrackedHand& hand= frame.hands[sideIndex];
+					const glm::vec3 wrist= hand.imagePoints[0];
+					const float mirror= sideIndex == 0 ? 1.f : -1.f;
+					for (int finger= 0; finger < 5; ++finger)
+					{
+						for (int joint= 0; joint < 4; ++joint)
+						{
+							hand.imagePoints[1 + finger * 4 + joint]=
+								wrist + glm::vec3(mirror * (-30.f + 15.f * (float)finger), -40.f - 15.f * (float)joint, 0.f);
+						}
+					}
+				}
+				WholeBodyExtras& extras= frame.body.wholeBody;
+				extras.present= true;
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					// Crossed: each whole-body hand is the other label's slot
+					extras.hands[sideIndex]= frame.hands[bBlocksCrossed ? 1 - sideIndex : sideIndex].imagePoints;
+					extras.handScores[sideIndex].fill(score);
+				}
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		runWithBlocks(40, true, 0.9f);
+		check(swapped(), "(k3) with the wrists together the hands' shapes report the swap the wrists cannot");
+		runWithBlocks(1, false, 0.9f);
+		check(!swapped(), "(k3) a slot matching its own side's whole-body hand ends the report");
+		runWithBlocks(40, true, 0.1f);
+		check(!swapped(), "(k3) whole-body hands under the score gate leave the report to the wrists");
 	}
 
 	// (p) The wrist's entry gate and the earned hold: a body wrist whose

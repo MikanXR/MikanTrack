@@ -1212,6 +1212,7 @@
 		"handAgrees": "Hand slot on the body's wrist",
 		"elbowGate": "Elbow visible",
 		"handednessSwapped": "The hand slots sit on the body's opposite wrists, so the hands are rejected. Change this setting:",
+		"oppositeWristRejectionsFmt": "Hand slots turned away on the other arm's wrist: left %d, right %d frames",
 		"shoulderDepth": "Shoulder depth (avatar units)",
 		"lean": "Lean (deg)",
 		"head": "Head",

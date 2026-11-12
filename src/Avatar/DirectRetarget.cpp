@@ -12,6 +12,7 @@
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
 #include "BodyPoseTypes.h"
+#include "HandSideMatch.h"
 #include "MathGLM.h"
 
 namespace
@@ -463,6 +464,8 @@ void DirectRetarget::resetMeasure()
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
 	m_handednessSwapStartMs= -1.0;
+	m_oppositeWristRejections[0]= 0;
+	m_oppositeWristRejections[1]= 0;
 	m_torso= TorsoState();
 	m_head= HeadState();
 	for (ArmState& arm : m_arms)
@@ -773,8 +776,18 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		const bool bHandOpposite= hand.tracked && usable(oppositeWristIndex) && shoulderWidthPx > 0.f &&
 			glm::distance(handWristPx, landmarkPx(oppositeWristIndex)) <=
 				kHandAgreementShoulderWidths * shoulderWidthPx;
-		bAnyHandOnOwnWrist|= bHandNear;
-		bAnyHandOnOppositeWrist|= bHandOpposite;
+		// The label report takes the slot's side from the hand's shape
+		// against the two whole-body hands where both score, which still
+		// tells the hands apart with the wrists together, and from the wrists
+		// otherwise. The entry gate above keeps the wrist alone.
+		const HandShapeMatch shape=
+			hand.tracked ? matchHandSideByShape(hand.imagePoints, body.wholeBody) : HandShapeMatch();
+		bAnyHandOnOwnWrist|= shape.side >= 0 ? shape.side == sideIndex : bHandNear;
+		bAnyHandOnOppositeWrist|= shape.side >= 0 ? shape.side != sideIndex : bHandOpposite;
+		// A slot the gate turned away while it sat on the other arm's wrist:
+		// what a wrong label costs
+		if (hand.tracked && !bHandNear && bHandOpposite)
+			m_oppositeWristRejections[sideIndex]++;
 		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
@@ -1168,6 +1181,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		m_handednessSwapStartMs= timestampMs;
 	m_state.bHandednessSwapped=
 		m_handednessSwapStartMs >= 0.0 && (timestampMs - m_handednessSwapStartMs) >= kHandednessSwapMs;
+	m_state.oppositeWristRejections[0]= m_oppositeWristRejections[0];
+	m_state.oppositeWristRejections[1]= m_oppositeWristRejections[1];
 }
 
 void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,

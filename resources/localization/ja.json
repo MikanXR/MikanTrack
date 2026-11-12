@@ -1212,6 +1212,7 @@
 		"handAgrees": "手のスロットが身体の手首と一致",
 		"elbowGate": "肘が見えている",
 		"handednessSwapped": "手のスロットが身体の反対側の手首にあるため、手が除外されています。この設定を変更してください：",
+		"oppositeWristRejectionsFmt": "反対側の腕の手首にあって除外された手のスロット: 左 %d、右 %d フレーム",
 		"shoulderDepth": "肩の奥行き (アバター単位)",
 		"lean": "上体の傾き (度)",
 		"head": "頭部",

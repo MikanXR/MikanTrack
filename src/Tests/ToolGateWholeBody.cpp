@@ -12,6 +12,7 @@
 #include "FaceRecorder.h"
 #include "FaceTypes.h"
 #include "FrameRecorder.h"
+#include "HandSideMatch.h"
 #include "OnnxSession.h"
 #include "RtmPoseModel.h"
 #include "SyntheticAvatar.h"
@@ -1193,29 +1194,8 @@ void reportHands(const char* tag, const TrackingReplay& replay, const std::vecto
 				slotOverlapHalf+= overlap >= 0.5f ? 1 : 0;
 			}
 
-			// By shape: the mean distance over the 21 points to each scored
-			// whole-body hand, in the slot's palm lengths
-			const float slotPalmPx= glm::length(glm::vec2(slot.imagePoints[9]) - glm::vec2(slot.imagePoints[0]));
-			float shapeDistance[2]= {FLT_MAX, FLT_MAX};
-			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			{
-				if (!bHandScored[sideIndex] || slotPalmPx < 1.f)
-					continue;
-				float sum= 0.f;
-				for (int landmark= 0; landmark < WHOLEBODY_HAND_LANDMARK_COUNT; ++landmark)
-				{
-					sum+= glm::length(glm::vec2(slot.imagePoints[landmark]) -
-									  glm::vec2(extras.hands[sideIndex][landmark]));
-				}
-				shapeDistance[sideIndex]= sum / (float)WHOLEBODY_HAND_LANDMARK_COUNT / slotPalmPx;
-			}
-			int shapeSide= -1;
-			{
-				const int nearer= shapeDistance[0] <= shapeDistance[1] ? 0 : 1;
-				if (shapeDistance[nearer] < FLT_MAX &&
-					shapeDistance[nearer] <= kShapeMarginRatio * shapeDistance[1 - nearer])
-					shapeSide= nearer;
-			}
+			// By shape, the rule the direct solver's label report reads
+			const int shapeSide= matchHandSideByShape(slot.imagePoints, extras).side;
 
 			// By the wrist: the slot's wrist within the agreement distance of
 			// one body wrist and not the other

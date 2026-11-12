@@ -125,7 +125,7 @@ Measured on the 2026-11-12 take (the webcam at the monitor, the phone and the tr
 
 - Hands: the whole-body hand's box holds the triangulated palm on 95 and 98 percent of frames (left, right).
 
-- Hand side: the slot's side by shape is right on all 2174 slot frames against 98 percent by the wrist test. With the wrists within a shoulder width it is right on 23 of 23 frames, where the wrist test decides 15 of the 23.
+- Hand side: the slot's side by shape, with both whole-body hands scored, is decided on 2158 of 2174 slot frames and right on all of them, against 98 percent by the wrist test. With the wrists within a shoulder width it is right on 23 of 23 frames, where the wrist test decides 15 of the 23.
 
 The blinks are under piece 4b, the head under piece 6 and the hint re-run under piece 7.
 
@@ -209,6 +209,8 @@ The direct solver's agreement test compares one pixel, the slot's wrist against 
 The shape match decides the slot's side for the `bHandednessSwapped` report where the wrist distance does now, and nothing in the solve reads it. The entry gate's agreement (`bHandNear`) keeps the wrist distance, so the solve's output does not move. The wrist distance also stays as the report's fallback on a frame where the block is absent or a hand's scores are below the gate, which covers the other backend and recordings made before the block existed. The solve state also counts the frames a slot was rejected for sitting on the opposite wrist, so the report shows how often a label costs a hand. Correcting labels per frame is deferred on that count (Decisions).
 
 The gate from piece 4: on the hands-crossing and clasping segments, the shape match agrees with the stereo fused side on more frames than the wrist test.
+
+Built, and the gate is met on the 2026-11-12 take: with the fused wrists within a shoulder width the shape match is right on 23 of 23 frames, where the wrist test decides 15. `matchHandSideByShape` (`src/Vision/HandSideMatch.h`) is the one rule the solver's report and `--gate-wholebody` both read. It decides only while both whole-body hands score, which is stricter than the first measurement's rule and leaves 16 of 2174 slot frames to the wrists. The solve state counts the frames each slot was turned away on the other arm's wrist, and the Direct solver stage shows the count. The solver's pose is untouched: the retarget golden's result on a direct take is the same before and after.
 
 ## Order and review stops
 

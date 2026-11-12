@@ -249,10 +249,15 @@ public:
 		glm::quat headFrame{1.f, 0.f, 0.f, 0.f};
 		glm::quat headDelta{1.f, 0.f, 0.f, 0.f};
 		Arm arms[2];
-		// The hand slots have sat on the opposite side's body wrists, and
-		// none on its own, for a second: the hand model's left and right
-		// are the wrong way round for this camera
+		// The hand slots have been the opposite side's hands, and none its
+		// own side's, for a second: the hand model's left and right are the
+		// wrong way round for this camera. A slot's side is read from its
+		// shape against the whole-body hands, or from the body wrists where
+		// the body model gives no scored hands.
 		bool bHandednessSwapped= false;
+		// Per slot, the frames since the solver's reset on which the entry
+		// gate turned the slot away while it sat on the other arm's wrist
+		int oppositeWristRejections[2]= {0, 0};
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -381,6 +386,7 @@ private:
 	// When the current run of frames with swapped hand labels began,
 	// negative outside one
 	double m_handednessSwapStartMs= -1.0;
+	int m_oppositeWristRejections[2]= {0, 0};
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

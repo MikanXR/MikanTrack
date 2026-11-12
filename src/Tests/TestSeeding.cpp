@@ -2,6 +2,7 @@
 
 #include "BodyHandHints.h"
 #include "HandLandmarkModel.h"
+#include "HandSideMatch.h"
 
 // Cross-camera seeding decides whether a projected hint duplicates a hand this
 // camera already tracks. That decision used to be split between a LABEL check
@@ -151,6 +152,53 @@ static int runSeedingTest(const TestArgs& args)
 	check(HandTrackingPipeline::chooseSlotToEvict({onLeftHand, onTheWall}, {0.9f, 0.9f}, {}) == -1,
 		  "no whole-body hand to judge by -> none gives way");
 
+	// -- The hand side by shape: two whole-body hands on one wrist -----
+	// The hands share a wrist pixel and differ by their shape alone, the
+	// right the mirror of the left about the wrist
+	{
+		const glm::vec2 wrist(600.f, 400.f);
+		auto mirrored= [&](std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT> points) {
+			for (glm::vec3& point : points)
+				point.x= 2.f * wrist.x - point.x;
+			return points;
+		};
+		BodyPoseObservation clasped;
+		clasped.valid= true;
+		clasped.wholeBody.present= true;
+		clasped.wholeBody.hands[0]= makeHand(wrist);
+		clasped.wholeBody.hands[1]= mirrored(makeHand(wrist));
+		clasped.wholeBody.handScores[0].fill(0.9f);
+		clasped.wholeBody.handScores[1].fill(0.9f);
+		const WholeBodyExtras& extras= clasped.wholeBody;
+
+		// A slot is the hand model's own reading of a hand, a few pixels off
+		auto nudged= [](std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT> points) {
+			for (glm::vec3& point : points)
+				point+= glm::vec3(2.f, -1.5f, 0.f);
+			return points;
+		};
+		check(matchHandSideByShape(nudged(extras.hands[0]), extras).side == 0 &&
+				  matchHandSideByShape(nudged(extras.hands[1]), extras).side == 1,
+			  "a slot on a wrist both hands share is the hand whose shape it has");
+
+		// Halfway between the two shapes is neither hand's
+		std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT> between= extras.hands[0];
+		for (int index= 0; index < WHOLEBODY_HAND_LANDMARK_COUNT; ++index)
+			between[index]= 0.5f * (extras.hands[0][index] + extras.hands[1][index]);
+		// A slot needs a palm length, which the average of mirrored hands keeps
+		check(matchHandSideByShape(between, extras).side == -1, "a slot no nearer one hand by the margin has no side");
+
+		WholeBodyExtras unscored= extras;
+		unscored.handScores[1][(int)eHandLandmark::PINKY_MCP]= 0.1f;
+		check(matchHandSideByShape(nudged(extras.hands[0]), unscored).side == -1,
+			  "a whole-body hand under the score gate leaves the side undecided");
+		check(matchHandSideByShape(nudged(extras.hands[0]), WholeBodyExtras()).side == -1,
+			  "no whole-body blocks, no side");
+		std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT> collapsed;
+		collapsed.fill(glm::vec3(wrist, 0.f));
+		check(matchHandSideByShape(collapsed, extras).side == -1, "a slot with no size has no side");
+	}
+
 	if (result == 0)
 		MIKAN_LOG_INFO("test-seeding") << "All seeding checks passed";
 
@@ -158,5 +206,5 @@ static int runSeedingTest(const TestArgs& args)
 }
 
 MIKAN_REGISTER_TEST("--test-seeding",
-					"Seed redundancy gate, the body model's hand hints, the eviction rule",
+					"Seed redundancy gate, the body model's hand hints, the eviction rule, the hand side by shape",
 					eTestCategory::SelfTest, runSeedingTest);

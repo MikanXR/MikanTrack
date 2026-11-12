@@ -1464,6 +1464,13 @@ void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& cont
 		drawDirectYesNoCell(arm.bElbowSeen);
 	ImGui::EndTable();
 
+	// How often a label has cost a hand since the solver started
+	if (state->oppositeWristRejections[0] > 0 || state->oppositeWristRejections[1] > 0)
+	{
+		ImGui::TextDisabled(locText("directStage.oppositeWristRejectionsFmt"), state->oppositeWristRejections[0],
+							state->oppositeWristRejections[1]);
+	}
+
 	// Swapped labels reject both hands, and the fix is this one setting
 	if (state->bHandednessSwapped)
 	{

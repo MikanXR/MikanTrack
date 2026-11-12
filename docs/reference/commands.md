@@ -82,7 +82,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-replay`: record/replay determinism, checksums, what-if, the audio and face sidecars
 - `--test-roiquality`: hand ROI image-quality metrics + flicker tracker
 - `--test-scene-view`: camera-matched scene view and overlay projection
-- `--test-seeding`: the seed redundancy gate, the body model's hand hints and the eviction rule
+- `--test-seeding`: the seed redundancy gate, the body model's hand hints, the eviction rule and the hand side by shape
 - `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip, the face profile binding and blend messages
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
