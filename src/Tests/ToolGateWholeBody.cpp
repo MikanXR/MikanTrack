@@ -1793,7 +1793,9 @@ void writeCsv(const std::string& path, const std::vector<ModelSample>& samples,
 	for (const ModelSample& sample : samples)
 	{
 		const WholeBodyFaceRatios& ratios= sample.ratios;
-		csv << sample.timestampMs << "," << (ratios.valid ? 1 : 0) << "," << ratios.minScore << ","
+		// The clock's milliseconds run to nine digits before the point
+		csv << std::fixed << std::setprecision(3) << sample.timestampMs << std::defaultfloat << std::setprecision(6)
+			<< "," << (ratios.valid ? 1 : 0) << "," << ratios.minScore << ","
 			<< ratios.faceWidthPx << "," << ratios.eyeOpenness[0] << "," << ratios.eyeOpenness[1] << ","
 			<< ratios.mouthOpen << "," << ratios.mouthWidth << "," << ratios.mouthCornerLift[0] << ","
 			<< ratios.mouthCornerLift[1] << "," << ratios.browHeight[0] << "," << ratios.browHeight[1] << ","
