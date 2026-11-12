@@ -1,7 +1,7 @@
 # AI Token Usage
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~211_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~633_L-blue)
+![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~212_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~635_L-blue)
 (estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
@@ -32,7 +32,7 @@ Anthropic publishes no per-token energy figures, so the estimate chains public r
 **For scale:** the central estimate (~70 kWh) is about two and a half days of average US household electricity, or roughly 140 hours of the RTX 3090 dev machine at full load. The central water estimate (~200 L) is about one bathtub.
 
 <!-- TOKEN_STATS:BEGIN -->
-Last regenerated 2026-11-09 06:03 UTC by `tools/token_stats.py`.
+Last regenerated 2026-11-12 05:06 UTC by `tools/token_stats.py`.
 
 ## Per-session usage
 
@@ -78,27 +78,28 @@ Last regenerated 2026-11-09 06:03 UTC by `tools/token_stats.py`.
 | Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7) | claude-opus-5-5 | 120 | 105,526 | 12,096,777 | 544,508 |
 | Microphone mouth stage, the forked first pass (Nov 6) | claude-fable-5-1 | 137 | 202,174 | 26,671,925 | 805,247 |
 | Face expression proposal (Nov 7) | claude-opus-5-5 | 48 | 34,768 | 5,122,476 | 289,624 |
-| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-fable-5-1 | 96 | 130,285 | 18,177,745 | 858,573 |
+| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-fable-5-1 | 105 | 134,551 | 19,263,718 | 976,431 |
 | Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-opus-5-5 | 214 | 188,798 | 23,835,496 | 722,459 |
 | Face expression system implementation (Nov 8) | claude-opus-5-5 | 159 | 203,086 | 44,555,615 | 871,072 |
+| Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11) | claude-opus-5-5 | 74 | 58,227 | 10,725,665 | 177,743 |
 
 ## Totals per model
 
 | Model | API calls | Input | Cache write | Cache read | Output | Weighted |
 |---|---|---|---|---|---|---|
 | claude-fable-5 | 2,591 | 21,074 | 12,397,951 | 942,019,064 | 3,193,585 | 25,137,668 |
-| claude-fable-5-1 | 2,778 | 78,784 | 20,973,909 | 883,473,071 | 4,523,802 | 27,452,497 |
+| claude-fable-5-1 | 2,787 | 79,042 | 21,091,767 | 884,559,044 | 4,528,068 | 27,507,999 |
 | claude-opus-5 | 3,302 | 45,258 | 15,571,474 | 1,312,417,756 | 3,471,033 | 33,621,308 |
-| claude-opus-5-5 | 3,483 | 6,986 | 15,604,992 | 589,723,941 | 1,395,741 | 17,092,865 |
+| claude-opus-5-5 | 3,557 | 7,138 | 15,782,735 | 600,449,606 | 1,453,968 | 17,410,071 |
 | claude-sonnet-5 | 445 | 13,920 | 1,324,975 | 44,892,367 | 527,219 | 1,759,094 |
 | claude-sonnet-5-5 | 113 | 226 | 700,653 | 8,395,287 | 59,015 | 402,129 |
-| **total** | 12,712 | 166,248 | 66,573,954 | 3,780,921,486 | 13,170,395 | **105,465,562** |
+| **total** | 12,795 | 166,658 | 66,869,555 | 3,792,733,124 | 13,232,888 | **105,838,270** |
 
 ## Energy and water estimate
 
 | Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |
 |---|---|---|---|---|
-| low | 0.5 | 53 kWh | 58 L | 158 L |
-| central | 2.0 | 211 kWh | 232 L | 633 L |
-| high | 6.0 | 633 kWh | 696 L | 1,898 L |
+| low | 0.5 | 53 kWh | 58 L | 159 L |
+| central | 2.0 | 212 kWh | 233 L | 635 L |
+| high | 6.0 | 635 kWh | 699 L | 1,905 L |
 <!-- TOKEN_STATS:END -->
