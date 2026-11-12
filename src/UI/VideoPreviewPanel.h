@@ -77,16 +77,18 @@ public:
 	void setShowWholeBodyFace(bool bShow) { m_bShowWholeBodyFace= bShow; }
 	bool getShowWholeBodyHands() const { return m_bShowWholeBodyHands; }
 	void setShowWholeBodyHands(bool bShow) { m_bShowWholeBodyHands= bShow; }
+	bool getShowLowVisibilityLandmarks() const { return m_bShowLowVisibilityLandmarks; }
+	void setShowLowVisibilityLandmarks(bool bShow) { m_bShowLowVisibilityLandmarks= bShow; }
 	// The direct solver's verdict on one camera's hand slots this frame
-	// (whether each was the hand), -1 for no camera: a rejected slot draws
-	// dimmed unless every slot is shown
+	// (whether each was the hand), -1 for no camera: a rejected slot draws as
+	// the hand slot draw mode says
 	void setHandUse(int cameraIndex, const std::array<bool, 2>& handUsed)
 	{
 		m_handUseCamera= cameraIndex;
 		m_handUsed= handUsed;
 	}
-	bool getShowAllHands() const { return m_bShowAllHands; }
-	void setShowAllHands(bool bShow) { m_bShowAllHands= bShow; }
+	eHandSlotDrawMode getHandSlotDrawMode() const { return m_handSlotDrawMode; }
+	void setHandSlotDrawMode(eHandSlotDrawMode mode) { m_handSlotDrawMode= mode; }
 	bool getShowOverlay() const { return m_bShowOverlay; }
 	void setShowOverlay(bool bShow) { m_bShowOverlay= bShow; }
 
@@ -113,7 +115,7 @@ private:
 
 	bool m_bShowOverlay= true;
 	bool m_bShowDetectionBoxes= false;
-	bool m_bShowAllHands= false;
+	eHandSlotDrawMode m_handSlotDrawMode= eHandSlotDrawMode::DimRejected;
 	int m_handUseCamera= -1;
 	std::array<bool, 2> m_handUsed{false, false};
 	// Raw body landmarks on body-pose cameras (the solver's source data)
@@ -121,4 +123,7 @@ private:
 	// The whole-body backend's face and hand blocks, each on its own toggle
 	bool m_bShowWholeBodyFace= true;
 	bool m_bShowWholeBodyHands= true;
+	// Body and whole-body landmarks under the visibility gate, drawn dimmed
+	// when on. Off by default: the unseen landmarks jump around the frame
+	bool m_bShowLowVisibilityLandmarks= false;
 };

@@ -25,7 +25,7 @@ static const float k_bodyVisibilityGate= 0.5f;
 
 void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result,
 									 const ImageToScreenMapping& mapping, bool bShowDetectionBoxes,
-									 const std::array<bool, 2>* handUsed)
+									 const std::array<bool, 2>* handUsed, eHandSlotDrawMode slotDrawMode)
 {
 	// Detection debug boxes
 	if (bShowDetectionBoxes)
@@ -51,7 +51,10 @@ void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameRe
 		if (!hand.tracked)
 			continue;
 
-		const bool bUnused= handUsed != nullptr && !(*handUsed)[sideIndex];
+		const bool bRejected= handUsed != nullptr && !(*handUsed)[sideIndex];
+		if (bRejected && slotDrawMode == eHandSlotDrawMode::OnlyAccepted)
+			continue;
+		const bool bUnused= bRejected && slotDrawMode == eHandSlotDrawMode::DimRejected;
 		auto dimmed= [&](ImU32 color) {
 			return bUnused ? (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, k_unusedHandAlpha) : color;
 		};
@@ -83,20 +86,23 @@ void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameRe
 }
 
 void HandOverlay::drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& body,
-							   const ImageToScreenMapping& mapping)
+							   const ImageToScreenMapping& mapping, bool bShowLowVisibility)
 {
 	if (!body.valid)
 		return;
 
 	auto isVisible= [&](int landmark) { return body.visibility[landmark] >= k_bodyVisibilityGate; };
+	// A backend that does not emit a joint leaves its slot at the image
+	// origin; drawing it would pin a phantom landmark in the corner
+	auto isDrawn= [&](int landmark) {
+		return body.isProvided(landmark) && (bShowLowVisibility || isVisible(landmark));
+	};
 
 	for (int i= 0; i < POSE_CONNECTION_COUNT; ++i)
 	{
 		const int a= POSE_CONNECTIONS[i][0];
 		const int b= POSE_CONNECTIONS[i][1];
-		// A backend that does not emit a joint leaves its slot at the image
-		// origin; drawing it would pin a phantom landmark in the corner
-		if (!body.isProvided(a) || !body.isProvided(b))
+		if (!isDrawn(a) || !isDrawn(b))
 			continue;
 		const bool bBothVisible= isVisible(a) && isVisible(b);
 		const glm::vec3& p0= body.imagePoints[a];
@@ -108,7 +114,7 @@ void HandOverlay::drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& 
 
 	for (int landmark= 0; landmark < POSE_LANDMARK_COUNT; ++landmark)
 	{
-		if (!body.isProvided(landmark))
+		if (!isDrawn(landmark))
 			continue;
 		const glm::vec3& p= body.imagePoints[landmark];
 		drawList->AddCircleFilled(
@@ -130,7 +136,7 @@ void HandOverlay::drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& 
 	for (const KeyJoint& joint : k_keyJoints)
 	{
 		const int index= (int)joint.landmark;
-		if (!body.isProvided(index))
+		if (!isDrawn(index))
 			continue;
 		const glm::vec3& p= body.imagePoints[index];
 		const ImVec2 screenPos= mapping.toScreen(p.x, p.y);
@@ -158,21 +164,28 @@ void HandOverlay::drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& 
 }
 
 void HandOverlay::drawWholeBodyExtras(ImDrawList* drawList, const BodyPoseObservation& body,
-									  const ImageToScreenMapping& mapping, bool bShowFace, bool bShowHands)
+									  const ImageToScreenMapping& mapping, bool bShowFace, bool bShowHands,
+									  bool bShowLowVisibility)
 {
 	if (!body.valid || !body.wholeBody.present)
 		return;
 	const WholeBodyExtras& extras= body.wholeBody;
 
-	auto shade= [](ImU32 color, float scoreA, float scoreB) {
-		const bool bVisible= scoreA >= k_bodyVisibilityGate && scoreB >= k_bodyVisibilityGate;
-		return bVisible ? color : (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, k_wholeBodyDimAlpha);
+	auto isVisible= [](float scoreA, float scoreB) {
+		return scoreA >= k_bodyVisibilityGate && scoreB >= k_bodyVisibilityGate;
+	};
+	auto shade= [&](ImU32 color, float scoreA, float scoreB) {
+		return isVisible(scoreA, scoreB) ? color : (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, k_wholeBodyDimAlpha);
 	};
 	auto drawSegment= [&](const glm::vec3& a, const glm::vec3& b, float scoreA, float scoreB, ImU32 color) {
+		if (!bShowLowVisibility && !isVisible(scoreA, scoreB))
+			return;
 		drawList->AddLine(mapping.toScreen(a.x, a.y), mapping.toScreen(b.x, b.y), shade(color, scoreA, scoreB),
 						  1.5f);
 	};
 	auto drawPoint= [&](const glm::vec3& p, float score, ImU32 color) {
+		if (!bShowLowVisibility && !isVisible(score, score))
+			return;
 		drawList->AddCircleFilled(mapping.toScreen(p.x, p.y), 1.5f, shade(color, score, score));
 	};
 

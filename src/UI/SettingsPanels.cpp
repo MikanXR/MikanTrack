@@ -1675,10 +1675,34 @@ void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& conte
 
 	if (context.config->direct.enabled)
 	{
-		bool bShowAllHands= previewPanel->getShowAllHands();
-		if (ImGui::Checkbox(locLabel("trackingPanel.showAllHands"), &bShowAllHands))
-			previewPanel->setShowAllHands(bShowAllHands);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.showAllHandsTooltip"));
+		struct SlotDrawModeOption
+		{
+			eHandSlotDrawMode mode;
+			const char* key;
+		};
+		static const SlotDrawModeOption k_slotDrawModes[]= {
+			{eHandSlotDrawMode::OnlyAccepted, "trackingPanel.handSlotDrawModeOnlyAccepted"},
+			{eHandSlotDrawMode::DimRejected, "trackingPanel.handSlotDrawModeDimRejected"},
+			{eHandSlotDrawMode::AllDetections, "trackingPanel.handSlotDrawModeAllDetections"},
+		};
+		const eHandSlotDrawMode currentMode= previewPanel->getHandSlotDrawMode();
+		const char* currentKey= k_slotDrawModes[0].key;
+		for (const SlotDrawModeOption& option : k_slotDrawModes)
+		{
+			if (option.mode == currentMode)
+				currentKey= option.key;
+		}
+		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.f);
+		if (ImGui::BeginCombo(locLabel("trackingPanel.handSlotDrawMode"), locText(currentKey)))
+		{
+			for (const SlotDrawModeOption& option : k_slotDrawModes)
+			{
+				if (ImGui::Selectable(locText(option.key), option.mode == currentMode))
+					previewPanel->setHandSlotDrawMode(option.mode);
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.handSlotDrawModeTooltip"));
 	}
 }
 
@@ -1700,6 +1724,11 @@ void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& conte
 	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyHands"), &bShowHands))
 		previewPanel->setShowWholeBodyHands(bShowHands);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyHandsTooltip"));
+
+	bool bShowLowVisibility= previewPanel->getShowLowVisibilityLandmarks();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showLowVisibilityLandmarks"), &bShowLowVisibility))
+		previewPanel->setShowLowVisibilityLandmarks(bShowLowVisibility);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showLowVisibilityLandmarksTooltip"));
 }
 
 void SettingsPanels::drawPerCameraSkeletonsControl(const TrackingSectionContext& context)

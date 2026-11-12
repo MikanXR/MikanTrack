@@ -68,7 +68,7 @@ A hand's side is the arm the model attached it to, and sides are the person's ow
 
 `bodyPoseToJson` writes the blocks under an optional `wholeBody` key, one `[x, y, z, score]` per point, so recordings and dumps carry them on every frame the observation rides, a held frame repeating them. An observation without the key reads with the blocks absent. The fused checksum covers the hand poses alone, so the key does not move it.
 
-The camera's Body model stage has a toggle per group. "Show body model face" draws the face along the iBUG contours (`WHOLEBODY_FACE_CONTOURS`) and "Show body model hands" draws each hand with `HAND_CONNECTIONS`, in colors apart from the hand pipeline's own hands, dimmed under the visibility gate (`HandOverlay::drawWholeBodyExtras`). The F9 dump's annotated frame draws both.
+The camera's Body model stage has a toggle per group. "Show body model face" draws the face along the iBUG contours (`WHOLEBODY_FACE_CONTOURS`) and "Show body model hands" draws each hand with `HAND_CONNECTIONS`, in colors apart from the hand pipeline's own hands (`HandOverlay::drawWholeBodyExtras`). The F9 dump's annotated frame draws both. A landmark under the visibility gate, in these groups and in the body landmarks, is hidden unless "Show low-visibility landmarks" is on, which draws it dimmed. It is off by default because the model places an unseen landmark anywhere and it jumps around the frame.
 
 ### Cadence and boxes
 
