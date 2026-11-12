@@ -217,6 +217,12 @@ public:
 			float twist= 0.f;
 			glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
 			glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
+			// The palm read this frame is the lifted palm's mirror along the
+			// view ray, and how much better the mirror's finger axis
+			// continues the forearm than the lifted one's (zero with no hand
+			// read)
+			bool bPalmMirrored= false;
+			float palmMirrorGain= 0.f;
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
 			// The loss stage's readout, which the retarget stage writes from
@@ -331,6 +337,8 @@ private:
 		bool bPalmFiltered= false;
 		glm::quat filteredPalm{1.f, 0.f, 0.f, 0.f};
 		int palmJumpFrames= 0;
+		// The lifted palm's mirror along the view ray is the one in force
+		bool bPalmMirrored= false;
 		// Pixels lightly, the depth heavily, the palm axes as directions
 		OneEuroFilterVec2 elbowPixelFilter;
 		OneEuroFilterVec2 wristPixelFilter;

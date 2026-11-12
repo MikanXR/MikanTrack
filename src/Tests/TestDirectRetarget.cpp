@@ -3,6 +3,7 @@
 #include "glm/gtx/quaternion.hpp"
 
 #include "AvatarRetarget.h"
+#include "AvatarRetargetMath.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "DirectRetarget.h"
@@ -595,6 +596,119 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bBent, "(j) a bent wrist leaves the rest wrist");
 		check(bSame, "(j) a palm mirrored along its view ray solves the same wrist and forearm roll");
+	}
+
+	// (j2) The mirror needs evidence. With the fingers upright the finger
+	// axis barely leans along the view ray, so which of the palm and its
+	// mirror continues the forearm better is noise: the lifted palm stands,
+	// and a hand turned through edge-on with that lean changing sign turns
+	// smoothly. The mirror is taken above the enter bar and kept down to the
+	// leave bar.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+		int frameIndex= 600;
+		auto solveFrame= [&](const User& frameUser) {
+			AvatarPose pose;
+			const TrackingFrameResult frame= makeFrame(camera, frameUser, *rig.skeleton, timestampMs, frameIndex++);
+			solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+			timestampMs+= 33.0;
+		};
+
+		// The hands held up: the upper arms forward and a little down, the
+		// forearms straight up, the fingers continuing them
+		User raised= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			raised.elbow[sideIndex]=
+				raised.shoulder[sideIndex] + kUpperArmLength * glm::normalize(glm::vec3(0.95f, 0.f, -0.3f));
+			raised.wrist[sideIndex]= raised.elbow[sideIndex] + glm::vec3(0.f, 0.f, kForearmLength);
+		}
+		// The palm turned by an angle about the fingers from facing the
+		// camera, the finger axis leaning along the view ray by lean
+		auto setRaisedPalms= [&](float turnRadians, float lean) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const glm::vec3 ray= glm::normalize(raised.wrist[sideIndex]);
+				const glm::vec3 up(0.f, 0.f, 1.f);
+				const glm::vec3 facing= glm::normalize(-ray - up * glm::dot(-ray, up));
+				const glm::vec3 normal= glm::angleAxis(turnRadians, up) * facing;
+				raised.palm[sideIndex]= makePalm(up + lean * ray, normal);
+			}
+		};
+		solver.reset();
+		setRaisedPalms(0.f, 0.05f);
+		for (int repeat= 0; repeat < 5; ++repeat)
+			solveFrame(raised);
+		bool bRead= true;
+		bool bNeverMirrored= true;
+		float largestStep= 0.f;
+		float lastTwist[2]= {solver.getSolveState().arms[0].twist, solver.getSolveState().arms[1].twist};
+		for (int step= 1; step <= 60; ++step)
+		{
+			// The lean's sign holds for three frames, long enough to pass
+			// the palm's one-frame hold
+			setRaisedPalms(glm::radians(3.f * (float)step), (step / 3) % 2 == 0 ? 0.05f : -0.05f);
+			solveFrame(raised);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::SolveState::Arm& arm= solver.getSolveState().arms[sideIndex];
+				bRead&= arm.bHandSeen && arm.bHandMeasured;
+				bNeverMirrored&= !arm.bPalmMirrored;
+				largestStep= std::max(largestStep, fabsf(AvatarRetargetMath::wrapAngle(arm.twist - lastTwist[sideIndex])));
+				lastTwist[sideIndex]= arm.twist;
+			}
+		}
+		check(bRead, "(j2) the raised hands are read on every frame of the turn");
+		check(bNeverMirrored, "(j2) an upright hand's lean along the view ray never takes the mirror");
+		check(largestStep < glm::radians(30.f), "(j2) a hand turned through edge-on turns the forearm smoothly");
+
+		// The bars, on the desk pose, where the forearm points at the camera
+		// and the gain is the lean times about 1.5: a lifted palm whose
+		// finger axis leans along the view ray by the given amount
+		User desk= makeNeutralUser();
+		auto setDeskPalms= [&](float lean) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const glm::vec3 ray= glm::normalize(desk.wrist[sideIndex]);
+				const glm::vec3 forward(1.f, 0.f, 0.f);
+				const glm::vec3 across= glm::normalize(forward - ray * glm::dot(forward, ray));
+				desk.palm[sideIndex]= makePalm(lean * ray + sqrtf(1.f - lean * lean) * across, glm::vec3(0.f, 0.f, -1.f));
+			}
+		};
+		auto bothMirrored= [&](bool bExpected) {
+			return solver.getSolveState().arms[0].bPalmMirrored == bExpected &&
+				solver.getSolveState().arms[1].bPalmMirrored == bExpected;
+		};
+		auto gainBetween= [&](float low, float high) {
+			bool bInside= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const float gain= solver.getSolveState().arms[sideIndex].palmMirrorGain;
+				bInside&= gain > low && gain < high;
+			}
+			return bInside;
+		};
+		solver.reset();
+		setDeskPalms(0.267f);
+		for (int repeat= 0; repeat < 5; ++repeat)
+			solveFrame(desk);
+		check(gainBetween(0.3f, 0.5f) && bothMirrored(false),
+			  "(j2) a gain between the bars, from the lifted palm, stays the lifted palm");
+		setDeskPalms(0.5f);
+		solveFrame(desk);
+		check(gainBetween(0.5f, 2.f) && bothMirrored(true), "(j2) a gain above the enter bar takes the mirror");
+		setDeskPalms(0.267f);
+		solveFrame(desk);
+		check(gainBetween(0.3f, 0.5f) && bothMirrored(true),
+			  "(j2) a gain between the bars, from the mirror, stays the mirror");
+		setDeskPalms(0.03f);
+		solveFrame(desk);
+		check(gainBetween(-0.3f, 0.3f) && bothMirrored(false),
+			  "(j2) a gain under the leave bar returns to the lifted palm");
 	}
 
 	// (k) A hand slot the body model disagrees with is not the hand: beside

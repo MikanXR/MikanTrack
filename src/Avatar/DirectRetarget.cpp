@@ -99,6 +99,17 @@ constexpr float kPnpSampleMaxReach= 0.98f;
 // mirror until it persists this many consecutive frames
 constexpr float kPalmJumpRadians= 60.f * glm::pi<float>() / 180.f;
 constexpr int kPalmJumpAcceptFrames= 2;
+// The lifted palm's mirror along the view ray is taken on how much better
+// its finger axis continues the forearm than the lifted one's does, the
+// gain, which runs to 2 and is about 1 for a hand pointing along the forearm
+// at the camera. The gain is twice the finger axis's lean along the view ray
+// times the forearm's, so with the fingers upright it is near zero and its
+// sign is noise, while the mirror turns an edge-on palm's normal right
+// round. So the mirror is taken above one bar and kept above a lower one,
+// and under that the lifted palm stands. Upright hands turned about the
+// wrist, which need no mirror, reach a gain of 0.3.
+constexpr float kPalmMirrorEnterGain= 0.5f;
+constexpr float kPalmMirrorLeaveGain= 0.3f;
 
 const glm::vec3 k_up(0.f, 0.f, 1.f);
 const glm::vec3 k_left(0.f, 1.f, 0.f);
@@ -1018,12 +1029,20 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			{
 				const glm::vec3 mirroredX= palmXRaw - 2.f * glm::dot(palmXRaw, viewRay) * viewRay;
 				const glm::vec3 mirroredZ= -(palmZRaw - 2.f * glm::dot(palmZRaw, viewRay) * viewRay);
-				if (glm::dot(mirroredX, forearmDirection) > glm::dot(palmXRaw, forearmDirection))
+				const float mirrorGain= glm::dot(mirroredX, forearmDirection) - glm::dot(palmXRaw, forearmDirection);
+				arm.bPalmMirrored= mirrorGain > (arm.bPalmMirrored ? kPalmMirrorLeaveGain : kPalmMirrorEnterGain);
+				armState.palmMirrorGain= mirrorGain;
+				if (arm.bPalmMirrored)
 				{
 					palmXRaw= mirroredX;
 					palmZRaw= mirroredZ;
 				}
 			}
+			else
+			{
+				arm.bPalmMirrored= false;
+			}
+			armState.bPalmMirrored= arm.bPalmMirrored;
 
 			// The hold: a raw palm that jumps away from the filtered one is
 			// the lift's remaining flip until it persists, then it is a turn
@@ -1097,6 +1116,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			arm.palmZFilter.reset();
 			arm.bPalmFiltered= false;
 			arm.palmJumpFrames= 0;
+			arm.bPalmMirrored= false;
 			arm.palmarMemory.reset();
 			for (OneEuroFilter& filter : arm.fingerFilters)
 				filter.reset();

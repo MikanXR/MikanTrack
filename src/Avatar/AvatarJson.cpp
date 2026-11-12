@@ -60,6 +60,8 @@ json armToJson(const DirectRetarget::SolveState::Arm& arm)
 		{"twist", arm.twist},
 		{"wristRotation", quatToJson(arm.wristRotation)},
 		{"filteredPalm", quatToJson(arm.filteredPalm)},
+		{"palmMirrored", arm.bPalmMirrored},
+		{"palmMirrorGain", arm.palmMirrorGain},
 		{"measuredFingers", fingersToJson(arm.measuredFingers)},
 		{"fingers", fingersToJson(arm.fingers)},
 	};

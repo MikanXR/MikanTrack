@@ -1,6 +1,7 @@
 #include "TestCommon.h"
 
 #include "AvatarRetarget.h"
+#include "AvatarRetargetMath.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
@@ -71,6 +72,9 @@ namespace
 {
 constexpr float kScoreGate= 0.3f;
 constexpr float kBendMinMeters= 0.05f;
+// A forearm twist that steps this far between two frames is a flip of the
+// palm, not a turn of the hand
+constexpr float kTwistJumpDegrees= 90.f;
 // A wrist this much nearer or farther than the shoulder, by the truth, is a
 // depth sign worth asking the model for
 constexpr float kDepthSignMinMeters= 0.1f;
@@ -211,9 +215,21 @@ struct SideStats
 	// remains is the single view's palm error proper
 	Stats inputPalmMirrorDeg;
 	Stats inputFingerDeg;
+	// The direct solve's forearm twist between consecutive frames that read
+	// the hand: how many such pairs, and how many stepped past
+	// kTwistJumpDegrees, which a hand does not turn in a frame
+	int twistFrames= 0;
+	int twistJumps= 0;
+	// Frames that read the hand, and how many took the lifted palm's mirror
+	int palmFrames= 0;
+	int palmMirroredFrames= 0;
 
 	void append(const SideStats& other)
 	{
+		palmFrames+= other.palmFrames;
+		palmMirroredFrames+= other.palmMirroredFrames;
+		twistFrames+= other.twistFrames;
+		twistJumps+= other.twistJumps;
 		truthArmFrames+= other.truthArmFrames;
 		modelArmFrames+= other.modelArmFrames;
 		oracle.append(other.oracle);
@@ -348,6 +364,9 @@ struct RetargetComparison
 	std::array<AvatarPose, kCandidateCount> lastPoses{};
 	// The input finger comparison's palmar memory per hand
 	std::array<HandPoseModel::PalmarSideMemory, 2> inputPalmarMemory{};
+	// The direct solve's twist on the last frame that read each hand
+	std::array<bool, 2> bLastTwist{};
+	std::array<float, 2> lastTwist{};
 
 	// This frame's truth-free numbers per side and candidate, for the CSV
 	struct FrameCandidate
@@ -358,6 +377,15 @@ struct RetargetComparison
 		float stepDeg[3]= {0.f, 0.f, 0.f}; // upper arm, forearm, hand
 	};
 	std::array<std::array<FrameCandidate, kCandidateCount>, 2> frame{};
+	// This frame's palm as the direct solve read it per side, for the CSV
+	struct FramePalm
+	{
+		bool bRead= false;
+		float twistDeg= 0.f;
+		bool bMirrored= false;
+		float mirrorGain= 0.f;
+	};
+	std::array<FramePalm, 2> framePalm{};
 
 	// bHaveTruth: the fused frame carries the stereo rig's world poses, so
 	// the reference can be solved
@@ -374,6 +402,27 @@ struct RetargetComparison
 		direct.solve(cameraInput, cameraModel, TrackingFrameResult::HeadPose(), cameraInput.timestampMs, *skeleton,
 					 directConfig, poses[kDirect]);
 		baseline.solve(cameraInput, cameraModel, *skeleton, directConfig, poses[kBaseline]);
+		// The twist's step, between frames that both read the hand
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::SolveState::Arm& arm= direct.getSolveState().arms[sideIndex];
+			const bool bRead= arm.bHandSeen && arm.bHandMeasured;
+			framePalm[sideIndex]= FramePalm{bRead, glm::degrees(arm.twist), arm.bPalmMirrored, arm.palmMirrorGain};
+			if (bRead)
+			{
+				sides[sideIndex].palmFrames++;
+				if (arm.bPalmMirrored)
+					sides[sideIndex].palmMirroredFrames++;
+			}
+			if (bRead && bLastTwist[sideIndex])
+			{
+				sides[sideIndex].twistFrames++;
+				if (fabsf(AvatarRetargetMath::wrapAngle(arm.twist - lastTwist[sideIndex])) > glm::radians(kTwistJumpDegrees))
+					sides[sideIndex].twistJumps++;
+			}
+			bLastTwist[sideIndex]= bRead;
+			lastTwist[sideIndex]= arm.twist;
+		}
 		std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> referencePosed;
 		std::array<std::array<AvatarPosedBone, HUMANOID_BONE_COUNT>, kCandidateCount> posed;
 		computePosedBones(*skeleton, referencePose, referencePosed);
@@ -678,6 +727,12 @@ void logCandidates(const char* tag, const SideStats& side)
 							<< " cm, signed p50 " << side.directWristDepthBiasCm.p50() << " cm on "
 							<< side.directWristDepthErrCm.count() << " frames";
 	}
+	if (side.twistFrames > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    direct retarget twist jumps over " << kTwistJumpDegrees << " deg: " << side.twistJumps
+							<< "/" << side.twistFrames << " frame pairs, palm mirrored on " << side.palmMirroredFrames
+							<< "/" << side.palmFrames << " frames";
+	}
 	if (side.inputPalmDeg.count() > 0)
 	{
 		MIKAN_LOG_INFO(tag) << "    their inputs, camera vs fused: palm frame p50 " << side.inputPalmDeg.p50()
@@ -729,7 +784,16 @@ void writeCsvHeader(std::ofstream& csv)
 		csv << "," << candidate << "ReprojShoulderPx," << candidate << "ReprojElbowPx," << candidate
 			<< "ReprojWristPx," << candidate << "StepUpperDeg," << candidate << "StepForearmDeg," << candidate
 			<< "StepHandDeg";
-	csv << "\n";
+	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain\n";
+}
+
+// The direct solve's palm columns: -1 on a frame that did not read the hand
+void writeCsvPalm(std::ofstream& csv, const RetargetComparison::FramePalm& palm)
+{
+	if (palm.bRead)
+		csv << "," << palm.twistDeg << "," << (palm.bMirrored ? 1 : 0) << "," << palm.mirrorGain;
+	else
+		csv << ",-1,-1,-1";
 }
 
 // The candidates' columns: a number not measured this frame is written as -1
@@ -925,6 +989,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 						for (int column= 0; column < kCsvTruthColumns; ++column)
 							csv << ",-1";
 						writeCsvCandidates(csv, comparison.frame[sideIndex]);
+						writeCsvPalm(csv, comparison.framePalm[sideIndex]);
 						csv << "\n";
 					}
 				}
@@ -1064,6 +1129,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 						writeCsvCandidates(csv, comparison.frame[sideIndex]);
 					else
 						writeCsvCandidates(csv, std::array<RetargetComparison::FrameCandidate, kCandidateCount>{});
+					writeCsvPalm(csv, bCompared ? comparison.framePalm[sideIndex] : RetargetComparison::FramePalm{});
 					csv << "\n";
 				}
 			}
