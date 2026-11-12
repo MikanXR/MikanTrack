@@ -8,8 +8,11 @@ namespace
 // fraction of its own neutral openness, the rest are face widths.
 constexpr float k_blinkFullFraction= 0.4f;
 constexpr float k_jawOpenFull= 0.2f;
-constexpr float k_smileFull= 0.3f;
-constexpr float k_puckerFull= 0.25f;
+constexpr float k_smileFull= 0.18f;
+constexpr float k_puckerFull= 0.14f;
+// An opening jaw draws the mouth corners in: the width it costs, per face
+// width of lip gap, which is given back before the width is read
+constexpr float k_jawWidthLoss= 0.35f;
 constexpr float k_browInnerFull= 0.1f;
 constexpr float k_browOuterFull= 0.12f;
 
@@ -86,9 +89,15 @@ void fillWebcamFaceSource(const BodyPoseObservation& body, bool bFresh, const Wh
 	set("eyeBlinkLeft", blink(left));
 	set("eyeBlinkRight", blink(right));
 	set("jawOpen", (ratios.mouthOpen - rest.mouthOpen) / k_jawOpenFull);
-	set("mouthSmileLeft", (ratios.mouthCornerLift[left] - rest.mouthCornerLift[left]) / k_smileFull);
-	set("mouthSmileRight", (ratios.mouthCornerLift[right] - rest.mouthCornerLift[right]) / k_smileFull);
-	set("mouthPucker", (rest.mouthWidth - ratios.mouthWidth) / k_puckerFull);
+	// The smile and the pucker are the two directions of the mouth's width
+	// about its neutral. The width follows a smile closely where the corner
+	// lift does not, and it is one number, so the two smile columns read
+	// alike.
+	const float jawGap= std::max(ratios.mouthOpen - rest.mouthOpen, 0.f);
+	const float width= ratios.mouthWidth + k_jawWidthLoss * jawGap;
+	set("mouthSmileLeft", (width - rest.mouthWidth) / k_smileFull);
+	set("mouthSmileRight", (width - rest.mouthWidth) / k_smileFull);
+	set("mouthPucker", (rest.mouthWidth - width) / k_puckerFull);
 	set("browInnerUp", (ratios.browInnerHeight - rest.browInnerHeight) / k_browInnerFull);
 	set("browOuterUpLeft", (ratios.browHeight[left] - rest.browHeight[left]) / k_browOuterFull);
 	set("browOuterUpRight", (ratios.browHeight[right] - rest.browHeight[right]) / k_browOuterFull);

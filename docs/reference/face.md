@@ -59,10 +59,12 @@ Each column is one face shape ratio (`computeWholeBodyFaceRatios`, [body-pose.md
 |---|---|---|
 | `eyeBlinkLeft`, `eyeBlinkRight` | the eye openness falling under its neutral | 0.4 of the neutral openness |
 | `jawOpen` | the inner lip gap | 0.2 face widths |
-| `mouthSmileLeft`, `mouthSmileRight` | the mouth corner's lift | 0.3 |
-| `mouthPucker` | the mouth width falling under its neutral | 0.25 |
+| `mouthSmileLeft`, `mouthSmileRight` | the mouth width rising over its neutral, both columns alike | 0.18 |
+| `mouthPucker` | the mouth width falling under its neutral | 0.14 |
 | `browInnerUp` | the inner brow height | 0.1 |
 | `browOuterUpLeft`, `browOuterUpRight` | the brow height | 0.12 |
+
+The smile and the pucker are the two directions of one number, the mouth's width about its neutral. An opening jaw draws the corners in, so 0.35 of the lip gap over its neutral is given back to the width first, and an open mouth reads as neither. The width follows the phone's smile at a correlation of 0.94 on both measured takes, where the mouth corner's lift follows it at 0.68 and 0.89 and rises with no smile. The cost is the side: the two smile columns always read alike. A hand passing in front of the face widens the mouth points, and reads as a smile over 0.3 on 12 percent of such frames on the first take, which Auto's dead zone is sized against.
 
 The other 43 columns are outside `measuredMask` and read zero. The sided columns cross the ratios' sides: `eyeBlinkLeft` reads the person's right eye. The phone's stream is the mirrored one: on a take with three winks of the right eye and then three of the left, its `eyeBlinkLeft` rose on the right eye's. The source matches the phone so a profile reads either alike. The crossing is two constants in `WebcamFace.cpp`.
 

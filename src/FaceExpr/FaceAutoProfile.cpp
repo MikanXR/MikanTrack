@@ -64,8 +64,8 @@ std::string webcamTerm(const char* arkitName)
 		const char* tauSeconds;
 	};
 	static const Shaping kShapings[]= {
-		{"eyeBlink", "0.5", "0.05"}, {"jawOpen", "0.12", "0.08"},     {"mouthSmile", "0.2", "0.08"},
-		{"mouthPucker", "0.2", "0.08"}, {"brow", "0.25", "0.08"},
+		{"eyeBlink", "0.5", "0.05"},     {"jawOpen", "0.12", "0.08"}, {"mouthSmile", "0.3", "0.08"},
+		{"mouthPucker", "0.25", "0.08"}, {"brow", "0.25", "0.08"},
 	};
 	const Shaping* shaping= &kShapings[1];
 	for (const Shaping& candidate : kShapings)

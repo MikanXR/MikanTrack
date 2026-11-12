@@ -249,6 +249,30 @@ static int runFaceExprTest(const TestArgs&)
 		check(near(column(webcam, "jawOpen"), 0.5f, 1e-3f) && near(column(webcam, "eyeBlinkLeft"), 0.f),
 			  "half the jaw's travel reads jawOpen at a half and nothing else");
 
+		// The smile and the pucker are the mouth's width about its neutral,
+		// 36 px of the 80 px face width here. The corners sit at +-18 px.
+		auto withMouthCorners= [&](float halfWidthPx, float lipGap) {
+			BodyPoseObservation body= makeBody(6.f, lipGap, 0.9f);
+			body.wholeBody.face[48].x= -halfWidthPx;
+			body.wholeBody.face[54].x= halfWidthPx;
+			return body;
+		};
+		// 7.2 px wider is 0.09 face widths, half the smile's travel of 0.18
+		fillWebcamFaceSource(withMouthCorners(21.6f, 0.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthSmileLeft"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileRight"), 0.5f, 1e-3f) &&
+				  near(column(webcam, "mouthPucker"), 0.f),
+			  "a wider mouth reads both smile columns alike and no pucker");
+		// 5.6 px narrower is 0.07 face widths, half the pucker's travel of 0.14
+		fillWebcamFaceSource(withMouthCorners(15.2f, 0.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthPucker"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f),
+			  "a narrower mouth reads the pucker and no smile");
+		// A lip gap of 0.2 face widths draws the corners in by 0.07, which is
+		// the jaw's and neither shape's
+		fillWebcamFaceSource(withMouthCorners(15.2f, 16.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthPucker"), 0.f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f, 1e-3f) &&
+				  near(column(webcam, "jawOpen"), 1.f, 1e-3f),
+			  "the width an open jaw costs reads as neither a pucker nor a smile");
+
 		// The person's left eye shut: the columns cross the ratios' sides
 		fillWebcamFaceSource(makeBody(1.f, 0.f, 0.9f), true, &neutral, webcam);
 		check(near(column(webcam, "eyeBlinkRight"), 1.f) && near(column(webcam, "eyeBlinkLeft"), 0.f),
