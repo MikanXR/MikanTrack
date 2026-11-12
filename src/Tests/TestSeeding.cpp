@@ -96,6 +96,8 @@ static int runSeedingTest(const TestArgs& args)
 	body.wholeBody.hands[1]= makeHand(glm::vec2(300.f, 400.f));
 	body.wholeBody.handScores[0].fill(0.9f);
 	body.wholeBody.handScores[1].fill(0.9f);
+	body.visibility[(int)ePoseLandmark::LEFT_WRIST]= 0.9f;
+	body.visibility[(int)ePoseLandmark::RIGHT_WRIST]= 0.9f;
 
 	std::vector<HandSearchHint> hints;
 	std::vector<HandBox> bodyBoxes;
@@ -121,6 +123,21 @@ static int runSeedingTest(const TestArgs& args)
 	body.wholeBody.handScores[1][(int)eHandLandmark::INDEX_MCP]= 0.1f;
 	makeBodyHandHints(body, 1280, 720, hints, bodyBoxes);
 	check(hints.size() == 1 && bodyBoxes.size() == 2, "an unscored hand gives no hint and still protects its box");
+	// The body model's doubt about a hand keeps it out too: a low score over
+	// the hand's points with the knuckles clear, or a wrist it cannot see
+	{
+		BodyPoseObservation doubted= body;
+		doubted.wholeBody.handScores[1].fill(0.9f);
+		doubted.wholeBody.handScores[0].fill(0.35f);
+		makeBodyHandHints(doubted, 1280, 720, hints, bodyBoxes);
+		check(hints.size() == 1 && bodyBoxes.size() == 2,
+			  "a hand scoring under a half on average gives no hint, its knuckles over their gate or not");
+		doubted.wholeBody.handScores[0].fill(0.9f);
+		doubted.visibility[(int)ePoseLandmark::LEFT_WRIST]= 0.3f;
+		makeBodyHandHints(doubted, 1280, 720, hints, bodyBoxes);
+		check(hints.size() == 1 && bodyBoxes.size() == 2, "a hand on a body wrist the model cannot see gives no hint");
+	}
+	makeBodyHandHints(body, 1280, 720, hints, bodyBoxes);
 	// A hand off the frame gives none either
 	body.wholeBody.hands[0]= makeHand(glm::vec2(900.f, 900.f));
 	makeBodyHandHints(body, 1280, 720, hints, bodyBoxes);

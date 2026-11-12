@@ -1561,7 +1561,7 @@ struct HintRunStats
 
 bool runHintPass(const char* tag, const TrackingReplay& replay, const std::string& frameDirectory, int cameraIndex,
 				 const std::vector<FrameObservation>& frames, const CameraGeometry* truthGeometry, bool bBodyHints,
-				 HintRunStats& outStats)
+				 HintRunStats& outStats, std::ofstream* seedCsv= nullptr)
 {
 	const AppConfig& config= replay.getRecordedConfig();
 	HandTrackingPipelineConfig pipelineConfig;
@@ -1583,6 +1583,15 @@ bool runHintPass(const char* tag, const TrackingReplay& replay, const std::strin
 	int dropoutRun[2]= {0, 0};
 	std::vector<HandSearchHint> hints;
 	std::vector<HandBox> handBoxes;
+	bool bHintsSet= false;
+	HandBodySeedStats seedBefore;
+	TrackingFrameResult prevResult;
+	if (seedCsv != nullptr)
+	{
+		*seedCsv << "timestampMs,side,centerX,centerY,palmPx,edgePx,gatedScore,meanScore,wristVisibility,"
+					"onTrackedSlot,slotsBefore,slotsAfter,applied,evicted,accepted,rejected,redundant,noFreeSlot,"
+					"tooSmall\n";
+	}
 	for (const FrameObservation& frame : frames)
 	{
 		const cv::Mat image=
@@ -1603,6 +1612,7 @@ bool runHintPass(const char* tag, const TrackingReplay& replay, const std::strin
 				{
 					pipeline.setSearchHints(hints, handBoxes);
 					hintCooldownFrames= 2;
+					bHintsSet= true;
 				}
 			}
 		}
@@ -1610,6 +1620,65 @@ bool runHintPass(const char* tag, const TrackingReplay& replay, const std::strin
 		TrackingFrameResult result;
 		pipeline.process(image, result);
 		outStats.pipelineMs.add(result.inferenceMs);
+
+		// One row per hint handed over on this frame, with what the frame's
+		// funnel did. A frame's two hints share the funnel's counts.
+		const HandBodySeedStats seedNow= pipeline.getSeedStats().body;
+		if (seedCsv != nullptr && bHintsSet)
+		{
+			std::vector<HandBox> slotBoxesBefore;
+			for (const TrackedHand& hand : prevResult.hands)
+			{
+				if (!hand.tracked)
+					continue;
+				const Box box= boxOf(hand.imagePoints);
+				slotBoxesBefore.push_back({box.min, box.max});
+			}
+			int slotsAfter= 0;
+			for (const TrackedHand& hand : result.hands)
+				slotsAfter+= hand.tracked ? 1 : 0;
+			for (const HandSearchHint& hint : hints)
+			{
+				// The whole-body hand the hint came from: the nearer palm center
+				int hintSide= 0;
+				float nearest= FLT_MAX;
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					const auto& hand= lastBody.wholeBody.hands[sideIndex];
+					const glm::vec2 palmCenter= 0.5f * (glm::vec2(hand[0]) + glm::vec2(hand[9]));
+					const float distance= glm::distance(palmCenter, hint.centerPx);
+					if (distance < nearest)
+					{
+						nearest= distance;
+						hintSide= sideIndex;
+					}
+				}
+				float gatedScore= 1.f;
+				for (int landmark : kSharedLandmarks)
+					gatedScore= std::min(gatedScore, lastBody.wholeBody.handScores[hintSide][landmark]);
+				float meanScore= 0.f;
+				for (float score : lastBody.wholeBody.handScores[hintSide])
+					meanScore+= score / (float)WHOLEBODY_HAND_LANDMARK_COUNT;
+				const float edgePx= std::min(std::min(hint.centerPx.x, (float)lastWidth - hint.centerPx.x),
+											 std::min(hint.centerPx.y, (float)lastHeight - hint.centerPx.y));
+				const int wristLandmark= hintSide == 0 ? (int)ePoseLandmark::LEFT_WRIST : (int)ePoseLandmark::RIGHT_WRIST;
+				*seedCsv << std::fixed << std::setprecision(3) << frame.timestampMs << std::defaultfloat
+						 << std::setprecision(5) << "," << hintSide << "," << hint.centerPx.x << "," << hint.centerPx.y
+						 << "," << hint.palmSizePx << "," << edgePx << "," << gatedScore << "," << meanScore << ","
+						 << lastBody.visibility[wristLandmark] << ","
+						 << (HandTrackingPipeline::isSeedRedundant(hint.centerPx, slotBoxesBefore) ? 1 : 0) << ","
+						 << slotBoxesBefore.size() << "," << slotsAfter << ","
+						 << seedNow.applied - seedBefore.applied << "," << seedNow.evicted - seedBefore.evicted << ","
+						 << seedNow.accepted - seedBefore.accepted << ","
+						 << seedNow.rejectedByModel - seedBefore.rejectedByModel << ","
+						 << seedNow.skippedRedundant - seedBefore.skippedRedundant << ","
+						 << seedNow.skippedNoFreeSlot - seedBefore.skippedNoFreeSlot << ","
+						 << seedNow.skippedTooSmall - seedBefore.skippedTooSmall << "\n";
+			}
+		}
+		seedBefore= seedNow;
+		bHintsSet= false;
+		prevResult= result;
 		lastBody= frame.body;
 		lastWidth= image.cols;
 		lastHeight= image.rows;
@@ -2226,10 +2295,17 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		const bool bHaveTruth= profile.intrinsics.present && profile.extrinsics.present;
 		HintRunStats withoutHints;
 		HintRunStats withHints;
+		// With a frames CSV, the hints handed over beside it, one row each
+		std::ofstream seedCsv;
+		if (!csvPath.empty())
+		{
+			const std::filesystem::path path(csvPath);
+			seedCsv.open((path.parent_path() / (path.stem().string() + "_seeds.csv")).string(), std::ios::trunc);
+		}
 		if (!runHintPass(tag, replay, frameDirectory, cameraIndex, dividedFrames, bHaveTruth ? &geometry : nullptr,
 						 false, withoutHints) ||
 			!runHintPass(tag, replay, frameDirectory, cameraIndex, dividedFrames, bHaveTruth ? &geometry : nullptr,
-						 true, withHints))
+						 true, withHints, seedCsv.is_open() ? &seedCsv : nullptr))
 			return 1;
 		MIKAN_LOG_INFO(tag) << "hand pipeline re-run over the raw frames with no cross-camera hints:";
 		logHintRun(tag, "without body hints", withoutHints);

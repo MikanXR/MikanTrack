@@ -35,6 +35,15 @@ void makeBodyHandHints(const BodyPoseObservation& body, int frameWidth, int fram
 		bool bScored= true;
 		for (int landmark : gatedLandmarks)
 			bScored= bScored && scores[landmark] >= k_bodyHandHintScoreGate;
+		// The body model's own doubt predicts the hand model's: a hand it
+		// scores low over its 21 points, or on a wrist it cannot see, is one
+		// the hand model drops on its first pass
+		float meanScore= 0.f;
+		for (float score : scores)
+			meanScore+= score / (float)WHOLEBODY_HAND_LANDMARK_COUNT;
+		const int bodyWristIndex= sideIndex == 0 ? (int)ePoseLandmark::LEFT_WRIST : (int)ePoseLandmark::RIGHT_WRIST;
+		bScored= bScored && meanScore >= k_bodyHandHintMeanScoreGate &&
+			body.visibility[bodyWristIndex] >= k_bodyHandHintWristVisibility;
 		if (!bScored)
 			continue;
 
