@@ -64,7 +64,7 @@ Each column is one face shape ratio (`computeWholeBodyFaceRatios`, [body-pose.md
 | `browInnerUp` | the inner brow height | 0.1 |
 | `browOuterUpLeft`, `browOuterUpRight` | the brow height | 0.12 |
 
-The other 43 columns are outside `measuredMask` and read zero. The sided columns cross the ratios' sides: `eyeBlinkLeft` reads the person's right eye. On the one take that carries a wink the phone's `Left` columns followed the person's right eye, and the source matches the phone so a profile reads either alike. The crossing is two constants in `WebcamFace.cpp`.
+The other 43 columns are outside `measuredMask` and read zero. The sided columns cross the ratios' sides: `eyeBlinkLeft` reads the person's right eye. The phone's stream is the mirrored one: on a take with three winks of the right eye and then three of the left, its `eyeBlinkLeft` rose on the right eye's. The source matches the phone so a profile reads either alike. The crossing is two constants in `WebcamFace.cpp`.
 
 The neutral values come with the direct mode's neutral capture: `DirectNeutralPose` carries the ratios behind `facePresent`, saved as `neutralFace` in the project's `direct` section. The capture takes the mean over the last model frames whose face cleared the gate (`WebcamFaceNeutralAverager`: up to 15 frames within 1.5 s, at least 5), since one frame's eye openness scatters by a quarter of a blink's travel. A neutral captured with the face unseen, or before the source existed, has none, and the source then reads against generic defaults.
 

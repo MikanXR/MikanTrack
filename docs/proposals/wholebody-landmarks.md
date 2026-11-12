@@ -212,6 +212,26 @@ The gate from piece 4: on the hands-crossing and clasping segments, the shape ma
 
 Built, and the gate is met on the 2026-11-12 take: with the fused wrists within a shoulder width the shape match is right on 23 of 23 frames, where the wrist test decides 15. `matchHandSideByShape` (`src/Vision/HandSideMatch.h`) is the one rule the solver's report and `--gate-wholebody` both read. It decides only while both whole-body hands score, which is stricter than the first measurement's rule and leaves 16 of 2174 slot frames to the wrists. The solve state counts the frames each slot was turned away on the other arm's wrist, and the Direct solver stage shows the count. The solver's pose is untouched: the retarget golden's result on a direct take is the same before and after.
 
+## Live check
+
+A direct take of 2026-11-12 on the webcam with the phone streaming (33 s: a rest hold, three winks of the right eye and three of the left, then the mouth and the brows), and three dumps from the same session.
+
+- The recording carries the blocks on all 981 frames and verifies in replay, and its config snapshot holds the face neutral the capture filled.
+
+- The dumps' annotated frames draw the face contours on the face and the body model's hands on the hands.
+
+- Sides: the phone's `eyeBlinkLeft` rose on the right eye's winks, so the phone's stream is the mirrored one and the webcam source's crossing stands. During a held wink the eye points' openness fell to 0.82 to 0.94 of its rest value on both eyes, the winking eye 4 to 10 points lower, and the points told the wink's eye on 36 percent of its frames where each face model told it on 94 to 100. That is the blink limit of piece 5 again.
+
+- The webcam columns under the captured neutral, against the phone's: the jaw, the brows and the smile sit 0.10 to 0.11 away on average over the mouth and brow segment and the pucker 0.20, and at rest none passes Auto's dead zone. The correlations are 0.94 for the jaw, 0.91 for the inner brow, 0.83 to 0.91 for the outer brows and 0.73 to 0.86 for the smile. The smile and the pucker read low: they peak at 0.33 and 0.56 where the phone's peak at 0.86 and 0.87.
+
+- Body hints live, from the dumps' funnel over the session: 12408 hints offered, 10459 on a hand already tracked, 1793 seeded with 382 of them by eviction, and the hand model kept 199 and dropped 1594. The re-run of piece 7 kept 59 of 129.
+
+- The hand side report: not swapped in the dump taken with the hands clasped, where one slot sat on both hands. The session counted 468 and 1010 frames with the left and the right slot turned away on the other arm's wrist.
+
+- In the first dump the body model had lost the person and sat on the wall with a confidence of 0.11 and no landmark visible. Every consumer here stood down on it: the face read untracked, the hands' scores were under the hint and shape gates, and no hand was taken.
+
+Not covered: the hand's return after a dropout and a slot on a scene object giving way (plan.md).
+
 ## Order and review stops
 
 1. Pieces 1 to 3: the block, the recording key, the overlay and the dump. Self-contained, behavior-neutral, and the overlay alone shows the points on the rig.
