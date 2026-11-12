@@ -40,8 +40,8 @@ static constexpr int k_cocoToPoseLandmark[COCO_KEYPOINT_COUNT]= {
 // The whole-body model's extra keypoints that have a BlazePose slot: the eye
 // corners and mouth corners from the face block, and per hand the pinky and
 // index knuckles and the thumb's second knuckle, which is what BlazePose
-// means by its hand slots. The remaining face and hand points have no slot
-// and stay with the model result.
+// means by its hand slots. The face and hand blocks ride whole beside the
+// slots, in the observation's whole-body extras.
 struct WholeBodySlot
 {
 	int keypoint;
@@ -179,9 +179,12 @@ eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, bool bForceD
 	return eBodyBoxSource::FullFrame;
 }
 
-void BodyPoseTracker::fillObservation(BodyPoseObservation& outObservation) const
+// The observation's blocks are sized by the model's layout
+static_assert(WHOLEBODY_LEFT_HAND_START - WHOLEBODY_FACE_START == WHOLEBODY_FACE_LANDMARK_COUNT);
+static_assert(WHOLEBODY_HAND_KEYPOINT_COUNT == WHOLEBODY_HAND_LANDMARK_COUNT);
+
+void BodyPoseTracker::fillObservation(const RtmPoseResult& result, BodyPoseObservation& outObservation)
 {
-	const RtmPoseResult& result= m_landmarkResult;
 	outObservation.hasDepth= result.hasDepth;
 
 	// SimCC peaks are not probabilities; they are reported as-is and clamped
@@ -205,6 +208,26 @@ void BodyPoseTracker::fillObservation(BodyPoseObservation& outObservation) const
 	{
 		for (const WholeBodySlot& slot : k_wholeBodyExtraSlots)
 			fill(slot.keypoint, slot.landmark);
+
+		// The face and hand blocks whole, in the model's own orders
+		WholeBodyExtras& extras= outObservation.wholeBody;
+		extras.present= true;
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+		{
+			const int keypoint= WHOLEBODY_FACE_START + index;
+			extras.face[index]= result.points[keypoint];
+			extras.faceScores[index]= std::clamp(result.scores[keypoint], 0.f, 1.f);
+		}
+		const int handStarts[2]= {WHOLEBODY_LEFT_HAND_START, WHOLEBODY_RIGHT_HAND_START};
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			for (int index= 0; index < WHOLEBODY_HAND_LANDMARK_COUNT; ++index)
+			{
+				const int keypoint= handStarts[sideIndex] + index;
+				extras.hands[sideIndex][index]= result.points[keypoint];
+				extras.handScores[sideIndex][index]= std::clamp(result.scores[keypoint], 0.f, 1.f);
+			}
+		}
 	}
 }
 
@@ -272,7 +295,7 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 			outObservation.valid= true;
 			outObservation.boxSource= boxSource;
 			outObservation.modelFrameIndex= m_modelFrameIndex;
-			fillObservation(outObservation);
+			fillObservation(m_landmarkResult, outObservation);
 		}
 		else
 		{

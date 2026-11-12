@@ -14,6 +14,11 @@ static const ImU32 k_palmDetectColor= IM_COL32(255, 220, 60, 180); // yellow
 static const ImU32 k_bodyColor= IM_COL32(200, 120, 255, 230);      // purple
 static const ImU32 k_bodyDimColor= IM_COL32(200, 120, 255, 70);
 static const ImU32 k_bodyKeyColor= IM_COL32(120, 255, 180, 255);   // green
+// The whole-body model's face and hand blocks, apart from the hand pipeline's
+// own hands
+static const ImU32 k_wholeBodyFaceColor= IM_COL32(60, 220, 200, 230);  // teal
+static const ImU32 k_wholeBodyHandColor= IM_COL32(255, 150, 40, 230);  // orange
+static const int k_wholeBodyDimAlpha= 70;
 // Matches BodyPoseSolver's landmark gate: below this a landmark is treated as
 // unseen, so the overlay dims exactly what the solver ignores
 static const float k_bodyVisibilityGate= 0.5f;
@@ -150,6 +155,62 @@ void HandOverlay::drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& 
 	char header[96];
 	snprintf(header, sizeof(header), "body pose conf %.2f (box: %s)", body.confidence, boxSourceName);
 	drawList->AddText(mapping.toScreen(8.f, 8.f), k_bodyColor, header);
+}
+
+void HandOverlay::drawWholeBodyExtras(ImDrawList* drawList, const BodyPoseObservation& body,
+									  const ImageToScreenMapping& mapping, bool bShowFace, bool bShowHands)
+{
+	if (!body.valid || !body.wholeBody.present)
+		return;
+	const WholeBodyExtras& extras= body.wholeBody;
+
+	auto shade= [](ImU32 color, float scoreA, float scoreB) {
+		const bool bVisible= scoreA >= k_bodyVisibilityGate && scoreB >= k_bodyVisibilityGate;
+		return bVisible ? color : (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, k_wholeBodyDimAlpha);
+	};
+	auto drawSegment= [&](const glm::vec3& a, const glm::vec3& b, float scoreA, float scoreB, ImU32 color) {
+		drawList->AddLine(mapping.toScreen(a.x, a.y), mapping.toScreen(b.x, b.y), shade(color, scoreA, scoreB),
+						  1.5f);
+	};
+	auto drawPoint= [&](const glm::vec3& p, float score, ImU32 color) {
+		drawList->AddCircleFilled(mapping.toScreen(p.x, p.y), 1.5f, shade(color, score, score));
+	};
+
+	if (bShowFace)
+	{
+		for (const WholeBodyFaceContour& contour : WHOLEBODY_FACE_CONTOURS)
+		{
+			for (int index= contour.first; index < contour.last; ++index)
+			{
+				drawSegment(extras.face[index], extras.face[index + 1], extras.faceScores[index],
+							extras.faceScores[index + 1], k_wholeBodyFaceColor);
+			}
+			if (contour.bClosed)
+			{
+				drawSegment(extras.face[contour.last], extras.face[contour.first], extras.faceScores[contour.last],
+							extras.faceScores[contour.first], k_wholeBodyFaceColor);
+			}
+		}
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+			drawPoint(extras.face[index], extras.faceScores[index], k_wholeBodyFaceColor);
+	}
+
+	if (bShowHands)
+	{
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const auto& points= extras.hands[sideIndex];
+			const auto& scores= extras.handScores[sideIndex];
+			for (int i= 0; i < HAND_CONNECTION_COUNT; ++i)
+			{
+				const int a= HAND_CONNECTIONS[i][0];
+				const int b= HAND_CONNECTIONS[i][1];
+				drawSegment(points[a], points[b], scores[a], scores[b], k_wholeBodyHandColor);
+			}
+			for (int index= 0; index < WHOLEBODY_HAND_LANDMARK_COUNT; ++index)
+				drawPoint(points[index], scores[index], k_wholeBodyHandColor);
+		}
+	}
 }
 
 void HandOverlay::drawForearmOverlay(ImDrawList* drawList, const ForearmOverlay& forearm,

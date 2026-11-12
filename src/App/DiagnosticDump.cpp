@@ -214,6 +214,46 @@ void DiagnosticDump::annotateFrame(const cv::Mat& frame, const TrackingFrameResu
 			cv::circle(outAnnotated, cv::Point2f(p.x, p.y), 2,
 					   bVisible ? bodyColor : bodyColor * 0.35, cv::FILLED);
 		}
+
+		// The whole-body model's face (teal) and hands (pink), apart from
+		// the hand pipeline's own hands below
+		if (result.body.wholeBody.present)
+		{
+			const WholeBodyExtras& extras= result.body.wholeBody;
+			auto drawSegment= [&](const glm::vec3& a, const glm::vec3& b, float scoreA, float scoreB,
+								  const cv::Scalar& color) {
+				const bool bVisible= scoreA >= 0.5f && scoreB >= 0.5f;
+				cv::line(outAnnotated, cv::Point2f(a.x, a.y), cv::Point2f(b.x, b.y),
+						 bVisible ? color : color * 0.35, 1);
+			};
+
+			const cv::Scalar faceColor(200, 220, 60);
+			for (const WholeBodyFaceContour& contour : WHOLEBODY_FACE_CONTOURS)
+			{
+				for (int index= contour.first; index < contour.last; ++index)
+				{
+					drawSegment(extras.face[index], extras.face[index + 1], extras.faceScores[index],
+								extras.faceScores[index + 1], faceColor);
+				}
+				if (contour.bClosed)
+				{
+					drawSegment(extras.face[contour.last], extras.face[contour.first],
+								extras.faceScores[contour.last], extras.faceScores[contour.first], faceColor);
+				}
+			}
+
+			const cv::Scalar handColor(180, 120, 255);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				for (int connection= 0; connection < HAND_CONNECTION_COUNT; ++connection)
+				{
+					const int a= HAND_CONNECTIONS[connection][0];
+					const int b= HAND_CONNECTIONS[connection][1];
+					drawSegment(extras.hands[sideIndex][a], extras.hands[sideIndex][b],
+								extras.handScores[sideIndex][a], extras.handScores[sideIndex][b], handColor);
+				}
+			}
+		}
 	}
 
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)

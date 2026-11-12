@@ -66,4 +66,11 @@ void drawForearmOverlay(ImDrawList* drawList, const ForearmOverlay& forearm,
 // bad elbow can be traced to a bad landmark rather than guessed at.
 void drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& body,
 				  const ImageToScreenMapping& mapping);
+
+// Draws the whole-body model's face block (the iBUG contours) and its two
+// hands, each group when asked, in their own colors so the body model's hands
+// read apart from the hand pipeline's. A point under the visibility gate is
+// dimmed. Draws nothing for an observation without the blocks.
+void drawWholeBodyExtras(ImDrawList* drawList, const BodyPoseObservation& body,
+						 const ImageToScreenMapping& mapping, bool bShowFace, bool bShowHands);
 }

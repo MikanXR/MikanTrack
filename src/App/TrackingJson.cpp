@@ -52,7 +52,7 @@ json bodyPoseToJson(const BodyPoseObservation& body)
 		imagePoints.push_back(vec3ToJson(body.imagePoints[landmark]));
 		visibility.push_back(body.visibility[landmark]);
 	}
-	return {
+	json out= {
 		{"valid", true},
 		{"modelFrameIndex", body.modelFrameIndex},
 		{"providedMask", body.providedMask},
@@ -62,6 +62,29 @@ json bodyPoseToJson(const BodyPoseObservation& body)
 		{"imagePoints", imagePoints},
 		{"visibility", visibility},
 	};
+
+	// The whole-body blocks, one [x, y, z, score] per point
+	if (body.wholeBody.present)
+	{
+		auto pointsToJson= [](const glm::vec3* points, const float* scores, int count) {
+			json block= json::array();
+			for (int index= 0; index < count; ++index)
+				block.push_back(json::array({points[index].x, points[index].y, points[index].z, scores[index]}));
+			return block;
+		};
+		const WholeBodyExtras& extras= body.wholeBody;
+		json hands= json::array();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			hands.push_back(pointsToJson(extras.hands[sideIndex].data(), extras.handScores[sideIndex].data(),
+										 WHOLEBODY_HAND_LANDMARK_COUNT));
+		}
+		out["wholeBody"]= {
+			{"face", pointsToJson(extras.face.data(), extras.faceScores.data(), WHOLEBODY_FACE_LANDMARK_COUNT)},
+			{"hands", hands},
+		};
+	}
+	return out;
 }
 
 json imageQualityToJson(const HandImageQuality& quality)
@@ -228,6 +251,36 @@ void bodyPoseFromJson(const json& j, BodyPoseObservation& outBody)
 			outBody.imagePoints[landmark]= vec3FromJson(imagePoints[landmark]);
 		if (landmark < (int)visibility.size())
 			outBody.visibility[landmark]= floatFromJson(visibility[landmark]);
+	}
+
+	// Absent from the planar backend's observations and from recordings
+	// predating the block, which leaves it not present
+	if (j.contains("wholeBody") && j["wholeBody"].is_object())
+	{
+		auto pointsFromJson= [](const json& block, glm::vec3* outPoints, float* outScores, int count) {
+			if (!block.is_array())
+				return;
+			for (int index= 0; index < count && index < (int)block.size(); ++index)
+			{
+				const json& point= block[index];
+				if (!point.is_array() || point.size() != 4)
+					continue;
+				outPoints[index]=
+					glm::vec3(floatFromJson(point[0]), floatFromJson(point[1]), floatFromJson(point[2]));
+				outScores[index]= floatFromJson(point[3]);
+			}
+		};
+		const json& wholeBody= j["wholeBody"];
+		WholeBodyExtras& extras= outBody.wholeBody;
+		extras.present= true;
+		pointsFromJson(wholeBody.value("face", json::array()), extras.face.data(), extras.faceScores.data(),
+					   WHOLEBODY_FACE_LANDMARK_COUNT);
+		const json hands= wholeBody.value("hands", json::array());
+		for (int sideIndex= 0; sideIndex < 2 && sideIndex < (int)hands.size(); ++sideIndex)
+		{
+			pointsFromJson(hands[sideIndex], extras.hands[sideIndex].data(), extras.handScores[sideIndex].data(),
+						   WHOLEBODY_HAND_LANDMARK_COUNT);
+		}
 	}
 }
 

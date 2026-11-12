@@ -1651,6 +1651,16 @@ void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& conte
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
+
+	bool bShowFace= previewPanel->getShowWholeBodyFace();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyFace"), &bShowFace))
+		previewPanel->setShowWholeBodyFace(bShowFace);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyFaceTooltip"));
+
+	bool bShowHands= previewPanel->getShowWholeBodyHands();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyHands"), &bShowHands))
+		previewPanel->setShowWholeBodyHands(bShowHands);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyHandsTooltip"));
 }
 
 void SettingsPanels::drawPerCameraSkeletonsControl(const TrackingSectionContext& context)

@@ -897,6 +897,67 @@ static int runBodyPoseTest(const TestArgs&)
 			  "a mask-less recording reads as all 33 provided");
 	}
 
+	// The whole-body blocks: a 133-point model result lands each face point
+	// and each hand's points in the block under the model's own index, the
+	// left hand under side 0, and the blocks survive a recording round trip.
+	{
+		RtmPoseResult model;
+		model.valid= true;
+		model.keypointCount= WHOLEBODY_KEYPOINT_COUNT;
+		model.hasDepth= true;
+		for (int keypoint= 0; keypoint < WHOLEBODY_KEYPOINT_COUNT; ++keypoint)
+		{
+			model.points[keypoint]= glm::vec3((float)keypoint, (float)(keypoint * 2), (float)keypoint * 0.01f);
+			model.scores[keypoint]= 0.25f + 0.005f * (float)keypoint;
+		}
+		// A SimCC peak above one is clamped as the slots' visibility is
+		model.scores[WHOLEBODY_FACE_START]= 1.5f;
+
+		BodyPoseObservation body;
+		body.valid= true;
+		BodyPoseTracker::fillObservation(model, body);
+
+		const WholeBodyExtras& extras= body.wholeBody;
+		bool bFace= extras.present && extras.faceScores[0] == 1.f;
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+			bFace= bFace && extras.face[index] == model.points[WHOLEBODY_FACE_START + index];
+		check(bFace, "the face block carries the 68 face points in the model's order");
+
+		bool bHands= true;
+		for (int index= 0; index < WHOLEBODY_HAND_LANDMARK_COUNT; ++index)
+		{
+			bHands= bHands && extras.hands[0][index] == model.points[WHOLEBODY_LEFT_HAND_START + index] &&
+				extras.hands[1][index] == model.points[WHOLEBODY_RIGHT_HAND_START + index] &&
+				extras.handScores[1][index] == model.scores[WHOLEBODY_RIGHT_HAND_START + index];
+		}
+		check(bHands, "side 0 is the model's left hand and side 1 its right");
+		check(extras.face[WHOLEBODY_FACE_MOUTH_LEFT] == body.imagePoints[9] &&
+				  extras.hands[0][WHOLEBODY_HAND_INDEX_MCP] == body.imagePoints[19],
+			  "a point with a slot reads the same in the slot and the block");
+
+		BodyPoseObservation restored;
+		TrackingJson::bodyPoseFromJson(TrackingJson::bodyPoseToJson(body), restored);
+		check(restored.wholeBody.present && restored.wholeBody.face == extras.face &&
+				  restored.wholeBody.faceScores == extras.faceScores && restored.wholeBody.hands == extras.hands &&
+				  restored.wholeBody.handScores == extras.handScores,
+			  "the whole-body blocks survive the round trip");
+
+		// A recording predating the blocks, and the planar backend's
+		nlohmann::json legacy= TrackingJson::bodyPoseToJson(body);
+		legacy.erase("wholeBody");
+		BodyPoseObservation legacyBody;
+		TrackingJson::bodyPoseFromJson(legacy, legacyBody);
+		check(legacyBody.valid && !legacyBody.wholeBody.present, "an observation without the key has no blocks");
+
+		RtmPoseResult planar= model;
+		planar.keypointCount= COCO_KEYPOINT_COUNT;
+		BodyPoseObservation planarBody;
+		planarBody.valid= true;
+		BodyPoseTracker::fillObservation(planar, planarBody);
+		check(!planarBody.wholeBody.present && !TrackingJson::bodyPoseToJson(planarBody).contains("wholeBody"),
+			  "the planar backend writes no blocks");
+	}
+
 	if (failures == 0)
 		MIKAN_LOG_INFO("test-bodypose") << "All body-pose solver tests passed";
 	return failures == 0 ? 0 : 1;

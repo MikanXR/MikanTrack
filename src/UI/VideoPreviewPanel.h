@@ -73,6 +73,10 @@ public:
 
 	bool getShowBodyPose() const { return m_bShowBodyPose; }
 	void setShowBodyPose(bool bShow) { m_bShowBodyPose= bShow; }
+	bool getShowWholeBodyFace() const { return m_bShowWholeBodyFace; }
+	void setShowWholeBodyFace(bool bShow) { m_bShowWholeBodyFace= bShow; }
+	bool getShowWholeBodyHands() const { return m_bShowWholeBodyHands; }
+	void setShowWholeBodyHands(bool bShow) { m_bShowWholeBodyHands= bShow; }
 	// The direct solver's verdict on one camera's hand slots this frame
 	// (whether each was the hand), -1 for no camera: a rejected slot draws
 	// dimmed unless every slot is shown
@@ -114,4 +118,7 @@ private:
 	std::array<bool, 2> m_handUsed{false, false};
 	// Raw body landmarks on body-pose cameras (the solver's source data)
 	bool m_bShowBodyPose= true;
+	// The whole-body backend's face and hand blocks, each on its own toggle
+	bool m_bShowWholeBodyFace= true;
+	bool m_bShowWholeBodyHands= true;
 };

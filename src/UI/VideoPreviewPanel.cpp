@@ -176,6 +176,8 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 				// on exactly the camera the stage is enabled for
 				if (m_bShowBodyPose)
 					HandOverlay::drawBodyPose(drawList, result->body, mapping);
+				HandOverlay::drawWholeBodyExtras(drawList, result->body, mapping, m_bShowWholeBodyFace,
+												 m_bShowWholeBodyHands);
 			}
 			if (forearms != nullptr && cameraIndex < (int)forearms->size())
 				HandOverlay::drawForearmOverlay(drawList, (*forearms)[cameraIndex], mapping);
