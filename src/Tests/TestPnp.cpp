@@ -229,6 +229,80 @@ static int runPnpTest(const TestArgs& args)
 		}
 	}
 
+	// The palmar side of a hand whose side is known is its anatomy. A curled
+	// left hand settles the side by its own evidence. A flat left hand whose
+	// thumb sits on the back of the palm plane seeds the wrong side from that
+	// evidence, and takes the right one when its side is decided. Decided as
+	// the other hand it takes the other.
+	{
+		// A left hand in its own frame: the fingers along +Y, the thumb and
+		// the index toward -X, the palm facing +Z, the joints curling toward
+		// the palm by the given amount, the thumb's knuckle lifted off the
+		// palm plane by thumbLift
+		auto makeLeftHand= [](float curl, float thumbLift) {
+			std::array<glm::vec3, HAND_LANDMARK_COUNT> points{};
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				const glm::vec3 base=
+					finger == 0 ? glm::vec3(-0.05f, 0.03f, 0.f) : glm::vec3(((float)finger - 2.5f) * 0.02f, 0.08f, 0.f);
+				for (int joint= 0; joint < 4; ++joint)
+				{
+					points[1 + finger * 4 + joint]=
+						base + glm::vec3(0.f, 0.03f * (float)joint, curl * (float)(joint * joint));
+				}
+			}
+			points[(int)eHandLandmark::THUMB_MCP].z+= thumbLift;
+			return points;
+		};
+		const std::array<glm::vec3, HAND_LANDMARK_COUNT> curledModel= makeLeftHand(0.006f, 0.f);
+		const std::array<glm::vec3, HAND_LANDMARK_COUNT> flatModel= makeLeftHand(0.f, -0.012f);
+		const float palmLength= glm::length(curledModel[(int)eHandLandmark::MIDDLE_MCP]);
+
+		// The lifted palm's normal for the hand under the given side
+		auto palmNormal= [&](const std::array<glm::vec3, HAND_LANDMARK_COUNT>& model, eHandSide side, bool bSideDecided,
+							 glm::vec3& outNormal) {
+			LandmarkTo3D landmarkTo3D;
+			landmarkTo3D.configure(intrinsics, palmLength);
+			TrackingFrameResult frame;
+			frame.timestampMs= 1000.0;
+			TrackedHand& hand= frame.hands[(int)side];
+			hand.tracked= true;
+			hand.side= side;
+			hand.bSideDecided= bSideDecided;
+			hand.presence= 0.9f;
+			hand.modelPoints= model;
+			for (int lm= 0; lm < HAND_LANDMARK_COUNT; ++lm)
+			{
+				const glm::vec3 cameraPoint= rotationTruth * model[lm] + translationTruth;
+				hand.imagePoints[lm]=
+					glm::vec3(fx * cameraPoint.x / cameraPoint.z + cx, fy * cameraPoint.y / cameraPoint.z + cy, 0.f);
+			}
+			landmarkTo3D.process(frame);
+			const HandPose& pose= frame.poses[(int)side];
+			outNormal= pose.palmOrientationCamera * glm::vec3(0.f, 0.f, 1.f);
+			return frame.hands[(int)side].hasCameraSpace && pose.tracked;
+		};
+
+		const glm::vec3 truePalmNormal= rotationTruth * glm::vec3(0.f, 0.f, 1.f);
+		glm::vec3 curled, flatSeeded, flatDecided, flatDecidedOtherHand, curledDecided;
+		const bool bSolved= palmNormal(curledModel, eHandSide::Left, false, curled) &&
+			palmNormal(flatModel, eHandSide::Left, false, flatSeeded) &&
+			palmNormal(flatModel, eHandSide::Left, true, flatDecided) &&
+			palmNormal(flatModel, eHandSide::Right, true, flatDecidedOtherHand) &&
+			palmNormal(curledModel, eHandSide::Left, true, curledDecided);
+		const bool bEvidence= glm::dot(curled, truePalmNormal) > 0.9f && glm::dot(flatSeeded, truePalmNormal) < -0.9f;
+		const bool bDecided= glm::dot(flatDecided, truePalmNormal) > 0.9f && glm::dot(curledDecided, truePalmNormal) > 0.9f &&
+			glm::dot(flatDecidedOtherHand, truePalmNormal) < -0.9f;
+		MIKAN_LOG_INFO("test-pnp") << "palmar side: solved=" << bSolved << " by evidence as expected=" << bEvidence
+								   << " from a decided side=" << bDecided;
+		if (!bSolved || !bEvidence || !bDecided)
+		{
+			MIKAN_LOG_ERROR("test-pnp") << "FAILED: a hand whose side is decided must take its palmar side from that "
+										   "side, and an undecided one from its evidence";
+			result= 1;
+		}
+	}
+
 	if (result == 0)
 		MIKAN_LOG_INFO("test-pnp") << "All PnP checks passed";
 

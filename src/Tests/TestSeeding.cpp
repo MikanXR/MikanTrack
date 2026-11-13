@@ -365,10 +365,33 @@ static int runSeedingTest(const TestArgs& args)
 		check(swaps(&onRight, &offRight, leftUnscored),
 			  "a slot on the one scored hand takes the side from a slot past the bar from it");
 
+		// Which hands' sides the whole-body hands decided, per side as the
+		// hands end up
+		auto decided= [&](const HandPoints* left, const HandPoints* right, const WholeBodyExtras& block, bool bLeft,
+						  bool bRight) {
+			const HandPoints* const slots[2]= {left, right};
+			bool bSideDecided[2]= {true, true};
+			correctHandSides(slots, block, bSideDecided);
+			return bSideDecided[0] == bLeft && bSideDecided[1] == bRight;
+		};
+		check(decided(&onLeft, &onRight, extras, true, true), "two hands on their own whole-body hands are decided");
+		check(decided(&onRight, &onLeft, extras, true, true), "and so are two that changed places");
+		check(decided(&onRight, nullptr, extras, false, true), "a single hand moved to its side is decided there");
+		check(decided(&offLeft, &onRight, extras, false, true), "a hand past the bar from both is not decided");
+		check(decided(&fartherLeft, &nearLeft, extras, true, false),
+			  "of two slots on one hand the one that keeps the side is decided and the other is not");
+		check(decided(nullptr, &onRight, leftUnscored, false, true),
+			  "a hand on its own whole-body hand is decided with the other whole-body hand unscored");
+		check(decided(&onRight, nullptr, leftUnscored, false, true), "and so is one the one-hand rule moved");
+		check(decided(nullptr, &onLeft, leftUnscored, false, false),
+			  "a hand whose own whole-body hand is the unscored one is not decided");
+
 		WholeBodyExtras unscored= extras;
 		unscored.handScores[0].fill(0.1f);
 		unscored.handScores[1].fill(0.1f);
 		check(!swaps(&onRight, &onLeft, unscored), "both hands under the score gate move nothing");
+		check(decided(&onLeft, &onRight, unscored, false, false) && decided(&onLeft, &onRight, WholeBodyExtras(), false, false),
+			  "nothing is decided with both hands under the score gate or the block absent");
 		check(!swaps(&onRight, &onLeft, WholeBodyExtras()), "an absent block moves nothing");
 		HandPoints collapsed;
 		collapsed.fill(glm::vec3(300.f, 400.f, 0.f));

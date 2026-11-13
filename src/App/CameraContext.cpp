@@ -435,6 +435,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 				outHand.handednessScore= hand.handednessScore;
 				outHand.rightProb= hand.rightProb;
 				outHand.bSideCorrected= hand.bSideCorrected;
+				outHand.bSideDecided= hand.bSideDecided;
 				outHand.imagePoints= hand.imagePoints;
 				outHand.modelPoints= hand.modelPoints;
 				outHand.imageQuality= hand.imageQuality;

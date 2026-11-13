@@ -53,11 +53,18 @@ HandShapeMatch matchHandSideByShape(const std::array<glm::vec3, HAND_LANDMARK_CO
 // within the bar of that side's whole-body hand, and gives it to a decided
 // other when it is not. A pure function of the frame, and of its own outcome:
 // applied to the hands it arranged, it moves nothing.
+//
+// outSideDecided, when given, is filled per side as the hands end up: whether
+// the hand under that side is on that side's whole-body hand, within the bar,
+// with the match or the one-hand rule deciding it or the other whole-body
+// hand unscored. A hand the match leaves undecided between two scoring hands
+// is not decided, and neither is the loser of a side two hands wanted.
 bool correctHandSides(const std::array<glm::vec3, HAND_LANDMARK_COUNT>* const slotImagePoints[2],
-					  const WholeBodyExtras& extras);
+					  const WholeBodyExtras& extras, bool* outSideDecided= nullptr);
 
 // correctHandSides on a camera's result, ahead of the lift: where it says so
 // the two hands change places, each takes its entry's side, and each is
-// flagged as moved. Reads the result's own body observation. Returns whether
-// they changed places.
+// flagged as moved. A hand whose side the whole-body hands decided is flagged
+// as that, moved or not. Reads the result's own body observation. Returns
+// whether they changed places.
 bool applyHandSideCorrection(TrackingFrameResult& ioResult);

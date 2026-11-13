@@ -907,12 +907,15 @@ static int runReplayTest(const TestArgs& args)
 			sourceCamera.hands[sideIndex].side= sideIndex;
 		}
 		sourceCamera.hands[0].bSideCorrected= true;
+		sourceCamera.hands[0].bSideDecided= true;
 		source.freshCameras.push_back(sourceCamera);
 		const nlohmann::json sourceJson= TrackingRecording::frameToJson(source);
 		RecordedFrame reloaded;
 		const bool bFlagOk= TrackingRecording::frameFromJson(nlohmann::json::parse(sourceJson.dump()), reloaded) &&
 			reloaded.freshCameras.size() == 1 && reloaded.freshCameras[0].hands[0].bSideCorrected &&
-			!reloaded.freshCameras[0].hands[1].bSideCorrected &&
+			!reloaded.freshCameras[0].hands[1].bSideCorrected && reloaded.freshCameras[0].hands[0].bSideDecided &&
+			!reloaded.freshCameras[0].hands[1].bSideDecided && sourceJson["fresh"][0]["hands"][0].contains("sideDecided") &&
+			!sourceJson["fresh"][0]["hands"][1].contains("sideDecided") &&
 			sourceJson["fresh"][0]["hands"][0].contains("sideCorrected") &&
 			!sourceJson["fresh"][0]["hands"][1].contains("sideCorrected");
 		MIKAN_LOG_INFO("test-replay") << "(g2) corrected-side flag round trip " << (bFlagOk ? "ok" : "FAILED");

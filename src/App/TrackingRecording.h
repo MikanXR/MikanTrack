@@ -34,6 +34,9 @@ struct RecordedHandInput
 	// The direct camera moved the hand to this side (absent in recordings
 	// made before it did, and on every hand it left alone)
 	bool bSideCorrected= false;
+	// The whole-body hands name the hand's side on this frame, which the
+	// lift reads (absent in recordings made before it did)
+	bool bSideDecided= false;
 	std::array<glm::vec3, HAND_LANDMARK_COUNT> imagePoints{};
 	std::array<glm::vec3, HAND_LANDMARK_COUNT> modelPoints{};
 	HandImageQuality imageQuality;

@@ -352,6 +352,14 @@ The first live take found what the recorded ones had not. With one hand out of v
 
 Learned: measure where the loss is before designing for where it is expected, since the fix for a sticky label is not the fix for a crossing. A stateless rule that reorders its inputs should be checked by applying it to its own output, and that check belongs in the self-tests. A contest between two near-equal candidates needs a holder, or the measurement noise decides it every frame.
 
+## 27. The palm turned right round: two fixes from inference, then a count
+
+With the hand labels corrected, direct mode still showed the palm jumping half a turn, 44 twist steps over 90 degrees on seven takes. Eleven of the jumps on two takes fell 5 to 8 frames after an entry took a hand, which matches the lift's palmar memory overturning a wrong seed after five contradicting frames plus the solver's two-frame hold. Two fixes were built on that reading. A solver wait of eight frames on a new hand's palm removed the jumps it covered and froze the palm on a quarter of the read frames, half on two takes, because a hand entry drops for a single frame constantly: 169 of 253 tracked runs on one take are one frame long. Keeping the lift's palmar memory across a short loss of the same slot changed nothing, 44 jumps to 46, and broke replay on every take.
+
+`--gate-direct` then gained the count that should have come first: each jump put down to what changed in the camera's hand over the three frames before it. 24 were the lift's palmar side flipping, 15 the solver's mirror toggling, 5 neither, and none a slot change. The knuckles' winding in the image changed on 3, so the hand was not turning over. The palmar side disagreed with the one the hand's side names on 1397 of 12694 lifted frames, and 21 of the 24 flips were into agreement: a jump was the lift correcting itself, and the stretch before it was the palm shown the wrong way round. The lift had kept clear of the side because the hand model's label is a view-dependent guess. In direct mode the side is now the body model's, so the lift takes the palmar side of a hand whose side the whole-body hands decided from that side. Jumps went from 44 to 26 and the jumps on a palmar flip from 24 to 1.
+
+Learned: a timing coincidence is a hypothesis, and a fix built on it tests the hypothesis at the price of the fix. Count the failures by cause in the tool before changing the pipeline. And a rule written to distrust an input should be revisited when the input's source changes.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

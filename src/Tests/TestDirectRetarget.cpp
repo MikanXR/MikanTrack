@@ -910,6 +910,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		// the report still reads the labels as swapped after its second.
 		user= makeNeutralUser();
 		putSlotsOnOppositeWrists(user);
+		bool bEveryHandDecided= true;
 		auto runCorrected= [&](int frameCount, bool bLabelsCrossed) {
 			AvatarPose pose;
 			int correctedFrames= 0;
@@ -917,7 +918,9 @@ static int runDirectRetargetTest(const TestArgs&)
 			{
 				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
 				addBlocks(frame, bLabelsCrossed, 0.9f);
-				if (applyHandSideCorrection(frame))
+				const bool bMoved= applyHandSideCorrection(frame);
+				bEveryHandDecided&= frame.hands[0].bSideDecided && frame.hands[1].bSideDecided;
+				if (bMoved)
 				{
 					std::swap(frame.poses[0], frame.poses[1]);
 					correctedFrames++;
@@ -931,6 +934,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		const int correctedFrames= runCorrected(20, true);
 		const DirectRetarget::SolveState early= solver.getSolveState();
 		check(correctedFrames == 20, "(k4) slots under crossed labels are moved on every frame");
+		check(bEveryHandDecided, "(k4) each moved hand's side is flagged as the body model's");
 		check(early.arms[0].bHandSeen && early.arms[1].bHandSeen, "(k4) each arm takes the hand moved to its side");
 		check(early.oppositeWristRejections[0] == before.oppositeWristRejections[0] &&
 				  early.oppositeWristRejections[1] == before.oppositeWristRejections[1],

@@ -56,8 +56,13 @@ struct PalmarSideMemory
 //
 // ioMemory is optional; pass one per tracked hand to make the palmar sign
 // temporally stable. It is updated in place.
+//
+// bSideDecided says side is known and not the hand model's own label, which
+// the palmar side is otherwise kept clear of. Which side of the knuckles'
+// plane is palmar is then the hand's anatomy and is taken from side, and
+// the memory follows it.
 glm::mat4 computePalmFrame(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
-						   PalmarSideMemory* ioMemory= nullptr);
+						   PalmarSideMemory* ioMemory= nullptr, bool bSideDecided= false);
 
 // The rest pose ("all angles zero") as per-finger proximal-phalanx directions
 // in the palm frame. Captured from a real flat hand by captureRestPose, or
@@ -76,7 +81,7 @@ NeutralDirections makeDefaultNeutralDirections(const HandSkeleton& skeleton);
 void computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
 						 const NeutralDirections& neutralDirs,
 						 std::array<FingerAngles, FINGER_COUNT>& outAngles,
-						 PalmarSideMemory* ioMemory= nullptr);
+						 PalmarSideMemory* ioMemory= nullptr, bool bSideDecided= false);
 
 // The same angles against a zero that needs no capture: each finger's rest
 // direction is its own metacarpal (base minus wrist, in the palm plane), so
@@ -94,7 +99,7 @@ void computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COU
 // lengths) from a metric landmark set. neutralDirInPalm is filled with the
 // flat-hand default; overwrite it with a captured rest pose if there is one.
 void computeSkeleton(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
-					 HandSkeleton& outSkeleton, PalmarSideMemory* ioMemory= nullptr);
+					 HandSkeleton& outSkeleton, PalmarSideMemory* ioMemory= nullptr, bool bSideDecided= false);
 
 // Forward kinematics: joint positions (4 per finger, base -> tip) from a
 // palm pose + skeleton + angles, in the space of palmTransform. Exactly

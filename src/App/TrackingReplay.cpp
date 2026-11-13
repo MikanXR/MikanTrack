@@ -260,6 +260,7 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 					hand.handednessScore= recordedHand.handednessScore;
 					hand.rightProb= recordedHand.rightProb;
 					hand.bSideCorrected= recordedHand.bSideCorrected;
+					hand.bSideDecided= recordedHand.bSideDecided;
 					hand.imagePoints= recordedHand.imagePoints;
 					hand.modelPoints= recordedHand.modelPoints;
 					hand.imageQuality= recordedHand.imageQuality;

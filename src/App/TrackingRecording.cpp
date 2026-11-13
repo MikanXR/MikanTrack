@@ -99,6 +99,8 @@ json handInputToJson(const RecordedHandInput& hand)
 		out["imageQuality"]= imageQualityToJson(hand.imageQuality);
 	if (hand.bSideCorrected)
 		out["sideCorrected"]= true;
+	if (hand.bSideDecided)
+		out["sideDecided"]= true;
 	return out;
 }
 
@@ -114,6 +116,7 @@ void handInputFromJson(const json& j, RecordedHandInput& outHand)
 	outHand.handednessScore= j.value("handednessScore", 0.f);
 	outHand.rightProb= j.value("rightProb", 0.5f);
 	outHand.bSideCorrected= j.value("sideCorrected", false);
+	outHand.bSideDecided= j.value("sideDecided", false);
 	landmarksFromJson(j.value("imagePoints", json::array()), outHand.imagePoints);
 	landmarksFromJson(j.value("modelPoints", json::array()), outHand.modelPoints);
 	if (j.contains("imageQuality"))
