@@ -737,6 +737,16 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		config.face.headAnchorPresent= true;
 	}
 
+	const json& bl= j.value("blink", json::object());
+	config.blink= BlinkConfig();
+	config.blink.syncEyes= bl.value("syncEyes", config.blink.syncEyes);
+	config.blink.winkThreshold= std::clamp(bl.value("winkThreshold", config.blink.winkThreshold),
+											BlinkConfig::k_minWinkThreshold, BlinkConfig::k_maxWinkThreshold);
+	config.blink.clarity=
+		std::clamp(bl.value("clarity", config.blink.clarity), BlinkConfig::k_minClarity, BlinkConfig::k_maxClarity);
+	config.blink.sensitivity= std::clamp(bl.value("sensitivity", config.blink.sensitivity),
+										  BlinkConfig::k_minSensitivity, BlinkConfig::k_maxSensitivity);
+
 	const json& au= j.value("audio", json::object());
 	config.audio.enabled= au.value("enabled", false);
 	config.audio.deviceName= au.value("deviceName", std::string());
@@ -949,6 +959,13 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 		}
 		j["face"]= faceJson;
 	}
+
+	j["blink"]= {
+		{"syncEyes", blink.syncEyes},
+		{"winkThreshold", blink.winkThreshold},
+		{"clarity", blink.clarity},
+		{"sensitivity", blink.sensitivity},
+	};
 
 	json smoothing= json::object();
 	for (int modelIndex= 0; modelIndex < MOUTH_MODEL_COUNT; ++modelIndex)

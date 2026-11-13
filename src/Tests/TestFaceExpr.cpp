@@ -1,7 +1,10 @@
 #include "TestCommon.h"
 
+#include <functional>
+
 #include "nlohmann/json.hpp"
 
+#include "AppConfig.h"
 #include "ExprInputTable.h"
 #include "ExprParameter.h"
 #include "FaceAutoProfile.h"
@@ -14,6 +17,7 @@
 #include "FaceProfile.h"
 #include "FaceProfileBinding.h"
 #include "FaceProfileLibrary.h"
+#include "WebcamBlink.h"
 #include "WebcamFace.h"
 
 // Tests for the face expression language: the parser, the compiler and its
@@ -312,6 +316,200 @@ static int runFaceExprTest(const TestArgs&)
 				  near(averaged.eyeOpenness[1], neutral.eyeOpenness[1], 1e-4f),
 			  "the face neutral is the mean over the model frames in the window");
 		check(!averager.average(5000.0, averaged), "frames older than the window give no face neutral");
+	}
+
+	// The Blink stage: a fast drop starts a blink, a slow sag moves the
+	// baseline, a held close at the floor holds, lowered lids release, and
+	// the eyes link unless they wink
+	{
+		// Each eye 20 px wide at scale 1, so a lid gap of 6 px reads an
+		// openness of 0.3, the default neutral's. The face is 80 px wide at
+		// scale 1.
+		auto makeBody= [](float leftGap, float rightGap, float scale) {
+			BodyPoseObservation body;
+			body.valid= true;
+			body.wholeBody.present= true;
+			body.wholeBody.faceScores.fill(0.9f);
+			auto set= [&](int index, float x, float y) {
+				body.wholeBody.face[index]= glm::vec3(x * scale, y * scale, 0.f);
+			};
+			set(36, -40.f, 0.f);
+			set(37, -33.f, -rightGap * 0.5f);
+			set(38, -27.f, -rightGap * 0.5f);
+			set(39, -20.f, 0.f);
+			set(40, -27.f, rightGap * 0.5f);
+			set(41, -33.f, rightGap * 0.5f);
+			set(42, 20.f, 0.f);
+			set(43, 27.f, -leftGap * 0.5f);
+			set(44, 33.f, -leftGap * 0.5f);
+			set(45, 40.f, 0.f);
+			set(46, 33.f, leftGap * 0.5f);
+			set(47, 27.f, leftGap * 0.5f);
+			for (int index= 0; index < 5; ++index)
+			{
+				set(17 + index, -45.f + 6.f * (float)index, -12.f);
+				set(22 + index, 21.f + 6.f * (float)index, -12.f);
+			}
+			set(30, 0.f, 20.f);
+			set(48, -18.f, 50.f);
+			set(54, 18.f, 50.f);
+			set(51, 0.f, 45.f);
+			set(57, 0.f, 55.f);
+			set(62, 0.f, 50.f);
+			set(66, 0.f, 50.f);
+			return body;
+		};
+
+		// One model frame every 33 ms
+		struct Run
+		{
+			WebcamBlinkFilter filter;
+			BlinkConfig config;
+			int64_t frame= 0;
+			FaceSources::Blink out;
+			void step(float leftGap, float rightGap, float scale,
+					  const std::function<BodyPoseObservation(float, float, float)>& make)
+			{
+				BodyPoseObservation body= make(leftGap, rightGap, scale);
+				body.modelFrameIndex= frame;
+				filter.update(body, true, 33.0 * (double)frame, config, out);
+				frame++;
+			}
+		};
+		const std::function<BodyPoseObservation(float, float, float)> make= makeBody;
+		auto settled= [&](Run& run, float scale= 1.f) {
+			run.filter.reset(nullptr);
+			for (int index= 0; index < 30; ++index)
+				run.step(6.f, 6.f, scale, make);
+		};
+
+		Run open;
+		settled(open);
+		check(open.out.tracked && open.out.bBaselineSettled && near(open.out.baseline[0], 0.3f, 1e-4f) &&
+				  near(open.out.eyeBlinkLeft, 0.f) && near(open.out.eyeBlinkRight, 0.f),
+			  "open eyes settle the baseline at their openness and read no blink");
+
+		Run blink;
+		settled(blink);
+		blink.step(2.f, 2.f, 1.f, make);
+		const bool bShut= blink.out.eyeBlinkLeft > 0.9f && blink.out.eyeBlinkRight > 0.9f &&
+			blink.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Closed;
+		blink.step(6.f, 6.f, 1.f, make);
+		check(bShut && near(blink.out.eyeBlinkLeft, 0.f) && near(blink.out.eyeBlinkRight, 0.f),
+			  "a fast drop reads a blink and the return reads none");
+
+		// 0.002 of openness a frame, under a tenth of the drop a closure needs
+		// within its window
+		Run sag;
+		settled(sag);
+		float maxBlink= 0.f;
+		for (int index= 0; index < 150; ++index)
+		{
+			const float gap= 6.f - 0.04f * (float)std::min(index, 60);
+			sag.step(gap, gap, 1.f, make);
+			maxBlink= std::max({maxBlink, sag.out.eyeBlinkLeft, sag.out.eyeBlinkRight});
+		}
+		check(near(maxBlink, 0.f) && sag.out.baseline[0] < 0.2f,
+			  "a slow sag reads no blink and moves the baseline down to it");
+
+		Run hold;
+		settled(hold);
+		for (int index= 0; index < 45; ++index)
+			hold.step(2.f, 2.f, 1.f, make);
+		check(hold.out.eyeBlinkLeft > 0.9f && hold.out.state[1] == (uint8_t)WebcamBlinkFilter::eEyeState::Closed,
+			  "eyes held shut at the floor stay closed past the long closure time");
+
+		// A fast drop to 0.23: under the start line, over the closed band
+		Run lowered;
+		settled(lowered);
+		lowered.step(4.6f, 4.6f, 1.f, make);
+		const bool bStarted= lowered.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Closing;
+		for (int index= 0; index < 25; ++index)
+			lowered.step(4.6f, 4.6f, 1.f, make);
+		check(bStarted && lowered.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Open &&
+				  near(lowered.out.eyeBlinkLeft, 0.f) && near(lowered.out.baseline[0], 0.23f, 1e-4f),
+			  "lids held between the floor and the baseline release and become the baseline");
+
+		// The person's left eye shut on a 120 px face: a wink, crossing to
+		// the ARKit right column
+		Run wink;
+		settled(wink, 1.5f);
+		wink.step(2.f, 6.f, 1.5f, make);
+		check(wink.out.eyeBlinkRight > 0.9f && near(wink.out.eyeBlinkLeft, 0.f),
+			  "a wink on a large face passes on the person's own eye, read as the phone's columns are");
+		Run smallWink;
+		smallWink.filter.reset(nullptr);
+		for (int index= 0; index < 30; ++index)
+			smallWink.step(6.f, 6.f, 0.5f, make);
+		smallWink.step(2.f, 6.f, 0.5f, make);
+		check(near(smallWink.out.eyeBlinkRight, 0.f) && near(smallWink.out.eyeBlinkLeft, 0.f),
+			  "a wink on a 40 px face links to the open eye");
+
+		BlinkConfig linkConfig;
+		float partial[2]= {0.3f, 0.f};
+		linkBlinkEyes(partial, 1.f, linkConfig);
+		float full[2]= {1.f, 0.f};
+		linkBlinkEyes(full, 1.f, linkConfig);
+		BlinkConfig syncConfig;
+		syncConfig.syncEyes= true;
+		float synced[2]= {1.f, 0.f};
+		linkBlinkEyes(synced, 1.f, syncConfig);
+		check(near(partial[0], 0.225f, 1e-5f) && near(partial[1], 0.f) && near(full[0], 1.f) && near(full[1], 0.f) &&
+				  near(synced[0], 0.5f) && near(synced[1], 0.5f),
+			  "a one-eye difference under the wink threshold pulls toward the open eye, over it passes, and sync "
+			  "averages");
+		check(near(shapeBlinkClosure(0.5f, 2), 0.5f) && shapeBlinkClosure(0.25f, 1) < 0.25f &&
+				  shapeBlinkClosure(0.75f, 1) > 0.75f && near(shapeBlinkClosure(1.f, 3), 1.f),
+			  "the S-curve holds its ends and its middle and pushes partial closures outward");
+
+		// A re-emitted observation does not step the stage
+		Run repeat;
+		settled(repeat);
+		BodyPoseObservation shut= makeBody(2.f, 2.f, 1.f);
+		shut.modelFrameIndex= repeat.frame - 1;
+		repeat.filter.update(shut, true, 33.0 * (double)repeat.frame, repeat.config, repeat.out);
+		check(near(repeat.out.eyeBlinkLeft, 0.f) && repeat.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Open,
+			  "an output frame repeating a model frame re-emits that frame's values");
+
+		// A reset reseeds the baseline from the neutral
+		WholeBodyFaceRatios neutral= makeDefaultWebcamFaceNeutral();
+		neutral.eyeOpenness[0]= 0.25f;
+		sag.filter.reset(&neutral);
+		check(sag.filter.isSeededFrom(&neutral) && !sag.filter.isSeededFrom(nullptr),
+			  "a reset seeds from the neutral it is given");
+		sag.step(5.f, 5.f, 1.f, make);
+		check(near(sag.out.baseline[0], 0.25f, 1e-4f) && !sag.out.bBaselineSettled,
+			  "a reset baseline starts at the neutral and is not settled");
+
+		// Stale and untracked
+		FaceSources::Blink stale;
+		open.filter.update(makeBody(6.f, 6.f, 1.f), false, 0.0, open.config, stale);
+		check(!stale.present && !stale.tracked, "a stale observation is not present");
+
+		// The blink inputs and the project section
+		FaceSources sources;
+		sources.blink.present= true;
+		sources.blink.tracked= true;
+		sources.blink.eyeBlinkLeft= 0.7f;
+		check(FaceExprInputs::fromName("blink.eyeBlink_L") == FaceExprInputs::k_blinkEyeBlinkLeft &&
+				  FaceExprInputs::fromName("Blink.EyeBlinkRight") == FaceExprInputs::k_blinkEyeBlinkRight &&
+				  FaceExprInputs::fromName("blink.jawOpen") < 0 && near(evalOnce("blink.eyeBlinkLeft", sources), 0.7f) &&
+				  near(evalOnce("blink.tracked", sources), 1.f),
+			  "blink.* names resolve and read the stage");
+		sources.blink.tracked= false;
+		check(near(evalOnce("blink.eyeBlinkLeft", sources), 0.f) && near(evalOnce("blink.present", sources), 1.f),
+			  "an untracked blink stage reads zero");
+
+		AppConfig config;
+		config.blink.syncEyes= true;
+		config.blink.winkThreshold= 0.55f;
+		config.blink.clarity= 3;
+		config.blink.sensitivity= 1.4f;
+		AppConfig loaded;
+		check(loaded.loadFromJsonString(config.toJsonString()) && loaded.blink == config.blink,
+			  "the blink section round-trips through the project JSON");
+		AppConfig fresh;
+		check(fresh.blink == BlinkConfig(), "a project with no blink section loads the defaults");
 	}
 
 	// The Auto profile's webcam fallback follows the mask it is generated for

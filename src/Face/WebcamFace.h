@@ -19,6 +19,13 @@ constexpr float k_webcamFaceScoreGate= 0.5f;
 // The direct camera's last observation is fresh while it is no older
 constexpr double k_webcamFaceFreshMs= 500.0;
 
+// The ratios' side that feeds each ARKit side. The ratios' sides are the
+// person's own (0 left, 1 right). The phone's Left columns followed the
+// person's right eye on the one take that carries a wink, so the columns
+// cross the ratios' sides to read as the phone's do.
+constexpr int k_ratioSideOfArkitLeft= 1;
+constexpr int k_ratioSideOfArkitRight= 0;
+
 // The neutral ratios of a face that was never captured
 WholeBodyFaceRatios makeDefaultWebcamFaceNeutral();
 

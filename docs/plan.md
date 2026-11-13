@@ -91,6 +91,8 @@ The living plan: what is in flight now, what comes next, and the open questions.
 - [ ] Pipeline panel milestones M2 through M19, in the order `docs/proposals/pipeline-panel.md` lists: section lifting, recording telemetry, the eight stage migrations, the Stage View, pinned windows and the Performance tab, then the retarget track (expression inputs as a parameter, the source pose, the shared solve and loss stage, chains, inline functions, the new behaviors). Each ends at a review stop.
 - [ ] The stream loses a dropout hold early while the phone or microphone is live: a face-only frame carries its sample's arrival time, which is later than the next camera frame's capture time, so a dropout whose first camera frame follows a face-only frame sees a backward step and `resolveOutputPose` drops the hold, and `AvatarRetarget::resolveRoot` snaps the root on the same step. `--test-retarget-golden` case (p7) pins it. The fix is its own change in pipeline milestone M16 (the loss stage's clock ignoring a small backward step), with the golden difference stated there. Not yet reproduced on the rig.
 
+- [ ] The Blink stage's false closures (LEARNINGS.md 30): on the 92 s rig take it reads over a half on 24 percent of the frames outside rest where the phone reads 5, from 61 to 69 false closures at the divider, half of them one model frame. Candidates: confirm a closure over two model frames, and hold off closure starts while the face block moves. Auto's blinks fall back to `blink.*` once the stage meets the bar there and on a take with held looks down and a long eyes-closed hold, which is still to be recorded.
+
 ## Later
 
 - [ ] Human-review the machine-translated Japanese strings in `resources/localization/ja.json` (translated per key alongside the code conversion; natural phrasing and terminology consistency were not reviewed by a native speaker).
@@ -113,7 +115,6 @@ The living plan: what is in flight now, what comes next, and the open questions.
 - [ ] Avatar load is synchronous on the main thread (well under a second for a VRoid file); move the parse and image decode to a worker if large models stall the UI noticeably.
 - [ ] The avatar shade for non-MToon materials and the single key light are fixed in the renderer; expose light direction and ambient if the preview needs tuning.
 - [ ] A node graph editor for face profiles that bakes to the same `FaceExprProgram` the text expressions compile to.
-- [ ] A `webcam.*` face source: a webcam face model's blendshapes as a third input namespace in `FaceExprInputs`.
 - [ ] Lua-defined inputs for face profiles: scripted values as an input namespace.
 - [ ] Curve-preview widgets in the Face tab: the response of `remap`, `smoothstep`, `pow` and `hysteresis` drawn over their input range, as ImPlot plots like the expression editor's trace.
 - [ ] Human-review the machine-translated Japanese strings for the Face tab (`faceTab`, `avatarPanel.tabFace`, `windows.modalDeleteFaceProfile`, `audioPanel.weightsNone` in `resources/localization/ja.json`).

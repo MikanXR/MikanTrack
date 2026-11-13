@@ -1365,6 +1365,7 @@ void VisionThread::applyWebcamToOutput(TrackingFrameResult& output, double nowMs
 	// The direct camera's face block as ARKit columns. A project with no
 	// direct camera has no webcam face.
 	output.face.webcam= FaceSources::Webcam();
+	output.face.blink= FaceSources::Blink();
 	if (!isDirectModeActive())
 		return;
 	const DirectConfig& direct= m_config->direct;
@@ -1375,6 +1376,13 @@ void VisionThread::applyWebcamToOutput(TrackingFrameResult& output, double nowMs
 	// The neutral capture reads its face ratios from the last frames
 	if (bFresh)
 		m_webcamNeutralAverager.add(camera.result.body, camera.timestampMs);
+
+	// The Blink stage over the same observation. A new neutral restarts it
+	// from the new seed.
+	const WholeBodyFaceRatios* neutral= direct.neutralFacePresent ? &direct.neutralFace : nullptr;
+	if (!m_blinkFilter.isSeededFrom(neutral))
+		m_blinkFilter.reset(neutral);
+	m_blinkFilter.update(camera.result.body, bFresh, camera.timestampMs, m_config->blink, output.face.blink);
 }
 
 void VisionThread::applyFaceToOutput(TrackingFrameResult& output, double nowMs, bool bCameraHead)

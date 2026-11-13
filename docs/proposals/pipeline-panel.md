@@ -48,7 +48,7 @@ The Tracking panel holds twelve sections from different pipeline stages in one s
 - Sub-stages:
 	- Capture: one lane per camera, each with Video, Hand models, Body model, Lift. The lane's camera label is itself selectable.
 	- Direct solver: Filters and gates, Torso and head, Arm chain, Palm and fingers, Hold and rest
-	- Face and mouth: Phone, Microphone, Profile
+	- Face and mouth: Phone, Webcam, Blink, Microphone, Profile
 	- Output: Delivery rules, VMC stream
 
 ### Selection and windows

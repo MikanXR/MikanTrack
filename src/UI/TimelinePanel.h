@@ -9,6 +9,7 @@
 #include "Scene3dPanel.h" // SceneCameraView
 #include "TrackingReplay.h"
 #include "TrackingTypes.h"
+#include "WebcamBlink.h"
 
 class AppConfig;
 class VisionThread;
@@ -30,6 +31,9 @@ public:
 	// The face profile binding the replayed face is evaluated through, the
 	// live one, so a profile edit can be judged against a recorded take
 	void setFaceBinding(std::shared_ptr<const FaceProfileBinding> binding) { m_faceBinding= std::move(binding); }
+	// The live Blink settings, so a settings edit can be judged against a
+	// recorded take. A change re-evaluates the shown frame from a pre-roll.
+	void setBlinkConfig(const BlinkConfig& config);
 
 	// When active, MainWindow feeds the 3D scene from the replay instead of
 	// the live tracking output
@@ -89,10 +93,13 @@ private:
 	// The recorded (live) output reconstructed as a displayable result
 	void buildRecordedResult(const RecordedFrame& recorded, TrackingFrameResult& outResult) const;
 	// The face sources of a recorded frame: the mouth from the record, the
-	// phone from the face sidecar's newest sample at or before it
-	FaceSources makeReplayFaceSources(int frameIndex) const;
-	// Evaluates the face profile up to the current frame: frame by frame
-	// while the playhead moves forward, from a reset state after a seek
+	// phone from the face sidecar's newest sample at or before it, the
+	// webcam and the Blink stage from the direct camera's observation. Steps
+	// the Blink stage, so frames come in order.
+	FaceSources makeReplayFaceSources(int frameIndex);
+	// Evaluates the face profile and the Blink stage up to the current
+	// frame: frame by frame while the playhead moves forward, from a reset
+	// state and a pre-roll after a seek
 	void rebuildDisplayFace();
 
 	TrackingReplay m_replay;
@@ -135,6 +142,11 @@ private:
 	FaceProfileRunner m_faceRunner;
 	FaceSources m_displayFace;
 	int m_faceFrame= -1;
+	WebcamBlinkFilter m_blinkFilter;
+	BlinkConfig m_blinkConfig;
+	// A seek replays this much of the take before the target, so the
+	// stateful stages read the target as straight playback would
+	static constexpr double k_facePreRollMs= 3000.0;
 	// A forward step longer than this many frames counts as a seek
 	static constexpr int k_maxFaceCatchUpFrames= 240;
 };

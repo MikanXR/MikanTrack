@@ -16,13 +16,6 @@ constexpr float k_jawWidthLoss= 0.3f;
 constexpr float k_browInnerFull= 0.1f;
 constexpr float k_browOuterFull= 0.12f;
 
-// The ratios' side that feeds each ARKit side. The ratios' sides are the
-// person's own (0 left, 1 right). The phone's Left columns followed the
-// person's right eye on the one take that carries a wink, so the columns
-// cross the ratios' sides to read as the phone's do.
-constexpr int k_ratioSideOfArkitLeft= 1;
-constexpr int k_ratioSideOfArkitRight= 0;
-
 float unit(float value)
 {
 	return std::clamp(value, 0.f, 1.f);

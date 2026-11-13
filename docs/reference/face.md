@@ -39,6 +39,10 @@ The service has no thread of its own. The vision thread calls `update(steadyNowM
 	- `tracked`: `present`, and the lowest score among the face points the ratios read is 0.5 or more
 	- `blendshapes[52]`: raw, in ARKit order
 	- `measuredMask`: a bit per column the source measures
+- `blink`: the Blink stage over the webcam's eye openness (below)
+	- `present`, `tracked`: the webcam source's
+	- `eyeBlinkLeft`, `eyeBlinkRight`: the stage's output, sides crossed as the webcam's are
+	- per eye by the person's own side, for the readout: the openness, the baseline, the floor, the state, and the closure before the eyes are linked
 - `outputs`: the active face profile's values for this frame, with the generation of the binding that produced them
 
 A source's values read zero unless it is tracked: the phone's blendshapes while the stream is quiet or the phone reports the face lost, the visemes past the stale window. An expression without a guard therefore relaxes instead of freezing on the last raw values. The face is present while any source is.
@@ -70,7 +74,44 @@ The other 43 columns are outside `measuredMask` and read zero. The sided columns
 
 The neutral values come with the direct mode's neutral capture: `DirectNeutralPose` carries the ratios behind `facePresent`, saved as `neutralFace` in the project's `direct` section. The capture takes the mean over the last model frames whose face cleared the gate (`WebcamFaceNeutralAverager`: up to 15 frames within 1.5 s, at least 5), since one frame's eye openness scatters by a quarter of a blink's travel. A neutral captured with the face unseen, or before the source existed, has none, and the source then reads against generic defaults.
 
-The blink columns have a limit that the other seven do not. The eye openness reads as low with the lids lowered (the phone's blink column between 0.1 and 0.35) as with the eyes shut, and it sits under its neutral for most of a session as the head turns and the gaze drops. Read against a fixed neutral, the blink columns were over a half on 26 to 81 percent of the 2026-11-12 take's frames outside its rest hold, where the phone's were on 1 to 14 percent. The other columns stayed within 0.03 to 0.18 of the phone's on average, but for the inner brow, which reads under the phone's (0.17 against 0.47 over the take's shapes window). Auto therefore does not read the webcam's blinks. A profile can, through its own function.
+The blink columns have a limit that the other seven do not. The eye openness reads as low with the lids lowered (the phone's blink column between 0.1 and 0.35) as with the eyes shut, and it sits under its neutral for most of a session as the head turns and the gaze drops. Read against a fixed neutral, the blink columns were over a half on 26 to 81 percent of the 2026-11-12 take's frames outside its rest hold, where the phone's were on 1 to 14 percent. The other columns stayed within 0.03 to 0.18 of the phone's on average, but for the inner brow, which reads under the phone's (0.17 against 0.47 over the take's shapes window). Auto therefore does not read the webcam's blinks. A profile can, through its own function. The Blink stage below reads the same openness over time instead of frame by frame.
+
+## Blink stage
+
+`WebcamBlinkFilter` (`src/Face/WebcamBlink.h`) turns the direct camera's eye openness into blinks over time. One frame cannot tell lowered lids from a shut eye, and their timing can: a blink is a fast drop and a return, a lowered gaze a slow sag. Each eye keeps an open baseline that follows slow changes, and its output rises only once a fast drop under that baseline has started a closure. It is stateful and deterministic in the observations' own timestamps, so a replay that feeds the same frames in order reads the same values. It steps once per model frame (by `modelFrameIndex`), and an output frame that repeats a model frame re-emits that frame's values. Its presence and tracking gates are the webcam source's.
+
+Each eye runs three states:
+
+- Open: the frame feeds the baseline, when the face is on-angle
+- Closing: a closure has started and the eye is not yet in the closed band
+- Closed: within 0.3 of the travel over the floor
+
+The parts, with their constants in `WebcamBlink.cpp`:
+
+- The baseline is the trimmed mean (30 percent off each end) of the open frames over the last 2.5 s, once it has 8 of them. Until then it is the seed: the neutral capture's eye openness, or the default 0.3. A frame feeds it only while the eye is Open and the nose tip sits within 0.15 face widths of the eyes' midpoint along the eye line, so a turned head does not teach it.
+
+- The floor is a fraction of the baseline, seeded at 0.65 (a shut eye reads about two thirds of the open eye's openness on the whole-body points). A closure that reaches the closed band moves the fraction 0.3 of the way toward its own lowest level, clamped to 0.2 to 0.85.
+
+- A closure starts when the openness drops by 0.17 of the baseline within 200 ms and lands at least that far under the baseline. The sensitivity setting divides the 0.17. A slow sag never drops that far within the window, so it moves the baseline instead.
+
+- A closure ends when the openness returns within 0.3 of the travel under the baseline. A closure that sits between the closed band and the baseline for 600 ms is lowered lids: it ends, and the baseline restarts at that level. A closure in the closed band holds as long as the eye stays there.
+
+- The output is the closure's depth between the baseline and the floor, through an S-curve symmetric about a half with the exponent 1.5 times the clarity setting. An Open eye reads zero.
+
+- The eyes are then linked: each is pulled toward the less closed eye, fully when they agree and not at all once they differ by the wink threshold. A face under 90 px of outer eye corner span lets winks through less, down to none at 50 px. With sync on, both read their mean.
+
+The live stage runs in `VisionThread::applyWebcamToOutput` beside the webcam source on a direct project, and reseeds when the neutral capture's eye openness changes. The timeline's replay runs its own over the direct camera's recorded observations in frame order (Face sidecar, below).
+
+Settings, `BlinkConfig` on `AppConfig::blink`, persisted under `blink` in the project JSON:
+
+- `bool syncEyes` (default false)
+- `float winkThreshold` (default 0.4, 0.1 to 1)
+- `int clarity` (default 1, 1 to 3)
+- `float sensitivity` (default 1, 0.5 to 2)
+
+The stage reads them every frame, so an edit applies without a config refresh and does not end a recording in progress.
+
+Auto does not read `blink.*`. On the 92 s rig take the stage finds the phone's blinks as the raw points do, and it still reads over a half on 24 percent of the frames outside the rest window where the phone reads 5, from short false closures that point jitter and head motion make. On a take with a still head it reads over a half on 1 to 5 percent, and it tells a wink's eye where the raw points do not.
 
 ## Profiles
 
@@ -129,6 +170,8 @@ Names compare without case, the input namespaces and the variable names alike:
 - `viseme.present`
 - `webcam.<arkitName>`: a webcam column, spelled as the phone's are. A column the source does not measure reads zero.
 - `webcam.present`, `webcam.tracked`
+- `blink.eyeBlinkLeft`, `blink.eyeBlinkRight`: the Blink stage's output, also spelled with the `_L`/`_R` suffix
+- `blink.present`, `blink.tracked`
 - the profile's variable names
 
 An unknown name is a compile error. The face input table (`FaceExprInputs`) is the one place a new face namespace is added.
@@ -175,7 +218,7 @@ Every recording opens `<stem>.face.jsonl` beside it when it starts, named after 
 
 The header carries a `face` block `{"file", "startMs"}` beside `audio`: the file name and the start time. The format version is 1. A header without the block loads as no face sidecar, and a recording whose sidecar file is absent replays with no phone face.
 
-The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and evaluates the live binding over each record's sources: the mouth from the record's `mouth` block, the phone through `FaceSidecar::samplePhone`. That one shared function takes the newest sample at or before the record's timestamp, present while it is younger than the streaming window, with the blendshapes zero unless that sample was tracked. Playing forward evaluates frame by frame, and a seek resets the state. An edited profile can therefore be judged on a recorded take.
+The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and evaluates the live binding over each record's sources: the mouth from the record's `mouth` block, the phone through `FaceSidecar::samplePhone`. That one shared function takes the newest sample at or before the record's timestamp, present while it is younger than the streaming window, with the blendshapes zero unless that sample was tracked. The webcam source and the Blink stage come from the direct camera's recorded observation under the take's neutral, the Blink stage with the live project's settings. Playing forward evaluates frame by frame. A seek resets the profile runner and the Blink stage and replays the 3 s before the target, so the target reads as straight playback would, and a Blink settings edit does the same at the shown frame. An edited profile or Blink setting can therefore be judged on a recorded take.
 
 ## Config and UI
 
@@ -187,6 +230,8 @@ The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and ev
 - `glm::quat headAnchor` with `headAnchorPresent`, written as `headAnchor` `[x, y, z, w]` only once captured
 
 The Webcam stage, under Face and mouth beside the Phone stage, shows the shown frame's webcam source: whether the direct camera sees the face, a prompt to capture the neutral again when it holds no face, and the measured columns' raw values. It is inactive on a project with no direct camera.
+
+The Blink stage, after the Webcam stage, holds the four settings and a readout of the shown frame: per eye the openness, the baseline and the floor, the state, and where the openness sits between the floor and the baseline, then the two output columns. It is inactive on a project with no direct camera and degraded while the baselines still stand on their seed.
 
 The Phone stage in the Inspector, under Face and mouth, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
 
@@ -228,4 +273,4 @@ The Profile stage's Diagnostics is a filtered view of the same values: the mouth
 
 ## Test
 
-`--test-face` covers the name table, both blendshape formats, bone parsing and rejection, the handshake filter, garbage input, a loopback round trip through the service, and the socket primitives. `--test-faceexpr` covers the webcam source (the columns from a synthetic face, the score gate, the neutral's average), the Auto profile's webcam mask, the language, the compiler's errors, every function, the time rule, the state slots across a recompile, the input sets, the profile JSON and the library. `--test-vmc` covers the head conversion, the anchor round trip, the Auto profile and the binding's combine rules, and the blendshape and avatar messages on the wire. `--test-replay` covers the face sidecar and `FaceSidecar::samplePhone`.
+`--test-face` covers the name table, both blendshape formats, bone parsing and rejection, the handshake filter, garbage input, a loopback round trip through the service, and the socket primitives. `--test-faceexpr` covers the webcam source (the columns from a synthetic face, the score gate, the neutral's average), the Blink stage (a fast blink, a slow sag, a held close, lowered lids, the linking and the wink, the S-curve, a re-emitted frame, the reseed, the `blink.*` inputs and the settings' JSON), the Auto profile's webcam mask, the language, the compiler's errors, every function, the time rule, the state slots across a recompile, the input sets, the profile JSON and the library. `--test-vmc` covers the head conversion, the anchor round trip, the Auto profile and the binding's combine rules, and the blendshape and avatar messages on the wire. `--test-replay` covers the face sidecar and `FaceSidecar::samplePhone`.

@@ -98,6 +98,7 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 	in.bWebcamPresent= in.bDirect;
 	in.bWebcamTracked= in.bDirect;
 	in.bWebcamNeutral= in.bDirect;
+	in.bBlinkSettled= in.bDirect;
 	in.bAudioEnabled= true;
 	in.bAudioDeviceOpen= true;
 	in.bAudioBackendReady= true;
@@ -223,6 +224,7 @@ std::vector<Fault> makeFaults()
 		{"webcam waiting", [](Inputs& in) { in.bWebcamPresent= in.bWebcamTracked= false; }},
 		{"webcam sees no face", [](Inputs& in) { in.bWebcamTracked= false; }},
 		{"webcam has no face neutral", [](Inputs& in) { in.bWebcamNeutral= false; }},
+		{"blink baselines settling", [](Inputs& in) { in.bBlinkSettled= false; }},
 		{"mic device closed", [](Inputs& in) { in.bAudioDeviceOpen= false; }},
 		{"mic model unavailable", [](Inputs& in) { in.bAudioBackendReady= false; }},
 		{"mic gated", [](Inputs& in) { in.bAudioGateOpen= false; }},
@@ -282,12 +284,12 @@ static int runPipelineModelTest(const TestArgs&)
 		check(PipelineModel::getSubStageLanes(id(S::HandModels, 1), 3).size() == 3,
 			  "(a) a sub-stage opens its top-level stage's lanes");
 		check(PipelineModel::getSubStageLanes(id(S::DirectSolver), 1).front().size() == 5 &&
-				  PipelineModel::getSubStageLanes(id(S::Face), 1).front().size() == 4 &&
+				  PipelineModel::getSubStageLanes(id(S::Face), 1).front().size() == 5 &&
 				  PipelineModel::getSubStageLanes(id(S::Output), 1).front().size() == 2 &&
 				  PipelineModel::getSubStageLanes(id(S::Fusion), 3).empty(),
 			  "(a) lanes of the direct solver, face, output, and none for fusion");
-		check(PipelineModel::getAllStages(false, 3).size() == 29 && PipelineModel::getAllStages(true, 1).size() == 22,
-			  "(a) stage counts: 29 for three cameras, 22 for direct");
+		check(PipelineModel::getAllStages(false, 3).size() == 30 && PipelineModel::getAllStages(true, 1).size() == 23,
+			  "(a) stage counts: 30 for three cameras, 23 for direct");
 		check(PipelineModel::getTopLevel(id(S::Lift, 1)) == id(S::Capture) &&
 				  PipelineModel::getTopLevel(id(S::Palm)) == id(S::DirectSolver) &&
 				  PipelineModel::getTopLevel(id(S::Fusion)) == id(S::Fusion),
@@ -328,12 +330,12 @@ static int runPipelineModelTest(const TestArgs&)
 			const eStageState state= stateOf(tri, stage);
 			// The overhead cameras run no body model
 			const bool bOverheadBody= stage.stage == S::BodyModel && stage.cameraIndex != 2;
-			// The webcam face is a direct project's
-			const bool bInactive= bOverheadBody || stage.stage == S::Webcam;
+			// The webcam face and its blinks are a direct project's
+			const bool bInactive= bOverheadBody || stage.stage == S::Webcam || stage.stage == S::Blink;
 			bAllRunning&= bInactive ? state == eStageState::Inactive : state == eStageState::Running;
 		}
 		check(bAllRunning,
-			  "(c) tri-camera: every stage runs, the overhead cameras' body model and the webcam face inactive");
+			  "(c) tri-camera: every stage runs, the overhead cameras' body model, the webcam face and the blinks inactive");
 
 		const Inputs direct= makeHealthy(true, 1, false, 0);
 		bool bDirectRunning= true;
