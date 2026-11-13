@@ -388,6 +388,24 @@ Higher bars cut jumps by mirroring less. Against the other hand's twist as a ref
 
 Learned: a jump count falls when a correction is switched off, and that says nothing about whether the correction was right. Check a threshold sweep against a reference before reading it.
 
+## 30. Blinks from the webcam over time: the timing finds the blinks and does not clear the false ones
+
+Section 25 left the webcam's blinks out of Auto: the eye openness reads as low with the lids lowered or the gaze dropped as with the eyes shut, so a fixed neutral holds the blink over a half on 26 to 81 percent of the frames outside the rest hold. XRAnimator's blink path, read for reference, gets its clean blinks from post-processing over MediaPipe's blendshape: an adaptive baseline per eye, a running floor, an S-curve, and both eyes pulled toward the less closed one unless they differ by a wink. It has no rate test. The Blink stage (face.md) takes those parts and adds one: a closure starts only on a fast drop under the baseline, and a slow sag moves the baseline instead.
+
+`--gate-wholebody` ran the stage over the whole-body points under each take's neutral, with the default settings. The bar for Auto's fallback was at least 9 of 10 phone blinks found at the live divider, over a half on no more than the phone's share of frames plus 5 points, and no held look down reading shut.
+
+- On the 92 s rig take (`2026-11-12_00-18-34`, the webcam position camera, head sweeps and a hands segment): at the divider the stage finds 14 of 15 and 18 of 19 of the phone's blinks, where the raw points find 14 of 15 and 19 of 19. It reads over a half on 24 percent of the frames outside the rest window for each eye, where the phone's columns are on 5 percent. It counts 69 and 61 false closures in the 92 s against the raw points' 80 and 85 at their best threshold, 49 and 31 of them on one model frame.
+
+- On the 33 s wink take (`2026-11-12_13-39-53`): 4 of 4 and 4 of 5 found at the divider, over a half on 5 and 4 percent against the phone's 14, and the stage tells the winking eye on 96 percent of the one-eye frames where the raw points do not tell the eyes apart (36 percent). It counts 4 and 5 false closures in the 33 s against the raw points' 2 and 0.
+
+- On a 56 s take with no phone blinks (`2026-11-12_14-45-00`): over a half on 1 to 2 percent against the phone's 0.
+
+The long closure rule was the expected risk: a closure held in the closed band does not end, and lowered lids read at the closed level. A run on the rig take with every closure released after 600 ms moved the share over a half from 24 to 21 percent, so the held closures are not the cause. The false closures are short: point jitter and head motion make drops as fast as a blink.
+
+Decided: the stage lands for custom profiles as `blink.*`, and Auto stays on the phone's blinks. The new take with deliberate looks down and a long eyes-closed hold was not recorded, so the held look down part of the bar is unmeasured. Not tried: confirming a closure over two model frames, which the one-frame share suggests would cut half the false ones, and holding off closure starts while the face block moves.
+
+Learned: a timing rule finds blinks on these points as well as the best threshold does, and the false events it does not remove are the points' own noise, which no rule on one ratio over time tells from a blink at the same speed.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

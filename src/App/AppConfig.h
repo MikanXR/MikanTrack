@@ -12,6 +12,7 @@
 #include "AudioTypes.h"
 #include "MikanVideoSourceTypes.h"
 #include "TrackingTypes.h"
+#include "WebcamBlink.h"
 #include "WholeBodyFaceRatios.h"
 
 // Persisted per-project tracking settings, stored as JSON at the loaded
@@ -463,6 +464,7 @@ public:
 	FusionConfig fusion;
 	ImuConfig imu;
 	FaceConfig face;
+	BlinkConfig blink;
 	AudioConfig audio;
 	BodyConfig body;
 	RecordingConfig recording;

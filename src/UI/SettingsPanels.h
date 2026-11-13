@@ -132,6 +132,8 @@ struct FaceReadout
 	// neutral capture holds the face
 	FaceSources::Webcam webcam;
 	bool bWebcamNeutral= false;
+	// The Blink stage of the shown frame
+	FaceSources::Blink blink;
 };
 
 // The direct solve behind the shown avatar pose
@@ -270,6 +272,11 @@ void drawFaceStreamStatus(const TrackingSectionContext& context);
 // the face, whether the neutral capture holds it, and the measured columns'
 // raw values
 void drawWebcamFaceReadout(const TrackingSectionContext& context);
+// The Blink stage pieces, no headers. The controls edit the live config,
+// which the stage reads each frame. The readout shows the shown frame's eyes:
+// openness against the baseline and the floor, the state, and the output.
+void drawBlinkControls(const TrackingSectionContext& context);
+void drawBlinkReadout(const TrackingSectionContext& context);
 // The body pieces, no headers: the proportions intro with Measure My Body,
 // and the proportion controls, which edit the live config. The per-camera
 // enables are drawBodyPoseCameraControls.

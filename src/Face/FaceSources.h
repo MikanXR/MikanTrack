@@ -43,6 +43,27 @@ struct FaceSources
 		// A bit per column the source measures. A column outside it reads zero.
 		uint64_t measuredMask= 0;
 	};
+	// The Blink stage over the webcam's eye openness
+	struct Blink
+	{
+		// The webcam source is present
+		bool present= false;
+		// The webcam source is tracked
+		bool tracked= false;
+		// Each eye's baseline rests on enough open frames, not the seed
+		bool bBaselineSettled= false;
+		// ARKit sides, crossed as the webcam source's are; zero unless tracked
+		float eyeBlinkLeft= 0.f;
+		float eyeBlinkRight= 0.f;
+		// Diagnostics by the person's own side, 0 left and 1 right
+		float openness[2]= {0.f, 0.f};
+		float baseline[2]= {0.f, 0.f};
+		float floor[2]= {0.f, 0.f};
+		// WebcamBlinkFilter::eEyeState
+		uint8_t state[2]= {0, 0};
+		// Before the eyes are linked
+		float closure[2]= {0.f, 0.f};
+	};
 	// The face profile evaluated over the sources for this frame. Empty until
 	// a profile has run on the frame.
 	struct Outputs
@@ -60,6 +81,7 @@ struct FaceSources
 	Phone phone;
 	Viseme viseme;
 	Webcam webcam;
+	Blink blink;
 	Outputs outputs;
 
 	// The face is present while any source is

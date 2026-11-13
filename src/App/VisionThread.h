@@ -16,6 +16,7 @@
 #include "RetargetChains.h"
 #include "RetargetStage.h"
 #include "FaceRecorder.h"
+#include "WebcamBlink.h"
 #include "WebcamFace.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
@@ -454,6 +455,8 @@ private:
 	uint64_t m_lastMouthSequence= 0;
 	// The direct camera's last face ratios, for the neutral capture
 	WebcamFaceNeutralAverager m_webcamNeutralAverager;
+	// The Blink stage over the direct camera's eye openness
+	WebcamBlinkFilter m_blinkFilter;
 	// The timestamp of the last output a camera produced, so a face-only
 	// frame can tell when the hands it repeats have gone stale
 	double m_lastCameraOutputMs= -1.0;

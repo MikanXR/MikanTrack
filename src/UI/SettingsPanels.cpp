@@ -1117,6 +1117,83 @@ void SettingsPanels::drawWebcamFaceReadout(const TrackingSectionContext& context
 	}
 }
 
+void SettingsPanels::drawBlinkControls(const TrackingSectionContext& context)
+{
+	BlinkConfig& blink= context.config->blink;
+	bool bChanged= false;
+	bChanged|= ImGui::Checkbox(locLabel("trackingPanel.blinkSyncEyes"), &blink.syncEyes);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.blinkSyncEyesTooltip"));
+	ImGui::BeginDisabled(blink.syncEyes);
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.blinkWinkThreshold"), &blink.winkThreshold,
+								  BlinkConfig::k_minWinkThreshold, BlinkConfig::k_maxWinkThreshold, "%.2f");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.blinkWinkThresholdTooltip"));
+	ImGui::EndDisabled();
+	bChanged|= ImGui::SliderInt(locLabel("trackingPanel.blinkClarity"), &blink.clarity, BlinkConfig::k_minClarity,
+								BlinkConfig::k_maxClarity);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.blinkClarityTooltip"));
+	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.blinkSensitivity"), &blink.sensitivity,
+								  BlinkConfig::k_minSensitivity, BlinkConfig::k_maxSensitivity, "%.2f");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.blinkSensitivityTooltip"));
+	if (bChanged)
+	{
+		blink.winkThreshold= std::clamp(blink.winkThreshold, BlinkConfig::k_minWinkThreshold, BlinkConfig::k_maxWinkThreshold);
+		blink.clarity= std::clamp(blink.clarity, BlinkConfig::k_minClarity, BlinkConfig::k_maxClarity);
+		blink.sensitivity= std::clamp(blink.sensitivity, BlinkConfig::k_minSensitivity, BlinkConfig::k_maxSensitivity);
+		// The stage reads the settings each frame, so an edit needs only a
+		// save. A refresh would end a recording in progress.
+		context.config->markDirty();
+	}
+}
+
+void SettingsPanels::drawBlinkReadout(const TrackingSectionContext& context)
+{
+	const FaceSources::Blink& blink= context.face->blink;
+	if (!blink.present)
+	{
+		ImGui::TextDisabled("%s", locText("trackingPanel.webcamFaceNone"));
+		return;
+	}
+	if (!blink.tracked)
+	{
+		ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.webcamFaceLost"));
+		return;
+	}
+	if (!blink.bBaselineSettled)
+		ImGui::TextWrapped("%s", locText("trackingPanel.blinkSettling"));
+
+	static const char* const s_stateKeys[3]= {"trackingPanel.blinkStateOpen", "trackingPanel.blinkStateClosing",
+											   "trackingPanel.blinkStateClosed"};
+	static const char* const s_sideKeys[2]= {"trackingPanel.blinkEyeLeft", "trackingPanel.blinkEyeRight"};
+	for (int side= 0; side < 2; ++side)
+	{
+		ImGui::SeparatorText(locText(s_sideKeys[side]));
+		ImGui::Text(locText("trackingPanel.blinkLevelsFmt"), blink.openness[side], blink.baseline[side],
+					blink.floor[side]);
+		ImGui::TextUnformatted(locText(s_stateKeys[std::min<int>(blink.state[side], 2)]));
+		// Where the openness sits between the floor and the baseline
+		const float span= blink.baseline[side] - blink.floor[side];
+		const float level= span > 1e-4f ? std::clamp((blink.openness[side] - blink.floor[side]) / span, 0.f, 1.f) : 0.f;
+		char overlay[16];
+		snprintf(overlay, sizeof(overlay), "%.2f", level);
+		ImGui::ProgressBar(level, ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(locText("trackingPanel.blinkOpenLevel"));
+	}
+
+	// The output, in ARKit columns
+	ImGui::SeparatorText(locText("trackingPanel.blinkOutputHeader"));
+	const float values[2]= {blink.eyeBlinkLeft, blink.eyeBlinkRight};
+	const char* const names[2]= {"eyeBlinkLeft", "eyeBlinkRight"};
+	for (int index= 0; index < 2; ++index)
+	{
+		char overlay[16];
+		snprintf(overlay, sizeof(overlay), "%.2f", values[index]);
+		ImGui::ProgressBar(values[index], ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(names[index]);
+	}
+}
+
 void SettingsPanels::drawBodyPoseIntro()
 {
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));

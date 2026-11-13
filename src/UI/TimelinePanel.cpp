@@ -563,7 +563,7 @@ void TimelinePanel::rebuildDisplayFrame()
 	m_builtViewMode= m_viewMode;
 }
 
-FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex) const
+FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex)
 {
 	FaceSources sources;
 	const RecordedFrame& recorded= *m_replay.getFrame(frameIndex).recorded;
@@ -584,8 +584,11 @@ FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex) const
 	{
 		const TrackingFrameResult& camera= frame.perCamera[direct.cameraIndex];
 		const bool bFresh= recorded.nowTimestampMs - camera.timestampMs <= k_webcamFaceFreshMs;
-		fillWebcamFaceSource(camera.body, bFresh, direct.neutralFacePresent ? &direct.neutralFace : nullptr,
-							 sources.webcam);
+		const WholeBodyFaceRatios* neutral= direct.neutralFacePresent ? &direct.neutralFace : nullptr;
+		fillWebcamFaceSource(camera.body, bFresh, neutral, sources.webcam);
+		if (!m_blinkFilter.isSeededFrom(neutral))
+			m_blinkFilter.reset(neutral);
+		m_blinkFilter.update(camera.body, bFresh, camera.timestampMs, m_blinkConfig, sources.blink);
 	}
 	return sources;
 }
@@ -599,7 +602,14 @@ void TimelinePanel::rebuildDisplayFace()
 	if (m_faceFrame >= 0 && m_currentFrame > m_faceFrame && m_currentFrame - m_faceFrame <= k_maxFaceCatchUpFrames)
 		firstFrame= m_faceFrame + 1;
 	else if (m_currentFrame != m_faceFrame)
+	{
 		m_faceRunner.reset();
+		const DirectConfig& direct= m_replay.getRecordedConfig().direct;
+		m_blinkFilter.reset(direct.neutralFacePresent ? &direct.neutralFace : nullptr);
+		const double targetMs= m_replay.getFrame(m_currentFrame).recorded->nowTimestampMs;
+		while (firstFrame > 0 && targetMs - m_replay.getFrame(firstFrame - 1).recorded->nowTimestampMs <= k_facePreRollMs)
+			--firstFrame;
+	}
 
 	for (int frameIndex= firstFrame; frameIndex <= m_currentFrame; ++frameIndex)
 	{
@@ -607,6 +617,15 @@ void TimelinePanel::rebuildDisplayFace()
 		m_faceRunner.evaluate(m_displayFace, m_replay.getFrame(frameIndex).recorded->nowTimestampMs);
 	}
 	m_faceFrame= m_currentFrame;
+}
+
+void TimelinePanel::setBlinkConfig(const BlinkConfig& config)
+{
+	if (config == m_blinkConfig)
+		return;
+	m_blinkConfig= config;
+	// The shown frame is stale: the next rebuild resets and pre-rolls
+	m_faceFrame= -1;
 }
 
 int TimelinePanel::getReplayTimelineId() const

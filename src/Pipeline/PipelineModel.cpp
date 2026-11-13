@@ -43,6 +43,7 @@ const StageInfo k_stages[(int)S::Count]= {
 	{"Face", "face", S::Face},
 	{"Phone", "phone", S::Face},
 	{"Webcam", "webcam", S::Face},
+	{"Blink", "blink", S::Face},
 	{"Microphone", "mic", S::Face},
 	{"Profile", "profile", S::Face},
 };
@@ -439,6 +440,21 @@ StageStatus computeWebcam(const Inputs& in)
 	return running(text("valTracked"));
 }
 
+// The Blink stage reads the webcam face source's eye openness, so it
+// waits on that source
+StageStatus computeBlink(const Inputs& in)
+{
+	if (!in.bDirect)
+		return inactive(text("valOff"), text("whyBlinkNotDirect"));
+	if (!in.bWebcamPresent)
+		return degraded(text("valWaiting"), text("whyWebcamNoBody"));
+	if (!in.bWebcamTracked)
+		return running(text("valNoFace"));
+	if (!in.bBlinkSettled)
+		return degraded(text("valSettling"), text("whyBlinkSettling"));
+	return running(text("valTracked"));
+}
+
 StageStatus computeMicrophone(const Inputs& in)
 {
 	if (!in.bAudioEnabled)
@@ -525,7 +541,8 @@ std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId
 						 makeId(S::HoldRest)});
 		break;
 	case S::Face:
-		lanes.push_back({makeId(S::Phone), makeId(S::Webcam), makeId(S::Microphone), makeId(S::Profile)});
+		lanes.push_back(
+			{makeId(S::Phone), makeId(S::Webcam), makeId(S::Blink), makeId(S::Microphone), makeId(S::Profile)});
 		break;
 	case S::Output:
 		lanes.push_back({makeId(S::DeliveryRules), makeId(S::VmcStream)});
@@ -682,6 +699,8 @@ StageStatus computeStatus(const PipelineStatusInputs& inputs, const PipelineStag
 		return computePhone(inputs);
 	case S::Webcam:
 		return computeWebcam(inputs);
+	case S::Blink:
+		return computeBlink(inputs);
 	case S::Microphone:
 		return computeMicrophone(inputs);
 	case S::Profile:

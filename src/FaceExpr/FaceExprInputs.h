@@ -16,6 +16,10 @@
 //   webcam.<arkitName> 70..121, ARKit order
 //   webcam.present     122
 //   webcam.tracked     123
+//   blink.eyeBlinkLeft 124
+//   blink.eyeBlinkRight 125
+//   blink.present      126
+//   blink.tracked      127
 namespace FaceExprInputs
 {
 constexpr int k_phoneBlendshapeBase= 0;
@@ -26,7 +30,11 @@ constexpr int k_visemePresent= k_visemeBase + VISEME_COUNT;
 constexpr int k_webcamBlendshapeBase= k_visemePresent + 1;
 constexpr int k_webcamPresent= k_webcamBlendshapeBase + ARKIT_BLENDSHAPE_COUNT;
 constexpr int k_webcamTracked= k_webcamPresent + 1;
-constexpr int k_count= k_webcamTracked + 1;
+constexpr int k_blinkEyeBlinkLeft= k_webcamTracked + 1;
+constexpr int k_blinkEyeBlinkRight= k_blinkEyeBlinkLeft + 1;
+constexpr int k_blinkPresent= k_blinkEyeBlinkRight + 1;
+constexpr int k_blinkTracked= k_blinkPresent + 1;
+constexpr int k_count= k_blinkTracked + 1;
 
 // The slot of a dotted name, compared without case ("phone.JawOpen",
 // "phone.eyeBlink_L", "viseme.AA"); -1 for a name the table lacks

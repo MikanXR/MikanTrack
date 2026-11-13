@@ -525,6 +525,7 @@ void MainWindow::update(float deltaSeconds)
 	// The Timeline advances before anything reads the shown frame, whether
 	// or not its panel is drawn this frame
 	m_timelinePanel->setFaceBinding(m_app->getFaceBinding());
+	m_timelinePanel->setBlinkConfig(m_app->getConfig()->blink);
 	m_timelinePanel->update(deltaSeconds);
 	updateShownFrame(perCameraResults);
 
@@ -932,6 +933,10 @@ void MainWindow::updateFaceReadouts()
 								 direct.neutralFacePresent ? &direct.neutralFace : nullptr, face.webcam);
 		}
 	}
+	// The Blink stage of the shown frame: the output's own, which a replay
+	// steps in order on the timeline
+	if (m_shown.fused != nullptr)
+		face.blink= m_shown.fused->face.blink;
 	m_faceReadout= face;
 	m_microphoneReadout= microphone;
 }
@@ -1442,6 +1447,7 @@ void MainWindow::gatherPipelineInputs()
 	in.bWebcamPresent= m_faceReadout.webcam.present;
 	in.bWebcamTracked= m_faceReadout.webcam.tracked;
 	in.bWebcamNeutral= m_faceReadout.bWebcamNeutral;
+	in.bBlinkSettled= m_faceReadout.blink.bBaselineSettled;
 	if (!bReplay)
 	{
 		in.bOscRunning= telemetry.bValid && telemetry.bOscRunning;

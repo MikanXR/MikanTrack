@@ -104,6 +104,8 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 				(!m_tracking.face->bAvailable || m_tracking.face->bEnabled));
 	case ePipelineStage::Webcam:
 		return section == eStageSection::Diagnostics;
+	case ePipelineStage::Blink:
+		return section == eStageSection::Settings || section == eStageSection::Diagnostics;
 	case ePipelineStage::Profile:
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
@@ -278,6 +280,12 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		break;
 	case ePipelineStage::Webcam:
 		SettingsPanels::drawWebcamFaceReadout(m_tracking);
+		break;
+	case ePipelineStage::Blink:
+		if (section == eStageSection::Settings)
+			SettingsPanels::drawBlinkControls(m_tracking);
+		else
+			SettingsPanels::drawBlinkReadout(m_tracking);
 		break;
 	case ePipelineStage::Microphone:
 		if (section == eStageSection::Inputs)

@@ -40,6 +40,7 @@ enum class ePipelineStage : int
 	Face,
 	Phone,
 	Webcam,
+	Blink,
 	Microphone,
 	Profile,
 	Count
@@ -210,6 +211,8 @@ struct PipelineStatusInputs
 	bool bWebcamPresent= false;
 	bool bWebcamTracked= false;
 	bool bWebcamNeutral= false;
+	// The Blink stage's baselines rest on open frames rather than the seed
+	bool bBlinkSettled= false;
 	bool bAudioEnabled= false;
 	bool bAudioDeviceOpen= false;
 	bool bAudioBackendReady= false;

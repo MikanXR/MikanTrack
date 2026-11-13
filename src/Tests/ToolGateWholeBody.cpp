@@ -16,13 +16,16 @@
 #include "OnnxSession.h"
 #include "RtmPoseModel.h"
 #include "SyntheticAvatar.h"
+#include "WebcamBlink.h"
+#include "WebcamFace.h"
 #include "WholeBodyFaceRatios.h"
 
 // Whole-body landmark gate: re-runs the whole-body model over a recording's
 // raw frames from one camera and measures what its face and hand blocks are
 // worth from that camera's position, against the truth the same take carries.
 //
-//   --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [labels] [frames.csv]
+//   --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [shapes=<s>-<s>] [gazedown=<s>-<s>]
+//                    [labels] [frames.csv]
 //
 // cameraIndex defaults to the direct camera, else the recording's body-pose
 // camera. The raw frames beside the recording are required (raw frame
@@ -49,6 +52,10 @@
 //            closed levels and their separation, then the phone's blinks as
 //            events and how many the openness finds at the threshold that
 //            scores best, with the false ones, at both cadences
+//   stage    the same blink numbers for the Blink stage run over the points,
+//            then the share of frames outside the rest window each of its
+//            columns reads over a half against the phone's, and with
+//            gazedown=<s>-<s> the frames of a held look down that read shut
 //   models   the same blink numbers for each face model found in models/
 //            (RTMPose face6, MediaPipe Face Landmarker), run on a crop the
 //            face block places, with its time
@@ -719,6 +726,81 @@ EyeSeries eyeSeriesFromRatios(const std::vector<ModelSample>& samples)
 		series.push_back(eye);
 	}
 	return series;
+}
+
+// The Blink stage over a pass's model frames in order, under the take's
+// neutral and the default settings, as one minus each eye's output so the
+// blink scoring reads it as it reads an openness. Sides are the person's own.
+EyeSeries eyeSeriesFromBlinkStage(const std::vector<ModelSample>& samples, const DirectConfig& direct)
+{
+	WebcamBlinkFilter filter;
+	filter.reset(direct.neutralFacePresent ? &direct.neutralFace : nullptr);
+	const BlinkConfig config;
+	EyeSeries series;
+	for (size_t index= 0; index < samples.size(); ++index)
+	{
+		BodyPoseObservation body= samples[index].body;
+		body.modelFrameIndex= (int64_t)index;
+		FaceSources::Blink blink;
+		filter.update(body, true, samples[index].timestampMs, config, blink);
+		EyeSample eye;
+		eye.timestampMs= samples[index].timestampMs;
+		eye.bValid= blink.tracked;
+		eye.bModelFrame= true;
+		eye.openness[k_ratioSideOfArkitLeft]= 1.f - blink.eyeBlinkLeft;
+		eye.openness[k_ratioSideOfArkitRight]= 1.f - blink.eyeBlinkRight;
+		series.push_back(eye);
+	}
+	return series;
+}
+
+// The share of frames outside the rest window each blink column reads over a
+// half, the stage's against the phone's at the same frames, and the frames
+// of a held gaze-down window that read shut
+void reportBlinkStageShare(const char* tag, const char* passName, const EyeSeries& series,
+						   const std::vector<RecordedFaceSample>& faceSamples, double restStartMs, double restEndMs,
+						   double gazeStartMs, double gazeEndMs)
+{
+	const int columns[2]= {arkitBlendshapeFromName("eyeBlinkLeft"), arkitBlendshapeFromName("eyeBlinkRight")};
+	const int sides[2]= {k_ratioSideOfArkitLeft, k_ratioSideOfArkitRight};
+	int frames= 0;
+	int stageOver[2]= {0, 0};
+	int phoneFrames= 0;
+	int phoneOver[2]= {0, 0};
+	int gazeFrames= 0;
+	int gazeShut= 0;
+	for (const EyeSample& sample : series)
+	{
+		if (!sample.bValid)
+			continue;
+		const bool bGaze= sample.timestampMs >= gazeStartMs && sample.timestampMs <= gazeEndMs;
+		if (bGaze)
+		{
+			gazeFrames++;
+			gazeShut+= (1.f - sample.openness[0] > 0.5f || 1.f - sample.openness[1] > 0.5f) ? 1 : 0;
+		}
+		if (sample.timestampMs >= restStartMs && sample.timestampMs <= restEndMs)
+			continue;
+		frames++;
+		float phone[2];
+		const bool bPhone= phoneValueAt(faceSamples, sample.timestampMs, columns[0], phone[0]) &&
+			phoneValueAt(faceSamples, sample.timestampMs, columns[1], phone[1]);
+		phoneFrames+= bPhone ? 1 : 0;
+		for (int index= 0; index < 2; ++index)
+		{
+			stageOver[index]+= 1.f - sample.openness[sides[index]] > 0.5f ? 1 : 0;
+			phoneOver[index]+= bPhone && phone[index] > 0.5f ? 1 : 0;
+		}
+	}
+	MIKAN_LOG_INFO(tag) << "  " << passName << ": over a half outside the rest window, eyeBlinkLeft "
+						<< percent(stageOver[0], frames) << "% and eyeBlinkRight " << percent(stageOver[1], frames)
+						<< "% of " << frames << " frames, the phone's " << percent(phoneOver[0], phoneFrames) << "% and "
+						<< percent(phoneOver[1], phoneFrames) << "% of " << phoneFrames;
+	if (gazeEndMs > gazeStartMs)
+	{
+		MIKAN_LOG_INFO(tag) << "  " << passName << ": held gaze-down window, " << gazeShut << " of " << gazeFrames
+							<< " frames read shut";
+	}
 }
 
 // -- The blink evaluation's face models --------------------------------------
@@ -2347,14 +2429,15 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	Window shapes= {"shapes=", 0.0, 1e9};
 	Window ears= {"ears=", 0.0, 1e9};
 	Window headphones= {"headphones=", -1.0, -1.0};
+	Window gazeDown= {"gazedown=", -1.0, -1.0};
 	// The phone's clock ahead of the camera's for the head comparison, ms
 	double headLagMs= 0.0;
 	const char* usage= "Usage: --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [shapes=<s>-<s>] "
-					   "[ears=<s>-<s>] [headphones=<s>-<s>] [headlag=<ms>] [labels] [frames.csv]";
+					   "[ears=<s>-<s>] [headphones=<s>-<s>] [gazedown=<s>-<s>] [headlag=<ms>] [labels] [frames.csv]";
 	for (const std::string& arg : args)
 	{
 		Window* window= nullptr;
-		for (Window* candidate : {&rest, &shapes, &ears, &headphones})
+		for (Window* candidate : {&rest, &shapes, &ears, &headphones, &gazeDown})
 		{
 			if (arg.rfind(candidate->key, 0) == 0)
 				window= candidate;
@@ -2601,6 +2684,19 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		const EyeSeries pointsEveryFrame= eyeSeriesFromRatios(shapesEveryFrame);
 		const EyeSeries pointsDivided= eyeSeriesFromRatios(shapesDivided);
 		reportBlinkSignal(tag, {{"every frame", &pointsEveryFrame}, {"at the divider", &pointsDivided}}, faceSamples);
+
+		// The Blink stage over the same points, each pass in order from its
+		// first frame
+		MIKAN_LOG_INFO(tag) << " the Blink stage over the whole-body points, one minus its output:";
+		const EyeSeries stageEveryFrame= eyeSeriesFromBlinkStage(shapesEveryFrame, config.direct);
+		const EyeSeries stageDivided= eyeSeriesFromBlinkStage(shapesDivided, config.direct);
+		reportBlinkSignal(tag, {{"every frame", &stageEveryFrame}, {"at the divider", &stageDivided}}, faceSamples);
+		const double gazeStartMs= gazeDown.startSeconds < 0.0 ? 0.0 : takeStartMs + gazeDown.startSeconds * 1000.0;
+		const double gazeEndMs= gazeDown.startSeconds < 0.0 ? -1.0 : takeStartMs + gazeDown.endSeconds * 1000.0;
+		reportBlinkStageShare(tag, "every frame", stageEveryFrame, faceSamples, restStartMs, restEndMs, gazeStartMs,
+							  gazeEndMs);
+		reportBlinkStageShare(tag, "at the divider", stageDivided, faceSamples, restStartMs, restEndMs, gazeStartMs,
+							  gazeEndMs);
 
 		// The face model candidates, each on a crop the face block places.
 		// A candidate whose model file is not beside the app is not run.

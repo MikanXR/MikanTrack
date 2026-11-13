@@ -57,6 +57,19 @@ int fromName(const std::string& name)
 		}
 		return -1;
 	}
+	if (space == "blink")
+	{
+		if (member == "present")
+			return k_blinkPresent;
+		if (member == "tracked")
+			return k_blinkTracked;
+		const std::string expanded= expandSideSuffix(member);
+		if (expanded == "eyeblinkleft")
+			return k_blinkEyeBlinkLeft;
+		if (expanded == "eyeblinkright")
+			return k_blinkEyeBlinkRight;
+		return -1;
+	}
 	if (space == "viseme")
 	{
 		if (member == "present")
@@ -89,6 +102,14 @@ std::string name(int slot)
 		return "webcam.present";
 	if (slot == k_webcamTracked)
 		return "webcam.tracked";
+	if (slot == k_blinkEyeBlinkLeft)
+		return "blink.eyeBlinkLeft";
+	if (slot == k_blinkEyeBlinkRight)
+		return "blink.eyeBlinkRight";
+	if (slot == k_blinkPresent)
+		return "blink.present";
+	if (slot == k_blinkTracked)
+		return "blink.tracked";
 	return "";
 }
 
@@ -109,6 +130,10 @@ void fill(const FaceSources& sources, float* outInputs)
 	}
 	outInputs[k_webcamPresent]= sources.webcam.present ? 1.f : 0.f;
 	outInputs[k_webcamTracked]= sources.webcam.tracked ? 1.f : 0.f;
+	outInputs[k_blinkEyeBlinkLeft]= sources.blink.tracked ? sources.blink.eyeBlinkLeft : 0.f;
+	outInputs[k_blinkEyeBlinkRight]= sources.blink.tracked ? sources.blink.eyeBlinkRight : 0.f;
+	outInputs[k_blinkPresent]= sources.blink.present ? 1.f : 0.f;
+	outInputs[k_blinkTracked]= sources.blink.tracked ? 1.f : 0.f;
 }
 
 const ExprInputTable& table()
