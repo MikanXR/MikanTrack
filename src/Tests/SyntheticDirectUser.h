@@ -175,7 +175,9 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 		hand.tracked= true;
 		hand.presence= 1.f;
 		const glm::vec2 wristPx= project(camera, user.wrist[sideIndex]) + user.handPixelOffset[sideIndex];
-		hand.imagePoints[0]= glm::vec3(wristPx.x, wristPx.y, 0.f);
+		// Every landmark at the wrist: the solver reads the wrist's pixel, and
+		// counts the landmarks at the frame's edge
+		hand.imagePoints.fill(glm::vec3(wristPx.x, wristPx.y, 0.f));
 		pose.tracked= true;
 		pose.presence= 1.f;
 		pose.confidence= 1.f;

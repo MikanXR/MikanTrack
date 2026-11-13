@@ -110,6 +110,12 @@ struct DirectRetargetConfig
 	// continues the forearm better at all.
 	float palmMirrorEnterGain= 0.5f;
 	float palmMirrorLeaveGain= 0.3f;
+	// A hand with this many landmarks at the frame's edge or past it is cut
+	// by the frame. The hand model lays the rest of a cut hand out by guess,
+	// and the guess can be the other hand's layout, which turns the palm
+	// right round. Such a hand keeps the wrist it gives the arm, and its
+	// palm and fingers are held as through a dropout. Zero reads every hand.
+	int handCutLandmarks= 3;
 	// The rig's joint limits on the relative rotations, radians: the head
 	// against the neutral head, the spine (the lean and the shoulder line's
 	// turn) against the neutral torso, and each wrist (the palm in the
@@ -242,6 +248,9 @@ public:
 			// read)
 			bool bPalmMirrored= false;
 			float palmMirrorGain= 0.f;
+			// The hand is on the arm and cut by the frame's edge, so its palm
+			// and fingers are held
+			bool bHandCut= false;
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
 			// The loss stage's readout, which the retarget stage writes from

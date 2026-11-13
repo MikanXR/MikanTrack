@@ -360,6 +360,14 @@ With the hand labels corrected, direct mode still showed the palm jumping half a
 
 Learned: a timing coincidence is a hypothesis, and a fix built on it tests the hypothesis at the price of the fix. Count the failures by cause in the tool before changing the pipeline. And a rule written to distrust an input should be revisited when the input's source changes.
 
+## 28. A hand half out of the frame is laid out as the other hand
+
+The first take recorded with `sideDecided` verified in replay and its palmar side matched the hand's side on 98% of lifted frames, against 89% before. It had three twist jumps in 1782 frame pairs, none on a palmar flip or a mirror toggle, all on the right hand as it left the frame's left edge or came back in. With the wrist 40 pixels from the edge and 12 to 17 of the 21 landmarks within 16 pixels of it, the hand model put the thumb off the edge and ran the pinky up the visible thumb. The whole-body hand sat on the same spot, so the side stayed decided and the lift's sign stayed right over landmarks that had turned. The palm turned about 130 degrees and stayed there until the hand was lost.
+
+The direct solver now holds the palm and fingers of a hand with three or more landmarks at the edge, as through a dropout. On that take the jumps went from 3 to 0 with 79 hand frames held. On the seven takes of 2026-11-12 the 26 jumps are unchanged, none of them being on a cut hand, with 99 frames held. `--gate-direct` counted the step off the held palm when a cut hand cleared the edge as a jump until a held frame stopped counting as read.
+
+Learned: the first reading of the three jumps took the tool's CSV, which interleaves the two sides' rows, as one series, and called each jump a single frame on a hand read on alternate frames. Per side each was a turn that persisted. Read a per-side series per side.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

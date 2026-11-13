@@ -839,6 +839,7 @@ inline DirectRetargetConfig atFrozenPalmMirror(DirectRetargetConfig config)
 {
 	config.palmMirrorEnterGain= 0.f;
 	config.palmMirrorLeaveGain= 0.f;
+	config.handCutLandmarks= 0;
 	return config;
 }
 

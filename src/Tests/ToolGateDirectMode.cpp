@@ -264,11 +264,15 @@ struct SideStats
 	// Frames that read the hand, and how many took the lifted palm's mirror
 	int palmFrames= 0;
 	int palmMirroredFrames= 0;
+	// Frames the hand was on the arm and cut by the frame's edge, its palm
+	// and fingers held
+	int handCutFrames= 0;
 
 	void append(const SideStats& other)
 	{
 		palmFrames+= other.palmFrames;
 		palmMirroredFrames+= other.palmMirroredFrames;
+		handCutFrames+= other.handCutFrames;
 		twistFrames+= other.twistFrames;
 		twistJumps+= other.twistJumps;
 		for (int cause= 0; cause < (int)eTwistJumpCause::Count; ++cause)
@@ -503,7 +507,9 @@ struct RetargetComparison
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const DirectRetarget::SolveState::Arm& arm= direct.getSolveState().arms[sideIndex];
-			const bool bRead= arm.bHandSeen && arm.bHandMeasured;
+			// A hand cut by the frame's edge is held, not read: the step off
+			// the held palm when it clears is a reacquire, not a jump
+			const bool bRead= arm.bHandSeen && arm.bHandMeasured && !arm.bHandCut;
 			framePalm[sideIndex]= FramePalm{bRead, glm::degrees(arm.twist), arm.bPalmMirrored, arm.palmMirrorGain};
 
 			std::array<PalmSignals, kTwistJumpCauseFrames + 1>& history= palmSignals[sideIndex];
@@ -519,6 +525,7 @@ struct RetargetComparison
 				if (history[kTwistJumpCauseFrames].palmarSign == sidePalmarSign)
 					sides[sideIndex].palmarAgreeFrames++;
 			}
+			sides[sideIndex].handCutFrames+= arm.bHandCut ? 1 : 0;
 			if (bRead)
 			{
 				sides[sideIndex].palmFrames++;
@@ -870,7 +877,8 @@ void logCandidates(const char* tag, const SideStats& side)
 	{
 		MIKAN_LOG_INFO(tag) << "    direct retarget twist jumps over " << kTwistJumpDegrees << " deg: " << side.twistJumps
 							<< "/" << side.twistFrames << " frame pairs, palm mirrored on " << side.palmMirroredFrames
-							<< "/" << side.palmFrames << " frames";
+							<< "/" << side.palmFrames << " frames, palm and fingers held for a hand cut by the frame's edge on "
+							<< side.handCutFrames << " frames";
 		if (side.twistJumps > 0)
 		{
 			std::ostringstream causes;

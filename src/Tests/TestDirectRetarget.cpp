@@ -784,6 +784,65 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(k) a hand slot on the body wrist is the hand");
 	}
 
+	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
+	// part out by guess, so its palm can come back turned right round: the
+	// palm and fingers are held while the landmarks sit at the edge, and
+	// follow the hand again once it is clear. With the count at zero every
+	// hand is read and the turned palm is taken.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		User user= makeNeutralUser();
+		// Four fingertips at the edge and the palm turned over about its
+		// finger axis, the left hand only
+		auto runFrames= [&](DirectStageSolver& solver, const Rig& rig, double& timestampMs, int firstFrame, int frameCount,
+							bool bCut) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+				if (bCut)
+				{
+					for (int tip : {8, 12, 16, 20})
+						frame.hands[0].imagePoints[tip].x= 2.f;
+					frame.poses[0].palmOrientationCamera= frame.poses[0].palmOrientationCamera *
+						glm::angleAxis(glm::pi<float>(), glm::vec3(1.f, 0.f, 0.f));
+				}
+				AvatarPose pose;
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto twistTurn= [](float a, float b) { return fabsf(AvatarRetargetMath::wrapAngle(a - b)); };
+
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+		runFrames(solver, rig, timestampMs, 700, 10, false);
+		const float clearTwist[2]= {solver.getSolveState().arms[0].twist, solver.getSolveState().arms[1].twist};
+		runFrames(solver, rig, timestampMs, 710, 10, true);
+		const DirectRetarget::SolveState cut= solver.getSolveState();
+		check(cut.arms[0].bHandCut && !cut.arms[1].bHandCut, "(k1) a hand with landmarks at the frame's edge is cut");
+		check(cut.arms[0].bHandSeen && cut.arms[0].bHandMeasured && twistTurn(cut.arms[0].twist, clearTwist[0]) < 1e-4f,
+			  "(k1) a cut hand stays on the arm and its palm is held past a turn right round");
+		check(twistTurn(cut.arms[1].twist, clearTwist[1]) < 0.05f, "(k1) the other hand is read as before");
+		runFrames(solver, rig, timestampMs, 720, 10, false);
+		const DirectRetarget::SolveState clear= solver.getSolveState();
+		check(!clear.arms[0].bHandCut && twistTurn(clear.arms[0].twist, clearTwist[0]) < 0.05f,
+			  "(k1) clear of the edge the hand is read again");
+
+		Rig everyHandRig= makeRig(kTiltDegrees);
+		everyHandRig.config.handCutLandmarks= 0;
+		DirectStageSolver everyHandSolver;
+		timestampMs= 0.0;
+		captureNeutral(everyHandRig, camera, everyHandSolver, timestampMs);
+		runFrames(everyHandSolver, everyHandRig, timestampMs, 700, 10, false);
+		const float readTwist= everyHandSolver.getSolveState().arms[0].twist;
+		runFrames(everyHandSolver, everyHandRig, timestampMs, 710, 10, true);
+		const DirectRetarget::SolveState read= everyHandSolver.getSolveState();
+		check(!read.arms[0].bHandCut && twistTurn(read.arms[0].twist, readTwist) > 1.5f,
+			  "(k1) with the count at zero the turned palm is taken");
+	}
+
 	// (k2) Hand slots carrying the wrong side sit on the other arm's body
 	// wrist. A second of that with no slot on its own wrist is reported as
 	// swapped labels, one agreeing frame ends it, and wrists held together,

@@ -1023,9 +1023,23 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// The hand: the palm frame in the world, its normal's roll about the
 		// forearm against the avatar's rest palm, and the palm in the
 		// measured forearm frame (the wrist). Held through a hand dropout, a
-		// slot the body disagrees with counting as one.
+		// slot the body disagrees with and a hand cut by the frame's edge
+		// each counting as one.
 		const glm::vec3 restPalmNormal= restPalmNormalUnder(skeleton, side, swing);
-		const bool bHandRead= bHandSeen && pose.tracked && pose.hasCameraPose;
+		int edgeLandmarks= 0;
+		if (bHandSeen && bFrameKnown && config.handCutLandmarks > 0)
+		{
+			for (const glm::vec3& point : hand.imagePoints)
+			{
+				const bool bInFrame= point.x >= kFrameMarginPx && point.y >= kFrameMarginPx &&
+					point.x <= (float)cameraModel.width - kFrameMarginPx &&
+					point.y <= (float)cameraModel.height - kFrameMarginPx;
+				edgeLandmarks+= bInFrame ? 0 : 1;
+			}
+		}
+		const bool bHandCut= config.handCutLandmarks > 0 && edgeLandmarks >= config.handCutLandmarks;
+		armState.bHandCut= bHandCut;
+		const bool bHandRead= bHandSeen && pose.tracked && pose.hasCameraPose && !bHandCut;
 		if (bHandRead)
 		{
 			const glm::quat palmRaw= glm::normalize(worldFromCam * pose.palmOrientationCamera);
