@@ -140,7 +140,8 @@ public:
 	// metacarpal, less the bend the model reads on a straight finger facing
 	// the camera (kFingerOpenBias, kThumbOpenBias), each bend floored at
 	// zero. The lateral is the splay past the hand's own fan, unbiased. One
-	// palmar memory per hand, reset when the hand is lost.
+	// palmar memory per hand, reset when the hand is lost. A hand whose side
+	// is decided takes the palmar side from it, as the lift does.
 	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 

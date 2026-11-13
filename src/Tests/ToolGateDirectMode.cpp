@@ -260,6 +260,14 @@ struct SideStats
 	// into agreement
 	int palmarFrames= 0;
 	int palmarAgreeFrames= 0;
+	// The same for the palm frame the solver's fingers are measured against,
+	// which is taken from the hand model's own 3D points with the solver's
+	// memory: frames the hand was read, how many agree, and both again on
+	// the frames the hand's side was decided
+	int fingerPalmarFrames= 0;
+	int fingerPalmarAgreeFrames= 0;
+	int fingerPalmarDecidedFrames= 0;
+	int fingerPalmarDecidedAgreeFrames= 0;
 	int palmarFlipsToAgree= 0;
 	// Frames that read the hand, and how many took the lifted palm's mirror
 	int palmFrames= 0;
@@ -282,6 +290,10 @@ struct SideStats
 		twistJumpsOnNewHand+= other.twistJumpsOnNewHand;
 		palmarFrames+= other.palmarFrames;
 		palmarAgreeFrames+= other.palmarAgreeFrames;
+		fingerPalmarFrames+= other.fingerPalmarFrames;
+		fingerPalmarAgreeFrames+= other.fingerPalmarAgreeFrames;
+		fingerPalmarDecidedFrames+= other.fingerPalmarDecidedFrames;
+		fingerPalmarDecidedAgreeFrames+= other.fingerPalmarDecidedAgreeFrames;
 		palmarFlipsToAgree+= other.palmarFlipsToAgree;
 		truthArmFrames+= other.truthArmFrames;
 		modelArmFrames+= other.modelArmFrames;
@@ -439,6 +451,7 @@ struct RetargetComparison
 	};
 	std::array<std::array<PalmSignals, kTwistJumpCauseFrames + 1>, 2> palmSignals{};
 	std::array<int, 2> handFrames{};
+	std::array<HandPoseModel::PalmarSideMemory, 2> fingerPalmarMemory{};
 
 	// This frame's truth-free numbers per side and candidate, for the CSV
 	struct FrameCandidate
@@ -526,6 +539,34 @@ struct RetargetComparison
 					sides[sideIndex].palmarAgreeFrames++;
 			}
 			sides[sideIndex].handCutFrames+= arm.bHandCut ? 1 : 0;
+			{
+				// As the solver does: the memory lasts while the hand is read
+				const TrackedHand& fingerHand= cameraInput.hands[sideIndex];
+				const bool bFingersRead= arm.bHandSeen && !arm.bHandCut && cameraInput.poses[sideIndex].tracked &&
+					cameraInput.poses[sideIndex].hasCameraPose;
+				if (bFingersRead)
+				{
+					const glm::mat4 fingerPalm=
+						HandPoseModel::computePalmFrame(fingerHand.modelPoints, fingerHand.side, &fingerPalmarMemory[sideIndex],
+														fingerHand.bSideDecided);
+					const glm::vec3& modelWrist= fingerHand.modelPoints[(int)eHandLandmark::WRIST];
+					const glm::vec3 knuckleCross=
+						glm::cross(fingerHand.modelPoints[(int)eHandLandmark::INDEX_MCP] - modelWrist,
+								   fingerHand.modelPoints[(int)eHandLandmark::PINKY_MCP] - modelWrist);
+					const bool bAgree= signOf(glm::dot(glm::vec3(fingerPalm[2]), knuckleCross)) == sidePalmarSign;
+					sides[sideIndex].fingerPalmarFrames++;
+					sides[sideIndex].fingerPalmarAgreeFrames+= bAgree ? 1 : 0;
+					if (fingerHand.bSideDecided)
+					{
+						sides[sideIndex].fingerPalmarDecidedFrames++;
+						sides[sideIndex].fingerPalmarDecidedAgreeFrames+= bAgree ? 1 : 0;
+					}
+				}
+				else
+				{
+					fingerPalmarMemory[sideIndex].reset();
+				}
+			}
 			if (bRead)
 			{
 				sides[sideIndex].palmFrames++;
@@ -891,6 +932,13 @@ void logCandidates(const char* tag, const SideStats& side)
 								<< side.twistJumpsWithModelTurn << ", on a hand the camera had for " << kNewHandFrames
 								<< " frames or fewer " << side.twistJumpsOnNewHand;
 		}
+	}
+	if (side.fingerPalmarFrames > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    the palmar side the solver's fingers are measured against is the one the hand's side names on "
+							<< side.fingerPalmarAgreeFrames << "/" << side.fingerPalmarFrames << " read frames, "
+							<< side.fingerPalmarDecidedAgreeFrames << "/" << side.fingerPalmarDecidedFrames
+							<< " of those with the side decided";
 	}
 	if (side.palmarFrames > 0)
 	{

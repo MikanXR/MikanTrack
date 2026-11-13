@@ -93,7 +93,7 @@ void computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& point
 // convention: the stereo path keeps the flat-hand neutral above.
 void computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles,
-								   PalmarSideMemory* ioMemory= nullptr);
+								   PalmarSideMemory* ioMemory= nullptr, bool bSideDecided= false);
 
 // Skeleton geometry (finger base positions in the palm frame + phalanx
 // lengths) from a metric landmark set. neutralDirInPalm is filled with the

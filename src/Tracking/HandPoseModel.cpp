@@ -345,9 +345,9 @@ void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMAR
 
 void HandPoseModel::computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points,
 												  eHandSide side, std::array<FingerAngles, FINGER_COUNT>& outAngles,
-												  PalmarSideMemory* ioMemory)
+												  PalmarSideMemory* ioMemory, bool bSideDecided)
 {
-	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory, bSideDecided);
 	const glm::vec3 palmZ= glm::vec3(palmFrame[2]);
 	const glm::vec3& wrist= points[(int)eHandLandmark::WRIST];
 	std::array<glm::vec3, FINGER_COUNT> neutralWorlds;

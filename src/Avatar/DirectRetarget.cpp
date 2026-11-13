@@ -385,7 +385,7 @@ glm::quat DirectRetarget::worldFromCamera(float tiltRadians)
 void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 										std::array<FingerAngles, FINGER_COUNT>& outAngles)
 {
-	HandPoseModel::computeMetacarpalFingerAngles(hand.modelPoints, hand.side, outAngles, &ioMemory);
+	HandPoseModel::computeMetacarpalFingerAngles(hand.modelPoints, hand.side, outAngles, &ioMemory, hand.bSideDecided);
 	for (int finger= 0; finger < FINGER_COUNT; ++finger)
 	{
 		const float* bias= finger == (int)eFinger::Thumb ? kThumbOpenBias : kFingerOpenBias;

@@ -295,6 +295,29 @@ static int runPnpTest(const TestArgs& args)
 			glm::dot(flatDecidedOtherHand, truePalmNormal) < -0.9f;
 		MIKAN_LOG_INFO("test-pnp") << "palmar side: solved=" << bSolved << " by evidence as expected=" << bEvidence
 								   << " from a decided side=" << bDecided;
+		// The direct solver's fingers are measured against the same palmar
+		// side: the flat hand's fingers settle on the wrong side of the palm
+		// from its evidence and on the palm's own side from a decided side
+		auto fingerPalmarSide= [&](bool bSideDecided) {
+			TrackedHand hand;
+			hand.tracked= true;
+			hand.side= eHandSide::Left;
+			hand.bSideDecided= bSideDecided;
+			hand.modelPoints= flatModel;
+			HandPoseModel::PalmarSideMemory memory;
+			std::array<FingerAngles, FINGER_COUNT> angles;
+			DirectRetarget::measureMonoFingers(hand, memory, angles);
+			return glm::dot(memory.palmarNormal, glm::vec3(0.f, 0.f, 1.f));
+		};
+		const bool bFingers= fingerPalmarSide(false) < -0.9f && fingerPalmarSide(true) > 0.9f;
+		MIKAN_LOG_INFO("test-pnp") << "the solver's fingers take the palmar side a decided side names=" << bFingers;
+		if (!bFingers)
+		{
+			MIKAN_LOG_ERROR("test-pnp") << "FAILED: the direct solver's fingers must be measured against the palmar "
+										   "side a decided side names";
+			result= 1;
+		}
+
 		if (!bSolved || !bEvidence || !bDecided)
 		{
 			MIKAN_LOG_ERROR("test-pnp") << "FAILED: a hand whose side is decided must take its palmar side from that "
