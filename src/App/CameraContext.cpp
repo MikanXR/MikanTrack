@@ -9,6 +9,7 @@
 #include "CVVideoFrameProcessor.h"
 #include "FrameRecorder.h"
 #include "HandRoiQuality.h"
+#include "HandSideMatch.h"
 #include "HandTrackingPipeline.h"
 #include "LandmarkTo3D.h"
 #include "Logger.h"
@@ -404,6 +405,13 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		}
 		timings.bodyPoseMs= lapMs();
 
+		// The hand model's left and right are a view-dependent guess made
+		// sticky. The body model labels a hand by the arm it ends, so on the
+		// direct camera its hands name each slot's side, here, where the
+		// recording and the lift both see the hand under its true side.
+		if (m_bHandSideCorrection)
+			applyHandSideCorrection(result);
+
 		// Lighting/exposure diagnostics on the exact image the model consumed
 		for (TrackedHand& hand : result.hands)
 			HandRoiQuality::analyzeHand(*activeFrame, hand);
@@ -426,6 +434,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 				outHand.presence= hand.presence;
 				outHand.handednessScore= hand.handednessScore;
 				outHand.rightProb= hand.rightProb;
+				outHand.bSideCorrected= hand.bSideCorrected;
 				outHand.imagePoints= hand.imagePoints;
 				outHand.modelPoints= hand.modelPoints;
 				outHand.imageQuality= hand.imageQuality;

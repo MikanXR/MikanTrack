@@ -34,6 +34,7 @@ struct DiagHandState
 	float presence= 0.f;
 	float handednessScore= 0.f;
 	float rightProb= 0.5f; // flip-adjusted classifier opinion (what fusion votes with)
+	bool bSideCorrected= false; // the direct camera moved the hand to this side
 	int labeledSide= -1;   // camera records: that camera's own label; fused: assigned side
 	float visibility= 0.f;
 	float confidence= 0.f; // presence x measured stability (what OSC gates on)

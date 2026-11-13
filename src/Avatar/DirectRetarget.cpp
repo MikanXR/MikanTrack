@@ -455,6 +455,8 @@ void DirectRetarget::resetMeasure()
 	m_handednessSwapStartMs= -1.0;
 	m_oppositeWristRejections[0]= 0;
 	m_oppositeWristRejections[1]= 0;
+	m_sideCorrections[0]= 0;
+	m_sideCorrections[1]= 0;
 	m_torso= TorsoState();
 	m_head= HeadState();
 	for (ArmState& arm : m_arms)
@@ -768,16 +770,25 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// The label report takes the slot's side from the hand's shape
 		// against the two whole-body hands where both score, which still
 		// tells the hands apart with the wrists together, and from the wrists
-		// otherwise. The entry gate above keeps the wrist alone.
+		// otherwise. The entry gate above keeps the wrist alone. The report
+		// is about the hand model's labels, so a slot the camera moved to
+		// this side is read against the side it was published under.
+		const bool bSideCorrected= hand.tracked && hand.bSideCorrected;
+		const int labelSide= bSideCorrected ? 1 - sideIndex : sideIndex;
+		const bool bNearLabelWrist= bSideCorrected ? bHandOpposite : bHandNear;
+		const bool bNearOtherLabelWrist= bSideCorrected ? bHandNear : bHandOpposite;
 		const HandShapeMatch shape=
 			hand.tracked ? matchHandSideByShape(hand.imagePoints, body.wholeBody) : HandShapeMatch();
-		bAnyHandOnOwnWrist|= shape.side >= 0 ? shape.side == sideIndex : bHandNear;
-		bAnyHandOnOppositeWrist|= shape.side >= 0 ? shape.side != sideIndex : bHandOpposite;
+		bAnyHandOnOwnWrist|= shape.side >= 0 ? shape.side == labelSide : bNearLabelWrist;
+		bAnyHandOnOppositeWrist|= shape.side >= 0 ? shape.side != labelSide : bNearOtherLabelWrist;
 		// A slot the gate turned away while it sat on the other arm's wrist:
 		// what a wrong label costs
 		if (hand.tracked && !bHandNear && bHandOpposite)
 			m_oppositeWristRejections[sideIndex]++;
 		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
+		// A hand this arm has only because the camera moved the slot to it
+		if (bHandSeen && bSideCorrected)
+			m_sideCorrections[sideIndex]++;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
 		// the body model's, which keeps the arm placed through a hand dropout;
@@ -1173,6 +1184,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		m_handednessSwapStartMs >= 0.0 && (timestampMs - m_handednessSwapStartMs) >= kHandednessSwapMs;
 	m_state.oppositeWristRejections[0]= m_oppositeWristRejections[0];
 	m_state.oppositeWristRejections[1]= m_oppositeWristRejections[1];
+	m_state.sideCorrections[0]= m_sideCorrections[0];
+	m_state.sideCorrections[1]= m_sideCorrections[1];
 }
 
 void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,

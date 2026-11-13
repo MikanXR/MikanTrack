@@ -19,7 +19,12 @@
 // shoulders), carried into the camera's own frame, so every comparison is
 // one model's view against the rig's view of the same arm.
 //
-//   --gate-direct <recording.jsonl>... [cameraIndex] [frames.csv]
+//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [frames.csv]
+//
+// correct runs the candidates on the camera's hands with their sides
+// corrected from the recorded whole-body hands ahead of the lift, as the
+// live direct camera corrects them: the A/B for a take recorded before it
+// did, or under a changed rule.
 //
 // cameraIndex defaults to the recording's body-pose camera. The raw frames
 // beside the recording are required (raw frame recording is opt-in). A
@@ -816,10 +821,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 	std::vector<std::string> recordings;
 	std::string csvPath;
 	int requestedCamera= -1;
+	bool bCorrectHandSides= false;
 	for (const std::string& arg : args)
 	{
 		if (TrackingRecording::isRecordingFile(arg))
 			recordings.push_back(arg);
+		else if (arg == "correct")
+			bCorrectHandSides= true;
 		else if (TrackingRecording::isRecordingSidecarFile(arg))
 			MIKAN_LOG_INFO(tag) << "Skipping " << arg << ": a take's sidecar, not a take";
 		else if (arg.size() > 4 && arg.substr(arg.size() - 4) == ".csv")
@@ -829,7 +837,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 	}
 	if (recordings.empty())
 	{
-		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [frames.csv]";
+		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [frames.csv]";
 		return 1;
 	}
 	std::ofstream csv;
@@ -928,6 +936,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 		}
 
 		replay.runAll();
+		int correctedFrames= 0;
+		if (bCorrectHandSides)
+		{
+			TrackingReplay::WhatIfParams params= replay.makeDefaultWhatIfParams();
+			params.correctHandSidesCamera= cameraIndex;
+			replay.runWhatIf(params);
+		}
 
 		std::array<SideStats, 2> sides{};
 		Stats inferenceMs;
@@ -972,7 +987,10 @@ static int runGateDirectModeTool(const TestArgs& args)
 			bool bCompared= false;
 			if (observation.valid && cameraIndex < (int)frame.perCamera.size() && frame.perCameraValid[cameraIndex])
 			{
-				TrackingFrameResult cameraInput= frame.perCamera[cameraIndex];
+				TrackingFrameResult cameraInput=
+					bCorrectHandSides ? frame.whatIfPerCamera[cameraIndex] : frame.perCamera[cameraIndex];
+				if (cameraInput.hands[0].bSideCorrected || cameraInput.hands[1].bSideCorrected)
+					correctedFrames++;
 				cameraInput.body= observation;
 				cameraModel.width= cameraInput.frameWidth > 0 ? cameraInput.frameWidth : image.cols;
 				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
@@ -1138,6 +1156,11 @@ static int runGateDirectModeTool(const TestArgs& args)
 		MIKAN_LOG_INFO(tag) << recordingName << " (" << replay.getFrameCount() << " frames, camera " << cameraIndex
 							<< ", " << framesRun << " raw frames run, " << framesMissing << " missing, ep "
 							<< tracker.activeEp() << ", inference p50 " << inferenceMs.p50() << " ms):";
+		if (bCorrectHandSides)
+		{
+			MIKAN_LOG_INFO(tag) << "  hand sides corrected ahead of the lift: a hand moved on " << correctedFrames
+								<< " frames";
+		}
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			logSide(tag, sideIndex == 0 ? "Left" : "Right", sides[sideIndex]);

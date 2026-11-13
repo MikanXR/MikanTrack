@@ -58,6 +58,7 @@ static json diagHandToJson(const DiagHandState& hand)
 		{"presence", hand.presence},
 		{"handednessScore", hand.handednessScore},
 		{"rightProb", hand.rightProb},
+		{"sideCorrected", hand.bSideCorrected},
 		{"labeledSide", sideName(hand.labeledSide)},
 		{"visibility", hand.visibility},
 		{"confidence", hand.confidence},
@@ -95,6 +96,7 @@ static void fillDiagHandFromResult(const TrackingFrameResult& result, int sideIn
 	outHand.presence= std::max(pose.presence, hand.presence);
 	outHand.handednessScore= hand.handednessScore;
 	outHand.rightProb= hand.rightProb;
+	outHand.bSideCorrected= hand.tracked && hand.bSideCorrected;
 	outHand.labeledSide= (int)(hand.tracked ? hand.side : pose.side);
 	outHand.visibility= pose.visibility;
 	outHand.confidence= pose.confidence;
@@ -299,6 +301,7 @@ static json handSnapshotToJson(const TrackedHand& hand)
 		{"slotId", hand.slotId},
 		{"presence", hand.presence},
 		{"handednessScore", hand.handednessScore},
+		{"sideCorrected", hand.bSideCorrected},
 		{"imagePoints", landmarksToJson(hand.imagePoints)},
 	};
 	if (hand.imageQuality.valid)

@@ -1471,7 +1471,16 @@ void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& cont
 							state->oppositeWristRejections[1]);
 	}
 
-	// Swapped labels reject both hands, and the fix is this one setting
+	// And how often the camera's correction kept one
+	if (state->sideCorrections[0] > 0 || state->sideCorrections[1] > 0)
+	{
+		ImGui::TextDisabled(locText("directStage.sideCorrectionsFmt"), state->sideCorrections[0],
+							state->sideCorrections[1]);
+	}
+
+	// Labels the wrong way round as a standing condition: the correction
+	// carries the hands while the body model sees them, and the fix is this
+	// one setting
 	if (state->bHandednessSwapped)
 	{
 		ImGui::PushTextWrapPos(0.f);

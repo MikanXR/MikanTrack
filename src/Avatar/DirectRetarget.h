@@ -271,6 +271,9 @@ public:
 		// Per slot, the frames since the solver's reset on which the entry
 		// gate turned the slot away while it sat on the other arm's wrist
 		int oppositeWristRejections[2]= {0, 0};
+		// Per arm, the frames since the solver's reset on which it took a
+		// hand the camera had moved to its side from the other label
+		int sideCorrections[2]= {0, 0};
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -400,6 +403,7 @@ private:
 	// negative outside one
 	double m_handednessSwapStartMs= -1.0;
 	int m_oppositeWristRejections[2]= {0, 0};
+	int m_sideCorrections[2]= {0, 0};
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

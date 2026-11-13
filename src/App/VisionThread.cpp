@@ -1018,14 +1018,16 @@ void VisionThread::runCaptureStage(IterationState& iteration)
 		m_frameRecorder != nullptr && m_frameRecorder->isRecording() ? m_frameRecorder.get() : nullptr;
 
 	// The direct camera has no fused world result to seed its hand slots
-	// from, so it takes them from its own body observation
-	const int bodyHintCamera= isDirectModeActive() ? m_config->direct.cameraIndex : -1;
+	// from, so it takes them from its own body observation, and its solver
+	// takes a hand by its side, so the same observation names the sides
+	const int directCamera= isDirectModeActive() ? m_config->direct.cameraIndex : -1;
 
 	float inferenceMsSum= 0.f;
 	for (int cameraIndex= 0; cameraIndex < (int)m_cameras.size(); ++cameraIndex)
 	{
 		std::unique_ptr<CameraContext>& context= m_cameras[cameraIndex];
-		context->setBodyHandHints(cameraIndex == bodyHintCamera);
+		context->setBodyHandHints(cameraIndex == directCamera);
+		context->setHandSideCorrection(cameraIndex == directCamera);
 		if (context->process(m_videoCapture, m_cameras.size() > 1 ? &m_lastFusedForHints : nullptr,
 							 m_autoScaleFactor.load(), bRecordingInputs, frameRecorder))
 		{

@@ -266,6 +266,115 @@ static int runSeedingTest(const TestArgs& args)
 		check(matchHandSideByShape(collapsed, extras).side == -1, "a slot with no size has no side");
 	}
 
+	// -- The distance bar and the side correction: two hands apart ----
+	{
+		BodyPoseObservation apart;
+		apart.valid= true;
+		apart.wholeBody.present= true;
+		apart.wholeBody.hands[0]= makeHand(glm::vec2(900.f, 400.f));
+		apart.wholeBody.hands[1]= makeHand(glm::vec2(300.f, 400.f));
+		apart.wholeBody.handScores[0].fill(0.9f);
+		apart.wholeBody.handScores[1].fill(0.9f);
+		const WholeBodyExtras& extras= apart.wholeBody;
+		using HandPoints= std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT>;
+
+		// The synthetic palm is 40 px long, so the bar of half a palm length
+		// is 20 px of mean distance
+		auto shifted= [](HandPoints points, float pixels) {
+			for (glm::vec3& point : points)
+				point.x+= pixels;
+			return points;
+		};
+		const HandPoints onLeft= shifted(extras.hands[0], 2.f);
+		const HandPoints onRight= shifted(extras.hands[1], 2.f);
+		const HandPoints offLeft= shifted(extras.hands[0], 30.f);
+		const HandPoints offRight= shifted(extras.hands[1], 30.f);
+
+		check(matchHandSideByShape(shifted(extras.hands[0], 12.f), extras).side == 0,
+			  "a slot inside the distance bar of the nearer hand has its side");
+		const HandShapeMatch far= matchHandSideByShape(offLeft, extras);
+		check(far.side == -1 && far.scored[0] && far.scored[1] &&
+				  far.distance[0] <= k_handShapeMarginRatio * far.distance[1],
+			  "a slot nearer one hand by the margin and past the bar from both has no side");
+
+		auto swaps= [&](const HandPoints* left, const HandPoints* right, const WholeBodyExtras& block) {
+			const HandPoints* const slots[2]= {left, right};
+			return correctHandSides(slots, block);
+		};
+		check(swaps(&onRight, &onLeft, extras), "two slots under crossed labels change places");
+		check(!swaps(&onLeft, &onRight, extras), "two slots under their own labels stay");
+		check(swaps(&onRight, nullptr, extras) && swaps(nullptr, &onLeft, extras),
+			  "a single slot under the wrong label moves to the other side");
+		check(!swaps(&onLeft, nullptr, extras) && !swaps(nullptr, &onRight, extras),
+			  "a single slot under its own label stays");
+		check(!swaps(nullptr, nullptr, extras), "no slots, nothing to move");
+
+		// Two slots on one hand: the one under its side keeps it, nearer or not
+		const HandPoints nearLeft= shifted(extras.hands[0], 1.f);
+		const HandPoints fartherLeft= shifted(extras.hands[0], 6.f);
+		check(!swaps(&fartherLeft, &nearLeft, extras), "of two slots on one hand the one under its side keeps it");
+		check(!swaps(&nearLeft, &fartherLeft, extras), "whichever of the two is nearer");
+		check(!swaps(&onLeft, &onLeft, extras), "a tie leaves the slots where they are");
+		check(swaps(&offLeft, &onLeft, extras), "a slot on a hand takes its side from a slot past the bar from it");
+
+		// A decided slot takes its side from an undecided one
+		check(swaps(&onRight, &offRight, extras), "an undecided slot takes the side a decided one leaves");
+		check(!swaps(&offRight, &offLeft, extras) && !swaps(&offLeft, &offRight, extras),
+			  "slots past the bar from both hands are not moved under either label");
+
+		// One hand in view: the label's own whole-body hand does not score
+		WholeBodyExtras leftUnscored= extras;
+		leftUnscored.handScores[0][(int)eHandLandmark::WRIST]= 0.1f;
+		check(swaps(&onRight, nullptr, leftUnscored),
+			  "a slot within the bar of the one scored hand, under the unscored hand's label, moves to it");
+		check(!swaps(&offRight, nullptr, leftUnscored), "and past the bar it stays");
+		check(!swaps(nullptr, &onRight, leftUnscored), "a slot under the scored hand's own label stays");
+		check(!swaps(nullptr, &onLeft, leftUnscored),
+			  "a slot whose own label's hand scores is not moved by one hand alone");
+
+		// Two slots on the one scored hand. The slot under that hand's own
+		// label is undecided, since the match needs both hands to score, and
+		// it keeps the entry, so the two do not trade it.
+		const HandPoints nearRight= shifted(extras.hands[1], 1.f);
+		const HandPoints fartherRight= shifted(extras.hands[1], 6.f);
+		check(!swaps(&fartherRight, &nearRight, leftUnscored),
+			  "of two slots on the one scored hand, the one under its label keeps the side from a farther one");
+		check(!swaps(&nearRight, &fartherRight, leftUnscored), "and from a nearer one");
+
+		// The rule applied to the hands it arranged moves nothing, on every
+		// pair of these slots under both blocks
+		{
+			const HandPoints* const candidates[]= {nullptr,	  &onLeft,		&onRight,	&offLeft,	  &offRight,
+												   &nearLeft, &fartherLeft, &nearRight, &fartherRight};
+			const WholeBodyExtras* const blocks[]= {&extras, &leftUnscored};
+			bool bSettles= true;
+			for (const WholeBodyExtras* block : blocks)
+			{
+				for (const HandPoints* left : candidates)
+				{
+					for (const HandPoints* right : candidates)
+					{
+						if (swaps(left, right, *block) && swaps(right, left, *block))
+							bSettles= false;
+					}
+				}
+			}
+			check(bSettles, "the rule applied to its own outcome moves nothing");
+		}
+		check(!swaps(&onRight, &onRight, leftUnscored), "a tie on the one scored hand leaves the slots where they are");
+		check(swaps(&onRight, &offRight, leftUnscored),
+			  "a slot on the one scored hand takes the side from a slot past the bar from it");
+
+		WholeBodyExtras unscored= extras;
+		unscored.handScores[0].fill(0.1f);
+		unscored.handScores[1].fill(0.1f);
+		check(!swaps(&onRight, &onLeft, unscored), "both hands under the score gate move nothing");
+		check(!swaps(&onRight, &onLeft, WholeBodyExtras()), "an absent block moves nothing");
+		HandPoints collapsed;
+		collapsed.fill(glm::vec3(300.f, 400.f, 0.f));
+		check(!swaps(&collapsed, nullptr, extras), "a slot with no size is not moved");
+	}
+
 	if (result == 0)
 		MIKAN_LOG_INFO("test-seeding") << "All seeding checks passed";
 

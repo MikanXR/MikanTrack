@@ -1,6 +1,6 @@
 # Proposal: per-frame hand label correction in direct mode
 
-Design decided, 2026-11-12. Nothing here is built. This document proposes giving a hand slot on the direct camera the side the whole-body model's hands name for it, on each frame, before the hand is lifted and before the direct solver sees it. It starts from a measurement of when the solver turns a slot away on the other arm's wrist, which is piece 1 below and changes what the problem is. The reviewer's questions are answered (Decisions below), and the design reflects the answers.
+Built and checked live, 2026-11-12. The reference docs carry the current state (hand-tracking.md, avatar.md). This document proposed giving a hand slot on the direct camera the side the whole-body model's hands name for it, on each frame, before the hand is lifted and before the direct solver sees it. It starts from a measurement of when the solver turns a slot away on the other arm's wrist, which is piece 1 below and changes what the problem is. The reviewer's questions are answered (Decisions below), and the design reflects the answers.
 
 ## Goal
 
@@ -117,7 +117,7 @@ Two changes to `src/Vision/HandSideMatch.h`, both pure functions of one frame.
 
 - Any other slot the match does not decide keeps its label.
 
-- With two slots, a decided slot takes its side and the other takes the side left over. Two slots decided for the same side are two slots on one hand: the nearer takes the side and the other is displaced, as the pipeline's own collision rule displaces one.
+- With two slots, a decided slot takes its side and the other takes the side left over. Two slots that want the same side are two slots on one hand, or one on it and one on nothing. The slot already under that side keeps it while it is within the bar of that side's whole-body hand, and gives it to a decided other when it is not. The other is displaced, as the pipeline's own collision rule displaces one. The holder's test is the bar and not the match, because with one whole-body hand unscored the match decides nothing for a slot under its own label: on the live take of 2026-11-12 a first form of this rule, a decided slot beating any undecided one, had two slots on the one scored hand trade entries on 42 frames. The nearer of two slots on a hand does not take the entry either: their distances differ by jitter, and on that take the nearer winning raised the side changes of a tracked slot from 38 to 85.
 
 - A block that is absent, both hands under the score gate or a slot with no size decides nothing, so the planar backend and a take from before the block behave as today.
 
@@ -132,10 +132,24 @@ The rule on the recorded slots, with the solver's gate applied after it:
 | Of those, on no hand | 72 | 72 | 34 | 35 |
 | Frames with a left hand | 1983 | 2045 | 2304 | 2304 |
 | Frames with a right hand | 1888 | 1951 | 2060 | 2063 |
-| Slot frames moved to the other side | | 190 | | 8 |
-| Side changes of a tracked slot | 61 | 46 | 8 | 2 |
+| Slot frames moved to the other side | | 166 | | 8 |
+| Side changes of a tracked slot | 61 | 27 | 8 | 2 |
 
 The 10 left on the direct takes are frames where two slots sit on one hand and the displaced one is turned away, which is right. Without the one-hand rule the direct takes read 95 turned away, 23 of them on the other arm's hand. No slot on no hand is taken on any take. The 34 slot frames accepted under the wrong side are all moved to their own arm.
+
+The live take of 2026-11-12, recorded on the build with the first form of the rule and read here with its recorded correction undone, so the slots are as the pipeline published them:
+
+| | Live take, as published | Live take, with the rule |
+|---|---|---|
+| Slot frames turned away | 136 | 63 |
+| Of those, on the other arm's hand | 127 | 46 |
+| Of those, on no hand | 9 | 17 |
+| Frames with a left hand | 618 | 661 |
+| Frames with a right hand | 608 | 638 |
+| Slot frames moved to the other side | | 173 |
+| Side changes of a tracked slot | 38 | 38 |
+
+The 46 left on the other arm's hand are a second slot on a hand that already has one, most of them with the other whole-body hand unscored. Through `--gate-direct` the same take reads twist jumps on 13 of 955 frame pairs as published and 10 of 1032 with the rule, and mirrored-palm frames on 35 of 1102 and 30 of 1175.
 
 ### 4. Where it applies: in the direct camera, before the lift
 
@@ -207,8 +221,8 @@ Replay checks on the recorded takes:
 	- no slot on no hand is taken on any take
 	- neither side's hand frames fall on any take
 	- the side changes of a tracked slot do not rise
-- `--gate-direct` on the direct takes with the rule applied ahead of the lift: its twist jumps and mirrored-palm frames per hand do not rise. This is the check on the palm through a corrected episode.
-- A take recorded on the new build verifies in replay and carries the flag.
+- `--gate-direct` on the direct takes with the rule applied ahead of the lift: its twist jumps and mirrored-palm frames per hand do not rise. This is the check on the palm through a corrected episode. Measured on the four direct takes: hands read on 118 more frames, mirrored-palm frames 16 to 4, twist jumps 6 to 8. The rise in twist jumps was accepted at the review. The one traced is the lift's per-side memory surviving a change of the slot under a side, which plan.md tracks.
+- A take recorded on the new build verifies in replay and carries the flag. Three did on 2026-11-12, the third with Flip handedness at the wrong value: 996 of its 1543 frames carry the flag, 431 of them with one hand in view, 9 slot frames are turned away, and the rule moves nothing on its own recorded outcome.
 
 Live checks, direct mode on the webcam with an avatar loaded:
 
