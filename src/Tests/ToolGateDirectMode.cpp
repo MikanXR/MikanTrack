@@ -19,7 +19,7 @@
 // shoulders), carried into the camera's own frame, so every comparison is
 // one model's view against the rig's view of the same arm.
 //
-//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [frames.csv]
+//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]
 //
 // correct runs the candidates on the camera's hands with their sides
 // corrected from the recorded whole-body hands ahead of the lift, as the
@@ -983,12 +983,22 @@ static int runGateDirectModeTool(const TestArgs& args)
 	std::string csvPath;
 	int requestedCamera= -1;
 	bool bCorrectHandSides= false;
+	// The palm mirror's bars for this run in place of the configured ones
+	bool bMirrorBars= false;
+	float mirrorEnterGain= 0.f;
+	float mirrorLeaveGain= 0.f;
 	for (const std::string& arg : args)
 	{
 		if (TrackingRecording::isRecordingFile(arg))
 			recordings.push_back(arg);
 		else if (arg == "correct")
 			bCorrectHandSides= true;
+		else if (arg.rfind("mirror=", 0) == 0 && arg.find(',') != std::string::npos)
+		{
+			bMirrorBars= true;
+			mirrorEnterGain= (float)atof(arg.substr(7).c_str());
+			mirrorLeaveGain= (float)atof(arg.substr(arg.find(',') + 1).c_str());
+		}
 		else if (TrackingRecording::isRecordingSidecarFile(arg))
 			MIKAN_LOG_INFO(tag) << "Skipping " << arg << ": a take's sidecar, not a take";
 		else if (arg.size() > 4 && arg.substr(arg.size() - 4) == ".csv")
@@ -998,7 +1008,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 	}
 	if (recordings.empty())
 	{
-		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [frames.csv]";
+		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]";
 		return 1;
 	}
 	std::ofstream csv;
@@ -1077,6 +1087,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 		comparison.skeleton= &skeleton;
 		comparison.referenceConfig= makeAvatarRetargetConfig(config, rigSettings);
 		comparison.directConfig= makeDirectRetargetConfig(config, rigSettings);
+		if (bMirrorBars)
+		{
+			comparison.directConfig.palmMirrorEnterGain= mirrorEnterGain;
+			comparison.directConfig.palmMirrorLeaveGain= mirrorLeaveGain;
+			MIKAN_LOG_INFO(tag) << "the palm mirror's bars for this run: enter " << mirrorEnterGain << ", leave "
+								<< mirrorLeaveGain;
+		}
 		comparison.directFromMarker= DirectRetarget::worldFromCamera(comparison.directConfig.cameraTiltRadians) *
 			glm::quat_cast(glm::mat3(geometry.cameraFromWorld));
 		DirectCameraModel cameraModel;

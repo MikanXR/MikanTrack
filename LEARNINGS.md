@@ -368,6 +368,26 @@ The direct solver now holds the palm and fingers of a hand with three or more la
 
 Learned: the first reading of the three jumps took the tool's CSV, which interleaves the two sides' rows, as one series, and called each jump a single frame on a hand read on alternate frames. Per side each was a turn that persisted. Read a per-side series per side.
 
+## 29. The palm mirror's gain does not say whether the mirror is right
+
+17 of the 26 twist jumps left on the takes of 2026-11-12 follow the direct solver's palm mirror toggling. On those hands the mirror and the lifted palm are about 110 degrees of twist apart, the gain sits between 0.3 and 0.7 for long stretches, and it crosses the bars (0.5 to enter, 0.3 to leave) on small changes. Seven of the jumps are excursions of one or two frames into the mirror and back, which the palm hold's two frames let through.
+
+A sweep of the bars through `--gate-direct ... mirror=<enter>,<leave>` on the eight takes:
+
+| Enter, leave | Twist jumps | Mirrored frames |
+|---|---|---|
+| 0.5, 0.3 | 26 | 265 |
+| 0.7, 0.5 | 18 | 93 |
+| 0.7, 0.3 | 17 | 114 |
+| 0.9, 0.6 | 13 | 29 |
+| 0.9, 0.3 | 11 | 45 |
+| never | 10 | 0 |
+| 0, 0 | 94 | 2277 |
+
+Higher bars cut jumps by mirroring less. Against the other hand's twist as a reference, which holds only while the hands are posed alike, one mirrored run of 113 frames at a gain of 0.43 to 0.70 was nearer the other hand on every frame, and a run of 27 frames at 0.35 to 0.73 on one. The same gain gets opposite verdicts, so no pair of bars keeps the first and drops the second.
+
+Learned: a jump count falls when a correction is switched off, and that says nothing about whether the correction was right. Check a threshold sweep against a reference before reading it.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
