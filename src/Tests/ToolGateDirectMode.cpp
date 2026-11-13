@@ -19,7 +19,12 @@
 // shoulders), carried into the camera's own frame, so every comparison is
 // one model's view against the rig's view of the same arm.
 //
-//   --gate-direct <recording.jsonl>... [cameraIndex] [frames.csv]
+//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]
+//
+// correct runs the candidates on the camera's hands with their sides
+// corrected from the recorded whole-body hands ahead of the lift, as the
+// live direct camera corrects them: the A/B for a take recorded before it
+// did, or under a changed rule.
 //
 // cameraIndex defaults to the recording's body-pose camera. The raw frames
 // beside the recording are required (raw frame recording is opt-in). A
@@ -75,6 +80,26 @@ constexpr float kBendMinMeters= 0.05f;
 // A forearm twist that steps this far between two frames is a flip of the
 // palm, not a turn of the hand
 constexpr float kTwistJumpDegrees= 90.f;
+// A twist jump is put down to what changed in the camera's hand over the
+// frames before it, this many transitions back: the solver's palm hold shows
+// a change up to two frames after the lift made it
+constexpr int kTwistJumpCauseFrames= 3;
+// A hand the camera has had for fewer frames than this is newly taken
+constexpr int kNewHandFrames= 8;
+
+// What a twist jump is put down to, the first that applies
+enum class eTwistJumpCause : int
+{
+	SlotChanged,   // another slot took the side
+	MirrorToggled, // the solver took or left the lifted palm's mirror
+	PalmarFlipped, // the lift changed which side of the palm plane is palmar
+	LeanFlipped,   // the lifted finger axis's lean along the view ray changed sign
+	Unexplained,
+	Count
+};
+const char* const kTwistJumpCauseNames[(int)eTwistJumpCause::Count]= {
+	"another slot under the side", "the solver's mirror toggled", "the lift's palmar side flipped",
+	"the lifted finger axis's lean flipped", "none of these"};
 // A wrist this much nearer or farther than the shoulder, by the truth, is a
 // depth sign worth asking the model for
 constexpr float kDepthSignMinMeters= 0.1f;
@@ -220,16 +245,56 @@ struct SideStats
 	// kTwistJumpDegrees, which a hand does not turn in a frame
 	int twistFrames= 0;
 	int twistJumps= 0;
+	// The jumps by cause, and how many came with the hand turning over in
+	// the image (the knuckles' winding changed), with the hand model's own
+	// 3D shape changing handedness, and on a newly taken hand
+	int twistJumpCauses[(int)eTwistJumpCause::Count]= {};
+	int twistJumpsWithImageTurn= 0;
+	int twistJumpsWithModelTurn= 0;
+	int twistJumpsOnNewHand= 0;
+	// The lift's palmar side against the one the hand's side names. Which
+	// side of the knuckles' cross product is palmar is fixed by which hand it
+	// is: in the lifted camera-space points it points out of the back of a
+	// left hand and out of a right hand's palm. Frames with a lifted hand,
+	// how many agree, and of the jumps on a palmar flip how many flipped
+	// into agreement
+	int palmarFrames= 0;
+	int palmarAgreeFrames= 0;
+	// The same for the palm frame the solver's fingers are measured against,
+	// which is taken from the hand model's own 3D points with the solver's
+	// memory: frames the hand was read, how many agree, and both again on
+	// the frames the hand's side was decided
+	int fingerPalmarFrames= 0;
+	int fingerPalmarAgreeFrames= 0;
+	int fingerPalmarDecidedFrames= 0;
+	int fingerPalmarDecidedAgreeFrames= 0;
+	int palmarFlipsToAgree= 0;
 	// Frames that read the hand, and how many took the lifted palm's mirror
 	int palmFrames= 0;
 	int palmMirroredFrames= 0;
+	// Frames the hand was on the arm and cut by the frame's edge, its palm
+	// and fingers held
+	int handCutFrames= 0;
 
 	void append(const SideStats& other)
 	{
 		palmFrames+= other.palmFrames;
 		palmMirroredFrames+= other.palmMirroredFrames;
+		handCutFrames+= other.handCutFrames;
 		twistFrames+= other.twistFrames;
 		twistJumps+= other.twistJumps;
+		for (int cause= 0; cause < (int)eTwistJumpCause::Count; ++cause)
+			twistJumpCauses[cause]+= other.twistJumpCauses[cause];
+		twistJumpsWithImageTurn+= other.twistJumpsWithImageTurn;
+		twistJumpsWithModelTurn+= other.twistJumpsWithModelTurn;
+		twistJumpsOnNewHand+= other.twistJumpsOnNewHand;
+		palmarFrames+= other.palmarFrames;
+		palmarAgreeFrames+= other.palmarAgreeFrames;
+		fingerPalmarFrames+= other.fingerPalmarFrames;
+		fingerPalmarAgreeFrames+= other.fingerPalmarAgreeFrames;
+		fingerPalmarDecidedFrames+= other.fingerPalmarDecidedFrames;
+		fingerPalmarDecidedAgreeFrames+= other.fingerPalmarDecidedAgreeFrames;
+		palmarFlipsToAgree+= other.palmarFlipsToAgree;
 		truthArmFrames+= other.truthArmFrames;
 		modelArmFrames+= other.modelArmFrames;
 		oracle.append(other.oracle);
@@ -367,6 +432,26 @@ struct RetargetComparison
 	// The direct solve's twist on the last frame that read each hand
 	std::array<bool, 2> bLastTwist{};
 	std::array<float, 2> lastTwist{};
+	// What the camera's hand looked like on the last frames, newest last,
+	// for a twist jump's cause
+	struct PalmSignals
+	{
+		bool bValid= false;
+		int slotId= -1;
+		bool bMirrored= false;
+		// Whether the lift's palm normal is along the knuckles' own cross
+		// product or against it: the palmar side it chose
+		int palmarSign= 0;
+		// The sign of the lifted finger axis along the view ray
+		int leanSign= 0;
+		// The winding of the wrist, index and pinky knuckles in the image
+		int imageWinding= 0;
+		// Which side of the hand model's own palm plane its thumb is on
+		int modelHandedness= 0;
+	};
+	std::array<std::array<PalmSignals, kTwistJumpCauseFrames + 1>, 2> palmSignals{};
+	std::array<int, 2> handFrames{};
+	std::array<HandPoseModel::PalmarSideMemory, 2> fingerPalmarMemory{};
 
 	// This frame's truth-free numbers per side and candidate, for the CSV
 	struct FrameCandidate
@@ -384,8 +469,37 @@ struct RetargetComparison
 		float twistDeg= 0.f;
 		bool bMirrored= false;
 		float mirrorGain= 0.f;
+		// eTwistJumpCause on a frame the twist jumped, -1 otherwise
+		int jumpCause= -1;
 	};
 	std::array<FramePalm, 2> framePalm{};
+
+	static int signOf(float value) { return value > 0.f ? 1 : (value < 0.f ? -1 : 0); }
+	static PalmSignals readPalmSignals(const TrackedHand& hand, const HandPose& pose, bool bMirrored)
+	{
+		PalmSignals signals;
+		if (!hand.tracked || !hand.hasCameraSpace || !pose.tracked)
+			return signals;
+		signals.bValid= true;
+		signals.slotId= hand.slotId;
+		signals.bMirrored= bMirrored;
+		const int wrist= (int)eHandLandmark::WRIST;
+		const int index= (int)eHandLandmark::INDEX_MCP;
+		const int pinky= (int)eHandLandmark::PINKY_MCP;
+		const int thumb= (int)eHandLandmark::THUMB_MCP;
+		const glm::vec3 cameraNormal= glm::cross(hand.cameraPoints[index] - hand.cameraPoints[wrist],
+												 hand.cameraPoints[pinky] - hand.cameraPoints[wrist]);
+		signals.palmarSign= signOf(glm::dot(pose.palmOrientationCamera * glm::vec3(0.f, 0.f, 1.f), cameraNormal));
+		signals.leanSign=
+			signOf(glm::dot(pose.palmOrientationCamera * glm::vec3(1.f, 0.f, 0.f), hand.cameraPoints[wrist]));
+		const glm::vec2 toIndex= glm::vec2(hand.imagePoints[index]) - glm::vec2(hand.imagePoints[wrist]);
+		const glm::vec2 toPinky= glm::vec2(hand.imagePoints[pinky]) - glm::vec2(hand.imagePoints[wrist]);
+		signals.imageWinding= signOf(toIndex.x * toPinky.y - toIndex.y * toPinky.x);
+		const glm::vec3 modelNormal= glm::cross(hand.modelPoints[index] - hand.modelPoints[wrist],
+												hand.modelPoints[pinky] - hand.modelPoints[wrist]);
+		signals.modelHandedness= signOf(glm::dot(modelNormal, hand.modelPoints[thumb] - hand.modelPoints[wrist]));
+		return signals;
+	}
 
 	// bHaveTruth: the fused frame carries the stereo rig's world poses, so
 	// the reference can be solved
@@ -406,8 +520,53 @@ struct RetargetComparison
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const DirectRetarget::SolveState::Arm& arm= direct.getSolveState().arms[sideIndex];
-			const bool bRead= arm.bHandSeen && arm.bHandMeasured;
+			// A hand cut by the frame's edge is held, not read: the step off
+			// the held palm when it clears is a reacquire, not a jump
+			const bool bRead= arm.bHandSeen && arm.bHandMeasured && !arm.bHandCut;
 			framePalm[sideIndex]= FramePalm{bRead, glm::degrees(arm.twist), arm.bPalmMirrored, arm.palmMirrorGain};
+
+			std::array<PalmSignals, kTwistJumpCauseFrames + 1>& history= palmSignals[sideIndex];
+			for (int slot= 0; slot < kTwistJumpCauseFrames; ++slot)
+				history[slot]= history[slot + 1];
+			history[kTwistJumpCauseFrames]=
+				readPalmSignals(cameraInput.hands[sideIndex], cameraInput.poses[sideIndex], arm.bPalmMirrored);
+			handFrames[sideIndex]= history[kTwistJumpCauseFrames].bValid ? handFrames[sideIndex] + 1 : 0;
+			const int sidePalmarSign= sideIndex == (int)eHandSide::Left ? -1 : 1;
+			if (history[kTwistJumpCauseFrames].bValid)
+			{
+				sides[sideIndex].palmarFrames++;
+				if (history[kTwistJumpCauseFrames].palmarSign == sidePalmarSign)
+					sides[sideIndex].palmarAgreeFrames++;
+			}
+			sides[sideIndex].handCutFrames+= arm.bHandCut ? 1 : 0;
+			{
+				// As the solver does: the memory lasts while the hand is read
+				const TrackedHand& fingerHand= cameraInput.hands[sideIndex];
+				const bool bFingersRead= arm.bHandSeen && !arm.bHandCut && cameraInput.poses[sideIndex].tracked &&
+					cameraInput.poses[sideIndex].hasCameraPose;
+				if (bFingersRead)
+				{
+					const glm::mat4 fingerPalm=
+						HandPoseModel::computePalmFrame(fingerHand.modelPoints, fingerHand.side, &fingerPalmarMemory[sideIndex],
+														fingerHand.bSideDecided);
+					const glm::vec3& modelWrist= fingerHand.modelPoints[(int)eHandLandmark::WRIST];
+					const glm::vec3 knuckleCross=
+						glm::cross(fingerHand.modelPoints[(int)eHandLandmark::INDEX_MCP] - modelWrist,
+								   fingerHand.modelPoints[(int)eHandLandmark::PINKY_MCP] - modelWrist);
+					const bool bAgree= signOf(glm::dot(glm::vec3(fingerPalm[2]), knuckleCross)) == sidePalmarSign;
+					sides[sideIndex].fingerPalmarFrames++;
+					sides[sideIndex].fingerPalmarAgreeFrames+= bAgree ? 1 : 0;
+					if (fingerHand.bSideDecided)
+					{
+						sides[sideIndex].fingerPalmarDecidedFrames++;
+						sides[sideIndex].fingerPalmarDecidedAgreeFrames+= bAgree ? 1 : 0;
+					}
+				}
+				else
+				{
+					fingerPalmarMemory[sideIndex].reset();
+				}
+			}
 			if (bRead)
 			{
 				sides[sideIndex].palmFrames++;
@@ -418,7 +577,35 @@ struct RetargetComparison
 			{
 				sides[sideIndex].twistFrames++;
 				if (fabsf(AvatarRetargetMath::wrapAngle(arm.twist - lastTwist[sideIndex])) > glm::radians(kTwistJumpDegrees))
+				{
 					sides[sideIndex].twistJumps++;
+					bool bSlot= false, bMirror= false, bPalmar= false, bLean= false, bImage= false, bModel= false;
+					for (int slot= 0; slot < kTwistJumpCauseFrames; ++slot)
+					{
+						const PalmSignals& before= history[slot];
+						const PalmSignals& after= history[slot + 1];
+						if (!before.bValid || !after.bValid)
+							continue;
+						bSlot|= before.slotId != after.slotId;
+						bMirror|= before.bMirrored != after.bMirrored;
+						bPalmar|= before.palmarSign != after.palmarSign;
+						bLean|= before.leanSign != after.leanSign;
+						bImage|= before.imageWinding != after.imageWinding;
+						bModel|= before.modelHandedness != after.modelHandedness;
+					}
+					const eTwistJumpCause cause= bSlot ? eTwistJumpCause::SlotChanged
+						: bMirror ? eTwistJumpCause::MirrorToggled
+						: bPalmar ? eTwistJumpCause::PalmarFlipped
+						: bLean ? eTwistJumpCause::LeanFlipped
+						: eTwistJumpCause::Unexplained;
+					sides[sideIndex].twistJumpCauses[(int)cause]++;
+					if (cause == eTwistJumpCause::PalmarFlipped && history[kTwistJumpCauseFrames].palmarSign == sidePalmarSign)
+						sides[sideIndex].palmarFlipsToAgree++;
+					sides[sideIndex].twistJumpsWithImageTurn+= bImage ? 1 : 0;
+					sides[sideIndex].twistJumpsWithModelTurn+= bModel ? 1 : 0;
+					sides[sideIndex].twistJumpsOnNewHand+= handFrames[sideIndex] <= kNewHandFrames ? 1 : 0;
+					framePalm[sideIndex].jumpCause= (int)cause;
+				}
 			}
 			bLastTwist[sideIndex]= bRead;
 			lastTwist[sideIndex]= arm.twist;
@@ -731,7 +918,34 @@ void logCandidates(const char* tag, const SideStats& side)
 	{
 		MIKAN_LOG_INFO(tag) << "    direct retarget twist jumps over " << kTwistJumpDegrees << " deg: " << side.twistJumps
 							<< "/" << side.twistFrames << " frame pairs, palm mirrored on " << side.palmMirroredFrames
-							<< "/" << side.palmFrames << " frames";
+							<< "/" << side.palmFrames << " frames, palm and fingers held for a hand cut by the frame's edge on "
+							<< side.handCutFrames << " frames";
+		if (side.twistJumps > 0)
+		{
+			std::ostringstream causes;
+			for (int cause= 0; cause < (int)eTwistJumpCause::Count; ++cause)
+				causes << (cause > 0 ? ", " : "") << kTwistJumpCauseNames[cause] << " " << side.twistJumpCauses[cause];
+			MIKAN_LOG_INFO(tag) << "      the jumps by what changed in the camera's hand over the " << kTwistJumpCauseFrames
+								<< " frames before, the first that applies: " << causes.str();
+			MIKAN_LOG_INFO(tag) << "      of the jumps, with the knuckles' winding in the image changing "
+								<< side.twistJumpsWithImageTurn << ", with the hand model's 3D shape changing handedness "
+								<< side.twistJumpsWithModelTurn << ", on a hand the camera had for " << kNewHandFrames
+								<< " frames or fewer " << side.twistJumpsOnNewHand;
+		}
+	}
+	if (side.fingerPalmarFrames > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    the palmar side the solver's fingers are measured against is the one the hand's side names on "
+							<< side.fingerPalmarAgreeFrames << "/" << side.fingerPalmarFrames << " read frames, "
+							<< side.fingerPalmarDecidedAgreeFrames << "/" << side.fingerPalmarDecidedFrames
+							<< " of those with the side decided";
+	}
+	if (side.palmarFrames > 0)
+	{
+		MIKAN_LOG_INFO(tag) << "    the lift's palmar side is the one the hand's side names on " << side.palmarAgreeFrames << "/"
+							<< side.palmarFrames << " lifted frames, and " << side.palmarFlipsToAgree << " of the "
+							<< side.twistJumpCauses[(int)eTwistJumpCause::PalmarFlipped]
+							<< " jumps on a palmar flip flipped to it";
 	}
 	if (side.inputPalmDeg.count() > 0)
 	{
@@ -784,16 +998,16 @@ void writeCsvHeader(std::ofstream& csv)
 		csv << "," << candidate << "ReprojShoulderPx," << candidate << "ReprojElbowPx," << candidate
 			<< "ReprojWristPx," << candidate << "StepUpperDeg," << candidate << "StepForearmDeg," << candidate
 			<< "StepHandDeg";
-	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain\n";
+	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain,directTwistJumpCause\n";
 }
 
 // The direct solve's palm columns: -1 on a frame that did not read the hand
 void writeCsvPalm(std::ofstream& csv, const RetargetComparison::FramePalm& palm)
 {
 	if (palm.bRead)
-		csv << "," << palm.twistDeg << "," << (palm.bMirrored ? 1 : 0) << "," << palm.mirrorGain;
+		csv << "," << palm.twistDeg << "," << (palm.bMirrored ? 1 : 0) << "," << palm.mirrorGain << "," << palm.jumpCause;
 	else
-		csv << ",-1,-1,-1";
+		csv << ",-1,-1,-1,-1";
 }
 
 // The candidates' columns: a number not measured this frame is written as -1
@@ -816,10 +1030,23 @@ static int runGateDirectModeTool(const TestArgs& args)
 	std::vector<std::string> recordings;
 	std::string csvPath;
 	int requestedCamera= -1;
+	bool bCorrectHandSides= false;
+	// The palm mirror's bars for this run in place of the configured ones
+	bool bMirrorBars= false;
+	float mirrorEnterGain= 0.f;
+	float mirrorLeaveGain= 0.f;
 	for (const std::string& arg : args)
 	{
 		if (TrackingRecording::isRecordingFile(arg))
 			recordings.push_back(arg);
+		else if (arg == "correct")
+			bCorrectHandSides= true;
+		else if (arg.rfind("mirror=", 0) == 0 && arg.find(',') != std::string::npos)
+		{
+			bMirrorBars= true;
+			mirrorEnterGain= (float)atof(arg.substr(7).c_str());
+			mirrorLeaveGain= (float)atof(arg.substr(arg.find(',') + 1).c_str());
+		}
 		else if (TrackingRecording::isRecordingSidecarFile(arg))
 			MIKAN_LOG_INFO(tag) << "Skipping " << arg << ": a take's sidecar, not a take";
 		else if (arg.size() > 4 && arg.substr(arg.size() - 4) == ".csv")
@@ -829,7 +1056,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 	}
 	if (recordings.empty())
 	{
-		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [frames.csv]";
+		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]";
 		return 1;
 	}
 	std::ofstream csv;
@@ -908,6 +1135,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 		comparison.skeleton= &skeleton;
 		comparison.referenceConfig= makeAvatarRetargetConfig(config, rigSettings);
 		comparison.directConfig= makeDirectRetargetConfig(config, rigSettings);
+		if (bMirrorBars)
+		{
+			comparison.directConfig.palmMirrorEnterGain= mirrorEnterGain;
+			comparison.directConfig.palmMirrorLeaveGain= mirrorLeaveGain;
+			MIKAN_LOG_INFO(tag) << "the palm mirror's bars for this run: enter " << mirrorEnterGain << ", leave "
+								<< mirrorLeaveGain;
+		}
 		comparison.directFromMarker= DirectRetarget::worldFromCamera(comparison.directConfig.cameraTiltRadians) *
 			glm::quat_cast(glm::mat3(geometry.cameraFromWorld));
 		DirectCameraModel cameraModel;
@@ -928,6 +1162,13 @@ static int runGateDirectModeTool(const TestArgs& args)
 		}
 
 		replay.runAll();
+		int correctedFrames= 0;
+		if (bCorrectHandSides)
+		{
+			TrackingReplay::WhatIfParams params= replay.makeDefaultWhatIfParams();
+			params.correctHandSidesCamera= cameraIndex;
+			replay.runWhatIf(params);
+		}
 
 		std::array<SideStats, 2> sides{};
 		Stats inferenceMs;
@@ -972,7 +1213,10 @@ static int runGateDirectModeTool(const TestArgs& args)
 			bool bCompared= false;
 			if (observation.valid && cameraIndex < (int)frame.perCamera.size() && frame.perCameraValid[cameraIndex])
 			{
-				TrackingFrameResult cameraInput= frame.perCamera[cameraIndex];
+				TrackingFrameResult cameraInput=
+					bCorrectHandSides ? frame.whatIfPerCamera[cameraIndex] : frame.perCamera[cameraIndex];
+				if (cameraInput.hands[0].bSideCorrected || cameraInput.hands[1].bSideCorrected)
+					correctedFrames++;
 				cameraInput.body= observation;
 				cameraModel.width= cameraInput.frameWidth > 0 ? cameraInput.frameWidth : image.cols;
 				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
@@ -1138,6 +1382,11 @@ static int runGateDirectModeTool(const TestArgs& args)
 		MIKAN_LOG_INFO(tag) << recordingName << " (" << replay.getFrameCount() << " frames, camera " << cameraIndex
 							<< ", " << framesRun << " raw frames run, " << framesMissing << " missing, ep "
 							<< tracker.activeEp() << ", inference p50 " << inferenceMs.p50() << " ms):";
+		if (bCorrectHandSides)
+		{
+			MIKAN_LOG_INFO(tag) << "  hand sides corrected ahead of the lift: a hand moved on " << correctedFrames
+								<< " frames";
+		}
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			logSide(tag, sideIndex == 0 ? "Left" : "Right", sides[sideIndex]);

@@ -893,6 +893,40 @@ static int runReplayTest(const TestArgs& args)
 		}
 	}
 
+	// -- (g2) A hand the direct camera moved to its side carries the flag
+	// through a frame's JSON, and a hand it left alone writes no key, as a
+	// recording from before the flag has none ---------------------------
+	{
+		RecordedFrame source;
+		RecordedCameraInput sourceCamera;
+		sourceCamera.cameraIndex= 0;
+		sourceCamera.valid= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			sourceCamera.hands[sideIndex].tracked= true;
+			sourceCamera.hands[sideIndex].side= sideIndex;
+		}
+		sourceCamera.hands[0].bSideCorrected= true;
+		sourceCamera.hands[0].bSideDecided= true;
+		source.freshCameras.push_back(sourceCamera);
+		const nlohmann::json sourceJson= TrackingRecording::frameToJson(source);
+		RecordedFrame reloaded;
+		const bool bFlagOk= TrackingRecording::frameFromJson(nlohmann::json::parse(sourceJson.dump()), reloaded) &&
+			reloaded.freshCameras.size() == 1 && reloaded.freshCameras[0].hands[0].bSideCorrected &&
+			!reloaded.freshCameras[0].hands[1].bSideCorrected && reloaded.freshCameras[0].hands[0].bSideDecided &&
+			!reloaded.freshCameras[0].hands[1].bSideDecided && sourceJson["fresh"][0]["hands"][0].contains("sideDecided") &&
+			!sourceJson["fresh"][0]["hands"][1].contains("sideDecided") &&
+			sourceJson["fresh"][0]["hands"][0].contains("sideCorrected") &&
+			!sourceJson["fresh"][0]["hands"][1].contains("sideCorrected");
+		MIKAN_LOG_INFO("test-replay") << "(g2) corrected-side flag round trip " << (bFlagOk ? "ok" : "FAILED");
+		if (!bFlagOk)
+		{
+			MIKAN_LOG_ERROR("test-replay")
+				<< "(g2) FAILED: a moved hand must carry its flag through the frame's JSON and an unmoved one write none";
+			result= 1;
+		}
+	}
+
 	// -- (h) A frame without the blocks loads as absent, and a version 1
 	// recording written before them still replays ----------------------
 	{

@@ -87,6 +87,12 @@ public:
 		// Off = the recorded IMU forearm output is not overlaid, so the body
 		// solver fills every side from the camera (a cameras-only pass)
 		bool bApplyRecordedImu= true;
+		// The camera whose hands take applyHandSideCorrection ahead of the
+		// lift, as the live direct camera's do, -1 for none. For a take
+		// recorded before the direct camera corrected its hands' sides, or to
+		// see one corrected under a changed rule. The camera's own recorded
+		// body observation names the sides.
+		int correctHandSidesCamera= -1;
 
 		bool isCameraEnabled(int cameraIndex) const
 		{

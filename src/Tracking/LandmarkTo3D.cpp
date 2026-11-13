@@ -95,7 +95,8 @@ void LandmarkTo3D::fillHandPose(const TrackedHand& hand, HandPose& outPose)
 
 	// Palm transform from the (rigid, PnP-consistent) camera-space landmarks
 	const glm::mat4 palmFrame=
-		HandPoseModel::computePalmFrame(hand.cameraPoints, hand.side, &m_cameraPalmarMemory[(int)hand.side]);
+		HandPoseModel::computePalmFrame(hand.cameraPoints, hand.side, &m_cameraPalmarMemory[(int)hand.side],
+										hand.bSideDecided);
 	outPose.palmPositionCamera= glm::vec3(palmFrame[3]);
 	outPose.palmOrientationCamera= glm::quat_cast(glm::mat3(palmFrame));
 	outPose.hasCameraPose= true;
@@ -120,7 +121,7 @@ void LandmarkTo3D::fillHandPose(const TrackedHand& hand, HandPose& outPose)
 		for (int i= 0; i < HAND_LANDMARK_COUNT; ++i)
 			metricModel[i]= hand.modelPoints[i] * modelScale;
 		HandPoseModel::computeSkeleton(metricModel, hand.side, outPose.skeleton,
-									   &m_modelPalmarMemory[(int)hand.side]);
+									   &m_modelPalmarMemory[(int)hand.side], hand.bSideDecided);
 	}
 
 	// RAW angles, deliberately: the rest-pose zero (fusedRestAngles) is
@@ -129,7 +130,7 @@ void LandmarkTo3D::fillHandPose(const TrackedHand& hand, HandPose& outPose)
 	// Per-camera rest offsets existed to zero each camera's own model bias
 	// for cross-camera BLENDING, which no longer exists.
 	HandPoseModel::computeFingerAngles(hand.modelPoints, hand.side, outPose.skeleton.neutralDirInPalm,
-									   outPose.fingers, &m_modelPalmarMemory[(int)hand.side]);
+									   outPose.fingers, &m_modelPalmarMemory[(int)hand.side], hand.bSideDecided);
 
 	outPose.fkReprojectionPx= computeFkReprojectionError(hand, outPose);
 }
@@ -192,7 +193,7 @@ bool LandmarkTo3D::buildCalibratedObjectPoints(const TrackedHand& hand,
 	// them exactly.
 	std::array<FingerAngles, FINGER_COUNT> angles{};
 	HandPoseModel::computeFingerAngles(hand.modelPoints, hand.side, skeleton.neutralDirInPalm, angles,
-									   &m_modelPalmarMemory[sideIndex]);
+									   &m_modelPalmarMemory[sideIndex], hand.bSideDecided);
 
 	std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
 	HandPoseModel::buildFingerJoints(glm::mat4(1.f), skeleton, angles, joints);

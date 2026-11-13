@@ -342,6 +342,52 @@ A third reading fell when the source was built on the points. The evaluation sco
 
 Learned: when unrelated estimators agree on the same false events, suspect the truth before the estimators, and look at the frames. An event score at a tuned threshold says a signal can be thresholded on that window, not that a fixed threshold works across a session: test the rule the consumer will run, over the whole take. A correlation cannot separate two columns that move together in the data.
 
+## 26. Hand label correction: the dropouts were not where the design expected, and the rule traded entries with itself
+
+The direct solver takes a hand slot for an arm only when the slot's wrist is beside that arm's body wrist, so a slot under the wrong side is turned away and the hand freezes. The first design expected the loss while the hands clasp or cross. The label report in `--gate-wholebody` on four direct takes put none of the 207 turned-away slot frames there. Clasped wrists are beside both slots, so both pass, and 34 slot frames were accepted on the wrong arm instead. 135 of the 207 were a real hand under the wrong side after the hands parted, in runs of at most 15 frames: the slot's own `rightProb` named the true side on 128 of them, and the published label was held by the pipeline's 15-frame stickiness. The other 72 were a slot on the face or a picture frame beside a raised wrist, turned away only because its label happened to be the other side.
+
+The whole-body model's hands name a slot's side by shape. The margin between the two distances alone gave a side to slots more than two palm lengths from both hands, so the match took a bar of 0.5 palm lengths, set from the gap in the data: turned-away real hands sat within 0.5, non-hands beyond 1, one frame between. With the rule ahead of the lift the four takes went from 207 turned away to 82 and from 135 on the other arm's hand to 10, with no slot on no hand taken.
+
+The first live take found what the recorded ones had not. With one hand out of view its whole-body hand does not score, the match decides nothing, and the one-hand rule decides for a slot under the unscored hand's label. Two slots on the visible hand then read as one decided challenger and one undecided holder, and the challenger took the entry on 42 frames. Applying the rule to the take's recorded slots moved 68 of them again, which is how it showed: a correct rule moves nothing on its own outcome. Letting the nearer of the two take the entry stopped that and raised the side changes of a tracked slot from 38 to 85, because two slots on one hand differ in distance by jitter. The slot already under the side now keeps it while it is within the bar of that side's hand, and the side changes stay at 38 on that take and fall from 61 to 27 on the four.
+
+Learned: measure where the loss is before designing for where it is expected, since the fix for a sticky label is not the fix for a crossing. A stateless rule that reorders its inputs should be checked by applying it to its own output, and that check belongs in the self-tests. A contest between two near-equal candidates needs a holder, or the measurement noise decides it every frame.
+
+## 27. The palm turned right round: two fixes from inference, then a count
+
+With the hand labels corrected, direct mode still showed the palm jumping half a turn, 44 twist steps over 90 degrees on seven takes. Eleven of the jumps on two takes fell 5 to 8 frames after an entry took a hand, which matches the lift's palmar memory overturning a wrong seed after five contradicting frames plus the solver's two-frame hold. Two fixes were built on that reading. A solver wait of eight frames on a new hand's palm removed the jumps it covered and froze the palm on a quarter of the read frames, half on two takes, because a hand entry drops for a single frame constantly: 169 of 253 tracked runs on one take are one frame long. Keeping the lift's palmar memory across a short loss of the same slot changed nothing, 44 jumps to 46, and broke replay on every take.
+
+`--gate-direct` then gained the count that should have come first: each jump put down to what changed in the camera's hand over the three frames before it. 24 were the lift's palmar side flipping, 15 the solver's mirror toggling, 5 neither, and none a slot change. The knuckles' winding in the image changed on 3, so the hand was not turning over. The palmar side disagreed with the one the hand's side names on 1397 of 12694 lifted frames, and 21 of the 24 flips were into agreement: a jump was the lift correcting itself, and the stretch before it was the palm shown the wrong way round. The lift had kept clear of the side because the hand model's label is a view-dependent guess. In direct mode the side is now the body model's, so the lift takes the palmar side of a hand whose side the whole-body hands decided from that side. Jumps went from 44 to 26 and the jumps on a palmar flip from 24 to 1.
+
+Learned: a timing coincidence is a hypothesis, and a fix built on it tests the hypothesis at the price of the fix. Count the failures by cause in the tool before changing the pipeline. And a rule written to distrust an input should be revisited when the input's source changes.
+
+## 28. A hand half out of the frame is laid out as the other hand
+
+The first take recorded with `sideDecided` verified in replay and its palmar side matched the hand's side on 98% of lifted frames, against 89% before. It had three twist jumps in 1782 frame pairs, none on a palmar flip or a mirror toggle, all on the right hand as it left the frame's left edge or came back in. With the wrist 40 pixels from the edge and 12 to 17 of the 21 landmarks within 16 pixels of it, the hand model put the thumb off the edge and ran the pinky up the visible thumb. The whole-body hand sat on the same spot, so the side stayed decided and the lift's sign stayed right over landmarks that had turned. The palm turned about 130 degrees and stayed there until the hand was lost.
+
+The direct solver now holds the palm and fingers of a hand with three or more landmarks at the edge, as through a dropout. On that take the jumps went from 3 to 0 with 79 hand frames held. On the seven takes of 2026-11-12 the 26 jumps are unchanged, none of them being on a cut hand, with 99 frames held. `--gate-direct` counted the step off the held palm when a cut hand cleared the edge as a jump until a held frame stopped counting as read.
+
+Learned: the first reading of the three jumps took the tool's CSV, which interleaves the two sides' rows, as one series, and called each jump a single frame on a hand read on alternate frames. Per side each was a turn that persisted. Read a per-side series per side.
+
+## 29. The palm mirror's gain does not say whether the mirror is right
+
+17 of the 26 twist jumps left on the takes of 2026-11-12 follow the direct solver's palm mirror toggling. On those hands the mirror and the lifted palm are about 110 degrees of twist apart, the gain sits between 0.3 and 0.7 for long stretches, and it crosses the bars (0.5 to enter, 0.3 to leave) on small changes. Seven of the jumps are excursions of one or two frames into the mirror and back, which the palm hold's two frames let through.
+
+A sweep of the bars through `--gate-direct ... mirror=<enter>,<leave>` on the eight takes:
+
+| Enter, leave | Twist jumps | Mirrored frames |
+|---|---|---|
+| 0.5, 0.3 | 26 | 265 |
+| 0.7, 0.5 | 18 | 93 |
+| 0.7, 0.3 | 17 | 114 |
+| 0.9, 0.6 | 13 | 29 |
+| 0.9, 0.3 | 11 | 45 |
+| never | 10 | 0 |
+| 0, 0 | 94 | 2277 |
+
+Higher bars cut jumps by mirroring less. Against the other hand's twist as a reference, which holds only while the hands are posed alike, one mirrored run of 113 frames at a gain of 0.43 to 0.70 was nearer the other hand on every frame, and a run of 27 frames at 0.35 to 0.73 on one. The same gain gets opposite verdicts, so no pair of bars keeps the first and drops the second.
+
+Learned: a jump count falls when a correction is switched off, and that says nothing about whether the correction was right. Check a threshold sweep against a reference before reading it.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

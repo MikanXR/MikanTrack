@@ -8,6 +8,7 @@
 #include "AvatarSkeleton.h"
 #include "DirectRetarget.h"
 #include "DirectStageSolver.h"
+#include "HandSideMatch.h"
 #include "MathGLM.h"
 #include "OneEuroFilter.h"
 #include "SyntheticAvatar.h"
@@ -783,6 +784,65 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(k) a hand slot on the body wrist is the hand");
 	}
 
+	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
+	// part out by guess, so its palm can come back turned right round: the
+	// palm and fingers are held while the landmarks sit at the edge, and
+	// follow the hand again once it is clear. With the count at zero every
+	// hand is read and the turned palm is taken.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		User user= makeNeutralUser();
+		// Four fingertips at the edge and the palm turned over about its
+		// finger axis, the left hand only
+		auto runFrames= [&](DirectStageSolver& solver, const Rig& rig, double& timestampMs, int firstFrame, int frameCount,
+							bool bCut) {
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+				if (bCut)
+				{
+					for (int tip : {8, 12, 16, 20})
+						frame.hands[0].imagePoints[tip].x= 2.f;
+					frame.poses[0].palmOrientationCamera= frame.poses[0].palmOrientationCamera *
+						glm::angleAxis(glm::pi<float>(), glm::vec3(1.f, 0.f, 0.f));
+				}
+				AvatarPose pose;
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto twistTurn= [](float a, float b) { return fabsf(AvatarRetargetMath::wrapAngle(a - b)); };
+
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		captureNeutral(rig, camera, solver, timestampMs);
+		runFrames(solver, rig, timestampMs, 700, 10, false);
+		const float clearTwist[2]= {solver.getSolveState().arms[0].twist, solver.getSolveState().arms[1].twist};
+		runFrames(solver, rig, timestampMs, 710, 10, true);
+		const DirectRetarget::SolveState cut= solver.getSolveState();
+		check(cut.arms[0].bHandCut && !cut.arms[1].bHandCut, "(k1) a hand with landmarks at the frame's edge is cut");
+		check(cut.arms[0].bHandSeen && cut.arms[0].bHandMeasured && twistTurn(cut.arms[0].twist, clearTwist[0]) < 1e-4f,
+			  "(k1) a cut hand stays on the arm and its palm is held past a turn right round");
+		check(twistTurn(cut.arms[1].twist, clearTwist[1]) < 0.05f, "(k1) the other hand is read as before");
+		runFrames(solver, rig, timestampMs, 720, 10, false);
+		const DirectRetarget::SolveState clear= solver.getSolveState();
+		check(!clear.arms[0].bHandCut && twistTurn(clear.arms[0].twist, clearTwist[0]) < 0.05f,
+			  "(k1) clear of the edge the hand is read again");
+
+		Rig everyHandRig= makeRig(kTiltDegrees);
+		everyHandRig.config.handCutLandmarks= 0;
+		DirectStageSolver everyHandSolver;
+		timestampMs= 0.0;
+		captureNeutral(everyHandRig, camera, everyHandSolver, timestampMs);
+		runFrames(everyHandSolver, everyHandRig, timestampMs, 700, 10, false);
+		const float readTwist= everyHandSolver.getSolveState().arms[0].twist;
+		runFrames(everyHandSolver, everyHandRig, timestampMs, 710, 10, true);
+		const DirectRetarget::SolveState read= everyHandSolver.getSolveState();
+		check(!read.arms[0].bHandCut && twistTurn(read.arms[0].twist, readTwist) > 1.5f,
+			  "(k1) with the count at zero the turned palm is taken");
+	}
+
 	// (k2) Hand slots carrying the wrong side sit on the other arm's body
 	// wrist. A second of that with no slot on its own wrist is reported as
 	// swapped labels, one agreeing frame ends it, and wrists held together,
@@ -857,35 +917,39 @@ static int runDirectRetargetTest(const TestArgs&)
 		// is read from the hand's shape, which tells the hands apart where
 		// the wrists cannot. The slots still sit on the opposite wrists, with
 		// the wrists together.
+		// The synthetic slots carry a wrist alone: give each the rest of a
+		// hand, the right the mirror of the left, and the observation its
+		// whole-body hands
+		auto addBlocks= [&](TrackingFrameResult& frame, bool bBlocksCrossed, float score) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				TrackedHand& hand= frame.hands[sideIndex];
+				const glm::vec3 wrist= hand.imagePoints[0];
+				const float mirror= sideIndex == 0 ? 1.f : -1.f;
+				for (int finger= 0; finger < 5; ++finger)
+				{
+					for (int joint= 0; joint < 4; ++joint)
+					{
+						hand.imagePoints[1 + finger * 4 + joint]=
+							wrist + glm::vec3(mirror * (-30.f + 15.f * (float)finger), -40.f - 15.f * (float)joint, 0.f);
+					}
+				}
+			}
+			WholeBodyExtras& extras= frame.body.wholeBody;
+			extras.present= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				// Crossed: each whole-body hand is the other label's slot
+				extras.hands[sideIndex]= frame.hands[bBlocksCrossed ? 1 - sideIndex : sideIndex].imagePoints;
+				extras.handScores[sideIndex].fill(score);
+			}
+		};
 		auto runWithBlocks= [&](int frameCount, bool bBlocksCrossed, float score) {
 			AvatarPose pose;
 			for (int repeat= 0; repeat < frameCount; ++repeat)
 			{
 				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
-				// The synthetic slots carry a wrist alone: give each the rest
-				// of a hand, the right the mirror of the left
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					TrackedHand& hand= frame.hands[sideIndex];
-					const glm::vec3 wrist= hand.imagePoints[0];
-					const float mirror= sideIndex == 0 ? 1.f : -1.f;
-					for (int finger= 0; finger < 5; ++finger)
-					{
-						for (int joint= 0; joint < 4; ++joint)
-						{
-							hand.imagePoints[1 + finger * 4 + joint]=
-								wrist + glm::vec3(mirror * (-30.f + 15.f * (float)finger), -40.f - 15.f * (float)joint, 0.f);
-						}
-					}
-				}
-				WholeBodyExtras& extras= frame.body.wholeBody;
-				extras.present= true;
-				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-				{
-					// Crossed: each whole-body hand is the other label's slot
-					extras.hands[sideIndex]= frame.hands[bBlocksCrossed ? 1 - sideIndex : sideIndex].imagePoints;
-					extras.handScores[sideIndex].fill(score);
-				}
+				addBlocks(frame, bBlocksCrossed, score);
 				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
 				timestampMs+= 33.0;
 			}
@@ -896,6 +960,53 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(!swapped(), "(k3) a slot matching its own side's whole-body hand ends the report");
 		runWithBlocks(40, true, 0.1f);
 		check(!swapped(), "(k3) whole-body hands under the score gate leave the report to the wrists");
+
+		// (k4) The direct camera's correction ahead of the solver. The slots
+		// are published under crossed labels with the wrists apart, the
+		// camera moves each to the side the whole-body hands name, and the
+		// lift then runs on the moved hands, which the frame's poses stand in
+		// for here. The arms take their hands, nothing is turned away, and
+		// the report still reads the labels as swapped after its second.
+		user= makeNeutralUser();
+		putSlotsOnOppositeWrists(user);
+		bool bEveryHandDecided= true;
+		auto runCorrected= [&](int frameCount, bool bLabelsCrossed) {
+			AvatarPose pose;
+			int correctedFrames= 0;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				addBlocks(frame, bLabelsCrossed, 0.9f);
+				const bool bMoved= applyHandSideCorrection(frame);
+				bEveryHandDecided&= frame.hands[0].bSideDecided && frame.hands[1].bSideDecided;
+				if (bMoved)
+				{
+					std::swap(frame.poses[0], frame.poses[1]);
+					correctedFrames++;
+				}
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+			return correctedFrames;
+		};
+		const DirectRetarget::SolveState before= solver.getSolveState();
+		const int correctedFrames= runCorrected(20, true);
+		const DirectRetarget::SolveState early= solver.getSolveState();
+		check(correctedFrames == 20, "(k4) slots under crossed labels are moved on every frame");
+		check(bEveryHandDecided, "(k4) each moved hand's side is flagged as the body model's");
+		check(early.arms[0].bHandSeen && early.arms[1].bHandSeen, "(k4) each arm takes the hand moved to its side");
+		check(early.oppositeWristRejections[0] == before.oppositeWristRejections[0] &&
+				  early.oppositeWristRejections[1] == before.oppositeWristRejections[1],
+			  "(k4) a moved slot is not turned away");
+		check(early.sideCorrections[0] > before.sideCorrections[0] && early.sideCorrections[1] > before.sideCorrections[1],
+			  "(k4) the hands an arm took by the correction are counted");
+		check(!swapped(), "(k4) moved slots for under a second are not reported");
+		runCorrected(15, true);
+		check(swapped() && solver.getSolveState().arms[0].bHandSeen && solver.getSolveState().arms[1].bHandSeen,
+			  "(k4) moved slots for over a second are reported as swapped labels, with the hands still seen");
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.handPixelOffset[sideIndex]= glm::vec2(0.f);
+		check(runCorrected(1, false) == 0 && !swapped(), "(k4) one frame of slots under their own labels ends the report");
 	}
 
 	// (p) The wrist's entry gate and the earned hold: a body wrist whose

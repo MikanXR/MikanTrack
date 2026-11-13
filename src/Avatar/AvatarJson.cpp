@@ -113,6 +113,7 @@ json directSolveStateToJson(const DirectRetarget::SolveState& state)
 		{"handednessSwapped", state.bHandednessSwapped},
 		{"oppositeWristRejections",
 		 json::array({state.oppositeWristRejections[0], state.oppositeWristRejections[1]})},
+		{"sideCorrections", json::array({state.sideCorrections[0], state.sideCorrections[1]})},
 		{"arms", json::array({armToJson(state.arms[0]), armToJson(state.arms[1])})},
 	};
 	if (state.torsoValid)

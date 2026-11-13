@@ -6,6 +6,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include "HandSideMatch.h"
 #include "Logger.h"
 #include "PathUtils.h"
 #include "SpaceTransforms.h"
@@ -258,6 +259,8 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 					hand.presence= recordedHand.presence;
 					hand.handednessScore= recordedHand.handednessScore;
 					hand.rightProb= recordedHand.rightProb;
+					hand.bSideCorrected= recordedHand.bSideCorrected;
+					hand.bSideDecided= recordedHand.bSideDecided;
 					hand.imagePoints= recordedHand.imagePoints;
 					hand.modelPoints= recordedHand.modelPoints;
 					hand.imageQuality= recordedHand.imageQuality;
@@ -267,6 +270,9 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 				// (cadence and all - the pose models are never re-run)
 				if (fresh.bHaveBodyPose)
 					result.body= fresh.body;
+
+				if (bWhatIf && whatIfParams->correctHandSidesCamera == cameraIndex)
+					applyHandSideCorrection(result);
 
 				// refLengthMeters > 0 <=> live had a LandmarkTo3D for this
 				// camera (an existing instance never reports 0)

@@ -839,7 +839,19 @@ inline DirectRetargetConfig atFrozenPalmMirror(DirectRetargetConfig config)
 {
 	config.palmMirrorEnterGain= 0.f;
 	config.palmMirrorLeaveGain= 0.f;
+	config.handCutLandmarks= 0;
 	return config;
+}
+
+// The frozen solver measures the fingers against a palmar side from the
+// hand's own evidence. The live one takes it from the hand's side where the
+// direct camera decided that side, so the pair gives the live side its hands
+// with no side decided.
+inline TrackingFrameResult atFrozenHandSides(TrackingFrameResult frame)
+{
+	for (TrackedHand& hand : frame.hands)
+		hand.bSideDecided= false;
+	return frame;
 }
 
 // The direct retarget: the pose, the solve state, the chains and the lift
@@ -866,11 +878,12 @@ struct DirectPair
 		frozen.reset();
 	}
 
-	bool solve(const TrackingFrameResult& cameraFrame, const DirectCameraModel& cameraModel,
+	bool solve(const TrackingFrameResult& callerFrame, const DirectCameraModel& cameraModel,
 			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
 			   const DirectRetargetConfig& callerConfig, std::string& outWhy)
 	{
 		const DirectRetargetConfig config= atFrozenPalmMirror(callerConfig);
+		const TrackingFrameResult cameraFrame= atFrozenHandSides(callerFrame);
 		live.solve(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, livePose);
 		liveSplit.measure(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, liveSource);
 		// The direct rules built straight from the config, where the stage

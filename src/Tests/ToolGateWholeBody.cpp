@@ -22,7 +22,7 @@
 // raw frames from one camera and measures what its face and hand blocks are
 // worth from that camera's position, against the truth the same take carries.
 //
-//   --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [frames.csv]
+//   --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [labels] [frames.csv]
 //
 // cameraIndex defaults to the direct camera, else the recording's body-pose
 // camera. The raw frames beside the recording are required (raw frame
@@ -61,6 +61,16 @@
 //   side      which side each hand slot is, by the hand's shape against the
 //             two whole-body hands and by the direct solver's wrist test,
 //             each against the fused side
+// Hand labels, on any camera, from the recorded whole-body blocks when the
+// take carries them and from the model re-run at the live divider otherwise:
+//   the hand slots the direct solver's wrist rule turns away on the other
+//   arm's wrist, split by what the hands were doing (from the two body
+//   wrists) and by what the slot was (from its distance to the whole-body
+//   hands), with the classifier's own opinion on the real hands among them,
+//   the run lengths, and the slots accepted under the wrong side, then the
+//   same frames with correctHandSides applied to the slots first. `labels`
+//   runs this report alone, and a take with the blocks then needs no raw
+//   frames.
 //
 // Everything is reported and nothing is gated: these numbers set the gates.
 
@@ -90,6 +100,19 @@ constexpr float kHandAgreementShoulderWidths= 0.5f;
 constexpr float kShapeMarginRatio= 0.8f;
 // The fused hands count as close together within this many shoulder widths
 constexpr float kHandsCloseShoulderWidths= 1.0f;
+// The direct solver's rule for a landmark it will use: visible at least this
+// much and this far inside the frame
+constexpr float kSolverMinVisibility= 0.5f;
+constexpr float kSolverFrameMarginPx= 16.f;
+// The body wrists read as clasped within this of each other, close within
+// the next, and crossed with the left past the right along the shoulder line
+// by the last, all in shoulder widths
+constexpr float kWristsClaspedShoulderWidths= 0.5f;
+constexpr float kWristsCloseShoulderWidths= 1.0f;
+constexpr float kWristsCrossedShoulderWidths= 0.15f;
+// The hand pipeline's switch count: a label held against the classifier
+// lasts at most this many frames
+constexpr int kLabelSwitchFrames= 15;
 
 struct Stats
 {
@@ -155,6 +178,10 @@ struct FrameObservation
 	double timestampMs= 0.0;
 	// The model ran on this frame
 	bool bModelFrame= false;
+	// The frame's size and the camera's own recorded hand slots on it
+	int frameWidth= 0;
+	int frameHeight= 0;
+	std::array<RecordedHandInput, 2> slots;
 };
 
 // outAllFrames, when given, receives every stored frame in order with the
@@ -202,6 +229,12 @@ bool runModelPass(const char* tag, const TrackingReplay& replay, const std::stri
 			{
 				outAllFrames->push_back({frameIndex, fresh.frameIndex, observation, fresh.timestampMs,
 											observation.valid && observation.modelFrameIndex != lastModelFrameIndex});
+			}
+			if (outAllFrames != nullptr)
+			{
+				outAllFrames->back().frameWidth= image.cols;
+				outAllFrames->back().frameHeight= image.rows;
+				outAllFrames->back().slots= fresh.hands;
 			}
 			// A divided-out frame re-emits the held result
 			if (!observation.valid || observation.modelFrameIndex == lastModelFrameIndex)
@@ -1102,6 +1135,32 @@ struct SideVerdicts
 	}
 };
 
+// The slot's fused side: the fused hand whose shared points it lies on,
+// clearly nearer than the other, -1 when it lies on neither. outNearest is its
+// distance to the nearer fused hand in that hand's palm lengths, FLT_MAX with
+// no fused hand in view.
+int fusedSideOfSlot(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& slotPoints, const TruthHand truth[2],
+					float& outNearest)
+{
+	float truthDistance[2]= {FLT_MAX, FLT_MAX};
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		if (!truth[sideIndex].valid)
+			continue;
+		float sum= 0.f;
+		for (int index= 0; index < kSharedPointCount; ++index)
+		{
+			sum+= glm::length(glm::vec2(slotPoints[kSharedLandmarks[index]]) - truth[sideIndex].points[index]);
+		}
+		truthDistance[sideIndex]= sum / (float)kSharedPointCount / truth[sideIndex].palmLengthPx;
+	}
+	const int truthSide= truthDistance[0] <= truthDistance[1] ? 0 : 1;
+	outNearest= truthDistance[truthSide];
+	if (truthDistance[truthSide] > 1.f || truthDistance[truthSide] > kShapeMarginRatio * truthDistance[1 - truthSide])
+		return -1;
+	return truthSide;
+}
+
 void reportHands(const char* tag, const TrackingReplay& replay, const std::vector<ModelSample>& samples,
 				 const CameraGeometry& geometry)
 {
@@ -1161,26 +1220,11 @@ void reportHands(const char* tag, const TrackingReplay& replay, const std::vecto
 			if (!slot.tracked)
 				continue;
 
-			// The slot's fused side: the fused hand whose shared points it
-			// lies on, clearly nearer than the other
-			float truthDistance[2]= {FLT_MAX, FLT_MAX};
-			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-			{
-				if (!truth[sideIndex].valid)
-					continue;
-				float sum= 0.f;
-				for (int index= 0; index < kSharedPointCount; ++index)
-				{
-					sum+= glm::length(glm::vec2(slot.imagePoints[kSharedLandmarks[index]]) -
-									  truth[sideIndex].points[index]);
-				}
-				truthDistance[sideIndex]= sum / (float)kSharedPointCount / truth[sideIndex].palmLengthPx;
-			}
-			const int truthSide= truthDistance[0] <= truthDistance[1] ? 0 : 1;
-			if (truthDistance[truthSide] < FLT_MAX)
-				slotTruthDistance.add(truthDistance[truthSide]);
-			if (truthDistance[truthSide] > 1.f ||
-				truthDistance[truthSide] > kShapeMarginRatio * truthDistance[1 - truthSide])
+			float nearestTruth= FLT_MAX;
+			const int truthSide= fusedSideOfSlot(slot.imagePoints, truth, nearestTruth);
+			if (nearestTruth < FLT_MAX)
+				slotTruthDistance.add(nearestTruth);
+			if (truthSide < 0)
 			{
 				slotsWithoutTruth++;
 				continue;
@@ -1254,6 +1298,428 @@ void reportHands(const char* tag, const TrackingReplay& replay, const std::vecto
 	wristAll.log(tag, "by wrist, every frame");
 	shapeClose.log(tag, "by shape, fused hands close together");
 	wristClose.log(tag, "by wrist, fused hands close together");
+}
+
+// -- The hand labels against the body model ---------------------------------
+
+// One stored frame of the camera as the direct solver reads it: the body
+// observation the stage held on it and the hand slots as published
+struct LabelFrame
+{
+	int replayFrameIndex= -1;
+	double timestampMs= 0.0;
+	int frameWidth= 0;
+	int frameHeight= 0;
+	BodyPoseObservation body;
+	std::array<RecordedHandInput, 2> slots;
+};
+
+// The camera's frames from the recording itself. Empty unless the recording
+// carries the whole-body block, since without it there is nothing to read a
+// hand's side from.
+std::vector<LabelFrame> recordedLabelFrames(const TrackingReplay& replay, int cameraIndex)
+{
+	std::vector<LabelFrame> frames;
+	bool bAnyBlock= false;
+	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
+	{
+		const RecordedFrame& recorded= *replay.getFrame(frameIndex).recorded;
+		for (const RecordedCameraInput& fresh : recorded.freshCameras)
+		{
+			if (fresh.cameraIndex != cameraIndex || !fresh.valid || !fresh.bHaveBodyPose)
+				continue;
+			bAnyBlock|= fresh.body.valid && fresh.body.wholeBody.present;
+			frames.push_back(
+				{frameIndex, fresh.timestampMs, fresh.frameWidth, fresh.frameHeight, fresh.body, fresh.hands});
+		}
+	}
+	if (!bAnyBlock)
+		frames.clear();
+	return frames;
+}
+
+// The same from a model pass over the raw frames
+std::vector<LabelFrame> labelFramesFromModel(const std::vector<FrameObservation>& observations)
+{
+	std::vector<LabelFrame> frames;
+	frames.reserve(observations.size());
+	for (const FrameObservation& observation : observations)
+	{
+		frames.push_back({observation.replayFrameIndex, observation.timestampMs, observation.frameWidth,
+						  observation.frameHeight, observation.body, observation.slots});
+	}
+	return frames;
+}
+
+// What the hands were doing, from the two body wrists
+enum class eWristsState : int
+{
+	Clasped,
+	Crossed,
+	Close,
+	Apart,
+	OneUnseen,
+	NoneUsable,
+	Count
+};
+
+// What a slot turned away on the other arm's wrist was, from the whole-body
+// hands
+enum class eTurnedAwaySlot : int
+{
+	// On the other arm's hand, and the match decides it: both hands score
+	OtherHandBothScored,
+	// On the other arm's hand, with the label's own hand unscored, so the
+	// match decides nothing
+	OtherHandOwnUnscored,
+	// Farther than the bar from the hand of the wrist it sits on
+	NoHand,
+	// Within the bar and not decided: no nearer one hand by the margin, or
+	// the wrist's own hand unscored
+	Undecided,
+	Count
+};
+
+void reportHandLabels(const char* tag, const TrackingReplay& replay, const std::vector<LabelFrame>& frames,
+					  const char* sourceName, const CameraGeometry* geometry)
+{
+	constexpr int kStateCount= (int)eWristsState::Count;
+	constexpr int kSlotCount= (int)eTurnedAwaySlot::Count;
+	static const char* kStateNames[kStateCount]= {"clasped",        "crossed",               "close",
+												  "free and apart", "one body wrist unseen", "neither wrist usable"};
+	static const char* kSlotNames[kSlotCount]= {"on the other arm's hand, both whole-body hands scoring",
+												"on the other arm's hand, the label's own hand unscored", "on no hand",
+												"undecided"};
+	static const char* kOtherSlotNames[4]= {"also turned away", "untracked", "on the same wrist", "elsewhere"};
+	static const ePoseLandmark kWristLandmarks[2]= {ePoseLandmark::LEFT_WRIST, ePoseLandmark::RIGHT_WRIST};
+
+	int stateFrames[kStateCount]= {};
+	int turnedAway[2]= {0, 0};
+	int table[kStateCount][kSlotCount]= {};
+	int slotTotals[kSlotCount]= {};
+	// Over the slots on the other arm's hand: the classifier's own opinion
+	int classifierNamesTrueSide= 0;
+	int classifierNamesLabel= 0;
+	// Over those the match decides: what the frame's other slot was doing
+	int otherSlot[4]= {0, 0, 0, 0};
+	int acceptedWrongSide[kStateCount]= {};
+	// A turned-away slot's distance to the nearer whole-body hand: within the
+	// bar, to one palm length, beyond it, and neither hand scoring
+	int nearestBins[4]= {0, 0, 0, 0};
+	Stats acceptedDistance;
+	// The fused side of a turned-away slot, per kind: the other arm's, the
+	// label's own, on no fused hand
+	int fusedSide[kSlotCount][3]= {};
+
+	struct Run
+	{
+		int frames= 0;
+		eTurnedAwaySlot startedAs= eTurnedAwaySlot::Undecided;
+	};
+	std::vector<Run> runs;
+	Run current[2];
+
+	// The frames through the solver's gate, [0] with the slots as published
+	// and [1] with correctHandSides applied first
+	struct RuleTally
+	{
+		int turnedAwayOnOtherHand= 0;
+		int turnedAwayOnNoHand= 0;
+		int handFrames[2]= {0, 0};
+		int movedSlotFrames= 0;
+		// A tracked slot published under the other side than on the frame before
+		int sideChanges= 0;
+		int lastSideOfSlot[2]= {-1, -1};
+	};
+	RuleTally ruleTallies[2];
+
+	for (const LabelFrame& frame : frames)
+	{
+		const BodyPoseObservation& body= frame.body;
+		const WholeBodyExtras& extras= body.wholeBody;
+		const bool bFrameKnown= frame.frameWidth > 0 && frame.frameHeight > 0;
+		auto usable= [&](ePoseLandmark landmark) {
+			const int index= (int)landmark;
+			if (!body.valid || !body.isProvided(index) || body.visibility[index] < kSolverMinVisibility)
+				return false;
+			if (!bFrameKnown)
+				return true;
+			const glm::vec3& point= body.imagePoints[index];
+			return point.x >= kSolverFrameMarginPx && point.y >= kSolverFrameMarginPx &&
+				point.x <= (float)frame.frameWidth - kSolverFrameMarginPx &&
+				point.y <= (float)frame.frameHeight - kSolverFrameMarginPx;
+		};
+		auto landmarkPx= [&](ePoseLandmark landmark) { return glm::vec2(body.imagePoints[(int)landmark]); };
+
+		const glm::vec2 shoulderLine=
+			landmarkPx(ePoseLandmark::LEFT_SHOULDER) - landmarkPx(ePoseLandmark::RIGHT_SHOULDER);
+		const float shoulderWidthPx=
+			usable(ePoseLandmark::LEFT_SHOULDER) && usable(ePoseLandmark::RIGHT_SHOULDER) ? glm::length(shoulderLine)
+																						  : 0.f;
+		const bool bWrist[2]= {usable(kWristLandmarks[0]), usable(kWristLandmarks[1])};
+
+		eWristsState state= eWristsState::NoneUsable;
+		if (shoulderWidthPx > 0.f && bWrist[0] && bWrist[1])
+		{
+			const glm::vec2 wristLine= landmarkPx(kWristLandmarks[0]) - landmarkPx(kWristLandmarks[1]);
+			const float separation= glm::length(wristLine) / shoulderWidthPx;
+			// The left wrist's place past the right along the shoulder line
+			const float along= glm::dot(wristLine, shoulderLine) / (shoulderWidthPx * shoulderWidthPx);
+			state= along < -kWristsCrossedShoulderWidths            ? eWristsState::Crossed
+				: separation <= kWristsClaspedShoulderWidths        ? eWristsState::Clasped
+				: separation <= kWristsCloseShoulderWidths          ? eWristsState::Close
+																	: eWristsState::Apart;
+		}
+		else if (shoulderWidthPx > 0.f && (bWrist[0] || bWrist[1]))
+		{
+			state= eWristsState::OneUnseen;
+		}
+		stateFrames[(int)state]++;
+
+		// Each slot under its label: the solver's two wrist tests, the shape
+		// match, and its distance to each whole-body hand
+		struct SlotRead
+		{
+			bool tracked= false;
+			bool bNear= false;
+			bool bOpposite= false;
+			int shapeSide= -1;
+			bool bDistance[2]= {false, false};
+			float distance[2]= {0.f, 0.f};
+			bool bTurnedAway= false;
+		};
+		auto readSlot= [&](const RecordedHandInput& slot, int sideIndex) {
+			SlotRead read;
+			read.tracked= slot.tracked;
+			if (!slot.tracked)
+				return read;
+			const glm::vec2 slotWrist(slot.imagePoints[0]);
+			const float agreementPx= kHandAgreementShoulderWidths * shoulderWidthPx;
+			read.bNear= bWrist[sideIndex] && shoulderWidthPx > 0.f &&
+				glm::length(slotWrist - landmarkPx(kWristLandmarks[sideIndex])) <= agreementPx;
+			read.bOpposite= bWrist[1 - sideIndex] && shoulderWidthPx > 0.f &&
+				glm::length(slotWrist - landmarkPx(kWristLandmarks[1 - sideIndex])) <= agreementPx;
+			read.bTurnedAway= !read.bNear && read.bOpposite;
+			if (body.valid)
+			{
+				const HandShapeMatch match= matchHandSideByShape(slot.imagePoints, extras);
+				read.shapeSide= match.side;
+				for (int handSide= 0; handSide < 2; ++handSide)
+				{
+					read.bDistance[handSide]= match.scored[handSide];
+					read.distance[handSide]= match.distance[handSide];
+				}
+			}
+			return read;
+		};
+		const SlotRead reads[2]= {readSlot(frame.slots[0], 0), readSlot(frame.slots[1], 1)};
+
+		// The same frame with the slots under the sides correctHandSides gives
+		// them, and without, through the solver's gate
+		{
+			const std::array<glm::vec3, HAND_LANDMARK_COUNT>* slotPoints[2]= {
+				frame.slots[0].tracked ? &frame.slots[0].imagePoints : nullptr,
+				frame.slots[1].tracked ? &frame.slots[1].imagePoints : nullptr};
+			const bool bSwap= body.valid && correctHandSides(slotPoints, extras);
+			for (int ruleIndex= 0; ruleIndex < 2; ++ruleIndex)
+			{
+				const bool bSwapped= ruleIndex == 1 && bSwap;
+				RuleTally& tally= ruleTallies[ruleIndex];
+				bool bSlotSeen[2]= {false, false};
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					const RecordedHandInput& slot= frame.slots[bSwapped ? 1 - sideIndex : sideIndex];
+					if (!slot.tracked)
+						continue;
+					const SlotRead read= bSwapped ? readSlot(slot, sideIndex) : reads[sideIndex];
+					tally.handFrames[sideIndex]+= read.bNear ? 1 : 0;
+					tally.movedSlotFrames+= bSwapped ? 1 : 0;
+					if (read.bTurnedAway)
+					{
+						const int otherSide= 1 - sideIndex;
+						const bool bOnOtherHand=
+							read.bDistance[otherSide] && read.distance[otherSide] <= k_handShapeMaxDistance;
+						(bOnOtherHand ? tally.turnedAwayOnOtherHand : tally.turnedAwayOnNoHand)++;
+					}
+					if (slot.slotId >= 0 && slot.slotId < 2)
+					{
+						bSlotSeen[slot.slotId]= true;
+						if (tally.lastSideOfSlot[slot.slotId] >= 0 && tally.lastSideOfSlot[slot.slotId] != sideIndex)
+							tally.sideChanges++;
+						tally.lastSideOfSlot[slot.slotId]= sideIndex;
+					}
+				}
+				for (int slotId= 0; slotId < 2; ++slotId)
+				{
+					if (!bSlotSeen[slotId])
+						tally.lastSideOfSlot[slotId]= -1;
+				}
+			}
+		}
+
+		TruthHand truth[2];
+		if (geometry != nullptr && frame.replayFrameIndex >= 0)
+		{
+			const TrackingReplay::ReplayFrame& replayFrame= replay.getFrame(frame.replayFrameIndex);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				truth[sideIndex]= makeTruthHand(replayFrame.replayedFused.poses[sideIndex], *geometry, frame.frameWidth,
+												frame.frameHeight);
+			}
+		}
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const SlotRead& read= reads[sideIndex];
+			const SlotRead& other= reads[1 - sideIndex];
+			const int otherSide= 1 - sideIndex;
+			const bool bOnOwnHand= read.bDistance[sideIndex] && read.distance[sideIndex] <= k_handShapeMaxDistance;
+			const bool bOnOtherHand= read.bDistance[otherSide] && read.distance[otherSide] <= k_handShapeMaxDistance;
+
+			if (read.tracked && read.bNear)
+			{
+				if (read.bDistance[sideIndex])
+					acceptedDistance.add(read.distance[sideIndex]);
+				if (read.shapeSide == otherSide && bOnOtherHand)
+					acceptedWrongSide[(int)state]++;
+			}
+
+			if (!read.tracked || !read.bTurnedAway)
+			{
+				if (current[sideIndex].frames > 0)
+					runs.push_back(current[sideIndex]);
+				current[sideIndex]= Run();
+				continue;
+			}
+
+			eTurnedAwaySlot kind= eTurnedAwaySlot::Undecided;
+			if (read.shapeSide == otherSide && bOnOtherHand)
+				kind= eTurnedAwaySlot::OtherHandBothScored;
+			else if (read.shapeSide < 0 && !read.bDistance[sideIndex] && bOnOtherHand)
+				kind= eTurnedAwaySlot::OtherHandOwnUnscored;
+			else if (read.bDistance[otherSide] && !bOnOtherHand)
+				kind= eTurnedAwaySlot::NoHand;
+			else if (read.bDistance[sideIndex] && read.bDistance[otherSide] && !bOnOwnHand)
+				kind= eTurnedAwaySlot::NoHand;
+
+			turnedAway[sideIndex]++;
+			table[(int)state][(int)kind]++;
+			slotTotals[(int)kind]++;
+			if (current[sideIndex].frames == 0)
+				current[sideIndex].startedAs= kind;
+			current[sideIndex].frames++;
+
+			const bool bAnyDistance= read.bDistance[0] || read.bDistance[1];
+			const float nearest= !bAnyDistance ? FLT_MAX
+				: !read.bDistance[0]           ? read.distance[1]
+				: !read.bDistance[1]           ? read.distance[0]
+											   : std::min(read.distance[0], read.distance[1]);
+			nearestBins[!bAnyDistance ? 3 : nearest <= k_handShapeMaxDistance ? 0 : nearest <= 1.f ? 1 : 2]++;
+
+			if (kind == eTurnedAwaySlot::OtherHandBothScored || kind == eTurnedAwaySlot::OtherHandOwnUnscored)
+			{
+				const RecordedHandInput& slot= frame.slots[sideIndex];
+				const int classifierSide= slot.rightProb > 0.5f ? 1 : 0;
+				(classifierSide == otherSide ? classifierNamesTrueSide : classifierNamesLabel)++;
+			}
+			if (kind == eTurnedAwaySlot::OtherHandBothScored)
+			{
+				otherSlot[!other.tracked ? 1 : other.bNear ? 2 : other.bTurnedAway ? 0 : 3]++;
+			}
+			if (geometry != nullptr)
+			{
+				float nearestTruth= FLT_MAX;
+				const int truthSide= fusedSideOfSlot(frame.slots[sideIndex].imagePoints, truth, nearestTruth);
+				fusedSide[(int)kind][truthSide < 0 ? 2 : truthSide == otherSide ? 0 : 1]++;
+			}
+		}
+	}
+	for (const Run& run : current)
+	{
+		if (run.frames > 0)
+			runs.push_back(run);
+	}
+
+	const int turnedAwayTotal= turnedAway[0] + turnedAway[1];
+	MIKAN_LOG_INFO(tag) << "hand labels against the body model, from " << sourceName << ", " << frames.size()
+						<< " frames:";
+	MIKAN_LOG_INFO(tag) << "  slot frames turned away on the other arm's wrist: " << turnedAwayTotal << " (left "
+						<< turnedAway[0] << ", right " << turnedAway[1] << ")";
+	for (int kind= 0; kind < kSlotCount; ++kind)
+		MIKAN_LOG_INFO(tag) << "    " << kSlotNames[kind] << ": " << slotTotals[kind];
+	MIKAN_LOG_INFO(tag) << "  by what the hands were doing (frames in the state, slot frames turned away, then each "
+						   "kind in the order above):";
+	for (int state= 0; state < kStateCount; ++state)
+	{
+		int stateTotal= 0;
+		for (int kind= 0; kind < kSlotCount; ++kind)
+			stateTotal+= table[state][kind];
+		MIKAN_LOG_INFO(tag) << "    " << kStateNames[state] << ": " << stateFrames[state] << " frames, " << stateTotal
+							<< " turned away (" << table[state][0] << ", " << table[state][1] << ", "
+							<< table[state][2] << ", " << table[state][3] << ")";
+	}
+	MIKAN_LOG_INFO(tag) << "  on the other arm's hand: rightProb names the true side on " << classifierNamesTrueSide
+						<< " and the label on " << classifierNamesLabel;
+	MIKAN_LOG_INFO(tag) << "  on the other arm's hand with both scoring, the frame's other slot: "
+						<< kOtherSlotNames[0] << " " << otherSlot[0] << ", " << kOtherSlotNames[1] << " "
+						<< otherSlot[1] << ", " << kOtherSlotNames[2] << " " << otherSlot[2] << ", "
+						<< kOtherSlotNames[3] << " " << otherSlot[3];
+
+	Stats runFrames;
+	int longestRealHandRun= 0;
+	int runsOverSwitch= 0;
+	for (const Run& run : runs)
+	{
+		runFrames.add((float)run.frames);
+		runsOverSwitch+= run.frames > kLabelSwitchFrames ? 1 : 0;
+		if (run.startedAs == eTurnedAwaySlot::OtherHandBothScored ||
+			run.startedAs == eTurnedAwaySlot::OtherHandOwnUnscored)
+			longestRealHandRun= std::max(longestRealHandRun, run.frames);
+	}
+	MIKAN_LOG_INFO(tag) << "  runs of a slot turned away: " << runs.size() << ", p50 " << runFrames.p50()
+						<< " frames, longest " << runFrames.percentile(1.f) << ", longest that began on the other arm's hand "
+						<< longestRealHandRun << ", over " << kLabelSwitchFrames << " frames " << runsOverSwitch;
+	MIKAN_LOG_INFO(tag) << "  a turned-away slot's distance to the nearer whole-body hand: within "
+						<< k_handShapeMaxDistance << " palm lengths " << nearestBins[0] << ", to 1 " << nearestBins[1]
+						<< ", beyond " << nearestBins[2] << ", neither hand scoring " << nearestBins[3];
+	MIKAN_LOG_INFO(tag) << "  an accepted slot's distance to its own side's whole-body hand: p50 "
+						<< acceptedDistance.p50() << " palm lengths, p90 " << acceptedDistance.p90() << " ("
+						<< acceptedDistance.count() << " slot frames)";
+
+	int acceptedWrongTotal= 0;
+	for (int count : acceptedWrongSide)
+		acceptedWrongTotal+= count;
+	MIKAN_LOG_INFO(tag) << "  slot frames accepted under the wrong side (on the other arm's hand by shape, beside "
+						   "their label's wrist): "
+						<< acceptedWrongTotal << " (" << kStateNames[0] << " " << acceptedWrongSide[0] << ", "
+						<< kStateNames[1] << " " << acceptedWrongSide[1] << ", " << kStateNames[2] << " "
+						<< acceptedWrongSide[2] << ", " << kStateNames[3] << " " << acceptedWrongSide[3] << ", "
+						<< kStateNames[4] << " " << acceptedWrongSide[4] << ")";
+	MIKAN_LOG_INFO(tag) << "  as published, then with correctHandSides applied to the slots first:";
+	MIKAN_LOG_INFO(tag) << "    slot frames turned away: "
+						<< ruleTallies[0].turnedAwayOnOtherHand + ruleTallies[0].turnedAwayOnNoHand << ", "
+						<< ruleTallies[1].turnedAwayOnOtherHand + ruleTallies[1].turnedAwayOnNoHand;
+	MIKAN_LOG_INFO(tag) << "    of those, within the bar of the other arm's hand: " << ruleTallies[0].turnedAwayOnOtherHand
+						<< ", " << ruleTallies[1].turnedAwayOnOtherHand;
+	MIKAN_LOG_INFO(tag) << "    of those, not: " << ruleTallies[0].turnedAwayOnNoHand << ", "
+						<< ruleTallies[1].turnedAwayOnNoHand;
+	MIKAN_LOG_INFO(tag) << "    frames with a left hand through the gate: " << ruleTallies[0].handFrames[0] << ", "
+						<< ruleTallies[1].handFrames[0];
+	MIKAN_LOG_INFO(tag) << "    frames with a right hand through the gate: " << ruleTallies[0].handFrames[1] << ", "
+						<< ruleTallies[1].handFrames[1];
+	MIKAN_LOG_INFO(tag) << "    slot frames moved to the other side: " << ruleTallies[1].movedSlotFrames;
+	MIKAN_LOG_INFO(tag) << "    side changes of a tracked slot: " << ruleTallies[0].sideChanges << ", "
+						<< ruleTallies[1].sideChanges;
+	if (geometry != nullptr)
+	{
+		MIKAN_LOG_INFO(tag) << "  the turned-away slots' fused side (the other arm's, the label's own, on no fused "
+							   "hand):";
+		for (int kind= 0; kind < kSlotCount; ++kind)
+		{
+			MIKAN_LOG_INFO(tag) << "    " << kSlotNames[kind] << ": " << fusedSide[kind][0] << ", "
+								<< fusedSide[kind][1] << ", " << fusedSide[kind][2];
+		}
+	}
 }
 
 // -- The head against the phone head ---------------------------------------
@@ -1868,6 +2334,7 @@ static int runGateWholeBodyTool(const TestArgs& args)
 
 	std::string recordingPath;
 	std::string csvPath;
+	bool bLabelsOnly= false;
 	int requestedCamera= -1;
 	// Windows of the take, seconds from its first frame
 	struct Window
@@ -1883,7 +2350,7 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	// The phone's clock ahead of the camera's for the head comparison, ms
 	double headLagMs= 0.0;
 	const char* usage= "Usage: --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [shapes=<s>-<s>] "
-					   "[ears=<s>-<s>] [headphones=<s>-<s>] [headlag=<ms>] [frames.csv]";
+					   "[ears=<s>-<s>] [headphones=<s>-<s>] [headlag=<ms>] [labels] [frames.csv]";
 	for (const std::string& arg : args)
 	{
 		Window* window= nullptr;
@@ -1896,6 +2363,8 @@ static int runGateWholeBodyTool(const TestArgs& args)
 			recordingPath= arg;
 		else if (arg.size() > 4 && arg.compare(arg.size() - 4, 4, ".csv") == 0)
 			csvPath= arg;
+		else if (arg == "labels")
+			bLabelsOnly= true;
 		else if (arg.rfind("headlag=", 0) == 0)
 			headLagMs= atof(arg.substr(8).c_str());
 		else if (window != nullptr)
@@ -1943,8 +2412,41 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	}
 	const CameraProfile& profile= config.camera(cameraIndex);
 
+	CameraGeometry geometry;
+	if (profile.intrinsics.present)
+	{
+		const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
+		geometry.fx= (float)cameraMatrix.x0;
+		geometry.fy= (float)cameraMatrix.y1;
+		geometry.cx= (float)cameraMatrix.z0;
+		geometry.cy= (float)cameraMatrix.z1;
+	}
+
+	// The hand labels read the recorded whole-body blocks when the take has
+	// them, and with a rig's extrinsics the fused hands as truth
+	std::vector<LabelFrame> labelFrames= recordedLabelFrames(replay, cameraIndex);
+	const char* labelSource= "the recorded whole-body blocks";
+	const bool bHandTruth= profile.intrinsics.present && profile.extrinsics.present;
+	auto reportLabels= [&]() {
+		if (bHandTruth)
+		{
+			geometry.cameraFromWorld= glm::inverse(profile.extrinsics.markerFromCamera);
+			if (!replay.didRun())
+				replay.runAll();
+		}
+		reportHandLabels(tag, replay, labelFrames, labelSource, bHandTruth ? &geometry : nullptr);
+	};
+
 	const std::string frameDirectory= TrackingRecording::makeFrameDirectoryPath(recordingPath);
-	if (!std::filesystem::exists(frameDirectory))
+	const bool bHaveFrames= std::filesystem::exists(frameDirectory);
+	if (!labelFrames.empty() && (bLabelsOnly || !bHaveFrames))
+	{
+		if (!bLabelsOnly)
+			MIKAN_LOG_INFO(tag) << "No raw frames beside the recording (" << frameDirectory << "): the hand labels alone";
+		reportLabels();
+		return 0;
+	}
+	if (!bHaveFrames)
 	{
 		MIKAN_LOG_ERROR(tag) << "No raw frames beside the recording (" << frameDirectory << ")";
 		return 1;
@@ -1960,6 +2462,17 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	Stats dividedInferenceMs;
 	int framesMissing= 0;
 	int dividedFramesMissing= 0;
+	if (bLabelsOnly)
+	{
+		// No block in the recording: the live-cadence pass alone
+		if (!runModelPass(tag, replay, frameDirectory, cameraIndex, liveDivider, divided, dividedInferenceMs,
+						  dividedFramesMissing, &dividedFrames))
+			return 1;
+		labelFrames= labelFramesFromModel(dividedFrames);
+		labelSource= "the model re-run at the live divider";
+		reportLabels();
+		return 0;
+	}
 	std::vector<FrameObservation> everyFrames;
 	if (!runModelPass(tag, replay, frameDirectory, cameraIndex, 1, everyFrame, inferenceMs, framesMissing,
 					  &everyFrames) ||
@@ -2138,16 +2651,6 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		}
 	}
 
-	CameraGeometry geometry;
-	if (profile.intrinsics.present)
-	{
-		const MikanMatrix3d& cameraMatrix= profile.intrinsics.intrinsics.undistorted_camera_matrix;
-		geometry.fx= (float)cameraMatrix.x0;
-		geometry.fy= (float)cameraMatrix.y1;
-		geometry.cx= (float)cameraMatrix.z0;
-		geometry.cy= (float)cameraMatrix.z1;
-	}
-
 	// -- The head against the phone head -----------------------------------
 	if (phoneWithHead == 0 || !profile.intrinsics.present)
 	{
@@ -2289,6 +2792,14 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		replay.runAll();
 		reportHands(tag, replay, divided, geometry);
 	}
+
+	// -- The hand labels against the body model ----------------------------
+	if (labelFrames.empty())
+	{
+		labelFrames= labelFramesFromModel(dividedFrames);
+		labelSource= "the model re-run at the live divider";
+	}
+	reportLabels();
 
 	// -- The hand pipeline as the direct camera runs it, without and with
 	// the body model's hints ------------------------------------------------

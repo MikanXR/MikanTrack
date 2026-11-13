@@ -118,6 +118,10 @@ public:
 	// For the direct camera, which has no fused world result to be seeded
 	// from. Vision thread only.
 	void setBodyHandHints(bool bEnabled) { m_bBodyHandHints= bEnabled; }
+	// Puts each hand under the side this camera's whole-body observation
+	// names for it, ahead of the recording tap and the lift. For the direct
+	// camera, whose solver takes a hand by its side. Vision thread only.
+	void setHandSideCorrection(bool bEnabled) { m_bHandSideCorrection= bEnabled; }
 
 private:
 	// Cross-camera search seeding: hands the fused result tracks but this
@@ -164,6 +168,7 @@ private:
 	// pass costs a few ms - don't pay it every frame)
 	int m_hintCooldownFrames= 0;
 	bool m_bBodyHandHints= false;
+	bool m_bHandSideCorrection= false;
 
 	// Recording staging: this camera's inputs for the current iteration,
 	// gathered in process() every frame and consumed when the frame record

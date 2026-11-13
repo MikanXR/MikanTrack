@@ -102,6 +102,17 @@ struct TrackedHand
 	// actual opinion - `side` can be displaced by slot bookkeeping (two slots
 	// claiming the same side) and must not be treated as evidence
 	float rightProb= 0.5f;
+	// The direct camera moved this hand here from the other side's entry
+	// (applyHandSideCorrection): the whole-body hands name this side for it,
+	// or the frame's other hand took the side it was published under. The
+	// hand model's label for it is the other side.
+	bool bSideCorrected= false;
+	// The whole-body hands name this hand's side on this frame
+	// (applyHandSideCorrection): it sits on that side's whole-body hand, and
+	// the shape match or the one-hand rule decided it, or the other
+	// whole-body hand does not score. The side is then the body model's and
+	// not the hand model's guess, and the lift takes the palmar side from it.
+	bool bSideDecided= false;
 
 	// Landmarks in full-frame pixels; z is MediaPipe relative depth
 	// (same scale as x/y pixels, relative to the wrist)

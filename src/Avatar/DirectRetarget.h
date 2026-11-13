@@ -110,6 +110,12 @@ struct DirectRetargetConfig
 	// continues the forearm better at all.
 	float palmMirrorEnterGain= 0.5f;
 	float palmMirrorLeaveGain= 0.3f;
+	// A hand with this many landmarks at the frame's edge or past it is cut
+	// by the frame. The hand model lays the rest of a cut hand out by guess,
+	// and the guess can be the other hand's layout, which turns the palm
+	// right round. Such a hand keeps the wrist it gives the arm, and its
+	// palm and fingers are held as through a dropout. Zero reads every hand.
+	int handCutLandmarks= 3;
 	// The rig's joint limits on the relative rotations, radians: the head
 	// against the neutral head, the spine (the lean and the shoulder line's
 	// turn) against the neutral torso, and each wrist (the palm in the
@@ -134,7 +140,8 @@ public:
 	// metacarpal, less the bend the model reads on a straight finger facing
 	// the camera (kFingerOpenBias, kThumbOpenBias), each bend floored at
 	// zero. The lateral is the splay past the hand's own fan, unbiased. One
-	// palmar memory per hand, reset when the hand is lost.
+	// palmar memory per hand, reset when the hand is lost. A hand whose side
+	// is decided takes the palmar side from it, as the lift does.
 	static void measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 								   std::array<FingerAngles, FINGER_COUNT>& outAngles);
 
@@ -242,6 +249,9 @@ public:
 			// read)
 			bool bPalmMirrored= false;
 			float palmMirrorGain= 0.f;
+			// The hand is on the arm and cut by the frame's edge, so its palm
+			// and fingers are held
+			bool bHandCut= false;
 			std::array<FingerAngles, FINGER_COUNT> measuredFingers{}; // this frame, before the filters
 			std::array<FingerAngles, FINGER_COUNT> fingers{};         // filtered, what the bones took
 			// The loss stage's readout, which the retarget stage writes from
@@ -271,6 +281,9 @@ public:
 		// Per slot, the frames since the solver's reset on which the entry
 		// gate turned the slot away while it sat on the other arm's wrist
 		int oppositeWristRejections[2]= {0, 0};
+		// Per arm, the frames since the solver's reset on which it took a
+		// hand the camera had moved to its side from the other label
+		int sideCorrections[2]= {0, 0};
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -400,6 +413,7 @@ private:
 	// negative outside one
 	double m_handednessSwapStartMs= -1.0;
 	int m_oppositeWristRejections[2]= {0, 0};
+	int m_sideCorrections[2]= {0, 0};
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

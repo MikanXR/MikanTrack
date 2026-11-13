@@ -51,7 +51,7 @@ glm::vec3 pronatedThumbHingeByAngle(const glm::vec3& standardHinge, const glm::v
 } // namespace
 
 glm::mat4 HandPoseModel::computePalmFrame(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points,
-										  eHandSide side, PalmarSideMemory* ioMemory)
+										  eHandSide side, PalmarSideMemory* ioMemory, bool bSideDecided)
 {
 	const glm::vec3& wrist= points[(int)eHandLandmark::WRIST];
 	const glm::vec3& indexMcp= points[(int)eHandLandmark::INDEX_MCP];
@@ -130,7 +130,16 @@ glm::mat4 HandPoseModel::computePalmFrame(const std::array<glm::vec3, HAND_LANDM
 
 	bool bContradicting= false;
 	float palmarSign;
-	if (!bRemembered)
+	if (bSideDecided)
+	{
+		// The side is known, so the palmar side is anatomy and no evidence
+		// or memory is asked. With the index knuckle toward the thumb, the
+		// cross of wrist-to-index with wrist-to-pinky points out of the back
+		// of a left hand and out of a right hand's palm, in a right-handed
+		// frame, which the camera's and the hand model's both are.
+		palmarSign= side == eHandSide::Left ? -1.f : 1.f;
+	}
+	else if (!bRemembered)
 	{
 		// Nothing to be continuous with, so take the best signal available:
 		// curl when the hand is properly flexed, otherwise the thumb, which
@@ -324,9 +333,9 @@ void computeFingerAnglesAgainst(const std::array<glm::vec3, HAND_LANDMARK_COUNT>
 void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
 										const NeutralDirections& neutralDirs,
 										std::array<FingerAngles, FINGER_COUNT>& outAngles,
-										PalmarSideMemory* ioMemory)
+										PalmarSideMemory* ioMemory, bool bSideDecided)
 {
-	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory, bSideDecided);
 	const glm::mat3 palmRotation= glm::mat3(palmFrame);
 	std::array<glm::vec3, FINGER_COUNT> neutralWorlds;
 	for (int finger= 0; finger < FINGER_COUNT; ++finger)
@@ -336,9 +345,9 @@ void HandPoseModel::computeFingerAngles(const std::array<glm::vec3, HAND_LANDMAR
 
 void HandPoseModel::computeMetacarpalFingerAngles(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points,
 												  eHandSide side, std::array<FingerAngles, FINGER_COUNT>& outAngles,
-												  PalmarSideMemory* ioMemory)
+												  PalmarSideMemory* ioMemory, bool bSideDecided)
 {
-	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory, bSideDecided);
 	const glm::vec3 palmZ= glm::vec3(palmFrame[2]);
 	const glm::vec3& wrist= points[(int)eHandLandmark::WRIST];
 	std::array<glm::vec3, FINGER_COUNT> neutralWorlds;
@@ -351,9 +360,9 @@ void HandPoseModel::computeMetacarpalFingerAngles(const std::array<glm::vec3, HA
 }
 
 void HandPoseModel::computeSkeleton(const std::array<glm::vec3, HAND_LANDMARK_COUNT>& points, eHandSide side,
-									HandSkeleton& outSkeleton, PalmarSideMemory* ioMemory)
+									HandSkeleton& outSkeleton, PalmarSideMemory* ioMemory, bool bSideDecided)
 {
-	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory);
+	const glm::mat4 palmFrame= computePalmFrame(points, side, ioMemory, bSideDecided);
 	const glm::mat4 palmInverse= glm::inverse(palmFrame);
 
 	for (int finger= 0; finger < FINGER_COUNT; ++finger)
