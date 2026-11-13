@@ -97,6 +97,19 @@ struct DirectRetargetConfig
 	// alone (makeDirectLossPolicy): the solver does not read it, and the
 	// retarget stage takes each arm's from its chain.
 	float restBlendMs= 300.f;
+	// The lifted palm's mirror along the view ray is taken on how much better
+	// its finger axis continues the forearm than the lifted one's does, the
+	// gain, which runs to 2 and is about 1 for a hand pointing along the
+	// forearm at the camera. The gain is twice the finger axis's lean along
+	// the view ray times the forearm's, so with the fingers upright it is
+	// near zero and its sign is noise, while the mirror turns an edge-on
+	// palm's normal right round. So the mirror is taken above one bar and
+	// kept above a lower one, and under that the lifted palm stands. Upright
+	// hands turned about the wrist, which need no mirror, reach a gain of
+	// 0.3. Both bars at zero is the bare rule, the mirror wherever it
+	// continues the forearm better at all.
+	float palmMirrorEnterGain= 0.5f;
+	float palmMirrorLeaveGain= 0.3f;
 	// The rig's joint limits on the relative rotations, radians: the head
 	// against the neutral head, the spine (the lean and the shoulder line's
 	// turn) against the neutral torso, and each wrist (the palm in the
