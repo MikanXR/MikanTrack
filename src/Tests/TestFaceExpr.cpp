@@ -4,6 +4,7 @@
 
 #include "ExprInputTable.h"
 #include "ExprParameter.h"
+#include "FaceAutoProfile.h"
 #include "FaceExprCompiler.h"
 #include "FaceExprEditorText.h"
 #include "FaceExprEvaluator.h"
@@ -13,6 +14,7 @@
 #include "FaceProfile.h"
 #include "FaceProfileBinding.h"
 #include "FaceProfileLibrary.h"
+#include "WebcamFace.h"
 
 // Tests for the face expression language: the parser, the compiler and its
 // errors, every function, the time rule, the state slots across a recompile,
@@ -158,8 +160,214 @@ static int runFaceExprTest(const TestArgs&)
 		}
 		check(bCasedValue, "a variable named in another case evaluates as the exact spelling does");
 
-		check(FaceExprInputs::fromName("phone.nope") < 0 && FaceExprInputs::fromName("webcam.jawOpen") < 0,
+		check(FaceExprInputs::fromName("phone.nope") < 0 && FaceExprInputs::fromName("webcam.nope") < 0 &&
+				  FaceExprInputs::fromName("mirror.jawOpen") < 0,
 			  "an unknown name or namespace is not an input");
+	}
+
+	// The webcam namespace: the 52 ARKit names and the two flags
+	{
+		bool bNames= true;
+		for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
+		{
+			const int slot= FaceExprInputs::k_webcamBlendshapeBase + index;
+			const std::string name= std::string("webcam.") + arkitBlendshapeName(index);
+			bNames= bNames && FaceExprInputs::fromName(name) == slot && FaceExprInputs::name(slot) == name;
+		}
+		check(bNames && FaceExprInputs::fromName("WEBCAM.eyeBlink_L") ==
+						  FaceExprInputs::k_webcamBlendshapeBase + arkitBlendshapeFromName("eyeBlinkLeft") &&
+				  FaceExprInputs::fromName("webcam.present") == FaceExprInputs::k_webcamPresent &&
+				  FaceExprInputs::fromName("webcam.tracked") == FaceExprInputs::k_webcamTracked,
+			  "the 52 webcam columns and the two flags resolve, in any case and by the side suffix");
+
+		FaceSources sources;
+		sources.webcam.present= true;
+		sources.webcam.tracked= true;
+		sources.webcam.measuredMask= webcamFaceMeasuredMask();
+		sources.webcam.blendshapes[(size_t)arkitBlendshapeFromName("jawOpen")]= 0.4f;
+		sources.webcam.blendshapes[(size_t)arkitBlendshapeFromName("eyeLookUpLeft")]= 0.7f;
+		check(near(evalOnce("webcam.jawOpen", sources), 0.4f) && near(evalOnce("webcam.tracked", sources), 1.f),
+			  "a measured webcam column reads its value while tracked");
+		check(near(evalOnce("webcam.eyeLookUpLeft", sources), 0.f),
+			  "a column outside the measured mask reads zero while tracked");
+		sources.webcam.tracked= false;
+		check(near(evalOnce("webcam.jawOpen", sources), 0.f) && near(evalOnce("webcam.present", sources), 1.f),
+			  "the webcam columns read zero unless tracked");
+	}
+
+	// The webcam source from a face block: each column is its ratio's travel
+	// from the neutral
+	{
+		// Image coordinates, y down, the person's left at larger x
+		auto makeBody= [](float leftEyeGap, float lipGap, float score) {
+			BodyPoseObservation body;
+			body.valid= true;
+			body.wholeBody.present= true;
+			body.wholeBody.faceScores.fill(score);
+			auto set= [&](int index, float x, float y) { body.wholeBody.face[index]= glm::vec3(x, y, 0.f); };
+			// The person's right eye 36..41 and left eye 42..47, each 20 wide
+			set(36, -40.f, 0.f);
+			set(37, -33.f, -3.f);
+			set(38, -27.f, -3.f);
+			set(39, -20.f, 0.f);
+			set(40, -27.f, 3.f);
+			set(41, -33.f, 3.f);
+			set(42, 20.f, 0.f);
+			set(43, 27.f, -leftEyeGap * 0.5f);
+			set(44, 33.f, -leftEyeGap * 0.5f);
+			set(45, 40.f, 0.f);
+			set(46, 33.f, leftEyeGap * 0.5f);
+			set(47, 27.f, leftEyeGap * 0.5f);
+			for (int index= 0; index < 5; ++index)
+			{
+				set(17 + index, -45.f + 6.f * (float)index, -12.f);
+				set(22 + index, 21.f + 6.f * (float)index, -12.f);
+			}
+			set(48, -18.f, 50.f);
+			set(54, 18.f, 50.f);
+			set(51, 0.f, 45.f);
+			set(57, 0.f, 55.f);
+			set(62, 0.f, 50.f - lipGap * 0.5f);
+			set(66, 0.f, 50.f + lipGap * 0.5f);
+			return body;
+		};
+		auto column= [](const FaceSources::Webcam& webcam, const char* name) {
+			return webcam.blendshapes[(size_t)arkitBlendshapeFromName(name)];
+		};
+
+		const BodyPoseObservation rest= makeBody(6.f, 0.f, 0.9f);
+		const WholeBodyFaceRatios neutral= computeWholeBodyFaceRatios(rest.wholeBody);
+		FaceSources::Webcam webcam;
+		fillWebcamFaceSource(rest, true, &neutral, webcam);
+		bool bAllZero= webcam.present && webcam.tracked && webcam.measuredMask == webcamFaceMeasuredMask();
+		for (float value : webcam.blendshapes)
+			bAllZero= bAllZero && near(value, 0.f);
+		check(bAllZero, "the neutral face reads every webcam column at zero");
+
+		// A lip gap of 8 px over the 80 px face width is 0.1, half the jaw's travel
+		fillWebcamFaceSource(makeBody(6.f, 8.f, 0.9f), true, &neutral, webcam);
+		check(near(column(webcam, "jawOpen"), 0.5f, 1e-3f) && near(column(webcam, "eyeBlinkLeft"), 0.f),
+			  "half the jaw's travel reads jawOpen at a half and nothing else");
+
+		// The smile and the pucker are the mouth's width about its neutral,
+		// 36 px of the 80 px face width here. The corners sit at +-18 px.
+		auto withMouthCorners= [&](float halfWidthPx, float lipGap) {
+			BodyPoseObservation body= makeBody(6.f, lipGap, 0.9f);
+			body.wholeBody.face[48].x= -halfWidthPx;
+			body.wholeBody.face[54].x= halfWidthPx;
+			return body;
+		};
+		// 7.2 px wider is 0.09 face widths, half the smile's travel of 0.18
+		fillWebcamFaceSource(withMouthCorners(21.6f, 0.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthSmileLeft"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileRight"), 0.5f, 1e-3f) &&
+				  near(column(webcam, "mouthPucker"), 0.f),
+			  "a wider mouth reads both smile columns alike and no pucker");
+		// 4 px narrower is 0.05 face widths, half the pucker's travel of 0.1
+		fillWebcamFaceSource(withMouthCorners(16.f, 0.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthPucker"), 0.5f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f),
+			  "a narrower mouth reads the pucker and no smile");
+		// A lip gap of 0.2 face widths draws the corners in by 0.06, which is
+		// the jaw's and neither shape's
+		fillWebcamFaceSource(withMouthCorners(15.6f, 16.f), true, &neutral, webcam);
+		check(near(column(webcam, "mouthPucker"), 0.f, 1e-3f) && near(column(webcam, "mouthSmileLeft"), 0.f, 1e-3f) &&
+				  near(column(webcam, "jawOpen"), 1.f, 1e-3f),
+			  "the width an open jaw costs reads as neither a pucker nor a smile");
+
+		// The person's left eye shut: the columns cross the ratios' sides
+		fillWebcamFaceSource(makeBody(1.f, 0.f, 0.9f), true, &neutral, webcam);
+		check(near(column(webcam, "eyeBlinkRight"), 1.f) && near(column(webcam, "eyeBlinkLeft"), 0.f),
+			  "the person's left eye shut reads eyeBlinkRight, as the phone's columns do");
+
+		fillWebcamFaceSource(makeBody(6.f, 8.f, 0.3f), true, &neutral, webcam);
+		check(webcam.present && !webcam.tracked && near(column(webcam, "jawOpen"), 0.f),
+			  "a face under the score gate is present, not tracked, and reads zero");
+		fillWebcamFaceSource(makeBody(6.f, 8.f, 0.9f), false, &neutral, webcam);
+		check(!webcam.present && !webcam.tracked && near(column(webcam, "jawOpen"), 0.f),
+			  "a stale observation is not present");
+		fillWebcamFaceSource(makeBody(6.f, 8.f, 0.9f), true, nullptr, webcam);
+		check(webcam.tracked && column(webcam, "jawOpen") > 0.4f, "a missing neutral reads against the defaults");
+
+		// The neutral capture's average over the last model frames
+		WebcamFaceNeutralAverager averager;
+		WholeBodyFaceRatios averaged;
+		for (int frame= 0; frame < 4; ++frame)
+		{
+			BodyPoseObservation body= makeBody(6.f, 0.f, 0.9f);
+			body.modelFrameIndex= frame;
+			averager.add(body, 100.0 * frame);
+			// A held observation re-emitted on a divided-out frame counts once
+			averager.add(body, 100.0 * frame + 30.0);
+		}
+		check(!averager.average(400.0, averaged), "four model frames are too few for a face neutral");
+		for (int frame= 4; frame < 8; ++frame)
+		{
+			BodyPoseObservation body= makeBody(4.f, 0.f, 0.9f);
+			body.modelFrameIndex= frame;
+			averager.add(body, 100.0 * frame);
+		}
+		const float openSix= neutral.eyeOpenness[0];
+		const float openFour= computeWholeBodyFaceRatios(makeBody(4.f, 0.f, 0.9f).wholeBody).eyeOpenness[0];
+		check(averager.average(800.0, averaged) && averaged.valid &&
+				  near(averaged.eyeOpenness[0], 0.5f * (openSix + openFour), 1e-4f) &&
+				  near(averaged.eyeOpenness[1], neutral.eyeOpenness[1], 1e-4f),
+			  "the face neutral is the mean over the model frames in the window");
+		check(!averager.average(5000.0, averaged), "frames older than the window give no face neutral");
+	}
+
+	// The Auto profile's webcam fallback follows the mask it is generated for
+	{
+		const uint64_t measured= webcamFaceMeasuredMask();
+		bool bOutsideUnchanged= true;
+		bool bInsideReadsWebcam= true;
+		int measuredCount= 0;
+		for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
+		{
+			const std::string masked= makeAutoArkitExpr(index, measured);
+			if ((measured >> index) & 1ull)
+			{
+				measuredCount++;
+				bInsideReadsWebcam= bInsideReadsWebcam &&
+					masked.find(std::string("webcam.") + arkitBlendshapeName(index)) != std::string::npos;
+			}
+			else
+			{
+				bOutsideUnchanged= bOutsideUnchanged && masked == makeAutoArkitExpr(index, 0);
+			}
+		}
+		check(measuredCount == 9 && bInsideReadsWebcam, "each of the nine measured columns falls back to the webcam");
+		check(bOutsideUnchanged, "a column outside the mask keeps the function it has without the webcam");
+		check(makeAutoArkitExpr(arkitBlendshapeFromName("eyeBlinkLeft")) == "phone.eyeBlinkLeft" &&
+				  makeAutoArkitExpr(arkitBlendshapeFromName("jawOpen")).find("max(") != std::string::npos,
+			  "Auto leaves the blinks to the phone and combines the jaw's webcam and viseme terms with max");
+		check(compileFaceProfile(makeAutoFaceProfile(nullptr, measured)).program != nullptr &&
+				  compileFaceProfile(makeAutoFaceProfile(nullptr)).program != nullptr,
+			  "the Auto profile compiles for the full measured mask and for its own");
+
+		// The webcam alone opens the jaw, and the phone wins while it sees a face
+		const FaceExprCompileResult jaw=
+			compileFaceProfile(profileOf({makeAutoArkitExpr(arkitBlendshapeFromName("jawOpen"))}));
+		FaceSources sources;
+		sources.webcam.present= true;
+		sources.webcam.tracked= true;
+		sources.webcam.measuredMask= measured;
+		sources.webcam.blendshapes[(size_t)arkitBlendshapeFromName("jawOpen")]= 1.f;
+		float value= 0.f;
+		bool bJaw= jaw.program != nullptr;
+		if (bJaw)
+		{
+			FaceExprEvaluator evaluator;
+			evaluator.setProgram(jaw.program);
+			FaceExprState state;
+			for (int step= 0; step < 20; ++step)
+				evaluator.evaluate(sources, 100.0 * step, state, &value);
+			bJaw= value > 0.9f;
+			sources.phone.present= true;
+			sources.phone.tracked= true;
+			sources.phone.blendshapes[(size_t)arkitBlendshapeFromName("jawOpen")]= 0.3f;
+			evaluator.evaluate(sources, 2100.0, state, &value);
+			bJaw= bJaw && near(value, 0.3f);
+		}
+		check(bJaw, "the webcam alone opens the jaw and the phone wins while it sees a face");
 		bool bNamesRoundTrip= true;
 		for (int slot= 0; slot < FaceExprInputs::k_count; ++slot)
 			bNamesRoundTrip&= FaceExprInputs::fromName(FaceExprInputs::name(slot)) == slot;

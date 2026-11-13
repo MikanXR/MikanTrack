@@ -19,6 +19,10 @@ static int runReplayTest(const TestArgs& args)
 		sample.bTracked= sampleIndex % 5 != 0;
 		for (int column= 0; column < ARKIT_BLENDSHAPE_COUNT; ++column)
 			sample.blendshapes[(size_t)column]= 1.f / (float)(3 + column + sampleIndex) - 0.01f;
+		// Every third one without a head, as a phone format that sends none
+		sample.bHasHead= sampleIndex % 3 != 0;
+		if (sample.bHasHead)
+			sample.headEulerDegrees= glm::vec3(1.f / (float)(7 + sampleIndex), -12.3f, 0.1f * (float)sampleIndex);
 		faceSamples.push_back(sample);
 	}
 
@@ -674,6 +678,7 @@ static int runReplayTest(const TestArgs& args)
 			const RecordedFaceSample& a= faceSamples[sampleIndex];
 			const RecordedFaceSample& b= loaded[sampleIndex];
 			if (a.sequence != b.sequence || a.timestampMs != b.timestampMs || a.bTracked != b.bTracked ||
+				a.bHasHead != b.bHasHead || a.headEulerDegrees != b.headEulerDegrees ||
 				memcmp(a.blendshapes.data(), b.blendshapes.data(), sizeof(float) * ARKIT_BLENDSHAPE_COUNT) != 0)
 				++faceMismatches;
 		}

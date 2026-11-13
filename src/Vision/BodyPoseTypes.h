@@ -62,6 +62,51 @@ enum class eBodyBoxSource : int
 	FullFrame= 3,  // nothing else available; the whole image
 };
 
+// The whole-body backend's face and hand blocks, which have no slot in the
+// 33-slot layout: the 68 iBUG face landmarks and 21 landmarks per hand in the
+// MediaPipe hand order.
+constexpr int WHOLEBODY_FACE_LANDMARK_COUNT= 68;
+constexpr int WHOLEBODY_HAND_LANDMARK_COUNT= 21;
+
+// The iBUG 68 contours as index runs, for overlays: consecutive points of a
+// run are joined, and a closed run joins its last point back to its first.
+struct WholeBodyFaceContour
+{
+	int first;
+	int last;
+	bool bClosed;
+};
+constexpr int WHOLEBODY_FACE_CONTOUR_COUNT= 9;
+constexpr WholeBodyFaceContour WHOLEBODY_FACE_CONTOURS[WHOLEBODY_FACE_CONTOUR_COUNT]= {
+	{0, 16, false},  // jaw line
+	{17, 21, false}, // right brow
+	{22, 26, false}, // left brow
+	{27, 30, false}, // nose bridge
+	{31, 35, false}, // nose base
+	{36, 41, true},  // right eye
+	{42, 47, true},  // left eye
+	{48, 59, true},  // outer lip
+	{60, 67, true},  // inner lip
+};
+
+// The face and hand blocks of one whole-body model frame, in the model's own
+// orders so the face and hand math can index them directly. The points that
+// also have a slot (the eye and mouth corners, three knuckles per hand) are
+// repeated here. Sides are the person's own, a hand's side being the arm the
+// model attached it to.
+struct WholeBodyExtras
+{
+	// True on an observation from the whole-body backend
+	bool present= false;
+	// Undistorted full-frame px, z as the slots carry it
+	std::array<glm::vec3, WHOLEBODY_FACE_LANDMARK_COUNT> face{};
+	// The planar SimCC score per point, clamped to [0,1] as visibility is
+	std::array<float, WHOLEBODY_FACE_LANDMARK_COUNT> faceScores{};
+	// Indexed by body side, 0 left, 1 right
+	std::array<std::array<glm::vec3, WHOLEBODY_HAND_LANDMARK_COUNT>, 2> hands{};
+	std::array<std::array<float, WHOLEBODY_HAND_LANDMARK_COUNT>, 2> handScores{};
+};
+
 struct BodyPoseObservation
 {
 	bool valid= false;
@@ -100,4 +145,7 @@ struct BodyPoseObservation
 
 	// sigmoid [0,1]: within frame and not occluded
 	std::array<float, POSE_LANDMARK_COUNT> visibility{};
+
+	// The face and hand blocks, from the whole-body backend only
+	WholeBodyExtras wholeBody;
 };

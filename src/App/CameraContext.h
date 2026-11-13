@@ -111,13 +111,22 @@ public:
 	// The frame the last process() call ran on (vision thread only; stable
 	// between iterations for diagnostic dumps)
 	const cv::Mat* getLastActiveFrame() const { return m_lastActiveFrame; }
-	// Cross-camera seed accounting; null when the camera has no pipeline
+	// Search hint accounting; null when the camera has no pipeline
 	const HandSeedStats* getSeedStats() const;
+
+	// Seeds this camera's hand slots from its own whole-body observation.
+	// For the direct camera, which has no fused world result to be seeded
+	// from. Vision thread only.
+	void setBodyHandHints(bool bEnabled) { m_bBodyHandHints= bEnabled; }
 
 private:
 	// Cross-camera search seeding: hands the fused result tracks but this
 	// camera lost get projected into its image as pipeline search hints
 	void seedSearchHints(const TrackingFrameResult& lastFused, float autoScaleFactor);
+	// Body seeding: the whole-body hands of this camera's last observation
+	// become the pipeline's search hints, with both hands' boxes as what a
+	// slot has to be off to give way to one
+	void seedBodyHandHints();
 
 	int m_cameraIndex= -1;
 	const AppConfig* m_config= nullptr;
@@ -154,6 +163,7 @@ private:
 	// Cross-camera seeding retry throttle (a failed speculative landmark
 	// pass costs a few ms - don't pay it every frame)
 	int m_hintCooldownFrames= 0;
+	bool m_bBodyHandHints= false;
 
 	// Recording staging: this camera's inputs for the current iteration,
 	// gathered in process() every frame and consumed when the frame record

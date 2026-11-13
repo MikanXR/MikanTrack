@@ -302,6 +302,46 @@ The crop is now one warp straight from the frame into the model input, at twice 
 
 Learned: a staged image pipeline ported from a demo carries the demo's intermediate buffers, and their cost and their clipping are both invisible until a hand fills the frame. Compose the geometry and resample once.
 
+## 24. A head from the face landmarks: three estimators, none closer to the phone
+
+The whole-body model emits 68 face landmarks, and the direct mode's head comes from three body keypoints, the ears and the nose. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 6) was to fit the head from the face instead, on the expectation that headphones and hair hide the ears. The measurement take was made on 2026-11-12: the webcam-position camera, the phone's head rotation in the face sidecar as truth, a head sweep with the ears visible and a second one under over-ear headphones. `--gate-wholebody` compares each head as a turn from the rest pose, after the one rotation that best carries the phone's turns onto the method's.
+
+Over the two sweeps, p50 error against the phone:
+
+- the six-point face fit (a PnP of the nose tip, chin, eye corners and mouth corners against a generic face): 15.8 and 15.3 degrees
+- the ear and nose head: 18.7 and 15.8 degrees
+- a rigid fit of the brows, nose and eyes lifted by the model's own depth: 43.9 and 41.0 degrees, its turn 2.3 times the phone's. At a quarter of the depth it reads 15.5 and 15.4, where the depth axis adds almost nothing.
+
+Every method read on every frame of both sweeps. The model placed the ears through the headphones, so the failure the piece was built for did not occur. The six-point fit and the ear and nose head sat 14 degrees from each other with no phone in it. A mirrored alignment fitted neither better, which rules out a phone axis read with the wrong sign, and shifting the phone by 200 ms either way moved the numbers by under 2 degrees.
+
+Two earlier readings of the same take were wrong and are worth keeping as the lesson. Over the whole take the ear and nose head read 8.4 degrees against the fit's 12.4, because the take is mostly a still head, where a filtered estimate sits quiet and a raw one jitters. And the ear head appeared to read on 54 percent of frames, because the tool took a head frame that repeated bit for bit as a held one, and a still head through a filter repeats.
+
+Dropped: no face head is closer to the phone than the ear and nose head by more than the comparison resolves. Not settled: whether 15 degrees is the true error of all three during a turn or a floor in the comparison, which has not been run against a known rotation.
+
+Learned: judge an estimator on the segment that exercises it. A whole-take median over a mostly still take measures the filter, and a freshness test built on "the value changed" fails on exactly the frames where nothing moves.
+
+## 25. Blinks from the webcam: a face model beat the whole-body points and was not worth its cost
+
+The webcam face source needs blinks, and an open eye is a few pixels tall in the whole-body model's input. The proposal (`docs/proposals/wholebody-landmarks.md`, piece 4b) was to measure the whole-body eye points against a face-only model on a crop the face block places. Three candidates ran on the 2026-11-12 take against the phone's blink columns: RTMPose face6-m and face6-t, and MediaPipe Face Landmarker's mesh with its blendshape model. The take's blink window is 22 s with 10 phone blinks and one wink, the user in thick-rimmed glasses at a 98 px face width.
+
+The open and closed levels' separation in pooled deviations, and the crop and inference time:
+
+- the whole-body points: 2.2 to 2.9, at no added cost
+- RTMPose face6-m: 3.8, its closed level a third of its open level where the points' is two thirds, at 6.6 ms a frame
+- RTMPose face6-t: 2.5 to 3.0, at 4.2 ms
+- the MediaPipe mesh: 2.3 to 2.5, at 5.2 ms with the blendshape model
+- the MediaPipe blendshape model: 1.9 to 2.5, its blink output reading 0.25 to 0.37 where the phone reads over 0.6
+
+At the live divider the points find 8 of 8 and 9 of 10 of the phone's blinks with 3 and 0 false events. face6-m finds all of them with 3 false events per eye, the same at every cadence.
+
+Two earlier readings were wrong. The points first showed 8 false blinks in the 22 s, which read as a failure. Most were the truth: the phone's blink column peaks at 0.45 to 0.59 on five closures that every camera signal, and the frames, show as full. And the points appeared unable to tell a wink's eye, because each eye's openness correlated equally with both phone columns. Nearly every blink in the take closes both eyes, so that correlation says nothing about sides. On the 12 frames of the one wink every signal tells the eye, with the camera's sides crossed against the phone's columns.
+
+Decided: the whole-body points carry the blinks and no face model is added. face6-m is better, and 6.6 ms a frame for a third model is not worth the margin while the points find the blinks at the cadence they run at. The other three candidates do not beat the points. Not settled: which of the phone's stream and the camera's sides is mirrored, and how the points hold on a second person or without glasses.
+
+A third reading fell when the source was built on the points. The evaluation scored blink events at each pass's best threshold, against an open level taken from the frames the phone called open. With a neutral fixed at the capture, as a live source has, the points read the eyes over half shut on 26 to 81 percent of the take's frames outside its rest hold. The openness is the same with the lids lowered as with the eyes shut (0.201 both, against 0.306 open), and it sags as the head turns and the gaze drops. The decision above stands as the cost call it was, and what it buys is narrower than this section first said: the points give the mouth and the brows, and the built-in profile does not take its blinks from them. The blinks stay the phone's. face6-m tells a lowered lid from a shut eye by 1.5 deviations, which is better and still thin.
+
+Learned: when unrelated estimators agree on the same false events, suspect the truth before the estimators, and look at the frames. An event score at a tuned threshold says a signal can be thresholded on that window, not that a fixed threshold works across a session: test the rule the consumer will run, over the whole take. A correlation cannot separate two columns that move together in the data.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

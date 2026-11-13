@@ -13,6 +13,9 @@
 //   phone.tracked      53
 //   viseme.<name>      54..68, the stage's viseme order
 //   viseme.present     69
+//   webcam.<arkitName> 70..121, ARKit order
+//   webcam.present     122
+//   webcam.tracked     123
 namespace FaceExprInputs
 {
 constexpr int k_phoneBlendshapeBase= 0;
@@ -20,7 +23,10 @@ constexpr int k_phonePresent= k_phoneBlendshapeBase + ARKIT_BLENDSHAPE_COUNT;
 constexpr int k_phoneTracked= k_phonePresent + 1;
 constexpr int k_visemeBase= k_phoneTracked + 1;
 constexpr int k_visemePresent= k_visemeBase + VISEME_COUNT;
-constexpr int k_count= k_visemePresent + 1;
+constexpr int k_webcamBlendshapeBase= k_visemePresent + 1;
+constexpr int k_webcamPresent= k_webcamBlendshapeBase + ARKIT_BLENDSHAPE_COUNT;
+constexpr int k_webcamTracked= k_webcamPresent + 1;
+constexpr int k_count= k_webcamTracked + 1;
 
 // The slot of a dotted name, compared without case ("phone.JawOpen",
 // "phone.eyeBlink_L", "viseme.AA"); -1 for a name the table lacks

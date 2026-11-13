@@ -1087,6 +1087,36 @@ void SettingsPanels::drawFaceStreamStatus(const TrackingSectionContext& context)
 							face.headEulerDegrees.z);
 }
 
+void SettingsPanels::drawWebcamFaceReadout(const TrackingSectionContext& context)
+{
+	const FaceReadout& face= *context.face;
+	const FaceSources::Webcam& webcam= face.webcam;
+	if (!webcam.present)
+	{
+		ImGui::TextDisabled("%s", locText("trackingPanel.webcamFaceNone"));
+		return;
+	}
+	if (webcam.tracked)
+		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("trackingPanel.webcamFaceTracked"));
+	else
+		ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.webcamFaceLost"));
+	if (!face.bWebcamNeutral)
+		ImGui::TextWrapped("%s", locText("trackingPanel.webcamFaceNeutralMissing"));
+
+	// The columns the source measures, raw
+	ImGui::SeparatorText(locText("trackingPanel.webcamFaceValuesHeader"));
+	for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
+	{
+		if (((webcam.measuredMask >> index) & 1ull) == 0)
+			continue;
+		char overlay[16];
+		snprintf(overlay, sizeof(overlay), "%.2f", webcam.blendshapes[(size_t)index]);
+		ImGui::ProgressBar(webcam.blendshapes[(size_t)index], ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(arkitBlendshapeName(index));
+	}
+}
+
 void SettingsPanels::drawBodyPoseIntro()
 {
 	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
@@ -1322,6 +1352,8 @@ void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& cont
 			direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
 			direct.neutralShoulderMidpoint= glm::vec3(0.f);
 			direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+			direct.neutralFacePresent= false;
+			direct.neutralFace= WholeBodyFaceRatios();
 			bChanged= true;
 		}
 	}
@@ -1431,6 +1463,13 @@ void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& cont
 	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
 		drawDirectYesNoCell(arm.bElbowSeen);
 	ImGui::EndTable();
+
+	// How often a label has cost a hand since the solver started
+	if (state->oppositeWristRejections[0] > 0 || state->oppositeWristRejections[1] > 0)
+	{
+		ImGui::TextDisabled(locText("directStage.oppositeWristRejectionsFmt"), state->oppositeWristRejections[0],
+							state->oppositeWristRejections[1]);
+	}
 
 	// Swapped labels reject both hands, and the fix is this one setting
 	if (state->bHandednessSwapped)
@@ -1636,10 +1675,34 @@ void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& conte
 
 	if (context.config->direct.enabled)
 	{
-		bool bShowAllHands= previewPanel->getShowAllHands();
-		if (ImGui::Checkbox(locLabel("trackingPanel.showAllHands"), &bShowAllHands))
-			previewPanel->setShowAllHands(bShowAllHands);
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.showAllHandsTooltip"));
+		struct SlotDrawModeOption
+		{
+			eHandSlotDrawMode mode;
+			const char* key;
+		};
+		static const SlotDrawModeOption k_slotDrawModes[]= {
+			{eHandSlotDrawMode::OnlyAccepted, "trackingPanel.handSlotDrawModeOnlyAccepted"},
+			{eHandSlotDrawMode::DimRejected, "trackingPanel.handSlotDrawModeDimRejected"},
+			{eHandSlotDrawMode::AllDetections, "trackingPanel.handSlotDrawModeAllDetections"},
+		};
+		const eHandSlotDrawMode currentMode= previewPanel->getHandSlotDrawMode();
+		const char* currentKey= k_slotDrawModes[0].key;
+		for (const SlotDrawModeOption& option : k_slotDrawModes)
+		{
+			if (option.mode == currentMode)
+				currentKey= option.key;
+		}
+		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.f);
+		if (ImGui::BeginCombo(locLabel("trackingPanel.handSlotDrawMode"), locText(currentKey)))
+		{
+			for (const SlotDrawModeOption& option : k_slotDrawModes)
+			{
+				if (ImGui::Selectable(locText(option.key), option.mode == currentMode))
+					previewPanel->setHandSlotDrawMode(option.mode);
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.handSlotDrawModeTooltip"));
 	}
 }
 
@@ -1651,6 +1714,21 @@ void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& conte
 	if (ImGui::Checkbox(locLabel("trackingPanel.showBodyLandmarks"), &bShowBodyPose))
 		previewPanel->setShowBodyPose(bShowBodyPose);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
+
+	bool bShowFace= previewPanel->getShowWholeBodyFace();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyFace"), &bShowFace))
+		previewPanel->setShowWholeBodyFace(bShowFace);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyFaceTooltip"));
+
+	bool bShowHands= previewPanel->getShowWholeBodyHands();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyHands"), &bShowHands))
+		previewPanel->setShowWholeBodyHands(bShowHands);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyHandsTooltip"));
+
+	bool bShowLowVisibility= previewPanel->getShowLowVisibilityLandmarks();
+	if (ImGui::Checkbox(locLabel("trackingPanel.showLowVisibilityLandmarks"), &bShowLowVisibility))
+		previewPanel->setShowLowVisibilityLandmarks(bShowLowVisibility);
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.showLowVisibilityLandmarksTooltip"));
 }
 
 void SettingsPanels::drawPerCameraSkeletonsControl(const TrackingSectionContext& context)

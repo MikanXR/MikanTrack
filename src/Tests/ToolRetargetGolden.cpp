@@ -180,6 +180,10 @@ int runDirect(const TrackingReplay& replay, const AppConfig& config, const Avata
 	Tally tally;
 	std::string why;
 	int placedFrames= 0;
+	DirectStageSolver atOwnBars;
+	AvatarPose atOwnBarsPose;
+	int palmFrames= 0;
+	int mirrorChangedFrames= 0;
 	BackwardSteps backward;
 	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
 	{
@@ -204,9 +208,30 @@ int runDirect(const TrackingReplay& replay, const AppConfig& config, const Avata
 				   why);
 		const Frozen::DirectRetarget::SolveState& state= direct.frozen.getSolveState();
 		placedFrames+= (state.arms[0].chain.valid || state.arms[1].chain.valid) ? 1 : 0;
+
+		// The one deliberate difference from the frozen path, counted: the
+		// same frames under the take's own palm mirror bars, against the
+		// compared solver at the frozen rule
+		atOwnBars.solve(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs, *skeleton, directConfig,
+						atOwnBarsPose);
+		bool bPalmRead= false;
+		bool bMirrorDiffers= false;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::SolveState::Arm& own= atOwnBars.getSolveState().arms[sideIndex];
+			const DirectRetarget::SolveState::Arm& compared= direct.live.getSolveState().arms[sideIndex];
+			bPalmRead= bPalmRead || own.palmMirrorGain != 0.f || compared.palmMirrorGain != 0.f;
+			bMirrorDiffers= bMirrorDiffers || own.bPalmMirrored != compared.bPalmMirrored;
+		}
+		palmFrames+= bPalmRead ? 1 : 0;
+		mirrorChangedFrames+= bMirrorDiffers ? 1 : 0;
 	}
 	MIKAN_LOG_INFO(kTag) << "direct camera " << cameraIndex << ": an arm placed on " << placedFrames << " of "
 						 << tally.frames << " frames";
+	MIKAN_LOG_INFO(kTag) << "the palm mirror's bars (enter " << directConfig.palmMirrorEnterGain << ", leave "
+						 << directConfig.palmMirrorLeaveGain << "), the deliberate difference from the frozen path, "
+						 << "change the mirror on " << mirrorChangedFrames << " of the " << palmFrames
+						 << " frames with a palm read. The compare below runs the live side at the frozen rule.";
 	// The direct solver restarts on any backward step, so none of them is a
 	// difference by design here
 	MIKAN_LOG_INFO(kTag) << backward.steps << " backward steps in the frame clock, the largest " << backward.largestMs

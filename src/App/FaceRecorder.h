@@ -15,14 +15,19 @@
 #include "FaceTypes.h"
 
 // One phone face sample as the vision thread saw it, the line format of the
-// face sidecar: {"seq", "t", "tracked", "w"[52]}. t is steadyNowMs() at
-// receipt, the recording's clock.
+// face sidecar: {"seq", "t", "tracked", "w"[52], "head"[3]}. t is
+// steadyNowMs() at receipt, the recording's clock. head is present only when
+// the phone sent one, and a sidecar written before the key carried none.
 struct RecordedFaceSample
 {
 	uint64_t sequence= 0;
 	double timestampMs= 0.0;
 	bool bTracked= false;
 	std::array<float, ARKIT_BLENDSHAPE_COUNT> blendshapes{};
+	// The phone's head rotation as it sent it, Euler degrees in the phone's
+	// own axis convention, unconverted
+	bool bHasHead= false;
+	glm::vec3 headEulerDegrees{0.f};
 };
 
 // Asynchronous writer for the face sidecar of a tracking recording,

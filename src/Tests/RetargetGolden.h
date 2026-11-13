@@ -826,6 +826,22 @@ struct PositionPair
 	}
 };
 
+// The frozen solver takes the lifted palm's mirror wherever the mirror
+// continues the forearm better at all. The live one takes it on evidence, a
+// gain over an enter bar and kept over a leave bar, which is a deliberate
+// change in output: on a real take it changes the palm on the frames the
+// gain sits between zero and the bars. The bars are config, and both at zero
+// is the frozen rule, so the pair runs the live side there and holds
+// everything else to the frozen bits. What the bars themselves do is the
+// direct retarget test's, and the recording tool counts the frames they
+// change on its take.
+inline DirectRetargetConfig atFrozenPalmMirror(DirectRetargetConfig config)
+{
+	config.palmMirrorEnterGain= 0.f;
+	config.palmMirrorLeaveGain= 0.f;
+	return config;
+}
+
 // The direct retarget: the pose, the solve state, the chains and the lift
 // scale. Two live paths run beside the frozen solver: the retarget stage,
 // and the pieces it is made of run by hand (measure, the loss stage under the
@@ -852,8 +868,9 @@ struct DirectPair
 
 	bool solve(const TrackingFrameResult& cameraFrame, const DirectCameraModel& cameraModel,
 			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
-			   const DirectRetargetConfig& config, std::string& outWhy)
+			   const DirectRetargetConfig& callerConfig, std::string& outWhy)
 	{
+		const DirectRetargetConfig config= atFrozenPalmMirror(callerConfig);
 		live.solve(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, livePose);
 		liveSplit.measure(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, liveSource);
 		// The direct rules built straight from the config, where the stage

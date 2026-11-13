@@ -12,6 +12,7 @@
 #include "OneEuroFilter.h"
 #include "SourcePose.h"
 #include "TrackingTypes.h"
+#include "WholeBodyFaceRatios.h"
 
 class AvatarSkeleton;
 
@@ -55,6 +56,11 @@ struct DirectNeutralPose
 	// could not see the face (looking straight at the camera). The hands
 	// carry no reference: a straight wrist is the avatar's rest wrist.
 	glm::quat head{1.f, 0.f, 0.f, 0.f};
+	// The face shape ratios at rest, the zero of the webcam face source.
+	// Absent when the capture did not see the face. The solver reads none
+	// of it.
+	bool facePresent= false;
+	WholeBodyFaceRatios face;
 };
 
 struct DirectRetargetConfig
@@ -91,6 +97,19 @@ struct DirectRetargetConfig
 	// alone (makeDirectLossPolicy): the solver does not read it, and the
 	// retarget stage takes each arm's from its chain.
 	float restBlendMs= 300.f;
+	// The lifted palm's mirror along the view ray is taken on how much better
+	// its finger axis continues the forearm than the lifted one's does, the
+	// gain, which runs to 2 and is about 1 for a hand pointing along the
+	// forearm at the camera. The gain is twice the finger axis's lean along
+	// the view ray times the forearm's, so with the fingers upright it is
+	// near zero and its sign is noise, while the mirror turns an edge-on
+	// palm's normal right round. So the mirror is taken above one bar and
+	// kept above a lower one, and under that the lifted palm stands. Upright
+	// hands turned about the wrist, which need no mirror, reach a gain of
+	// 0.3. Both bars at zero is the bare rule, the mirror wherever it
+	// continues the forearm better at all.
+	float palmMirrorEnterGain= 0.5f;
+	float palmMirrorLeaveGain= 0.3f;
 	// The rig's joint limits on the relative rotations, radians: the head
 	// against the neutral head, the spine (the lean and the shoulder line's
 	// turn) against the neutral torso, and each wrist (the palm in the
@@ -243,10 +262,15 @@ public:
 		glm::quat headFrame{1.f, 0.f, 0.f, 0.f};
 		glm::quat headDelta{1.f, 0.f, 0.f, 0.f};
 		Arm arms[2];
-		// The hand slots have sat on the opposite side's body wrists, and
-		// none on its own, for a second: the hand model's left and right
-		// are the wrong way round for this camera
+		// The hand slots have been the opposite side's hands, and none its
+		// own side's, for a second: the hand model's left and right are the
+		// wrong way round for this camera. A slot's side is read from its
+		// shape against the whole-body hands, or from the body wrists where
+		// the body model gives no scored hands.
 		bool bHandednessSwapped= false;
+		// Per slot, the frames since the solver's reset on which the entry
+		// gate turned the slot away while it sat on the other arm's wrist
+		int oppositeWristRejections[2]= {0, 0};
 	};
 	const SolveState& getSolveState() const { return m_state; }
 
@@ -375,6 +399,7 @@ private:
 	// When the current run of frames with swapped hand labels began,
 	// negative outside one
 	double m_handednessSwapStartMs= -1.0;
+	int m_oppositeWristRejections[2]= {0, 0};
 	float m_tiltRadians= 0.f;
 	TorsoState m_torso;
 	HeadState m_head;

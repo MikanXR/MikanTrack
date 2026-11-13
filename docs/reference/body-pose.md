@@ -50,12 +50,25 @@ Decode is argmax over each axis divided by the 2.0 SimCC split ratio; x and y ma
 
 ### The canonical landmark space
 
-`BodyPoseObservation` (`src/Vision/BodyPoseTypes.h`) uses the 33-slot BlazePose index space (`ePoseLandmark`, `POSE_LANDMARK_COUNT`) as the canonical layout, so every consumer (solver, overlays, recordings, dumps) is backend-independent. `k_cocoToPoseLandmark` in `BodyPoseTracker.cpp` maps the 17 COCO keypoints into it, and `k_wholeBodyExtraSlots` adds the whole-body model's eye corners, mouth corners and the hand knuckles BlazePose names (index and pinky knuckles, the thumb's second knuckle); its remaining face and hand points have no slot and stay with the model result. Slots the backend does not fill are reported through `providedMask`, a 64-bit mask with one bit per landmark, rather than being invented. Landmark positions are undistorted full-frame pixels. With the whole-body backend `hasDepth` is set and each landmark's `z` is its depth relative to the hip midpoint in meters, positive away from the camera; the hips' own distance is not in it. Other backends leave `z` at zero with `hasDepth` false, as do recordings made before the depth axis. `visibility` per landmark carries the clamped model score, and the observation's `confidence` is the mean score over the 17 COCO keypoints whichever backend ran, so the two backends read alike. `eBodyBoxSource` records where each model frame's person box came from:
+`BodyPoseObservation` (`src/Vision/BodyPoseTypes.h`) uses the 33-slot BlazePose index space (`ePoseLandmark`, `POSE_LANDMARK_COUNT`) as the canonical layout, so every consumer (solver, overlays, recordings, dumps) is backend-independent. `k_cocoToPoseLandmark` in `BodyPoseTracker.cpp` maps the 17 COCO keypoints into it, and `k_wholeBodyExtraSlots` adds the whole-body model's eye corners, mouth corners and the hand knuckles BlazePose names (index and pinky knuckles, the thumb's second knuckle); its face and hand blocks ride whole beside the slots in `wholeBody` (below). Slots the backend does not fill are reported through `providedMask`, a 64-bit mask with one bit per landmark, rather than being invented. Landmark positions are undistorted full-frame pixels. With the whole-body backend `hasDepth` is set and each landmark's `z` is its depth relative to the hip midpoint in meters, positive away from the camera; the hips' own distance is not in it. Other backends leave `z` at zero with `hasDepth` false, as do recordings made before the depth axis. `visibility` per landmark carries the clamped model score, and the observation's `confidence` is the mean score over the 17 COCO keypoints whichever backend ran, so the two backends read alike. `eBodyBoxSource` records where each model frame's person box came from:
 
 - `Detector`: the person detector fired this model frame
 - `Tracked`: grown from the previous model frame's confident keypoints
 - `FullFrame`: nothing else available, the whole image
 - `None`: no model run
+
+### The whole-body blocks
+
+An observation from the whole-body backend also carries `wholeBody` (`WholeBodyExtras`), the model's face and hand blocks in the model's own orders:
+
+- `face`: the 68 iBUG landmarks with `faceScores`
+- `hands`: 21 landmarks per hand in the MediaPipe hand order with `handScores`, indexed by body side (0 left, 1 right)
+
+A hand's side is the arm the model attached it to, and sides are the person's own. Points are undistorted full-frame pixels with `z` as the slots carry it, and each score is the clamped planar SimCC score. The depth peak is not carried. The points that also have a slot (the eye and mouth corners, three knuckles per hand) are repeated in the block, so the block indexes by iBUG and hand order without a lookup. The six foot points are dropped. `present` is false for the planar backend.
+
+`bodyPoseToJson` writes the blocks under an optional `wholeBody` key, one `[x, y, z, score]` per point, so recordings and dumps carry them on every frame the observation rides, a held frame repeating them. An observation without the key reads with the blocks absent. The fused checksum covers the hand poses alone, so the key does not move it.
+
+The camera's Body model stage has a toggle per group. "Show body model face" draws the face along the iBUG contours (`WHOLEBODY_FACE_CONTOURS`) and "Show body model hands" draws each hand with `HAND_CONNECTIONS`, in colors apart from the hand pipeline's own hands (`HandOverlay::drawWholeBodyExtras`). The F9 dump's annotated frame draws both. A landmark under the visibility gate, in these groups and in the body landmarks, is hidden unless "Show low-visibility landmarks" is on, which draws it dimmed. It is off by default because the model places an unseen landmark anywhere and it jumps around the frame.
 
 ### Cadence and boxes
 

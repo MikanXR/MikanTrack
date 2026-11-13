@@ -55,6 +55,40 @@ static bool vec3FromJson(const json& parent, const char* key, glm::vec3& outVec)
 	return true;
 }
 
+// The face shape ratios of a neutral capture. The sided ratios are [left, right].
+static json faceRatiosToJson(const WholeBodyFaceRatios& ratios)
+{
+	return {
+		{"eyeOpenness", json::array({ratios.eyeOpenness[0], ratios.eyeOpenness[1]})},
+		{"mouthOpen", ratios.mouthOpen},
+		{"mouthWidth", ratios.mouthWidth},
+		{"mouthCornerLift", json::array({ratios.mouthCornerLift[0], ratios.mouthCornerLift[1]})},
+		{"browHeight", json::array({ratios.browHeight[0], ratios.browHeight[1]})},
+		{"browInnerHeight", ratios.browInnerHeight},
+	};
+}
+
+static bool faceRatiosFromJson(const json& j, WholeBodyFaceRatios& outRatios)
+{
+	auto pair= [&](const char* key, float* outPair) {
+		if (!j.contains(key) || !j[key].is_array() || j[key].size() != 2)
+			return false;
+		outPair[0]= (float)j[key][0];
+		outPair[1]= (float)j[key][1];
+		return true;
+	};
+	WholeBodyFaceRatios ratios;
+	if (!j.is_object() || !pair("eyeOpenness", ratios.eyeOpenness) || !pair("mouthCornerLift", ratios.mouthCornerLift) ||
+		!pair("browHeight", ratios.browHeight))
+		return false;
+	ratios.mouthOpen= j.value("mouthOpen", 0.f);
+	ratios.mouthWidth= j.value("mouthWidth", 0.f);
+	ratios.browInnerHeight= j.value("browInnerHeight", 0.f);
+	ratios.valid= true;
+	outRatios= ratios;
+	return true;
+}
+
 static json matrix3dToJson(const MikanMatrix3d& m)
 {
 	return json::array({m.x0, m.x1, m.x2, m.y0, m.y1, m.y2, m.z0, m.z1, m.z2});
@@ -402,6 +436,8 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 	direct.neutral.torso= config.direct.neutralTorso;
 	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
 	direct.neutral.head= config.direct.neutralHead;
+	direct.neutral.facePresent= config.direct.neutralFacePresent;
+	direct.neutral.face= config.direct.neutralFace;
 	const BodyDimensions dimensions= makeBodyDimensions(config);
 	direct.userShoulderWidthMeters= dimensions.shoulderWidthMeters;
 	direct.headWidthMeters= dimensions.headWidthMeters;
@@ -792,6 +828,8 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		direct.neutralPresent= quatFromJson(dr, "neutralTorso", direct.neutralTorso) &&
 			vec3FromJson(dr, "neutralShoulderMidpoint", direct.neutralShoulderMidpoint);
 		quatFromJson(dr, "neutralHead", direct.neutralHead);
+		if (direct.neutralPresent && dr.contains("neutralFace"))
+			direct.neutralFacePresent= faceRatiosFromJson(dr["neutralFace"], direct.neutralFace);
 	}
 
 	const json& hs= j.value("handScale", json::object());
@@ -966,6 +1004,8 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 			directJson["neutralTorso"]= quatToJson(direct.neutralTorso);
 			directJson["neutralShoulderMidpoint"]= vec3ToJson(direct.neutralShoulderMidpoint);
 			directJson["neutralHead"]= quatToJson(direct.neutralHead);
+			if (direct.neutralFacePresent)
+				directJson["neutralFace"]= faceRatiosToJson(direct.neutralFace);
 		}
 		j["direct"]= directJson;
 	}

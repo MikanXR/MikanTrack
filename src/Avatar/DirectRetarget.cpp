@@ -12,6 +12,7 @@
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
 #include "BodyPoseTypes.h"
+#include "HandSideMatch.h"
 #include "MathGLM.h"
 
 namespace
@@ -99,17 +100,6 @@ constexpr float kPnpSampleMaxReach= 0.98f;
 // mirror until it persists this many consecutive frames
 constexpr float kPalmJumpRadians= 60.f * glm::pi<float>() / 180.f;
 constexpr int kPalmJumpAcceptFrames= 2;
-// The lifted palm's mirror along the view ray is taken on how much better
-// its finger axis continues the forearm than the lifted one's does, the
-// gain, which runs to 2 and is about 1 for a hand pointing along the forearm
-// at the camera. The gain is twice the finger axis's lean along the view ray
-// times the forearm's, so with the fingers upright it is near zero and its
-// sign is noise, while the mirror turns an edge-on palm's normal right
-// round. So the mirror is taken above one bar and kept above a lower one,
-// and under that the lifted palm stands. Upright hands turned about the
-// wrist, which need no mirror, reach a gain of 0.3.
-constexpr float kPalmMirrorEnterGain= 0.5f;
-constexpr float kPalmMirrorLeaveGain= 0.3f;
 
 const glm::vec3 k_up(0.f, 0.f, 1.f);
 const glm::vec3 k_left(0.f, 1.f, 0.f);
@@ -463,6 +453,8 @@ void DirectRetarget::resetMeasure()
 	m_bHasTime= false;
 	m_lastTimestampMs= 0.0;
 	m_handednessSwapStartMs= -1.0;
+	m_oppositeWristRejections[0]= 0;
+	m_oppositeWristRejections[1]= 0;
 	m_torso= TorsoState();
 	m_head= HeadState();
 	for (ArmState& arm : m_arms)
@@ -773,8 +765,18 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		const bool bHandOpposite= hand.tracked && usable(oppositeWristIndex) && shoulderWidthPx > 0.f &&
 			glm::distance(handWristPx, landmarkPx(oppositeWristIndex)) <=
 				kHandAgreementShoulderWidths * shoulderWidthPx;
-		bAnyHandOnOwnWrist|= bHandNear;
-		bAnyHandOnOppositeWrist|= bHandOpposite;
+		// The label report takes the slot's side from the hand's shape
+		// against the two whole-body hands where both score, which still
+		// tells the hands apart with the wrists together, and from the wrists
+		// otherwise. The entry gate above keeps the wrist alone.
+		const HandShapeMatch shape=
+			hand.tracked ? matchHandSideByShape(hand.imagePoints, body.wholeBody) : HandShapeMatch();
+		bAnyHandOnOwnWrist|= shape.side >= 0 ? shape.side == sideIndex : bHandNear;
+		bAnyHandOnOppositeWrist|= shape.side >= 0 ? shape.side != sideIndex : bHandOpposite;
+		// A slot the gate turned away while it sat on the other arm's wrist:
+		// what a wrong label costs
+		if (hand.tracked && !bHandNear && bHandOpposite)
+			m_oppositeWristRejections[sideIndex]++;
 		const bool bHandSeen= (bHadChain ? bHandNear : bHandGate) && bWristUsable;
 
 		// The wrist pixel: the hand model's wrist while the hand is seen, else
@@ -1030,7 +1032,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				const glm::vec3 mirroredX= palmXRaw - 2.f * glm::dot(palmXRaw, viewRay) * viewRay;
 				const glm::vec3 mirroredZ= -(palmZRaw - 2.f * glm::dot(palmZRaw, viewRay) * viewRay);
 				const float mirrorGain= glm::dot(mirroredX, forearmDirection) - glm::dot(palmXRaw, forearmDirection);
-				arm.bPalmMirrored= mirrorGain > (arm.bPalmMirrored ? kPalmMirrorLeaveGain : kPalmMirrorEnterGain);
+				arm.bPalmMirrored=
+					mirrorGain > (arm.bPalmMirrored ? config.palmMirrorLeaveGain : config.palmMirrorEnterGain);
 				armState.palmMirrorGain= mirrorGain;
 				if (arm.bPalmMirrored)
 				{
@@ -1168,6 +1171,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		m_handednessSwapStartMs= timestampMs;
 	m_state.bHandednessSwapped=
 		m_handednessSwapStartMs >= 0.0 && (timestampMs - m_handednessSwapStartMs) >= kHandednessSwapMs;
+	m_state.oppositeWristRejections[0]= m_oppositeWristRejections[0];
+	m_state.oppositeWristRejections[1]= m_oppositeWristRejections[1];
 }
 
 void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,

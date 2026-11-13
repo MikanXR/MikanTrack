@@ -34,15 +34,43 @@ The service has no thread of its own. The vision thread calls `update(steadyNowM
 - `viseme`:
 	- `present`: the microphone's newest `MouthSample` ([audio.md](./audio.md)) is no more than a second old
 	- `weights[15]`: after the emission filter
+- `webcam`: the direct camera's whole-body face block as ARKit columns (below)
+	- `present`: the direct camera's last observation is no more than 500 ms old and carries the block
+	- `tracked`: `present`, and the lowest score among the face points the ratios read is 0.5 or more
+	- `blendshapes[52]`: raw, in ARKit order
+	- `measuredMask`: a bit per column the source measures
 - `outputs`: the active face profile's values for this frame, with the generation of the binding that produced them
 
-A source's values read zero unless it is tracked: the phone's blendshapes while the stream is quiet or the phone reports the face lost, the visemes past the stale window. An expression without a guard therefore relaxes instead of freezing on the last raw values. The face is present while either source is.
+A source's values read zero unless it is tracked: the phone's blendshapes while the stream is quiet or the phone reports the face lost, the visemes past the stale window. An expression without a guard therefore relaxes instead of freezing on the last raw values. The face is present while any source is.
 
 `VisionThread::applyFaceToOutput` fills both sources on every output frame and decides nothing about who drives which shape. That choice belongs to the profile. It also keeps the head duties: the phone's head rotation replaces the camera head's orientation while the stream is live and tracked, with the head marked valid at full confidence. The phone measures the head far better than the body-pose stage. The position stays the camera head's, since the phone's is relative to the phone.
 
 The phone runs faster than the cameras, the microphone's mouth frames arrive at 30 Hz on their own thread, and both keep flowing when the cameras stop. A new sample of either that no camera frame carried goes out on its own (`runFaceOnlyOutput`). That frame repeats the last output with the new sources and the sample's own timestamp. Once the last camera frame is older than the dropout window, the repeated hands go out untracked, so the streamer's hold and freeze rules see a loss rather than a pose that never ages.
 
 The phone reports its head rotation away from looking straight at the phone. The anchor is the world orientation of that straight ahead. Unaligned it is identity, so looking at the phone faces world +X, the avatar's rest facing. "Align head to camera" captures the anchor at the next camera frame where both the body-pose head and the phone head are measured (`faceHeadAnchorFromWorld`), so a phone mounted off to one side still turns the head about the right axes.
+
+## Webcam source
+
+`fillWebcamFaceSource` (`src/Face/WebcamFace.h`) turns the direct camera's face block into the `webcam` source. It exists on a direct project alone: `VisionThread::applyWebcamToOutput` fills it from the direct camera's last observation on every output frame, and the timeline's replay fills it from the same camera's recorded observation under the take's own neutral, so no sidecar is needed. It is a pure function of one observation and the neutral.
+
+Each column is one face shape ratio (`computeWholeBodyFaceRatios`, [body-pose.md](./body-pose.md)) mapped from its neutral value to a full value and clamped to 0..1, raw, with no dead zone and no smoothing:
+
+| Column | Ratio | Full travel |
+|---|---|---|
+| `eyeBlinkLeft`, `eyeBlinkRight` | the eye openness falling under its neutral | 0.4 of the neutral openness |
+| `jawOpen` | the inner lip gap | 0.2 face widths |
+| `mouthSmileLeft`, `mouthSmileRight` | the mouth width rising over its neutral, both columns alike | 0.18 |
+| `mouthPucker` | the mouth width falling under its neutral | 0.1 |
+| `browInnerUp` | the inner brow height | 0.1 |
+| `browOuterUpLeft`, `browOuterUpRight` | the brow height | 0.12 |
+
+The smile and the pucker are the two directions of one number, the mouth's width about its neutral. An opening jaw draws the corners in, so 0.3 of the lip gap over its neutral is given back to the width first, and an open mouth reads as neither. The width follows the phone's smile at a correlation of 0.94 on both measured takes, where the mouth corner's lift follows it at 0.68 and 0.89 and rises with no smile. The cost is the side: the two smile columns always read alike. The jaw's share is one value for every face, and it leaves a little behind: with the jaw open alone the smile read 0.17 on one direct take and the pucker 0.12 on another, both under Auto's dead zones. A hand passing in front of the face widens the mouth points, and reads as a smile over 0.3 on 12 percent of such frames on the first take, which Auto's dead zone is sized against.
+
+The other 43 columns are outside `measuredMask` and read zero. The sided columns cross the ratios' sides: `eyeBlinkLeft` reads the person's right eye. The phone's stream is the mirrored one: on a take with three winks of the right eye and then three of the left, its `eyeBlinkLeft` rose on the right eye's. The source matches the phone so a profile reads either alike. The crossing is two constants in `WebcamFace.cpp`.
+
+The neutral values come with the direct mode's neutral capture: `DirectNeutralPose` carries the ratios behind `facePresent`, saved as `neutralFace` in the project's `direct` section. The capture takes the mean over the last model frames whose face cleared the gate (`WebcamFaceNeutralAverager`: up to 15 frames within 1.5 s, at least 5), since one frame's eye openness scatters by a quarter of a blink's travel. A neutral captured with the face unseen, or before the source existed, has none, and the source then reads against generic defaults.
+
+The blink columns have a limit that the other seven do not. The eye openness reads as low with the lids lowered (the phone's blink column between 0.1 and 0.35) as with the eyes shut, and it sits under its neutral for most of a session as the head turns and the gaze drops. Read against a fixed neutral, the blink columns were over a half on 26 to 81 percent of the 2026-11-12 take's frames outside its rest hold, where the phone's were on 1 to 14 percent. The other columns stayed within 0.03 to 0.18 of the phone's on average, but for the inner brow, which reads under the phone's (0.17 against 0.47 over the take's shapes window). Auto therefore does not read the webcam's blinks. A profile can, through its own function.
 
 ## Profiles
 
@@ -70,7 +98,9 @@ The built-in Auto profile (`makeAutoFaceProfile`, `src/FaceExpr/FaceAutoProfile.
 
 - No avatar: the 52 ARKit names as morph outputs.
 
-An ARKit column reads the phone while it sees a face and otherwise the visemes the viseme table spreads over it: `select(phone.tracked, phone.jawOpen, 0.85 * viseme.aa + 0.35 * viseme.E + ...)`. A vowel preset reads its viseme directly: `select(phone.tracked, phone.jawOpen, viseme.aa)`. The phone therefore wins while it streams a tracked face, and the microphone drives the mouth otherwise, with the eyes and brows at rest.
+An ARKit column reads the phone while it sees a face and otherwise the visemes the viseme table spreads over it: `select(phone.tracked, phone.jawOpen, 0.85 * viseme.aa + 0.35 * viseme.E + ...)`. A vowel preset reads its viseme directly: `select(phone.tracked, phone.jawOpen, viseme.aa)`. The phone therefore wins while it streams a tracked face, and the microphone drives the mouth otherwise.
+
+A column the webcam measures falls back to it while the phone sees no face, inside a dead zone and a smoothing: `select(phone.tracked, phone.browInnerUp, smooth(remap(webcam.browInnerUp, 0.25, 1), 0.08))`. On a mouth column the webcam's shape and the viseme fallback combine with max, so either alone opens the mouth: `select(phone.tracked, phone.jawOpen, max(smooth(remap(webcam.jawOpen, 0.12, 1), 0.08), <viseme terms>))`. The presets follow the same order. `makeAutoFaceProfile` takes the mask of webcam columns to use. Its default, `autoFaceWebcamMask`, is the measured mask less the two blinks, so Auto's blinks read the phone alone (see the webcam source's blink limit below). A column outside the mask keeps the rule it has without the webcam.
 
 ### Binding and evaluation
 
@@ -97,6 +127,8 @@ Names compare without case, the input namespaces and the variable names alike:
 - `phone.present`, `phone.tracked`
 - `viseme.<name>`: a viseme weight (`viseme.aa`, `viseme.PP`, `viseme.sil`)
 - `viseme.present`
+- `webcam.<arkitName>`: a webcam column, spelled as the phone's are. A column the source does not measure reads zero.
+- `webcam.present`, `webcam.tracked`
 - the profile's variable names
 
 An unknown name is a compile error. The face input table (`FaceExprInputs`) is the one place a new face namespace is added.
@@ -139,7 +171,7 @@ Variables: a variable has a name and an expression. The name is a plain identifi
 
 ## Face sidecar
 
-Every recording opens `<stem>.face.jsonl` beside it when it starts, named after the recording as the audio sidecar is, so a phone that connects mid-recording is captured. One line per phone sample as the vision thread saw it: `{"seq", "t", "tracked", "w"[52]}`, with `t` the sample's receipt time on the recording's clock. A sample is written when its sequence changes, on camera and face-only iterations alike, so the sidecar runs at the phone's rate while the frame stream keeps one record per fusion iteration. `FaceRecorder` (`src/App/FaceRecorder.h`) writes it on its own thread and is finalized with the recording. A sidecar that received no sample is deleted when the recording stops.
+Every recording opens `<stem>.face.jsonl` beside it when it starts, named after the recording as the audio sidecar is, so a phone that connects mid-recording is captured. One line per phone sample as the vision thread saw it: `{"seq", "t", "tracked", "w"[52], "head"[3]}`, with `t` the sample's receipt time on the recording's clock. `head` is the phone's head rotation as it sent it, Euler degrees in the phone's own axis convention, written only when the sample carried one. No replayed stage reads it. It is the head truth the measurement tools compare a camera head against, and a sidecar written before the key has none. A sample is written when its sequence changes, on camera and face-only iterations alike, so the sidecar runs at the phone's rate while the frame stream keeps one record per fusion iteration. `FaceRecorder` (`src/App/FaceRecorder.h`) writes it on its own thread and is finalized with the recording. A sidecar that received no sample is deleted when the recording stops.
 
 The header carries a `face` block `{"file", "startMs"}` beside `audio`: the file name and the start time. The format version is 1. A header without the block loads as no face sidecar, and a recording whose sidecar file is absent replays with no phone face.
 
@@ -153,6 +185,8 @@ The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and ev
 - `int port` (default 49983)
 - `std::string phoneAddress` (default `255.255.255.255`)
 - `glm::quat headAnchor` with `headAnchorPresent`, written as `headAnchor` `[x, y, z, w]` only once captured
+
+The Webcam stage, under Face and mouth beside the Phone stage, shows the shown frame's webcam source: whether the direct camera sees the face, a prompt to capture the neutral again when it holds no face, and the measured columns' raw values. It is inactive on a project with no direct camera.
 
 The Phone stage in the Inspector, under Face and mouth, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
 
@@ -194,4 +228,4 @@ The Profile stage's Diagnostics is a filtered view of the same values: the mouth
 
 ## Test
 
-`--test-face` covers the name table, both blendshape formats, bone parsing and rejection, the handshake filter, garbage input, a loopback round trip through the service, and the socket primitives. `--test-faceexpr` covers the language, the compiler's errors, every function, the time rule, the state slots across a recompile, the input sets, the profile JSON and the library. `--test-vmc` covers the head conversion, the anchor round trip, the Auto profile and the binding's combine rules, and the blendshape and avatar messages on the wire. `--test-replay` covers the face sidecar and `FaceSidecar::samplePhone`.
+`--test-face` covers the name table, both blendshape formats, bone parsing and rejection, the handshake filter, garbage input, a loopback round trip through the service, and the socket primitives. `--test-faceexpr` covers the webcam source (the columns from a synthetic face, the score gate, the neutral's average), the Auto profile's webcam mask, the language, the compiler's errors, every function, the time rule, the state slots across a recompile, the input sets, the profile JSON and the library. `--test-vmc` covers the head conversion, the anchor round trip, the Auto profile and the binding's combine rules, and the blendshape and avatar messages on the wire. `--test-replay` covers the face sidecar and `FaceSidecar::samplePhone`.

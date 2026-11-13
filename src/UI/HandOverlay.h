@@ -35,6 +35,16 @@ struct ForearmOverlay
 	ImVec2 elbowPx[2]{};
 };
 
+// How the camera view draws a hand slot the direct solver rejected. The palm
+// detector keeps finding hand-shaped things in the scene, and a full-strength
+// wireframe on the wall reads as a phantom hand.
+enum class eHandSlotDrawMode
+{
+	OnlyAccepted,  // a rejected slot is not drawn
+	DimRejected,   // a rejected slot is drawn dimmed
+	AllDetections, // every slot is drawn at full strength
+};
+
 namespace HandOverlay
 {
 // Projects the fused world-space forearm (wrist and elbow) into one camera's
@@ -46,11 +56,11 @@ ForearmOverlay makeForearmOverlay(const CameraProfile& profile, const TrackingFr
 
 // Draws the tracked hand slots and, when asked, the palm detector's boxes.
 // handUsed, when given, is the direct solver's verdict per side (whether the
-// slot was the hand this frame): a slot it rejected is drawn dimmed, since
-// the palm detector keeps finding hand-shaped things in the scene and a
-// full-strength wireframe on the wall reads as a phantom hand.
+// slot was the hand this frame), and a slot it rejected is drawn as
+// slotDrawMode says. Without a verdict every slot is drawn at full strength.
 void drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result, const ImageToScreenMapping& mapping,
-						bool bShowDetectionBoxes, const std::array<bool, 2>* handUsed= nullptr);
+						bool bShowDetectionBoxes, const std::array<bool, 2>* handUsed= nullptr,
+						eHandSlotDrawMode slotDrawMode= eHandSlotDrawMode::DimRejected);
 
 // Draws the projected forearm (wrist->elbow) with an elbow marker. Lets you
 // check the IMU forearm direction against the real arm in the video: if the
@@ -60,10 +70,21 @@ void drawForearmOverlay(ImDrawList* drawList, const ForearmOverlay& forearm,
 						const ImageToScreenMapping& mapping);
 
 // Draws the body skeleton for a body-pose camera: the RAW landmarks
-// the solver consumes, dimmed wherever visibility falls under the solver's
-// gate, with the visibility of the joints it actually uses (shoulders,
-// elbows, wrists) labelled. This is the source data behind the elbow, so a
-// bad elbow can be traced to a bad landmark rather than guessed at.
+// the solver consumes, with the visibility of the joints it actually uses
+// (shoulders, elbows, wrists) labelled. This is the source data behind the
+// elbow, so a bad elbow can be traced to a bad landmark rather than guessed
+// at. A landmark under the solver's visibility gate is drawn dimmed when
+// bShowLowVisibility is set and skipped otherwise, since the unseen landmarks
+// jump around the frame.
 void drawBodyPose(ImDrawList* drawList, const BodyPoseObservation& body,
-				  const ImageToScreenMapping& mapping);
+				  const ImageToScreenMapping& mapping, bool bShowLowVisibility);
+
+// Draws the whole-body model's face block (the iBUG contours) and its two
+// hands, each group when asked, in their own colors so the body model's hands
+// read apart from the hand pipeline's. A point under the visibility gate is
+// drawn dimmed when bShowLowVisibility is set and skipped otherwise. Draws
+// nothing for an observation without the blocks.
+void drawWholeBodyExtras(ImDrawList* drawList, const BodyPoseObservation& body,
+						 const ImageToScreenMapping& mapping, bool bShowFace, bool bShowHands,
+						 bool bShowLowVisibility);
 }

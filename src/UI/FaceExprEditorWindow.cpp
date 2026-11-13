@@ -137,6 +137,8 @@ const char* groupLabel(const std::string& prefix)
 		return locText("exprEditor.groupPhone");
 	if (prefix == "viseme")
 		return locText("exprEditor.groupViseme");
+	if (prefix == "webcam")
+		return locText("exprEditor.groupWebcam");
 	return prefix.c_str();
 }
 

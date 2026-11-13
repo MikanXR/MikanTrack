@@ -78,12 +78,15 @@ public:
 	// Drops box tracking, the held observation, and the frame counter
 	void reset();
 
+	// Writes a model result into the 33-slot layout and, for a whole-body
+	// result, the face and hand blocks. The observation's validity, box
+	// source and model frame index are the caller's.
+	static void fillObservation(const RtmPoseResult& result, BodyPoseObservation& outObservation);
+
 private:
 	// Person box for this model frame, from tracking or from the detector
 	eBodyBoxSource acquireBox(const cv::Mat& bgrFrame, bool bForceDetect,
 							  glm::vec2& outBoxMin, glm::vec2& outBoxMax);
-	// Writes the model result into the 33-slot layout
-	void fillObservation(BodyPoseObservation& outObservation) const;
 
 	bool m_bLoaded= false;
 	BodyPoseTrackerConfig m_config;

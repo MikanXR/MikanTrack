@@ -42,6 +42,7 @@ const StageInfo k_stages[(int)S::Count]= {
 	{"VmcStream", "vmc", S::Output},
 	{"Face", "face", S::Face},
 	{"Phone", "phone", S::Face},
+	{"Webcam", "webcam", S::Face},
 	{"Microphone", "mic", S::Face},
 	{"Profile", "profile", S::Face},
 };
@@ -423,6 +424,21 @@ StageStatus computePhone(const Inputs& in)
 	return running(text("valRateFmt", in.faceDatagramsPerSecond));
 }
 
+// The webcam face source is the direct camera's face block, so it exists on
+// a direct project alone
+StageStatus computeWebcam(const Inputs& in)
+{
+	if (!in.bDirect)
+		return inactive(text("valOff"), text("whyWebcamNotDirect"));
+	if (!in.bWebcamPresent)
+		return degraded(text("valWaiting"), text("whyWebcamNoBody"));
+	if (!in.bWebcamTracked)
+		return running(text("valNoFace"));
+	if (!in.bWebcamNeutral)
+		return degraded(text("valNoNeutral"), text("whyWebcamNeutral"));
+	return running(text("valTracked"));
+}
+
 StageStatus computeMicrophone(const Inputs& in)
 {
 	if (!in.bAudioEnabled)
@@ -440,8 +456,9 @@ StageStatus computeMicrophone(const Inputs& in)
 
 StageStatus computeFace(const Inputs& in)
 {
+	const bool bWebcamLive= in.bDirect && in.bWebcamTracked;
 	if (!in.bFaceEnabled && !in.bAudioEnabled)
-		return inactive(text("valOff"), text("whyFaceOff"));
+		return bWebcamLive ? running(text("valWebcamOnly")) : inactive(text("valOff"), text("whyFaceOff"));
 	if (isUnrecorded(in))
 		return notRecorded();
 	const StageStatus phone= computePhone(in);
@@ -459,6 +476,8 @@ StageStatus computeFace(const Inputs& in)
 		return running(text("valPhoneOnly"));
 	if (bMicLive)
 		return running(text("valMicOnly"));
+	if (bWebcamLive)
+		return running(text("valWebcamOnly"));
 	return degraded(text("valNoSource"), text("whyFaceNoSource"));
 }
 
@@ -506,7 +525,7 @@ std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId
 						 makeId(S::HoldRest)});
 		break;
 	case S::Face:
-		lanes.push_back({makeId(S::Phone), makeId(S::Microphone), makeId(S::Profile)});
+		lanes.push_back({makeId(S::Phone), makeId(S::Webcam), makeId(S::Microphone), makeId(S::Profile)});
 		break;
 	case S::Output:
 		lanes.push_back({makeId(S::DeliveryRules), makeId(S::VmcStream)});
@@ -661,6 +680,8 @@ StageStatus computeStatus(const PipelineStatusInputs& inputs, const PipelineStag
 		return computeFace(inputs);
 	case S::Phone:
 		return computePhone(inputs);
+	case S::Webcam:
+		return computeWebcam(inputs);
 	case S::Microphone:
 		return computeMicrophone(inputs);
 	case S::Profile:

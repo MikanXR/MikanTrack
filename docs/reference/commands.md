@@ -72,7 +72,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-extrinsics`: Aruco marker pose + table-plane raycast
 - `--test-framerecorder`: raw frame recording: round trip, naming, overflow drops
 - `--test-face`: iFacialMocap receiver: datagram parser, receive filter, loopback socket
-- `--test-faceexpr`: face expressions: precedence, functions, names, variables, smooth, the time rule, hysteresis, state slots across a recompile, input sets, profile JSON, the library
+- `--test-faceexpr`: face expressions and the webcam face source: precedence, functions, names, variables, smooth, the time rule, hysteresis, state slots across a recompile, input sets, profile JSON, the library
 - `--test-fusion`: multi-camera fusion, clustering, triangulation, holds
 - `--test-handestimator`: angle-space multi-view hand state estimator
 - `--test-handpose`: palm frame, finger angles, FK round-trip, conventions
@@ -82,7 +82,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-replay`: record/replay determinism, checksums, what-if, the audio and face sidecars
 - `--test-roiquality`: hand ROI image-quality metrics + flicker tracker
 - `--test-scene-view`: camera-matched scene view and overlay projection
-- `--test-seeding`: cross-camera seed redundancy gate
+- `--test-seeding`: the seed redundancy gate, the body model's hand hints, the eviction rule and the hand side by shape
 - `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip, the face profile binding and blend messages
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
@@ -107,6 +107,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--export-board`: writes + opens the printable Charuco board PNG
 - `--export-marker`: writes + opens the printable origin Aruco marker PNG
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
+- `--gate-wholebody`: the whole-body model's face and hand blocks on one camera's raw frames, at every frame and at the live divider: face point jitter, the face shape ratios and blinks against the phone's face sidecar, the blink evaluation's face model candidates found in `models/`, and the body model's hands and the hand slot's side against the stereo rig's triangulated hands
 - `--gate-direct`: whole-body 3D arm directions on one camera's raw frames against the stereo rig's output, the single-camera direct mode's gate, with the direct retarget and a Kalidokit-style baseline measured side by side (a direct-mode take runs their truth-free metrics alone), and the direct solve's twist jumps and mirrored-palm frames per hand
 - `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
 - `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording

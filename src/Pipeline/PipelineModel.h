@@ -39,6 +39,7 @@ enum class ePipelineStage : int
 	// Joins at Output
 	Face,
 	Phone,
+	Webcam,
 	Microphone,
 	Profile,
 	Count
@@ -205,6 +206,10 @@ struct PipelineStatusInputs
 	bool bFaceStreaming= false;
 	bool bFaceTracked= false;
 	float faceDatagramsPerSecond= 0.f;
+	// The direct camera's face block as the webcam face source
+	bool bWebcamPresent= false;
+	bool bWebcamTracked= false;
+	bool bWebcamNeutral= false;
 	bool bAudioEnabled= false;
 	bool bAudioDeviceOpen= false;
 	bool bAudioBackendReady= false;

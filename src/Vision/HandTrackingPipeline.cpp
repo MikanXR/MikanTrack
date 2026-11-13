@@ -118,6 +118,7 @@ void HandTrackingPipeline::process(const cv::Mat& bgrFrame, TrackingFrameResult&
 	// nowhere to go (measured: 74 of 75 seeds during real gaps hit
 	// skippedNoFreeSlot). A wrong seed costs one frame: runHandLandmarkStage
 	// drops a speculative seed the same frame it fails the presence threshold.
+	m_bodySeedBackoff.tick();
 	applySearchHints();
 
 	// Recount AFTER seeding so a slot a seed just claimed suppresses the
@@ -198,12 +199,31 @@ void HandTrackingPipeline::runPalmDetectionStage(const cv::Mat& bgrFrame, Tracki
 	}
 }
 
-// Synthesizes a PalmDetection at a hinted image location. Only the wrist->
-// middle-MCP keypoint pair (crop rotation) and the keypoint bounding box
-// (crop extent) feed the landmark model's crop math, so approximate anatomy
-// is fine - the first landmark pass corrects the ROI or rejects it.
-static PalmDetection synthesizeDetectionFromHint(const HandSearchHint& hint)
+// A PalmDetection at a hinted image location. Only the wrist->middle-MCP
+// keypoint pair (crop rotation) and the keypoint bounding box (crop extent)
+// feed the landmark model's crop math, so for a hint without keypoints
+// approximate anatomy is fine - the first landmark pass corrects the ROI or
+// rejects it.
+PalmDetection HandTrackingPipeline::makeSeedDetection(const HandSearchHint& hint)
 {
+	if (hint.bHasPalmKeypoints)
+	{
+		// The hand's own keypoints and their box, the ROI a tracked slot
+		// builds from its landmarks
+		PalmDetection detection;
+		detection.keypoints= hint.palmKeypoints;
+		detection.boxMin= hint.palmKeypoints[0];
+		detection.boxMax= hint.palmKeypoints[0];
+		for (const glm::vec2& keypoint : hint.palmKeypoints)
+		{
+			detection.boxMin= glm::min(detection.boxMin, keypoint);
+			detection.boxMax= glm::max(detection.boxMax, keypoint);
+		}
+		detection.score= 0.5f;
+		detection.rotationRadians= PalmDetector::computeRotation(detection.keypoints[0], detection.keypoints[2]);
+		return detection;
+	}
+
 	const glm::vec2 c= hint.centerPx;
 	const glm::vec2 d= hint.dirPx;
 	const glm::vec2 p(-d.y, d.x);
@@ -242,13 +262,98 @@ bool HandTrackingPipeline::isSeedRedundant(const glm::vec2& centerPx, const std:
 	return false;
 }
 
+void BodySeedBackoff::tick()
+{
+	for (Place& place : m_places)
+	{
+		place.closedFrames--;
+		place.forgetFrames--;
+	}
+	m_places.erase(std::remove_if(m_places.begin(), m_places.end(),
+								  [](const Place& place) { return place.forgetFrames <= 0; }),
+				   m_places.end());
+}
+
+bool BodySeedBackoff::isClosed(const glm::vec2& centerPx) const
+{
+	for (const Place& place : m_places)
+	{
+		if (place.closedFrames > 0 && HandTrackingPipeline::isSeedRedundant(centerPx, {place.box}))
+			return true;
+	}
+	return false;
+}
+
+void BodySeedBackoff::noteRejected(const HandBox& seedBox)
+{
+	const glm::vec2 center= (seedBox.min + seedBox.max) * 0.5f;
+	for (Place& place : m_places)
+	{
+		if (!HandTrackingPipeline::isSeedRedundant(center, {place.box}))
+			continue;
+		// The same place again, within its memory: twice the wait
+		place.refusals++;
+		place.box= seedBox;
+		place.closedFrames= std::min(k_firstFrames << place.refusals, k_maxFrames);
+		place.forgetFrames= place.closedFrames + k_memoryFrames;
+		return;
+	}
+	Place place;
+	place.box= seedBox;
+	place.closedFrames= k_firstFrames;
+	place.forgetFrames= k_firstFrames + k_memoryFrames;
+	m_places.push_back(place);
+}
+
+void BodySeedBackoff::noteAccepted(const HandBox& seedBox)
+{
+	const glm::vec2 center= (seedBox.min + seedBox.max) * 0.5f;
+	m_places.erase(std::remove_if(m_places.begin(), m_places.end(),
+								  [&](const Place& place) {
+									  return HandTrackingPipeline::isSeedRedundant(center, {place.box});
+								  }),
+				   m_places.end());
+}
+
+int HandTrackingPipeline::chooseSlotToEvict(const std::array<HandBox, 2>& slotBoxes,
+											const std::array<float, 2>& slotPresences,
+											const std::vector<HandBox>& bodyHandBoxes)
+{
+	// The same margin the redundancy test gives a hint
+	constexpr float k_inflation= 1.25f;
+
+	if (bodyHandBoxes.empty())
+		return -1;
+
+	int chosen= -1;
+	for (int slotIndex= 0; slotIndex < 2; ++slotIndex)
+	{
+		const HandBox& slotBox= slotBoxes[slotIndex];
+		bool bOnBodyHand= false;
+		for (const HandBox& bodyBox : bodyHandBoxes)
+		{
+			const glm::vec2 center= (bodyBox.min + bodyBox.max) * 0.5f;
+			const glm::vec2 halfExtent= (bodyBox.max - bodyBox.min) * (0.5f * k_inflation);
+			const glm::vec2 bodyMin= center - halfExtent;
+			const glm::vec2 bodyMax= center + halfExtent;
+			bOnBodyHand= bOnBodyHand || (slotBox.min.x <= bodyMax.x && slotBox.max.x >= bodyMin.x &&
+										 slotBox.min.y <= bodyMax.y && slotBox.max.y >= bodyMin.y);
+		}
+		if (!bOnBodyHand && (chosen < 0 || slotPresences[slotIndex] < slotPresences[chosen]))
+			chosen= slotIndex;
+	}
+	return chosen;
+}
+
 void HandTrackingPipeline::applySearchHints()
 {
 	for (const HandSearchHint& hint : m_searchHints)
 	{
+		// The two sources share every gate and count into their own funnels
+		const bool bBody= hint.bFromBody;
 		if (hint.palmSizePx < 8.f)
 		{
-			m_seedStats.skippedTooSmall++;
+			(bBody ? m_seedStats.body.skippedTooSmall : m_seedStats.skippedTooSmall)++;
 			continue;
 		}
 
@@ -260,31 +365,55 @@ void HandTrackingPipeline::applySearchHints()
 		}
 		if (isSeedRedundant(hint.centerPx, m_activeBoxes))
 		{
-			m_seedStats.skippedRedundant++;
+			(bBody ? m_seedStats.body.skippedRedundant : m_seedStats.skippedRedundant)++;
 			continue;
 		}
 
-		bool bSeeded= false;
-		for (HandSlot& slot : m_slots)
+		// A place the hand model just turned a body seed down stays closed
+		// to body hints for the backoff
+		if (bBody && m_bodySeedBackoff.isClosed(hint.centerPx))
 		{
-			if (slot.active)
-				continue;
-
-			slot.deactivate();
-			slot.active= true;
-			slot.hasPendingDetection= true;
-			slot.bSeededFromHint= true;
-			slot.pendingDetection= synthesizeDetectionFromHint(hint);
-			slot.roiBoxMin= slot.pendingDetection.boxMin;
-			slot.roiBoxMax= slot.pendingDetection.boxMax;
-			bSeeded= true;
-			break;
+			m_seedStats.body.skippedBackoff++;
+			continue;
 		}
 
-		if (bSeeded)
-			m_seedStats.applied++;
-		else
-			m_seedStats.skippedNoFreeSlot++;
+		HandSlot* seedSlot= nullptr;
+		for (HandSlot& slot : m_slots)
+		{
+			if (seedSlot == nullptr && !slot.active)
+				seedSlot= &slot;
+		}
+
+		// No free slot: a body hint takes a slot that is on neither whole-body
+		// hand. A slot still waiting on its own first landmark pass is left
+		// alone, the other body hint's seed among them.
+		if (seedSlot == nullptr && bBody && !m_slots[0].hasPendingDetection && !m_slots[1].hasPendingDetection)
+		{
+			const int evictIndex= chooseSlotToEvict(
+				{HandBox{m_slots[0].roiBoxMin, m_slots[0].roiBoxMax}, HandBox{m_slots[1].roiBoxMin, m_slots[1].roiBoxMax}},
+				{m_slots[0].presence, m_slots[1].presence}, m_bodyHandBoxes);
+			if (evictIndex >= 0)
+			{
+				seedSlot= &m_slots[evictIndex];
+				m_seedStats.body.evicted++;
+			}
+		}
+
+		if (seedSlot == nullptr)
+		{
+			(bBody ? m_seedStats.body.skippedNoFreeSlot : m_seedStats.skippedNoFreeSlot)++;
+			continue;
+		}
+
+		seedSlot->deactivate();
+		seedSlot->active= true;
+		seedSlot->hasPendingDetection= true;
+		seedSlot->bSeededFromHint= true;
+		seedSlot->bSeededFromBody= bBody;
+		seedSlot->pendingDetection= makeSeedDetection(hint);
+		seedSlot->roiBoxMin= seedSlot->pendingDetection.boxMin;
+		seedSlot->roiBoxMax= seedSlot->pendingDetection.boxMax;
+		(bBody ? m_seedStats.body.applied : m_seedStats.applied)++;
 	}
 	m_searchHints.clear();
 }
@@ -310,12 +439,16 @@ void HandTrackingPipeline::runHandLandmarkStage(const cv::Mat& bgrFrame)
 			(bSpeculativeSeed && m_handResult.confidence < m_config.handPresenceThreshold))
 		{
 			if (bSpeculativeSeed)
-				m_seedStats.rejectedByModel++;
+				(slot.bSeededFromBody ? m_seedStats.body.rejectedByModel : m_seedStats.rejectedByModel)++;
+			if (bSpeculativeSeed && slot.bSeededFromBody)
+				m_bodySeedBackoff.noteRejected(HandBox{slot.roiBoxMin, slot.roiBoxMax});
 			slot.deactivate();
 			continue;
 		}
+		if (bSpeculativeSeed && slot.bSeededFromBody)
+			m_bodySeedBackoff.noteAccepted(HandBox{slot.roiBoxMin, slot.roiBoxMax});
 		if (bSpeculativeSeed)
-			m_seedStats.accepted++;
+			(slot.bSeededFromBody ? m_seedStats.body.accepted : m_seedStats.accepted)++;
 		slot.bSeededFromHint= false;
 
 		slot.hasPendingDetection= false;

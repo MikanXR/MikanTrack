@@ -16,6 +16,7 @@
 #include "RetargetChains.h"
 #include "RetargetStage.h"
 #include "FaceRecorder.h"
+#include "WebcamFace.h"
 #include "FrameRecorder.h"
 #include "ImuService.h"
 #include "HandBoneCalibrator.h"
@@ -390,6 +391,8 @@ private:
 	void runOutputStage(IterationState& iteration);
 	// The microphone's visemes onto the output's viseme source
 	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
+	// The direct camera's face block onto the output's webcam source
+	void applyWebcamToOutput(TrackingFrameResult& output, double nowMs);
 	// The face stream's blendshapes onto the output's phone source, and its
 	// head, which wins over the camera head while the stream is live and
 	// tracked. Fills the viseme source beside it.
@@ -449,6 +452,8 @@ private:
 	// Microphone mouth stage. Owned by App; this thread reads its sample.
 	AudioService* m_audioService= nullptr;
 	uint64_t m_lastMouthSequence= 0;
+	// The direct camera's last face ratios, for the neutral capture
+	WebcamFaceNeutralAverager m_webcamNeutralAverager;
 	// The timestamp of the last output a camera produced, so a face-only
 	// frame can tell when the hands it repeats have gone stale
 	double m_lastCameraOutputMs= -1.0;
