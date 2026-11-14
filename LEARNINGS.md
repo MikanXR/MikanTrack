@@ -521,9 +521,29 @@ Two takes, the tilt slider set to each camera's pitch from its extrinsics: the t
 
 - A lens far from the calibration changes which frames are posed. At 3.00 the first take posed 527 of the 1042 arm frames, and a table over the frames every lens shares then read 23.0 degrees at the calibration and no order across the lenses. The sweep prints each lens's own frame count beside the shared one for this reason.
 
-Both cameras look down, the first take's truth elbow is not independent of the model, and the second take has few frames with the hands up. A take from a level front camera with the IMUs worn is still to be made (plan.md).
+Both of those cameras look down, the first take's truth elbow is not independent of the model, and the second take has few frames with the hands up. A third take answers the three: the same C920 at the webcam position, 4.7 degrees above level, both IMUs worn and the hands up for most of it, 3072 arm frames posed under every lens.
 
-Learned: a sensitivity is not an accuracy. The output moving a degree per percent of focal length said nothing about which way, and against the truth the calibrated lens is no optimum: the wrist's depth sets the error, and the lens only trades direction against distance. A what-if made by patching a shared header moves the truth with the candidate, so the candidate needs its own copy. And a comparison over the frames every variant shares is only as wide as its narrowest variant.
+| Focal length scale | Direct, degrees p50 | Direct, depth error cm | Baseline, degrees p50 |
+|---|---|---|---|
+| 0.85 | 16.6 | 5.9 | 45.0 |
+| 0.90 | 16.5 | 6.1 | 45.4 |
+| 0.95 | 16.9 | 6.4 | 45.9 |
+| 1.00 | 19.9 | 7.5 | 46.0 |
+| 1.05 | 20.2 | 8.1 | 46.3 |
+| 1.10 | 19.6 | 8.5 | 46.5 |
+| 1.15 | 19.7 | 9.0 | 46.6 |
+| 1.25 | 19.2 | 9.7 | 46.8 |
+| 1.50 | 17.7 | 11.8 | 47.5 |
+
+- On the level camera the direct chain beats the baseline at every lens, 19.9 degrees against 46.0 at the calibration, where the tilted takes had the two tied.
+
+- The calibration is again no optimum. The direction stays between 16.5 and 20.2 degrees, and the depth error grows with the assumed focal length from 5.9 to 11.8 cm, so a lens 15 percent short reads slightly better than the calibrated one.
+
+- The direct error is two populations. On 17 percent of the left arm's frames and 32 percent of the right's the chain is over 60 degrees off: the truth's wrist is about 20 cm nearer the camera than the shoulder, and the chain's is out to the side at the shoulder's depth. The rest read 11.4 and 14.3 degrees at p50 with the depth 4.5 and 6.4 cm off. The bad frames come in runs. Not explained (plan.md).
+
+- Against the position retarget the direct forearm is 78 degrees p50 on the left and 58 on the right where the baseline's is 44 and 45, and it moves with the lens, from 96 at 0.85 to 53 at 1.50 as the mean of the sides. The reference was not verified on this take, whose right mounting was captured minutes before it with a 36 degree pose spread (plan.md).
+
+Learned: a sensitivity is not an accuracy. The output moving a degree per percent of focal length said nothing about which way, and against the truth the calibrated lens is no optimum: the wrist's depth sets the error, and the lens only trades direction against distance. A what-if made by patching a shared header moves the truth with the candidate, so the candidate needs its own copy. And a comparison over the frames every variant shares is only as wide as its narrowest variant. And a tie on a tilted camera did not carry to a level one, where the rays beat the learned depth by 26 degrees at every lens tried.
 
 ## Cross-cutting lessons
 
