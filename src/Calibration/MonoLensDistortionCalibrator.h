@@ -4,6 +4,7 @@
 #include "MikanVideoSourceTypes.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 
 // Helper use to implement OpenCV camera lens intrinsic/distortion calibration method.
@@ -65,11 +66,29 @@ public:
 	float computeCalibrationProgress() const;
 	void resetCalibrationState();
 
+	// Solves on a worker thread, dropping any view whose corners do not fit
+	// the rest (computeMonoLensCameraCalibrationWithoutOutliers). The solve is
+	// complete when it passed, failed, or dropped views. In the last case
+	// wantsReplacementSamples is true, the dropped views are gone from the
+	// capture counts, and resumeCapture hands the calibrator back to update()
+	// for their replacements, after which the solve runs again.
 	void computeCameraCalibration();
 	bool getIsCameraCalibrationComplete() const;
+	bool wantsReplacementSamples() const;
+	void resumeCapture();
+	// Views dropped as outliers since the last reset
+	int getDroppedSampleCount() const;
 	int getDesiredPatternCount() const;
 	bool getCameraCalibration(MikanMonoIntrinsics* out_mono_intrinsics);
 	float getReprojectionError() const;
+
+	// Writes the views the solve ran on as JSON: the frame size, the board's
+	// points, each view's image points with their ids and its error, the
+	// views dropped as outliers, and whether the solve passed with its
+	// reprojection error. Enough to solve the set again
+	// elsewhere, which is how a run that lands off is told apart from a good
+	// one. Call it once the solve has finished.
+	bool writeCaptureSet(const std::filesystem::path& path) const;
 
 protected:
 	// Keystone factor (>= 1) of the current detection: max length ratio

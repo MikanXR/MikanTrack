@@ -169,6 +169,22 @@ static int runCharucoTest(const TestArgs& args)
 					<< chessCalibrator.getCapturedSampleCount() << " (expected 1 then 2)";
 				result= 1;
 			}
+
+			// The captured views read back from the file a run leaves behind
+			const std::filesystem::path captureSetPath=
+				std::filesystem::temp_directory_path() / "mikan_charuco_test" / "capture_set.json";
+			nlohmann::json captureSet;
+			if (chessCalibrator.writeCaptureSet(captureSetPath))
+				captureSet= nlohmann::json::parse(std::ifstream(captureSetPath), nullptr, false);
+			const size_t cornerCount= (size_t)((chessboardPattern.cols - 1) * (chessboardPattern.rows - 1));
+			if (!captureSet.is_object() || captureSet["views"].size() != 2
+				|| captureSet["views"][1]["points"].size() != cornerCount
+				|| captureSet["views"][1]["ids"].size() != cornerCount
+				|| captureSet["boardPoints"].size() != cornerCount || captureSet["width"] != frameImage.cols)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: the capture set file does not hold the two views";
+				result= 1;
+			}
 		}
 
 		// 7: End-to-end intrinsics recovery through a KNOWN synthetic
@@ -231,6 +247,44 @@ static int runCharucoTest(const TestArgs& args)
 			{
 				MIKAN_LOG_ERROR("test-charuco")
 					<< "REGRESSION: synthetic intrinsics recovery failed";
+				result= 1;
+			}
+
+			// 7b: one view with its corners found in the wrong places is
+			// dropped, and the solve on the rest lands where the clean one did
+			MIKAN_LOG_INFO("test-charuco") << "7b: outlier view dropped";
+			std::vector<t_opencv_point2d_list> spoiledPointsList= imagePointsList;
+			for (size_t pointIndex= 0; pointIndex < spoiledPointsList[5].size(); ++pointIndex)
+				spoiledPointsList[5][pointIndex].x+= 0.4f * (float)(pointIndex % 10) * (float)(pointIndex % 10);
+
+			MikanMonoIntrinsics spoiled, cleaned;
+			double spoiledError= 0.0, cleanedError= 0.0;
+			std::vector<DroppedCalibrationView> droppedViews;
+			std::vector<double> viewErrors;
+			computeMonoLensCameraCalibration(width, height, geometry, spoiledPointsList, imagePointIDList, spoiled,
+											 spoiledError);
+			const bool bCleanedSolved= computeMonoLensCameraCalibrationWithoutOutliers(
+				width, height, geometry, spoiledPointsList, imagePointIDList, cleaned, cleanedError, droppedViews,
+				viewErrors);
+
+			MIKAN_LOG_INFO("test-charuco")
+				<< "spoiled hfov=" << spoiled.hfov << " reprojection=" << spoiledError << "px, without outliers hfov="
+				<< cleaned.hfov << " reprojection=" << cleanedError << "px, dropped " << droppedViews.size();
+			if (!bCleanedSolved || droppedViews.size() != 1 || droppedViews[0].viewIndex != 5
+				|| viewErrors.size() != 11 || fabs(cleaned.hfov - truthHfov) > 0.05 || cleanedError > 0.5
+				|| fabs(spoiled.hfov - truthHfov) < 2.0)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: the outlier view was not dropped cleanly";
+				result= 1;
+			}
+
+			// A clean set drops nothing
+			computeMonoLensCameraCalibrationWithoutOutliers(width, height, geometry, imagePointsList,
+															imagePointIDList, cleaned, cleanedError, droppedViews,
+															viewErrors);
+			if (!droppedViews.empty())
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: a clean set dropped " << droppedViews.size() << " views";
 				result= 1;
 			}
 		}

@@ -1,5 +1,6 @@
 #include "CameraMath.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "Logger.h"
@@ -38,13 +39,76 @@ glm::mat4 computeGLMCameraViewMatrix(const glm::mat4& poseXform)
 	return modelView;
 }
 
+bool computeMonoLensCameraCalibrationWithoutOutliers(const int frameWidth, const int frameHeight,
+													 const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
+													 const std::vector<t_opencv_point2d_list>& cvImagePointsList,
+													 const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
+													 MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError,
+													 std::vector<DroppedCalibrationView>& outDroppedViews,
+													 std::vector<double>& outViewErrors)
+{
+	outDroppedViews.clear();
+
+	// The views still in the solve, by their index in the lists handed in
+	std::vector<int> keptViewIndices;
+	for (int viewIndex= 0; viewIndex < (int)cvImagePointsList.size() && viewIndex < (int)cvImagePointIDs.size();
+		 ++viewIndex)
+	{
+		keptViewIndices.push_back(viewIndex);
+	}
+
+	while (true)
+	{
+		std::vector<t_opencv_point2d_list> keptImagePointsList;
+		std::vector<t_opencv_pointID_list> keptImagePointIDs;
+		for (const int viewIndex : keptViewIndices)
+		{
+			keptImagePointsList.push_back(cvImagePointsList[viewIndex]);
+			keptImagePointIDs.push_back(cvImagePointIDs[viewIndex]);
+		}
+
+		const bool bSuccess= computeMonoLensCameraCalibration(
+			frameWidth, frameHeight, opencvLensCalibrationGeometry, keptImagePointsList, keptImagePointIDs,
+			outIntrinsics, outReprojectionError, &outViewErrors);
+
+		std::vector<double> solvedErrors;
+		int worstKeptIndex= -1;
+		for (int keptIndex= 0; keptIndex < (int)outViewErrors.size(); ++keptIndex)
+		{
+			if (outViewErrors[keptIndex] < 0.0)
+				continue;
+
+			solvedErrors.push_back(outViewErrors[keptIndex]);
+			if (worstKeptIndex < 0 || outViewErrors[keptIndex] > outViewErrors[worstKeptIndex])
+				worstKeptIndex= keptIndex;
+		}
+		if (worstKeptIndex < 0 || (int)solvedErrors.size() <= k_minViewsForOutlierDrop)
+			return bSuccess;
+
+		std::nth_element(solvedErrors.begin(), solvedErrors.begin() + solvedErrors.size() / 2, solvedErrors.end());
+		const double medianError= solvedErrors[solvedErrors.size() / 2];
+		const double worstError= outViewErrors[worstKeptIndex];
+		if (worstError <= k_maxViewReprojectionError || worstError <= k_maxViewErrorOverMedian * medianError)
+			return bSuccess;
+
+		MIKAN_MT_LOG_INFO("computeCameraCalibration")
+			<< "Dropping view " << keptViewIndices[worstKeptIndex] << ": reprojection error " << worstError
+			<< "px against a median of " << medianError << "px";
+		outDroppedViews.push_back({keptViewIndices[worstKeptIndex], worstError});
+		keptViewIndices.erase(keptViewIndices.begin() + worstKeptIndex);
+	}
+}
+
 bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeight,
 									  const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
 									  const std::vector<t_opencv_point2d_list>& cvImagePointsList,
 									  const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
-									  MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError)
+									  MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError,
+									  std::vector<double>* outViewErrors)
 {
 	bool bSuccess= true;
+	if (outViewErrors != nullptr)
+		outViewErrors->clear();
 
 	// Initialize the output intrinsics with default values
 	outIntrinsics= MikanMonoIntrinsics();
@@ -57,6 +121,8 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 	const t_opencv_point3d_list& geometryPoints= opencvLensCalibrationGeometry.points;
 	std::vector<t_opencv_point2d_list> cvValidImagePointsList;
 	std::vector<t_opencv_point3d_list> cvObjectPointsList;
+	// The index each solved sample had in the lists handed in
+	std::vector<size_t> validSampleIndices;
 	for (size_t sampleIndex= 0; sampleIndex < cvImagePointsList.size() && sampleIndex < cvImagePointIDs.size();
 		 ++sampleIndex)
 	{
@@ -87,6 +153,7 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 
 		cvValidImagePointsList.push_back(imagePoints);
 		cvObjectPointsList.push_back(objectPoints);
+		validSampleIndices.push_back(sampleIndex);
 	}
 
 	if (cvValidImagePointsList.size() == 0)
@@ -103,6 +170,7 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 
 	// Refine the camera intrinsic matrix and compute distortion parameters
 	cv::Mat cvDistCoeffsRowVector;
+	cv::Mat cvViewErrors;
 	try
 	{
 		outReprojectionError= cv::calibrateCamera(
@@ -110,6 +178,8 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 			cvDistortedIntrinsicMatrix,         // Input/Output camera intrinsic matrix
 			cvDistCoeffsRowVector,              // Output distortion coefficients
 			cv::noArray(), cv::noArray(),       // best fit board poses as rvec/tvec pairs
+			cv::noArray(), cv::noArray(),       // standard deviations of the intrinsics and the poses
+			cvViewErrors,                       // RMS reprojection error of each sample
 			cv::CALIB_FIX_ASPECT_RATIO +        // The functions considers only fy as a free parameter
 				cv::CALIB_FIX_PRINCIPAL_POINT + // The principal point is not changed during the global optimization
 				cv::CALIB_ZERO_TANGENT_DIST
@@ -124,6 +194,17 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 			cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON));
 
 		bSuccess= is_valid_float(outReprojectionError);
+
+		// A sample left out above has no error: it reads as -1
+		if (outViewErrors != nullptr)
+		{
+			outViewErrors->assign(cvImagePointsList.size(), -1.0);
+			for (size_t validIndex= 0; validIndex < validSampleIndices.size() && (int)validIndex < cvViewErrors.rows;
+				 ++validIndex)
+			{
+				(*outViewErrors)[validSampleIndices[validIndex]]= cvViewErrors.at<double>((int)validIndex, 0);
+			}
+		}
 	}
 	catch (cv::Exception* e)
 	{

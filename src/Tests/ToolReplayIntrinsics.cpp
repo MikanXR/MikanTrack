@@ -11,14 +11,26 @@
 // time ("file,seconds" under a header line). Every sample the gate takes is
 // kept, with no cap, so the count says how the gate behaved on the footage.
 //
-// usage: --replay-intrinsics <frames_dir> chessboard|charuco [cols rows]
+// A trailing .json path receives the captured views, the file the wizard
+// writes after its own solve.
+//
+// usage: --replay-intrinsics <frames_dir> chessboard|charuco [cols rows] [capture_set.json]
 
-static int runReplayIntrinsics(const TestArgs& args)
+static int runReplayIntrinsics(const TestArgs& allArgs)
 {
+	TestArgs args= allArgs;
+	std::filesystem::path captureSetPath;
+	if (!args.empty() && std::filesystem::path(args.back()).extension() == ".json")
+	{
+		captureSetPath= args.back();
+		args.pop_back();
+	}
+
 	const char* tag= "replay-intrinsics";
 	if (args.size() < 2 || (args.size() != 2 && args.size() != 4))
 	{
-		MIKAN_LOG_ERROR(tag) << "usage: --replay-intrinsics <frames_dir> chessboard|charuco [cols rows]";
+		MIKAN_LOG_ERROR(tag)
+			<< "usage: --replay-intrinsics <frames_dir> chessboard|charuco [cols rows] [capture_set.json]";
 		return 1;
 	}
 
@@ -95,9 +107,22 @@ static int runReplayIntrinsics(const TestArgs& args)
 		return 1;
 	}
 
-	calibrator->computeCameraCalibration();
-	while (!calibrator->getIsCameraCalibrationComplete())
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	// The footage is over, so views the solve drops are not replaced: the
+	// solve runs again on what is left
+	while (true)
+	{
+		calibrator->computeCameraCalibration();
+		while (!calibrator->getIsCameraCalibrationComplete())
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		if (!calibrator->wantsReplacementSamples())
+			break;
+		calibrator->resumeCapture();
+	}
+	MIKAN_LOG_INFO(tag) << "dropped " << calibrator->getDroppedSampleCount() << " outlier views, solved from "
+						<< calibrator->getCapturedSampleCount();
+
+	if (!captureSetPath.empty() && calibrator->writeCaptureSet(captureSetPath))
+		MIKAN_LOG_INFO(tag) << "Capture set written to " << captureSetPath.string();
 
 	MikanMonoIntrinsics intrinsics;
 	if (!calibrator->getCameraCalibration(&intrinsics))

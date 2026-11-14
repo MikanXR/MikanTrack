@@ -469,7 +469,11 @@ The board on a phone screen instead of on paper, measured afterwards on the C920
 
 - A hold of 0.3 seconds under 1.5 px captured nothing on the same recording. A hand holds still for a frame or two, so the gate is one comparison against the detection 0.09 seconds earlier.
 
-Decided: the one-camera lens calibration shows a plain chessboard on a phone, found per frame with the classic detector and re-detected with the sector based one on the frames it keeps. The printed charuco board stays for a rig.
+- Live, one run in five landed 2.7 percent low. Its saved views showed why: two of the twelve had corners in the wrong places (10.9 and 2.5 px of reprojection error where the rest sat at 0.25), the worst a full grid returned by the sector based detector on a 53 degree tilt. Dropping the worst view while it is over 1 px, one at a time, brought the run to -0.1 percent and left the other four untouched, all five between -0.1 and +0.8. Dropping only the single worst view left it at -3.3, since the second then dominates.
+
+- Nothing about the set as a whole gave the bad run away beforehand on recorded footage: the spread with one view left out, a half split and the tilt counts all had no correlation with a 12-view set's error. The per-view error is what separates a bad view, by a factor of ten or more.
+
+Decided: the one-camera lens calibration shows a plain chessboard on a phone, found per frame with the classic detector and re-detected with the sector based one on the frames it keeps. The solve drops outlier views and the wizard asks for their replacements. The printed charuco board stays for a rig.
 
 Learned: a pattern that needs no decoding survives an emissive screen, and which frames are kept moved the focal length more than which detector found them.
 

@@ -845,6 +845,7 @@
 		"cancelCloseButton": "Cancel / Close",
 		"captureProgressFmt": "Captured %d / %d boards (%d tilted / %d needed)",
 		"columnsInput": "Columns",
+		"discardedCapturesFmt": "%d captures were discarded because their corners did not line up with the rest. Capture replacements.",
 		"exportBoardButton": "Export + open board PNG for printing...",
 		"exportBoardTooltip": "Writes the board to resources/calibration and opens it in your image\nviewer. Print at 100%% scale and check a square with a ruler - a\nrescaled print silently rescales the whole tracking world. The same\nboard is the extrinsics target, so its FORWARD label sets the world\naxes.",
 		"exportPhonePatternButton": "Export the pattern as an image...",

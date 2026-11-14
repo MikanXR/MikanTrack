@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <atomic>
 #include <deque>
+#include <fstream>
 #include <thread>
 
+#include "nlohmann/json.hpp"
 #include "opencv2/opencv.hpp"
 
 struct MonoLensDistortionCalibrationState
@@ -18,7 +20,9 @@ struct MonoLensDistortionCalibrationState
 		NotStarted,
 		Running,
 		Succeded,
-		Failed
+		Failed,
+		// Views were dropped as outliers: capture resumes for their replacements
+		DroppedSamples
 	};
 
 	// One whole-pattern detection and the capture time of its video frame
@@ -41,6 +45,15 @@ struct MonoLensDistortionCalibrationState
 	t_opencv_point2d_list quadList;
 	std::vector<t_opencv_point2d_list> imagePointsList;
 	std::vector<t_opencv_pointID_list> imagePointIDList;
+	// Whether each captured view counted toward the tilt quota
+	std::vector<bool> tiltedList;
+
+	// The views the solves have dropped as outliers since the last reset, kept
+	// for the capture set file, and the kept views' errors in the last solve
+	std::vector<t_opencv_point2d_list> droppedImagePointsList;
+	std::vector<t_opencv_pointID_list> droppedImagePointIDList;
+	std::vector<double> droppedViewErrors;
+	std::vector<double> viewErrors;
 
 	// Steadiness state
 	int64_t lastFrameSequence;
@@ -83,6 +96,11 @@ struct MonoLensDistortionCalibrationState
 		quadList.clear();
 		imagePointsList.clear();
 		imagePointIDList.clear();
+		tiltedList.clear();
+		droppedImagePointsList.clear();
+		droppedImagePointIDList.clear();
+		droppedViewErrors.clear();
+		viewErrors.clear();
 
 		// Reset the steadiness state
 		lastFrameSequence= -1;
@@ -201,7 +219,10 @@ void MonoLensDistortionCalibrator::update(int64_t frameSequence, double frameTim
 	else if (captureLastFoundCalibrationPattern())
 	{
 		if (bTilted)
+		{
 			++state->tiltedPatternCount;
+			state->tiltedList.back()= true;
+		}
 		state->bWantsTiltedSample= false;
 	}
 
@@ -271,6 +292,7 @@ bool MonoLensDistortionCalibrator::captureLastFoundCalibrationPattern()
 	{
 		m_calibrationState->imagePointsList.push_back(imagePoints);
 		m_calibrationState->imagePointIDList.push_back(imagePointIDs);
+		m_calibrationState->tiltedList.push_back(false);
 
 		for (int i= 0; i < 4; ++i)
 		{
@@ -318,14 +340,43 @@ void MonoLensDistortionCalibrator::computeCameraCalibration()
 	calibrationState->asyncComputeTask= new std::thread(
 		[calibrationState]
 		{
-			bool bSuccess= computeMonoLensCameraCalibration(
+			std::vector<DroppedCalibrationView> droppedViews;
+			bool bSuccess= computeMonoLensCameraCalibrationWithoutOutliers(
 				calibrationState->frameWidth, calibrationState->frameHeight, calibrationState->calibrationGeometry,
 				calibrationState->imagePointsList, calibrationState->imagePointIDList,
-				calibrationState->outputCameraIntrinsics, calibrationState->reprojectionError);
+				calibrationState->outputCameraIntrinsics, calibrationState->reprojectionError, droppedViews,
+				calibrationState->viewErrors);
+
+			// Take the dropped views out of the capture state, highest index
+			// first so the indices still to go stay valid. Nothing else reads
+			// that state until this task reports its status.
+			std::sort(droppedViews.begin(), droppedViews.end(),
+					  [](const DroppedCalibrationView& a, const DroppedCalibrationView& b)
+					  { return a.viewIndex > b.viewIndex; });
+			for (const DroppedCalibrationView& dropped : droppedViews)
+			{
+				const int viewIndex= dropped.viewIndex;
+				calibrationState->droppedImagePointsList.push_back(calibrationState->imagePointsList[viewIndex]);
+				calibrationState->droppedImagePointIDList.push_back(calibrationState->imagePointIDList[viewIndex]);
+				calibrationState->droppedViewErrors.push_back(dropped.reprojectionError);
+
+				if (calibrationState->tiltedList[viewIndex])
+					--calibrationState->tiltedPatternCount;
+				--calibrationState->capturedPatternCount;
+
+				calibrationState->imagePointsList.erase(calibrationState->imagePointsList.begin() + viewIndex);
+				calibrationState->imagePointIDList.erase(calibrationState->imagePointIDList.begin() + viewIndex);
+				calibrationState->tiltedList.erase(calibrationState->tiltedList.begin() + viewIndex);
+				calibrationState->quadList.erase(calibrationState->quadList.begin() + 4 * viewIndex,
+												 calibrationState->quadList.begin() + 4 * viewIndex + 4);
+			}
 
 			// Signal the main thread that the task is complete
-			calibrationState->asyncComputeTaskStatus=
-				bSuccess ? MonoLensDistortionCalibrationState::Succeded : MonoLensDistortionCalibrationState::Failed;
+			if (!droppedViews.empty())
+				calibrationState->asyncComputeTaskStatus= MonoLensDistortionCalibrationState::DroppedSamples;
+			else
+				calibrationState->asyncComputeTaskStatus= bSuccess ? MonoLensDistortionCalibrationState::Succeded
+																   : MonoLensDistortionCalibrationState::Failed;
 		});
 }
 
@@ -334,7 +385,34 @@ bool MonoLensDistortionCalibrator::getIsCameraCalibrationComplete() const
 	auto status= m_calibrationState->asyncComputeTaskStatus.load();
 
 	return status == MonoLensDistortionCalibrationState::Succeded
-		   || status == MonoLensDistortionCalibrationState::Failed;
+		   || status == MonoLensDistortionCalibrationState::Failed
+		   || status == MonoLensDistortionCalibrationState::DroppedSamples;
+}
+
+bool MonoLensDistortionCalibrator::wantsReplacementSamples() const
+{
+	return m_calibrationState->asyncComputeTaskStatus.load() == MonoLensDistortionCalibrationState::DroppedSamples;
+}
+
+int MonoLensDistortionCalibrator::getDroppedSampleCount() const
+{
+	return (int)m_calibrationState->droppedViewErrors.size();
+}
+
+void MonoLensDistortionCalibrator::resumeCapture()
+{
+	if (m_calibrationState->asyncComputeTask != nullptr)
+	{
+		m_calibrationState->asyncComputeTask->join();
+
+		delete m_calibrationState->asyncComputeTask;
+		m_calibrationState->asyncComputeTask= nullptr;
+	}
+	m_calibrationState->asyncComputeTaskStatus= MonoLensDistortionCalibrationState::NotStarted;
+
+	// The pattern is wherever the last capture left it
+	m_calibrationState->bWantsTiltedSample= false;
+	m_calibrationState->resetSteadiness();
 }
 
 int MonoLensDistortionCalibrator::getDesiredPatternCount() const { return m_calibrationState->desiredPatternCount; }
@@ -361,3 +439,57 @@ bool MonoLensDistortionCalibrator::getCameraCalibration(MikanMonoIntrinsics* out
 }
 
 float MonoLensDistortionCalibrator::getReprojectionError() const { return m_calibrationState->reprojectionError; }
+
+bool MonoLensDistortionCalibrator::writeCaptureSet(const std::filesystem::path& path) const
+{
+	const MonoLensDistortionCalibrationState* state= m_calibrationState;
+
+	nlohmann::json boardPoints= nlohmann::json::array();
+	for (const cv::Point3f& point : state->calibrationGeometry.points)
+		boardPoints.push_back({point.x, point.y, point.z});
+
+	nlohmann::json views= nlohmann::json::array();
+	for (size_t viewIndex= 0; viewIndex < state->imagePointsList.size(); ++viewIndex)
+	{
+		nlohmann::json points= nlohmann::json::array();
+		for (const cv::Point2f& point : state->imagePointsList[viewIndex])
+			points.push_back({point.x, point.y});
+		nlohmann::json view= {{"ids", state->imagePointIDList[viewIndex]}, {"points", points}};
+		if (state->viewErrors.size() == state->imagePointsList.size())
+			view["reprojectionError"]= state->viewErrors[viewIndex];
+		views.push_back(view);
+	}
+
+	nlohmann::json droppedViews= nlohmann::json::array();
+	for (size_t viewIndex= 0; viewIndex < state->droppedImagePointsList.size(); ++viewIndex)
+	{
+		nlohmann::json points= nlohmann::json::array();
+		for (const cv::Point2f& point : state->droppedImagePointsList[viewIndex])
+			points.push_back({point.x, point.y});
+		droppedViews.push_back({{"ids", state->droppedImagePointIDList[viewIndex]},
+								{"points", points},
+								{"reprojectionError", state->droppedViewErrors[viewIndex]}});
+	}
+
+	const nlohmann::json captureSet= {
+		{"width", state->frameWidth},
+		{"height", state->frameHeight},
+		{"boardPoints", boardPoints},
+		{"views", views},
+		{"droppedViews", droppedViews},
+		{"solved", state->asyncComputeTaskStatus.load() == MonoLensDistortionCalibrationState::Succeded},
+		{"reprojectionError", state->reprojectionError},
+	};
+
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream file(path);
+	if (!file.is_open())
+	{
+		MIKAN_LOG_WARNING("MonoLensDistortionCalibrator::writeCaptureSet")
+			<< "Could not write the capture set to " << path.string();
+		return false;
+	}
+	file << captureSet.dump();
+	return true;
+}

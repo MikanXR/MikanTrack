@@ -38,11 +38,12 @@ cd build/Release && ./MikanTrack.exe --list-tests | awk '/^self-tests:/{f=1;next
 
 The full batch takes about 15 seconds and prints nothing but `done` when everything passes. For a failing flag, read its `.log` in the same directory.
 
-Side effects of a batch run: each test overwrites its own `.log` next to the exe, and four of them write scratch files under `%TEMP%`:
+Side effects of a batch run: each test overwrites its own `.log` next to the exe, and five of them write scratch files under `%TEMP%`:
 - `mikan-test-replay.jsonl` with its `.face.jsonl` sidecar
 - `mikan-test-faceprofiles/`
 - `mikan_framerecorder_test/`
 - `mikanmediapipe_test_dump/`
+- `mikan_charuco_test/`
 
 Nothing touches a project folder, a saved config, or any recording.
 
@@ -84,7 +85,7 @@ Nothing touches a project folder, a saved config, or any recording.
 
 ### Calibration
 
-- `--test-charuco`: the intrinsics wizard path. Bare Charuco finder construction, an ONNX pipeline startup that mirrors live app state, `MonoLensDistortionCalibrator` construction and `update()` against synthetic frames, capture progress on a rendered board including a second capture after an immediate fast board move, no capture from a video frame handed over repeatedly or from a board that keeps moving, the phone chessboard captured once held still and again after a move, synthetic intrinsics recovery checked against the true horizontal FOV and a sub-hundredth-pixel reprojection error, and the phone page address read back out of its rendered QR code. The ONNX step is a smoke check that the pipeline starts alongside the calibrator, not an inference assertion.
+- `--test-charuco`: the intrinsics wizard path. Bare Charuco finder construction, an ONNX pipeline startup that mirrors live app state, `MonoLensDistortionCalibrator` construction and `update()` against synthetic frames, capture progress on a rendered board including a second capture after an immediate fast board move, no capture from a video frame handed over repeatedly or from a board that keeps moving, the phone chessboard captured once held still and again after a move with both views read back from the capture set file, synthetic intrinsics recovery checked against the true horizontal FOV and a sub-hundredth-pixel reprojection error, one view with misplaced corners dropped from the solve with the focal length back at the truth and a clean set dropping nothing, and the phone page address read back out of its rendered QR code. The ONNX step is a smoke check that the pipeline starts alongside the calibrator, not an inference assertion.
 
 - `--test-extrinsics`: the extrinsics wizard math. An Aruco marker rendered into a synthetic camera 0.8 m above the world origin, then marker distance, recovered camera height, `ExtrinsicsWizard::raycastPixelOntoPlane` onto the table, and the marker axes fixing the world frame rather than only the origin. A second section covers `ExtrinsicsValidation` cross-camera scoring: perfect observations score near zero, and a one-degree orientation error on one camera is flagged by the spacing check even though reprojection alone nearly hides it.
 

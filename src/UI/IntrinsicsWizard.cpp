@@ -152,8 +152,20 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, int
 
 	if (m_state == eState::Solving && m_calibrator->getIsCameraCalibrationComplete())
 	{
+		// Kept whether or not the solve passed, one file per camera that the
+		// next run overwrites
+		m_calibrator->writeCaptureSet(m_config->getProjectDirectory() / "dumps"
+									  / ("intrinsics_capture_camera" + std::to_string(m_cameraIndex + 1) + ".json"));
+
 		MikanMonoIntrinsics monoIntrinsics;
-		if (m_calibrator->getCameraCalibration(&monoIntrinsics) && monoIntrinsics.pixel_width > 0)
+		if (m_calibrator->wantsReplacementSamples())
+		{
+			// Views whose corners did not fit the rest were dropped: back to
+			// capture for their replacements
+			m_calibrator->resumeCapture();
+			m_state= eState::Capture;
+		}
+		else if (m_calibrator->getCameraCalibration(&monoIntrinsics) && monoIntrinsics.pixel_width > 0)
 		{
 			applyResultToConfig();
 			// Show the live undistorted view for verification
@@ -273,6 +285,14 @@ void IntrinsicsWizard::drawWizardWindow(float deltaSeconds, const cv::Mat& bgrPr
 						m_calibrator->getDesiredPatternCount(), m_calibrator->getTiltedSampleCount(),
 						MonoLensDistortionCalibrator::k_minTiltedSampleCount);
 			ImGui::ProgressBar(progress, ImVec2(-1, 0));
+
+			if (m_calibrator->getDroppedSampleCount() > 0)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.3f, 1.f));
+				ImGui::TextWrapped(locText("intrinsicsWizard.discardedCapturesFmt"),
+								   m_calibrator->getDroppedSampleCount());
+				ImGui::PopStyleColor();
+			}
 
 			if (m_calibrator->wantsTiltedSample())
 			{

@@ -845,6 +845,7 @@
 		"cancelCloseButton": "キャンセル / 閉じる",
 		"captureProgressFmt": "%d / %d 枚を撮影済み（傾き %d / %d 枚）",
 		"columnsInput": "列数",
+		"discardedCapturesFmt": "%d 枚の撮影は、コーナーが他の撮影と一致しなかったため破棄されました。代わりの撮影を行ってください。",
 		"exportBoardButton": "印刷用ボードPNGを書き出して開く...",
 		"exportBoardTooltip": "ボードはresources/calibrationに書き出され、画像\nビューアーで開かれます。100%%スケールで印刷し、定規で正方形の\n一辺を確認してください。縮尺がずれると、トラッキング空間全体の\n縮尺もずれてしまいます。同じボードが外部パラメータの基準にも\nなるため、印刷面の「FORWARD」ラベルが世界座標の軸を決めます。",
 		"exportPhonePatternButton": "パターンを画像として書き出す...",
