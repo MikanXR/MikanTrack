@@ -1,5 +1,9 @@
 #include "TestCommon.h"
 
+#include "CalibrationPatternFinder_Chessboard.h"
+
+#include "opencv2/objdetect.hpp"
+
 static int runCharucoTest(const TestArgs& args)
 {
 	int result= 0;
@@ -17,18 +21,19 @@ static int runCharucoTest(const TestArgs& args)
 		pipeline.startup(pipelineConfig);
 
 		MIKAN_LOG_INFO("test-charuco") << "3: MonoLensDistortionCalibrator ctor (wizard path)";
-		MonoLensDistortionCalibrator calibrator(1280, 720, 11, 8, 16.f, 12.f,
-												eCharucoDictionaryType::DICT_6X6, 12);
+		// The default pattern is the 11x8 charuco board of the printed sheet
+		const CalibrationPatternDesc charucoPattern;
+		MonoLensDistortionCalibrator calibrator(1280, 720, charucoPattern, 12);
 
 		MIKAN_LOG_INFO("test-charuco") << "4: update() with synthetic frames";
 		cv::Mat grayFrame(720, 1280, CV_8UC1, cv::Scalar(128));
 		for (int frame= 0; frame < 5; ++frame)
-			calibrator.update(0.033f, &grayFrame);
+			calibrator.update(frame, frame * 0.033, &grayFrame);
 
 		// 5: Regression test for the capture stall: render a synthetic
 		// charuco board and run the wizard loop (update + overlay read
 		// each frame). The overlay read must not commit capture state,
-		// so the stability timer must fire and progress must advance.
+		// so the hold-still gate must fire and progress must advance.
 		MIKAN_LOG_INFO("test-charuco") << "5: capture progress with a rendered board + overlay reads";
 		{
 			const cv::aruco::Dictionary dictionary=
@@ -39,14 +44,25 @@ static int runCharucoTest(const TestArgs& args)
 			// requires the ENTIRE board visible (no partial captures)
 			board.generateImage(cv::Size(1100, 800), boardImage, 180, 1);
 
-			MonoLensDistortionCalibrator boardCalibrator(1100, 800, 11, 8, 16.f, 12.f,
-														 eCharucoDictionaryType::DICT_6X6, 12);
+			MonoLensDistortionCalibrator boardCalibrator(1100, 800, charucoPattern, 12);
+
+			// The same video frame handed over on several UI frames must
+			// not count as a pattern being held still
+			for (int repeat= 0; repeat < 40; ++repeat)
+				boardCalibrator.update(0, repeat * 0.05, &boardImage);
+			if (boardCalibrator.computeCalibrationProgress() > 0.f)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: a repeated video frame was captured";
+				result= 1;
+			}
 
 			t_opencv_point2d_list overlayPoints;
 			cv::Point2f overlayQuad[4];
-			for (int frame= 0; frame < 40; ++frame) // 2s at 50ms > 1s stability window
+			int frameSequence= 1;
+			double frameSeconds= 10.0;
+			for (int frame= 0; frame < 40; ++frame, ++frameSequence, frameSeconds+= 0.05) // 2s, several holds long
 			{
-				boardCalibrator.update(0.05f, &boardImage);
+				boardCalibrator.update(frameSequence, frameSeconds, &boardImage);
 				// Mimic the wizard overlay read every frame
 				boardCalibrator.getPatternFinder()->getCurrentCalibrationPattern(overlayPoints, overlayQuad);
 			}
@@ -75,9 +91,9 @@ static int runCharucoTest(const TestArgs& args)
 				cv::warpAffine(boardImage, shiftedImage, translation, boardImage.size(),
 							   cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(255));
 
-				for (int frame= 0; frame < 40; ++frame)
+				for (int frame= 0; frame < 40; ++frame, ++frameSequence, frameSeconds+= 0.05)
 				{
-					boardCalibrator.update(0.05f, &shiftedImage);
+					boardCalibrator.update(frameSequence, frameSeconds, &shiftedImage);
 					boardCalibrator.getPatternFinder()->getCurrentCalibrationPattern(overlayPoints,
 																					 overlayQuad);
 				}
@@ -95,6 +111,79 @@ static int runCharucoTest(const TestArgs& args)
 					MIKAN_LOG_INFO("test-charuco")
 						<< "Captured " << capturedSamples << " samples after fast move (expected 2)";
 				}
+			}
+		}
+
+		// A board that keeps moving is never held still, so nothing is
+		// captured however long it stays in view
+		MIKAN_LOG_INFO("test-charuco") << "6b: no capture from a moving board";
+		{
+			const cv::aruco::Dictionary dictionary= cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
+			const cv::aruco::CharucoBoard board(cv::Size(11, 8), 0.016f, 0.012f, dictionary);
+			cv::Mat boardImage;
+			board.generateImage(cv::Size(1100, 800), boardImage, 180, 1);
+
+			MonoLensDistortionCalibrator movingCalibrator(1100, 800, charucoPattern, 12);
+			for (int frame= 0; frame < 40; ++frame)
+			{
+				// 3 px a frame at 20 fps, twice the hold-still allowance over its baseline
+				cv::Mat movedImage;
+				const cv::Mat translation= (cv::Mat_<double>(2, 3) << 1, 0, -60.0 + 3.0 * frame, 0, 1, 0);
+				cv::warpAffine(boardImage, movedImage, translation, boardImage.size(), cv::INTER_LINEAR,
+							   cv::BORDER_CONSTANT, cv::Scalar(255));
+				movingCalibrator.update(frame, frame * 0.05, &movedImage);
+			}
+
+			if (movingCalibrator.computeCalibrationProgress() > 0.f)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: a moving board was captured";
+				result= 1;
+			}
+		}
+
+		// The phone's plain chessboard through the same calibrator: found
+		// whole, captured once held still, and captured again after a move
+		MIKAN_LOG_INFO("test-charuco") << "6c: chessboard capture";
+		{
+			const CalibrationPatternDesc chessboardPattern= CalibrationPatternFinder_Chessboard::makePhoneBoardDesc();
+			const cv::Mat boardImage=
+				renderChessboardImage(chessboardPattern.cols, chessboardPattern.rows, 60);
+			// Room around the board for the shifted pose
+			cv::Mat frameImage(boardImage.rows + 200, boardImage.cols + 400, CV_8UC1, cv::Scalar(255));
+			boardImage.copyTo(frameImage(cv::Rect(100, 100, boardImage.cols, boardImage.rows)));
+			cv::Mat shiftedImage(frameImage.size(), CV_8UC1, cv::Scalar(255));
+			boardImage.copyTo(shiftedImage(cv::Rect(250, 100, boardImage.cols, boardImage.rows)));
+
+			MonoLensDistortionCalibrator chessCalibrator(frameImage.cols, frameImage.rows, chessboardPattern, 12);
+			int frameSequence= 0;
+			for (int frame= 0; frame < 20; ++frame, ++frameSequence)
+				chessCalibrator.update(frameSequence, frameSequence * 0.05, &frameImage);
+			const int firstCount= chessCalibrator.getCapturedSampleCount();
+			for (int frame= 0; frame < 20; ++frame, ++frameSequence)
+				chessCalibrator.update(frameSequence, frameSequence * 0.05, &shiftedImage);
+
+			if (firstCount != 1 || chessCalibrator.getCapturedSampleCount() != 2)
+			{
+				MIKAN_LOG_ERROR("test-charuco")
+					<< "REGRESSION: chessboard captures " << firstCount << " then "
+					<< chessCalibrator.getCapturedSampleCount() << " (expected 1 then 2)";
+				result= 1;
+			}
+
+			// The captured views read back from the file a run leaves behind
+			const std::filesystem::path captureSetPath=
+				std::filesystem::temp_directory_path() / "mikan_charuco_test" / "capture_set.json";
+			nlohmann::json captureSet;
+			if (chessCalibrator.writeCaptureSet(captureSetPath))
+				captureSet= nlohmann::json::parse(std::ifstream(captureSetPath), nullptr, false);
+			const size_t cornerCount= (size_t)((chessboardPattern.cols - 1) * (chessboardPattern.rows - 1));
+			if (!captureSet.is_object() || captureSet["views"].size() != 2
+				|| captureSet["views"][1]["points"].size() != cornerCount
+				|| captureSet["views"][1]["ids"].size() != cornerCount
+				|| captureSet["boardPoints"].size() != cornerCount || captureSet["width"] != frameImage.cols)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: the capture set file does not hold the two views";
+				result= 1;
 			}
 		}
 
@@ -158,6 +247,56 @@ static int runCharucoTest(const TestArgs& args)
 			{
 				MIKAN_LOG_ERROR("test-charuco")
 					<< "REGRESSION: synthetic intrinsics recovery failed";
+				result= 1;
+			}
+
+			// 7b: one view with its corners found in the wrong places is
+			// dropped, and the solve on the rest lands where the clean one did
+			MIKAN_LOG_INFO("test-charuco") << "7b: outlier view dropped";
+			std::vector<t_opencv_point2d_list> spoiledPointsList= imagePointsList;
+			for (size_t pointIndex= 0; pointIndex < spoiledPointsList[5].size(); ++pointIndex)
+				spoiledPointsList[5][pointIndex].x+= 0.4f * (float)(pointIndex % 10) * (float)(pointIndex % 10);
+
+			MikanMonoIntrinsics spoiled, cleaned;
+			double spoiledError= 0.0, cleanedError= 0.0;
+			std::vector<DroppedCalibrationView> droppedViews;
+			std::vector<double> viewErrors;
+			computeMonoLensCameraCalibration(width, height, geometry, spoiledPointsList, imagePointIDList, spoiled,
+											 spoiledError);
+			const bool bCleanedSolved= computeMonoLensCameraCalibrationWithoutOutliers(
+				width, height, geometry, spoiledPointsList, imagePointIDList, cleaned, cleanedError, droppedViews,
+				viewErrors);
+
+			MIKAN_LOG_INFO("test-charuco")
+				<< "spoiled hfov=" << spoiled.hfov << " reprojection=" << spoiledError << "px, without outliers hfov="
+				<< cleaned.hfov << " reprojection=" << cleanedError << "px, dropped " << droppedViews.size();
+			if (!bCleanedSolved || droppedViews.size() != 1 || droppedViews[0].viewIndex != 5
+				|| viewErrors.size() != 11 || fabs(cleaned.hfov - truthHfov) > 0.05 || cleanedError > 0.5
+				|| fabs(spoiled.hfov - truthHfov) < 2.0)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: the outlier view was not dropped cleanly";
+				result= 1;
+			}
+
+			// A clean set drops nothing
+			computeMonoLensCameraCalibrationWithoutOutliers(width, height, geometry, imagePointsList,
+															imagePointIDList, cleaned, cleanedError, droppedViews,
+															viewErrors);
+			if (!droppedViews.empty())
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: a clean set dropped " << droppedViews.size() << " views";
+				result= 1;
+			}
+		}
+
+		// The phone page's address survives the QR code a phone reads it from
+		{
+			MIKAN_LOG_INFO("test-charuco") << "QR code round trip";
+			const cv::Mat qrImage= renderQrCodeImage(k_phonePatternUrl, 6);
+			const std::string decoded= qrImage.empty() ? std::string() : cv::QRCodeDetector().detectAndDecode(qrImage);
+			if (decoded != k_phonePatternUrl)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: QR code decoded as '" << decoded << "'";
 				result= 1;
 			}
 		}

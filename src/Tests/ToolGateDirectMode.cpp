@@ -460,6 +460,10 @@ struct RetargetComparison
 		float reprojectPx[3]= {0.f, 0.f, 0.f};
 		bool bStep= false;
 		float stepDeg[3]= {0.f, 0.f, 0.f}; // upper arm, forearm, hand
+		// The posed bones' world rotations from rest, so two runs of one take
+		// under different configs can be compared frame by frame
+		bool bPose= false;
+		glm::quat boneDeltaWorld[4]; // upper arm, forearm, hand, head
 	};
 	std::array<std::array<FrameCandidate, kCandidateCount>, 2> frame{};
 	// This frame's palm as the direct solve read it per side, for the CSV
@@ -697,6 +701,13 @@ struct RetargetComparison
 				FrameCandidate& frameStats= frame[sideIndex][candidate];
 				if (!pose.bones[(int)hand].present)
 					continue;
+
+				{
+					const B poseBones[4]= {upper, lower, hand, B::Head};
+					for (int i= 0; i < 4; ++i)
+						frameStats.boneDeltaWorld[i]= pose.bones[(int)poseBones[i]].deltaWorld;
+					frameStats.bPose= true;
+				}
 
 				// The posed joints into the camera against the model's landmarks
 				if (bHaveMidpoint)
@@ -995,9 +1006,15 @@ void writeCsvHeader(std::ofstream& csv)
 			csv << "," << source << joint << "X," << source << joint << "Y," << source << joint << "Z";
 	const char* candidates[kCandidateCount]= {"direct", "baseline"};
 	for (const char* candidate : candidates)
+	{
 		csv << "," << candidate << "ReprojShoulderPx," << candidate << "ReprojElbowPx," << candidate
 			<< "ReprojWristPx," << candidate << "StepUpperDeg," << candidate << "StepForearmDeg," << candidate
 			<< "StepHandDeg";
+		csv << "," << candidate << "Posed";
+		for (const char* bone : {"Upper", "Forearm", "Hand", "Head"})
+			for (const char* axis : {"W", "X", "Y", "Z"})
+				csv << "," << candidate << bone << "Q" << axis;
+	}
 	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain,directTwistJumpCause\n";
 }
 
@@ -1019,6 +1036,15 @@ void writeCsvCandidates(std::ofstream& csv, const std::array<RetargetComparison:
 			csv << "," << (candidate.bReproject[i] ? candidate.reprojectPx[i] : -1.f);
 		for (int i= 0; i < 3; ++i)
 			csv << "," << (candidate.bStep ? candidate.stepDeg[i] : -1.f);
+		csv << "," << (candidate.bPose ? 1 : 0);
+		for (int i= 0; i < 4; ++i)
+		{
+			const glm::quat& q= candidate.boneDeltaWorld[i];
+			if (candidate.bPose)
+				csv << "," << q.w << "," << q.x << "," << q.y << "," << q.z;
+			else
+				csv << ",0,0,0,0";
+		}
 	}
 }
 } // namespace

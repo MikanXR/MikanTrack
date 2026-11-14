@@ -9,6 +9,7 @@
 #include "glm/ext/vector_double3.hpp"
 
 #include <memory>
+#include <vector>
 
 #define DEFAULT_MONO_HFOV 60.0 // 60 degrees
 #define DEFAULT_MONO_ZNEAR 0.1 // 0.1 meters (10cm)
@@ -33,7 +34,39 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 									  const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
 									  const std::vector<t_opencv_point2d_list>& cvImagePointsList,
 									  const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
-									  struct MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError);
+									  struct MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError,
+									  std::vector<double>* outViewErrors= nullptr);
+
+// One view dropped from a lens solve: its index in the lists handed in and
+// the reprojection error it had in the solve that dropped it
+struct DroppedCalibrationView
+{
+	int viewIndex;
+	double reprojectionError;
+};
+
+// A view whose corners were found in the wrong places bends the focal length
+// to fit it: one such view in twelve moved it 3 percent. Views that fit sit
+// at a few tenths of a pixel, so a view is dropped when its error is over
+// both this many pixels and this many times the median view's.
+constexpr double k_maxViewReprojectionError= 1.0;
+constexpr double k_maxViewErrorOverMedian= 3.0;
+// Fewer views than this are solved as they are
+constexpr int k_minViewsForOutlierDrop= 4;
+
+// The lens solve, repeated with the worst view left out while that view is
+// an outlier under the rule above. One at a time, since the worst view hides
+// the next. outDroppedViews lists what was left out, and the result, the
+// reprojection error and outViewErrors (one per view kept, in order) are the
+// last solve's.
+bool computeMonoLensCameraCalibrationWithoutOutliers(const int frameWidth, const int frameHeight,
+													 const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
+													 const std::vector<t_opencv_point2d_list>& cvImagePointsList,
+													 const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
+													 struct MikanMonoIntrinsics& outIntrinsics,
+													 double& outReprojectionError,
+													 std::vector<DroppedCalibrationView>& outDroppedViews,
+													 std::vector<double>& outViewErrors);
 
 bool computeOpenCVCameraRelativePatternTransform(const struct MikanMonoIntrinsics& intrinsics,
 												 const t_opencv_point2d_list& imagePoints,
@@ -50,6 +83,20 @@ void extractCameraIntrinsicMatrixParameters(const cv::Matx33f& intrinsic_matrix,
 											float& out_principal_point_y, float& out_skew);
 
 void createDefautMonoIntrinsics(int pixelWidth, int pixelHeight, struct MikanMonoIntrinsics& outIntrinsics);
+
+// A lens from its distorted camera matrix values and distortion, with the
+// undistorted matrix and field of view derived as the lens solve derives
+// them. False for a lens outside the solve's plausibility window.
+bool createMonoIntrinsics(const int frameWidth, const int frameHeight, const double focalLengthX,
+						  const double focalLengthY, const double principalPointX, const double principalPointY,
+						  const struct MikanDistortionCoefficients& distortion,
+						  struct MikanMonoIntrinsics& outIntrinsics);
+// A pinhole from a field of view across the frame's diagonal, the figure a
+// webcam's box quotes: principal point at the centre, no distortion. The
+// stand-in for a lens that was never measured.
+constexpr double k_defaultNominalDiagonalFovDegrees= 78.0;
+bool createNominalMonoIntrinsics(const int frameWidth, const int frameHeight, const double diagonalFovDegrees,
+								 struct MikanMonoIntrinsics& outIntrinsics);
 
 void computeOpenGLProjMatFromCameraIntrinsics(const struct MikanMonoIntrinsics& intrinsics, glm::mat4& outProjection,
 											  int* outViewport= nullptr);

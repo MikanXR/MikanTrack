@@ -1,4 +1,5 @@
 #include "PatternExport.h"
+#include "CalibrationPatternFinder_Chessboard.h"
 #include "Logger.h"
 #include "PathUtils.h"
 #include <functional>
@@ -51,6 +52,15 @@ std::filesystem::path exportAndOpenCharucoBoard(int charucoCols, int charucoRows
 									   charucoMarkerLengthMM, charucoDictionaryType, 10.f);
 	});
 }
+std::filesystem::path exportAndOpenPhoneChessboard()
+{
+	return openExportedPattern("phone_chessboard.png", [&](const std::filesystem::path& path) {
+		// 240 px squares: 2640 px across, past the long side of a phone
+		// screen, so the phone scales the image down rather than up
+		return generateChessboardPng(path, CalibrationPatternFinder_Chessboard::k_phoneBoardCols,
+									 CalibrationPatternFinder_Chessboard::k_phoneBoardRows, 240);
+	});
+}
 std::filesystem::path exportAndOpenArucoMarker(int arucoId, eCharucoDictionaryType arucoDictionaryType,
 											  float markerLengthMM)
 {
@@ -89,6 +99,74 @@ bool generateCharucoBoardPng(const std::filesystem::path& pngPath, int charucoCo
 	}
 
 	MIKAN_LOG_INFO("generateCharucoBoardPng") << "ChArUco board PNG saved to: " << pngPath.string();
+
+	return true;
+}
+
+const char* const k_phonePatternUrl= "https://mikanxr.org/calibrate/";
+
+cv::Mat renderQrCodeImage(const std::string& text, int modulePx)
+{
+	cv::Mat modules;
+	try
+	{
+		cv::QRCodeEncoder::create()->encode(text, modules);
+	}
+	catch (const cv::Exception& e)
+	{
+		MIKAN_LOG_ERROR("renderQrCodeImage") << "OpenCV error encoding QR code: " << e.what();
+		return cv::Mat();
+	}
+	if (modules.empty() || modulePx <= 0)
+		return cv::Mat();
+
+	// Nearest neighbour keeps the module edges hard, and a reader needs
+	// white around the code to find it
+	cv::Mat scaled;
+	cv::resize(modules, scaled, cv::Size(), (double)modulePx, (double)modulePx, cv::INTER_NEAREST);
+	const int quietPx= 2 * modulePx;
+	cv::copyMakeBorder(scaled, scaled, quietPx, quietPx, quietPx, quietPx, cv::BORDER_CONSTANT, cv::Scalar(255));
+
+	cv::Mat bgrImage;
+	cv::cvtColor(scaled, bgrImage, cv::COLOR_GRAY2BGR);
+	return bgrImage;
+}
+
+cv::Mat renderChessboardImage(int squareCols, int squareRows, int squareSizePx)
+{
+	const int marginPx= squareSizePx / 2;
+	cv::Mat boardImage(squareRows * squareSizePx + 2 * marginPx, squareCols * squareSizePx + 2 * marginPx, CV_8UC1,
+					   cv::Scalar(255));
+
+	for (int row= 0; row < squareRows; ++row)
+	{
+		for (int col= 0; col < squareCols; ++col)
+		{
+			if ((row + col) % 2 != 0)
+				continue;
+
+			const cv::Rect square(marginPx + col * squareSizePx, marginPx + row * squareSizePx, squareSizePx,
+								  squareSizePx);
+			boardImage(square).setTo(cv::Scalar(0));
+		}
+	}
+
+	return boardImage;
+}
+
+bool generateChessboardPng(const std::filesystem::path& pngPath, int squareCols, int squareRows, int squareSizePx)
+{
+	if (squareCols < 3 || squareRows < 3 || squareSizePx <= 0)
+	{
+		MIKAN_LOG_ERROR("generateChessboardPng") << "Invalid board parameters";
+		return false;
+	}
+
+	if (!cv::imwrite(pngPath.string(), renderChessboardImage(squareCols, squareRows, squareSizePx)))
+	{
+		MIKAN_LOG_ERROR("generateChessboardPng") << "Failed to write PNG to: " << pngPath.string();
+		return false;
+	}
 
 	return true;
 }

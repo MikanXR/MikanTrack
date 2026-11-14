@@ -64,6 +64,8 @@ public:
 	uint32_t getCameraTextureId(int cameraIndex) const;
 	// Width over height of that texture; 16:9 until a frame arrived
 	float getCameraAspect(int cameraIndex) const;
+	// The size of the camera's newest frame, false before one has arrived
+	bool getCameraFrameSize(int cameraIndex, int& outWidth, int& outHeight) const;
 
 	void setActiveCamera(int cameraIndex) { m_activeCamera= cameraIndex; }
 	int getActiveCamera() const { return m_activeCamera; }

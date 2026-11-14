@@ -1,4 +1,4 @@
-#include "CalibrationPatternFinder_Charuco.h"
+#include "CalibrationPatternFinder.h"
 #include "Logger.h"
 #include "MathUtility.h"
 #include "MonoLensDistortionCalibrator.h"
@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
+#include <fstream>
 #include <thread>
 
+#include "nlohmann/json.hpp"
 #include "opencv2/opencv.hpp"
 
 struct MonoLensDistortionCalibrationState
@@ -17,7 +20,16 @@ struct MonoLensDistortionCalibrationState
 		NotStarted,
 		Running,
 		Succeded,
-		Failed
+		Failed,
+		// Views were dropped as outliers: capture resumes for their replacements
+		DroppedSamples
+	};
+
+	// One whole-pattern detection and the capture time of its video frame
+	struct DetectionSample
+	{
+		double timeSeconds;
+		t_opencv_point2d_list points;
 	};
 
 	// Static Input
@@ -33,9 +45,20 @@ struct MonoLensDistortionCalibrationState
 	t_opencv_point2d_list quadList;
 	std::vector<t_opencv_point2d_list> imagePointsList;
 	std::vector<t_opencv_pointID_list> imagePointIDList;
+	// Whether each captured view counted toward the tilt quota
+	std::vector<bool> tiltedList;
 
-	// Image point stability state
-	float imagePointsStabilityTimer;
+	// The views the solves have dropped as outliers since the last reset, kept
+	// for the capture set file, and the kept views' errors in the last solve
+	std::vector<t_opencv_point2d_list> droppedImagePointsList;
+	std::vector<t_opencv_pointID_list> droppedImagePointIDList;
+	std::vector<double> droppedViewErrors;
+	std::vector<double> viewErrors;
+
+	// Steadiness state
+	int64_t lastFrameSequence;
+	std::deque<DetectionSample> recentDetections;
+	float steadyFraction;
 
 	// Async Calibration Compute
 	std::thread* asyncComputeTask;
@@ -58,6 +81,12 @@ struct MonoLensDistortionCalibrationState
 		resetCalibration();
 	}
 
+	void resetSteadiness()
+	{
+		recentDetections.clear();
+		steadyFraction= 0.f;
+	}
+
 	void resetCalibration()
 	{
 		// Reset the capture state
@@ -67,9 +96,15 @@ struct MonoLensDistortionCalibrationState
 		quadList.clear();
 		imagePointsList.clear();
 		imagePointIDList.clear();
+		tiltedList.clear();
+		droppedImagePointsList.clear();
+		droppedImagePointIDList.clear();
+		droppedViewErrors.clear();
+		viewErrors.clear();
 
-		// Reset the stability state
-		imagePointsStabilityTimer= 0.f;
+		// Reset the steadiness state
+		lastFrameSequence= -1;
+		resetSteadiness();
 
 		// Reset the async task state
 		asyncComputeTask= nullptr;
@@ -82,21 +117,17 @@ struct MonoLensDistortionCalibrationState
 };
 
 //-- MonoDistortionCalibrator ----
-MonoLensDistortionCalibrator::MonoLensDistortionCalibrator(int frameWidth, int frameHeight, int charucoCols,
-														   int charucoRows, float charucoSquareLengthMM,
-														   float charucoMarkerLengthMM,
-														   eCharucoDictionaryType charucoDictionaryType,
+MonoLensDistortionCalibrator::MonoLensDistortionCalibrator(int frameWidth, int frameHeight,
+														   const CalibrationPatternDesc& pattern,
 														   int desiredSampleCount)
 	: m_calibrationState(new MonoLensDistortionCalibrationState)
 {
-	m_patternFinder= new CalibrationPatternFinder_Charuco(frameWidth, frameHeight, charucoCols, charucoRows,
-														  charucoSquareLengthMM, charucoMarkerLengthMM,
-														  charucoDictionaryType);
+	m_patternFinder= CalibrationPatternFinder::createLensPatternFinder(pattern, frameWidth, frameHeight);
 
 	this->frameWidth= (float)frameWidth;
 	this->frameHeight= (float)frameHeight;
-	m_cornerCols= charucoCols - 1;
-	m_cornerRows= charucoRows - 1;
+	m_cornerCols= pattern.cols - 1;
+	m_cornerRows= pattern.rows - 1;
 
 	m_calibrationState->init(m_patternFinder, frameWidth, frameHeight, desiredSampleCount);
 }
@@ -113,59 +144,93 @@ MonoLensDistortionCalibrator::~MonoLensDistortionCalibrator()
 	delete m_calibrationState;
 }
 
-void MonoLensDistortionCalibrator::update(float deltaSeconds, const cv::Mat* grayscaleFrame,
-										  const float minSeperationDist)
+void MonoLensDistortionCalibrator::update(int64_t frameSequence, double frameTimeSeconds,
+										  const cv::Mat* grayscaleFrame, const float minSeperationDist)
 {
+	MonoLensDistortionCalibrationState* state= m_calibrationState;
+
 	// Feed the latest grayscale frame to the pattern finder
 	m_patternFinder->setGrayscaleFrame(grayscaleFrame);
 
 	if (hasSampledAllCalibrationPatterns())
 		return;
 
+	// The same video frame again says nothing new about how still the pattern is
+	if (frameSequence == state->lastFrameSequence)
+		return;
+	state->lastFrameSequence= frameSequence;
+
 	// Update the pattern capture state
 	findNewCalibrationPattern(minSeperationDist);
 
-	// Update the image point stability timer.
-	// Once the pattern has been held valid (in a new location) for the stability
-	// duration, capture it as a calibration sample and restart the hold cycle.
-	//
-	// The timer MUST reset on capture (not just when the points go invalid):
-	// a fast board move or a disjoint partial-board detection can produce a
-	// valid detection on the very next frame after a capture, and waiting for
-	// an invalid frame to reset the hold state would stall capture forever.
-	if (areCurrentImagePointsValid())
+	t_opencv_point2d_list imagePoints;
+	cv::Point2f unusedQuad[4];
+	if (!m_patternFinder->getCurrentCalibrationPattern(imagePoints, unusedQuad))
 	{
-		m_calibrationState->imagePointsStabilityTimer+= deltaSeconds;
-		if (m_calibrationState->imagePointsStabilityTimer >= k_imagePointStabilityDuration)
-		{
-			// Tilt quota: focal length is only observable from perspective, so
-			// once the flat-board quota is full, only tilted boards are
-			// accepted. A rejected flat board does NOT touch the finder's
-			// last-valid points, so tilting the board in place re-arms the
-			// hold cycle and captures immediately.
-			const bool bTilted= computeCurrentPatternKeystone() >= k_tiltKeystoneThreshold;
-			const int flatQuota=
-				int_max(m_calibrationState->desiredPatternCount - k_minTiltedSampleCount, 0);
-			const int flatCount=
-				m_calibrationState->capturedPatternCount - m_calibrationState->tiltedPatternCount;
+		state->resetSteadiness();
+		return;
+	}
 
-			if (!bTilted && flatCount >= flatQuota)
-			{
-				m_calibrationState->bWantsTiltedSample= true;
-			}
-			else if (captureLastFoundCalibrationPattern())
-			{
-				if (bTilted)
-					++m_calibrationState->tiltedPatternCount;
-				m_calibrationState->bWantsTiltedSample= false;
-			}
-			m_calibrationState->imagePointsStabilityTimer= 0.f;
+	// A frame time that runs backwards is a restarted stream, and one that
+	// jumps ahead leaves nothing recent enough to compare against
+	if (!state->recentDetections.empty())
+	{
+		const double sinceLastDetection= frameTimeSeconds - state->recentDetections.back().timeSeconds;
+		if (sinceLastDetection < 0.0 || sinceLastDetection > (double)k_steadyMaxFrameGapSeconds)
+			state->resetSteadiness();
+	}
+
+	// Compare against the newest earlier detection that is at least a baseline old
+	state->steadyFraction= 0.f;
+	for (auto it= state->recentDetections.rbegin(); it != state->recentDetections.rend(); ++it)
+	{
+		if (frameTimeSeconds - it->timeSeconds >= (double)k_steadyBaselineSeconds)
+		{
+			const float movement= m_patternFinder->computeMeanPointDistance(imagePoints, it->points);
+			state->steadyFraction= movement > k_steadyMaxMovement ? k_steadyMaxMovement / movement : 1.f;
+			break;
 		}
 	}
-	else
+
+	state->recentDetections.push_back({frameTimeSeconds, imagePoints});
+	// Only one detection older than the baseline is ever read
+	while (state->recentDetections.size() > 1
+		   && frameTimeSeconds - state->recentDetections[1].timeSeconds >= (double)k_steadyBaselineSeconds)
 	{
-		m_calibrationState->imagePointsStabilityTimer= 0.f;
+		state->recentDetections.pop_front();
 	}
+
+	if (state->steadyFraction < 1.f)
+		return;
+
+	// Tilt quota: focal length is only observable from perspective, so
+	// once the flat-board quota is full, only tilted boards are
+	// accepted. A rejected flat board does NOT touch the finder's
+	// last-valid points, so tilting the board in place re-arms the
+	// hold cycle and captures as soon as it is still again.
+	const bool bTilted= computeCurrentPatternKeystone() >= k_tiltKeystoneThreshold;
+	const int flatQuota= int_max(state->desiredPatternCount - k_minTiltedSampleCount, 0);
+	const int flatCount= state->capturedPatternCount - state->tiltedPatternCount;
+
+	if (!bTilted && flatCount >= flatQuota)
+	{
+		state->bWantsTiltedSample= true;
+	}
+	else if (captureLastFoundCalibrationPattern())
+	{
+		if (bTilted)
+		{
+			++state->tiltedPatternCount;
+			state->tiltedList.back()= true;
+		}
+		state->bWantsTiltedSample= false;
+	}
+
+	// The comparison MUST start over on every attempt, captured or not: a
+	// fast board move can produce a valid detection on the very next frame
+	// after a capture, and that frame has to be judged against detections of
+	// its own pose, not the captured one.
+	state->resetSteadiness();
 }
 
 float MonoLensDistortionCalibrator::computeCurrentPatternKeystone() const
@@ -176,7 +241,7 @@ float MonoLensDistortionCalibrator::computeCurrentPatternKeystone() const
 		return 1.f;
 
 	// Full-board detection is enforced by the finder, so the corner list is
-	// the complete grid in charuco-id (row-major) order
+	// the complete grid in row-major order
 	const int cornerCount= m_cornerCols * m_cornerRows;
 	if ((int)imagePoints.size() != cornerCount || m_cornerCols < 2 || m_cornerRows < 2)
 		return 1.f;
@@ -205,6 +270,8 @@ bool MonoLensDistortionCalibrator::wantsTiltedSample() const
 	return m_calibrationState->bWantsTiltedSample && !hasSampledAllCalibrationPatterns();
 }
 
+int MonoLensDistortionCalibrator::getCapturedSampleCount() const { return m_calibrationState->capturedPatternCount; }
+
 int MonoLensDistortionCalibrator::getTiltedSampleCount() const
 {
 	return m_calibrationState->tiltedPatternCount;
@@ -225,6 +292,7 @@ bool MonoLensDistortionCalibrator::captureLastFoundCalibrationPattern()
 	{
 		m_calibrationState->imagePointsList.push_back(imagePoints);
 		m_calibrationState->imagePointIDList.push_back(imagePointIDs);
+		m_calibrationState->tiltedList.push_back(false);
 
 		for (int i= 0; i < 4; ++i)
 		{
@@ -248,10 +316,7 @@ bool MonoLensDistortionCalibrator::areCurrentImagePointsValid() const
 	return m_patternFinder->areCurrentImagePointsValid();
 }
 
-float MonoLensDistortionCalibrator::getStabilityFraction() const
-{
-	return std::min(m_calibrationState->imagePointsStabilityTimer / k_imagePointStabilityDuration, 1.f);
-}
+float MonoLensDistortionCalibrator::getStabilityFraction() const { return m_calibrationState->steadyFraction; }
 
 float MonoLensDistortionCalibrator::computeCalibrationProgress() const
 {
@@ -275,14 +340,43 @@ void MonoLensDistortionCalibrator::computeCameraCalibration()
 	calibrationState->asyncComputeTask= new std::thread(
 		[calibrationState]
 		{
-			bool bSuccess= computeMonoLensCameraCalibration(
+			std::vector<DroppedCalibrationView> droppedViews;
+			bool bSuccess= computeMonoLensCameraCalibrationWithoutOutliers(
 				calibrationState->frameWidth, calibrationState->frameHeight, calibrationState->calibrationGeometry,
 				calibrationState->imagePointsList, calibrationState->imagePointIDList,
-				calibrationState->outputCameraIntrinsics, calibrationState->reprojectionError);
+				calibrationState->outputCameraIntrinsics, calibrationState->reprojectionError, droppedViews,
+				calibrationState->viewErrors);
+
+			// Take the dropped views out of the capture state, highest index
+			// first so the indices still to go stay valid. Nothing else reads
+			// that state until this task reports its status.
+			std::sort(droppedViews.begin(), droppedViews.end(),
+					  [](const DroppedCalibrationView& a, const DroppedCalibrationView& b)
+					  { return a.viewIndex > b.viewIndex; });
+			for (const DroppedCalibrationView& dropped : droppedViews)
+			{
+				const int viewIndex= dropped.viewIndex;
+				calibrationState->droppedImagePointsList.push_back(calibrationState->imagePointsList[viewIndex]);
+				calibrationState->droppedImagePointIDList.push_back(calibrationState->imagePointIDList[viewIndex]);
+				calibrationState->droppedViewErrors.push_back(dropped.reprojectionError);
+
+				if (calibrationState->tiltedList[viewIndex])
+					--calibrationState->tiltedPatternCount;
+				--calibrationState->capturedPatternCount;
+
+				calibrationState->imagePointsList.erase(calibrationState->imagePointsList.begin() + viewIndex);
+				calibrationState->imagePointIDList.erase(calibrationState->imagePointIDList.begin() + viewIndex);
+				calibrationState->tiltedList.erase(calibrationState->tiltedList.begin() + viewIndex);
+				calibrationState->quadList.erase(calibrationState->quadList.begin() + 4 * viewIndex,
+												 calibrationState->quadList.begin() + 4 * viewIndex + 4);
+			}
 
 			// Signal the main thread that the task is complete
-			calibrationState->asyncComputeTaskStatus=
-				bSuccess ? MonoLensDistortionCalibrationState::Succeded : MonoLensDistortionCalibrationState::Failed;
+			if (!droppedViews.empty())
+				calibrationState->asyncComputeTaskStatus= MonoLensDistortionCalibrationState::DroppedSamples;
+			else
+				calibrationState->asyncComputeTaskStatus= bSuccess ? MonoLensDistortionCalibrationState::Succeded
+																   : MonoLensDistortionCalibrationState::Failed;
 		});
 }
 
@@ -291,7 +385,34 @@ bool MonoLensDistortionCalibrator::getIsCameraCalibrationComplete() const
 	auto status= m_calibrationState->asyncComputeTaskStatus.load();
 
 	return status == MonoLensDistortionCalibrationState::Succeded
-		   || status == MonoLensDistortionCalibrationState::Failed;
+		   || status == MonoLensDistortionCalibrationState::Failed
+		   || status == MonoLensDistortionCalibrationState::DroppedSamples;
+}
+
+bool MonoLensDistortionCalibrator::wantsReplacementSamples() const
+{
+	return m_calibrationState->asyncComputeTaskStatus.load() == MonoLensDistortionCalibrationState::DroppedSamples;
+}
+
+int MonoLensDistortionCalibrator::getDroppedSampleCount() const
+{
+	return (int)m_calibrationState->droppedViewErrors.size();
+}
+
+void MonoLensDistortionCalibrator::resumeCapture()
+{
+	if (m_calibrationState->asyncComputeTask != nullptr)
+	{
+		m_calibrationState->asyncComputeTask->join();
+
+		delete m_calibrationState->asyncComputeTask;
+		m_calibrationState->asyncComputeTask= nullptr;
+	}
+	m_calibrationState->asyncComputeTaskStatus= MonoLensDistortionCalibrationState::NotStarted;
+
+	// The pattern is wherever the last capture left it
+	m_calibrationState->bWantsTiltedSample= false;
+	m_calibrationState->resetSteadiness();
 }
 
 int MonoLensDistortionCalibrator::getDesiredPatternCount() const { return m_calibrationState->desiredPatternCount; }
@@ -318,3 +439,57 @@ bool MonoLensDistortionCalibrator::getCameraCalibration(MikanMonoIntrinsics* out
 }
 
 float MonoLensDistortionCalibrator::getReprojectionError() const { return m_calibrationState->reprojectionError; }
+
+bool MonoLensDistortionCalibrator::writeCaptureSet(const std::filesystem::path& path) const
+{
+	const MonoLensDistortionCalibrationState* state= m_calibrationState;
+
+	nlohmann::json boardPoints= nlohmann::json::array();
+	for (const cv::Point3f& point : state->calibrationGeometry.points)
+		boardPoints.push_back({point.x, point.y, point.z});
+
+	nlohmann::json views= nlohmann::json::array();
+	for (size_t viewIndex= 0; viewIndex < state->imagePointsList.size(); ++viewIndex)
+	{
+		nlohmann::json points= nlohmann::json::array();
+		for (const cv::Point2f& point : state->imagePointsList[viewIndex])
+			points.push_back({point.x, point.y});
+		nlohmann::json view= {{"ids", state->imagePointIDList[viewIndex]}, {"points", points}};
+		if (state->viewErrors.size() == state->imagePointsList.size())
+			view["reprojectionError"]= state->viewErrors[viewIndex];
+		views.push_back(view);
+	}
+
+	nlohmann::json droppedViews= nlohmann::json::array();
+	for (size_t viewIndex= 0; viewIndex < state->droppedImagePointsList.size(); ++viewIndex)
+	{
+		nlohmann::json points= nlohmann::json::array();
+		for (const cv::Point2f& point : state->droppedImagePointsList[viewIndex])
+			points.push_back({point.x, point.y});
+		droppedViews.push_back({{"ids", state->droppedImagePointIDList[viewIndex]},
+								{"points", points},
+								{"reprojectionError", state->droppedViewErrors[viewIndex]}});
+	}
+
+	const nlohmann::json captureSet= {
+		{"width", state->frameWidth},
+		{"height", state->frameHeight},
+		{"boardPoints", boardPoints},
+		{"views", views},
+		{"droppedViews", droppedViews},
+		{"solved", state->asyncComputeTaskStatus.load() == MonoLensDistortionCalibrationState::Succeded},
+		{"reprojectionError", state->reprojectionError},
+	};
+
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream file(path);
+	if (!file.is_open())
+	{
+		MIKAN_LOG_WARNING("MonoLensDistortionCalibrator::writeCaptureSet")
+			<< "Could not write the capture set to " << path.string();
+		return false;
+	}
+	file << captureSet.dump();
+	return true;
+}

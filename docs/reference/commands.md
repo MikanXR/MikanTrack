@@ -92,6 +92,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-stage-view`: Stage View: the content of every view mode and the mode names
 - `--test-pipeline-model`: pipeline model: layout per project shape, stage ids, status rules, string table coverage
 - `--test-vrm`: VRM loader and rest skeleton on synthetic in-memory files, both VRM generations
+- `--test-webcam-table`: webcam table: USB ids, table lookup and scaling, the nominal pinhole, the intrinsics source
 
 ### Hardware (need a camera or controller physically connected to mean anything)
 
@@ -113,6 +114,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
 - `--replay-extrinsics`: A/B a candidate extrinsics config against a recording
+- `--replay-intrinsics <frames_dir> chessboard|charuco [cols rows] [capture_set.json]`: runs the intrinsics wizard's pattern finder, hold-still gate and lens solve over a folder of frames recorded by `tools/intrinsics_spike/pattern_probe.py`, reporting the samples the gate took and the solved focal length, distortion and reprojection error, the check for a change to the gate or a finder. A trailing `.json` path receives the captured views, the file the wizard leaves in the project's `dumps/` after each run
 - `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates
 - `--replay-popmetrics`: pop statistics of a recording: baseline vs hand estimator
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
@@ -128,6 +130,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 Python, no build needed:
 
 - `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
+- `tools/intrinsics_spike/`: the calibration what-if scripts over recordings (header patching, raw-equivalent frames, the `--gate-direct` sensitivity sweep, the focal length estimators), run from their own venv as its README sets out
 
 ---
 

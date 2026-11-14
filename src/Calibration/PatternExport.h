@@ -3,6 +3,9 @@
 #include "CalibrationPatternFinder.h"
 
 #include <filesystem>
+#include <string>
+
+#include "opencv2/core/mat.hpp"
 
 // Renders a printable ChArUco board image and writes it to a PNG file.
 // Adapted from MikanXR's MarkerObjectSystem::printMarker (minus the libharu PDF output).
@@ -10,6 +13,18 @@
 bool generateCharucoBoardPng(const std::filesystem::path& pngPath, int charucoCols, int charucoRows,
 							 float charucoSquareLengthMM, float charucoMarkerLengthMM,
 							 eCharucoDictionaryType charucoDictionaryType, float pixelsPerMM);
+
+// A plain chessboard, squares across and down, with a white margin half a
+// square wide: the pattern a phone screen shows for lens calibration. The top
+// left square is black.
+cv::Mat renderChessboardImage(int squareCols, int squareRows, int squareSizePx);
+bool generateChessboardPng(const std::filesystem::path& pngPath, int squareCols, int squareRows, int squareSizePx);
+
+// The page that shows the phone chessboard, and that address as a QR code
+// image: black on white, CV_8UC3, each module modulePx across, with a quiet
+// margin. Empty when the text cannot be encoded.
+extern const char* const k_phonePatternUrl;
+cv::Mat renderQrCodeImage(const std::string& text, int modulePx);
 
 // Writes a printable pattern to the standard calibration resource path and
 // opens it in the OS's default image viewer, ready to print. Returns the
@@ -20,6 +35,9 @@ bool generateCharucoBoardPng(const std::filesystem::path& pngPath, int charucoCo
 std::filesystem::path exportAndOpenCharucoBoard(int charucoCols, int charucoRows,
 												float charucoSquareLengthMM, float charucoMarkerLengthMM,
 												eCharucoDictionaryType charucoDictionaryType);
+// The phone chessboard as an image file, for a phone with no connection to
+// load the page: sent to the phone and shown full screen it is the same board
+std::filesystem::path exportAndOpenPhoneChessboard();
 std::filesystem::path exportAndOpenArucoMarker(int arucoId, eCharucoDictionaryType arucoDictionaryType,
 											   float markerLengthMM);
 

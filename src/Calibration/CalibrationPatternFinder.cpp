@@ -1,5 +1,7 @@
 // Main implementation file that includes all calibration pattern finder implementations
 #include "CalibrationPatternFinder.h"
+#include "CalibrationPatternFinder_Charuco.h"
+#include "CalibrationPatternFinder_Chessboard.h"
 #include "CameraMath.h"
 #include "Logger.h"
 #include "MathOpenCV.h"
@@ -7,6 +9,7 @@
 #include "MathUtility.h"
 
 #include <algorithm>
+#include <cfloat>
 
 #include "opencv2/opencv.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
@@ -97,6 +100,36 @@ bool CalibrationPatternFinder::estimateNewCalibrationPatternPose(glm::dmat4& out
 }
 
 bool CalibrationPatternFinder::areCurrentImagePointsValid() const { return m_currentImagePoints.size() > 0; }
+
+float CalibrationPatternFinder::computeMeanPointDistance(const t_opencv_point2d_list& pointsA,
+														 const t_opencv_point2d_list& pointsB) const
+{
+	if (pointsA.empty() || pointsA.size() != pointsB.size())
+		return FLT_MAX;
+
+	float distanceSum= 0.f;
+	for (size_t pointIndex= 0; pointIndex < pointsA.size(); ++pointIndex)
+		distanceSum+= (float)cv::norm(pointsA[pointIndex] - pointsB[pointIndex]);
+
+	return distanceSum / (float)pointsA.size();
+}
+
+CalibrationPatternFinder* CalibrationPatternFinder::createLensPatternFinder(const CalibrationPatternDesc& pattern,
+																			int frameWidth, int frameHeight)
+{
+	switch (pattern.type)
+	{
+	case eCalibrationPatternType::mode_chessboard:
+		return new CalibrationPatternFinder_Chessboard(frameWidth, frameHeight, pattern.cols, pattern.rows,
+													   pattern.squareLengthMM);
+	case eCalibrationPatternType::mode_charuco:
+		return new CalibrationPatternFinder_Charuco(frameWidth, frameHeight, pattern.cols, pattern.rows,
+													pattern.squareLengthMM, pattern.markerLengthMM,
+													pattern.dictionary);
+	default:
+		CV_Error(cv::Error::StsBadArg, "Not a lens calibration pattern");
+	}
+}
 
 ArucoDictionaryPtr CalibrationPatternFinder::getArucoDictionary(eCharucoDictionaryType dictionaryType)
 {

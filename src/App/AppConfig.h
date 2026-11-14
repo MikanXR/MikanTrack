@@ -25,9 +25,22 @@ struct VideoConfig
 	std::string modeName;
 };
 
+// Where a camera's intrinsics came from. Only a calibrated lens is good
+// enough for the extrinsics solve, and the other two stand in for one on a
+// single camera that was never shown a pattern.
+enum class eIntrinsicsSource
+{
+	Calibrated, // solved by the intrinsics wizard
+	Table,      // the shipped webcam table's values for this camera model
+	Nominal,    // a pinhole from a typed field of view
+};
+
 struct IntrinsicsConfig
 {
 	bool present= false;
+	// A config without the key reads as calibrated
+	eIntrinsicsSource source= eIntrinsicsSource::Calibrated;
+	bool isCalibrated() const { return present && source == eIntrinsicsSource::Calibrated; }
 	MikanMonoIntrinsics intrinsics;
 	double reprojectionError= 0.0;
 };
@@ -88,6 +101,14 @@ struct HandSkeletonConfig
 {
 	bool present[2]= {false, false}; // indexed by eHandSide
 	std::array<HandSkeleton, 2> skeleton{};
+};
+
+// The pattern the lens calibration looks for: a chessboard shown on a phone
+// screen, or the printed charuco board
+enum class eIntrinsicsPattern
+{
+	PhoneChessboard,
+	PrintedCharuco,
 };
 
 struct CharucoBoardConfig
@@ -343,9 +364,8 @@ struct DirectConfig
 	// The camera whose landmarks drive the avatar
 	int cameraIndex= 0;
 	// The camera's downward pitch, degrees, positive looking down, set by
-	// the user alone (a webcam on top of the monitor by default; nothing
-	// measures it)
-	float cameraTiltDegrees= 10.f;
+	// the user alone (a level camera by default; nothing measures it)
+	float cameraTiltDegrees= 0.f;
 	bool neutralPresent= false;
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};
@@ -459,6 +479,9 @@ public:
 	HandScaleConfig handScale;
 	HandSkeletonConfig handSkeleton;
 	CharucoBoardConfig charucoBoard;
+	// A config without the key reads as the phone for one camera and the
+	// printed board for more
+	eIntrinsicsPattern intrinsicsPattern= eIntrinsicsPattern::PhoneChessboard;
 	TrackingConfig tracking;
 	OscConfig osc;
 	FusionConfig fusion;

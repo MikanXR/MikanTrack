@@ -6,7 +6,12 @@ The calibration subsystem in `src/Calibration`, built on OpenCV, plus the ImGui 
 
 ## Shared infrastructure
 
-- `CalibrationPatternFinder` (`src/Calibration/CalibrationPatternFinder.h`) is the pattern-detection base class with two subclasses: `CalibrationPatternFinder_Charuco` (`cv::aruco::CharucoDetector`, used by intrinsics) and `CalibrationPatternFinder_Aruco` (`cv::aruco::ArucoDetector`, used by extrinsics). Both use the `DICT_6X6` dictionary.
+- `CalibrationPatternFinder` (`src/Calibration/CalibrationPatternFinder.h`) is the pattern-detection base class with three subclasses:
+	- `CalibrationPatternFinder_Charuco` (`cv::aruco::CharucoDetector`), the printed board for intrinsics
+	- `CalibrationPatternFinder_Chessboard` (`cv::findChessboardCorners`), the plain chessboard a phone screen shows for intrinsics
+	- `CalibrationPatternFinder_Aruco` (`cv::aruco::ArucoDetector`), the origin marker for extrinsics
+
+	The charuco and ArUco finders use the `DICT_6X6` dictionary. `CalibrationPatternFinder::createLensPatternFinder` builds either intrinsics finder from a `CalibrationPatternDesc`.
 - `PatternPoseSampler` (`src/Calibration/PatternPoseSampler.h`) samples one camera's view of a static pattern for extrinsics. It pools per-corner pixel observations across captures (keyed by pattern point ID) and solves one pose from the averages, rather than averaging per-frame poses, which attacks detection noise where it enters and yields one meaningful reprojection error.
 - `CVVideoFrameProcessor` (`src/Calibration/CVVideoFrameProcessor.cpp`) bakes intrinsics into X/Y remap maps via `cv::initUndistortRectifyMap` and applies them with `cv::remap`. `VisionThread` recreates it unconditionally on every config refresh: gating on frame dimensions alone once kept a previous calibration's maps alive after recalibrating at the same resolution.
 - `PatternExport` (`src/Calibration/PatternExport.cpp`) writes the printable patterns to `resources/calibration` and opens them with `PathUtils::openFileWithDefaultApplication`. The wizards expose this as export buttons, and the same generators run headless as `--export-board [cols rows squareMM markerMM]` (`src/Tests/ToolExportBoard.cpp`) and `--export-marker [markerId markerLengthMM]` (`src/Tests/ToolExportMarker.cpp`), defaulting to the saved config's parameters. Both sheets must print at 100% scale: a rescaled print silently rescales the whole tracking world.
@@ -15,25 +20,63 @@ The calibration subsystem in `src/Calibration`, built on OpenCV, plus the ImGui 
 
 ## Lens intrinsics (per camera)
 
-`IntrinsicsWizard` (`src/UI/IntrinsicsWizard.cpp`) drives `MonoLensDistortionCalibrator` for one camera at a time. On entry it disables tracking and undistortion for that camera (samples need raw distorted frames); the other cameras keep tracking. The user shows a printed charuco board, whose geometry comes from the `CharucoBoardConfig` block and is edited in the wizard.
+`IntrinsicsWizard` (`src/UI/IntrinsicsWizard.cpp`) drives `MonoLensDistortionCalibrator` for one camera at a time. On entry it disables tracking and undistortion for that camera (samples need raw distorted frames); the other cameras keep tracking. The user shows one of two patterns, chosen in the wizard's first screen and persisted as `AppConfig::intrinsicsPattern` (a config without the key reads as the phone for one camera and the printed board for more):
 
-Sample gating, in `MonoLensDistortionCalibrator::update` and `CalibrationPatternFinder_Charuco::findNewCalibrationPattern`:
+- The phone chessboard: a fixed 10 by 5 board drawn by the page at `https://mikanxr.org/calibrate/` (`static/calibrate/index.html` in the website repo), which the wizard offers as a QR code rendered by `renderQrCodeImage` (`cv::QRCodeEncoder`) with the address beside it. The path has no inputs, since the solve depends on the board's proportions and not its size. An export button writes the same board as a PNG for a phone with no connection.
 
-- Full board required. Partial detections technically calibrate (the solve matches corners by charuco ID), but they are exactly the marginal-condition samples that fed wild focal-length solves, so every corner must be detected.
+- The printed charuco board, whose geometry comes from the `CharucoBoardConfig` block and is edited in the wizard.
 
-- A sample auto-captures after the board holds steady for `k_imagePointStabilityDuration` (1 s) in a new location (`k_defaultMinSeperationDist`, 10 px average corner movement).
+The choice and the phone instructions are drawn by `LensPatternPrompt` (`src/UI/LensPatternPrompt.cpp`), which the guided setup's board step shares. A charuco board on a phone screen is not offered: the screen's bloom corrupts the marker bits, so the board is rarely found whole.
+
+Sample gating, in `MonoLensDistortionCalibrator::update` and each finder's `findNewCalibrationPattern`:
+
+- Full board required. Partial detections technically calibrate (the solve matches corners by charuco ID), but they are exactly the marginal-condition samples that fed wild focal-length solves, so every corner must be detected. A chessboard has no corner identity, so it is only ever found whole.
+
+- A sample auto-captures when the board is held still in a new location (`k_defaultMinSeperationDist`, 10 px average corner movement from the last sample). Still means the corners moved no more than `k_steadyMaxMovement` (3 px on average) against the detection `k_steadyBaselineSeconds` (0.09 s) earlier. A moving board is blurred and its corners land off: on a hand-held phone, samples taken without this test put the solved focal length up to 8.5 percent out, and with it inside 2.3 percent. One comparison is the whole test, because a hand-held board is only that still for a frame or two at a time.
+
+- The gate advances once per video frame. The wizard runs on the UI frame and reads a latest-wins preview, so it passes the preview's frame index and capture time, and a frame seen again is ignored.
+
+- The chessboard finder detects with `cv::findChessboardCorners` on every frame and re-detects the captured frame with `cv::findChessboardCornersSB`, whose corners the sample keeps. The second detector places corners better on a soft or bloomed image (0.3 px reprojection against 0.7 px) at 40 to 55 ms a frame. When it does not find the board the capture is refused.
 
 - Tilt quota: focal length is only observable from perspective, so at least `k_minTiltedSampleCount` (4) of the 12 samples must show keystone at or above `k_tiltKeystoneThreshold` (1.10, the ratio of opposite outer edge lengths). Once the flat-board quota fills, fronto-parallel boards are rejected and the wizard prompts for tilt.
 
 The solve is `computeMonoLensCameraCalibration` (`src/Calibration/CameraMath.cpp`): `cv::initCameraMatrix2D` then `cv::calibrateCamera` with `CALIB_FIX_ASPECT_RATIO + CALIB_FIX_PRINCIPAL_POINT + CALIB_ZERO_TANGENT_DIST + CALIB_RATIONAL_MODEL + CALIB_FIX_K3 + CALIB_FIX_K4 + CALIB_FIX_K5 + CALIB_FIX_K6`, so only k1/k2 are estimated. k6 must be fixed along with k3/k4/k5: under the rational model a free k6 is a lone r^6 denominator degree of freedom that fits the captured corners to sub-pixel error while going wild outside them, after which `cv::getOptimalNewCameraMatrix` emits a degenerate undistorted matrix. The result then passes plausibility gates before it is accepted: hfov must land in a 20 to 160 degree window and the undistorted/distorted fx ratio in 0.2 to 5.0, because a degenerate capture set reports sub-pixel reprojection error while the recovered focal length is nonsense. Failing either gate fails the calibration loudly instead of persisting intrinsics that poison every downstream solve.
 
-On accept the wizard writes `IntrinsicsConfig` for that camera plus the board parameters, saves the config, and re-enables undistortion so the user can verify straight lines in the live preview. The undistortion maps are rebuilt from the new intrinsics unconditionally (see shared infrastructure above).
+The calibrator runs the solve through `computeMonoLensCameraCalibrationWithoutOutliers`, which drops outlier views. A detector now and then returns a full grid with its corners in the wrong places, most often on a steeply tilted pattern, and one such view in twelve moved the focal length 3 percent while the run's overall error stayed plausible. Views that fit sit at 0.1 to 0.5 px, so the worst view is dropped while its reprojection error is over both `k_maxViewReprojectionError` (1 px) and `k_maxViewErrorOverMedian` (3) times the median view's, and the solve repeats. One view goes at a time, since the worst hides the next. When views were dropped the calibrator reports `wantsReplacementSamples`, the wizard returns to capture with a count of the discarded views, and the solve runs again once their replacements are in, so an accepted result always stands on the full sample count.
+
+Once a solve finishes, passed or not, the wizard writes the views it ran on to `dumps/intrinsics_capture_camera<N>.json` in the project folder (`MonoLensDistortionCalibrator::writeCaptureSet`: the frame size, the board's points, each kept view's image points, ids and error, and the views dropped as outliers), one file per camera that the next solve overwrites. The set solves again offline, so a run that lands off can be compared with a good one (`tools/intrinsics_spike/board_runs.py views`).
+
+On accept the wizard writes `IntrinsicsConfig` for that camera plus the pattern choice and the board parameters, saves the config, and re-enables undistortion so the user can verify straight lines in the live preview. The undistortion maps are rebuilt from the new intrinsics unconditionally (see shared infrastructure above).
 
 ---
 
+### A lens without a calibration
+
+A camera's `IntrinsicsConfig` carries a `source` beside `present`:
+
+- `calibrated`: solved by the intrinsics wizard. A config without the key reads as this.
+- `table`: the shipped webcam table's values for the camera model
+- `nominal`: a pinhole from a typed field of view
+
+`present` is true for all three, so everything that needs a lens (undistortion, the direct solve, the lift) runs on any of them. `IntrinsicsConfig::isCalibrated` is the stricter test, and the extrinsics wizard and its two launch gates use it: a table or nominal lens stands in for a calibration on one camera and is not accepted for placing cameras against each other.
+
+The webcam table is `resources/calibration/webcam_table.json`, read by `WebcamIntrinsicsTable` (`src/Calibration/WebcamIntrinsicsTable.cpp`). Each camera is keyed by its USB vendor and product ids in hex, as the device path spells them (`parseUsbDeviceIds`, `src/Utility/UsbDeviceIds.cpp`), and lists calibrations by frame size: focal length, principal point, and eight distortion coefficients in OpenCV's order. The lookup rules:
+
+- A calibration at the frame size is used as stored.
+
+- Otherwise the largest calibration of the same aspect ratio is scaled by the width ratio (focal length and principal point, with the distortion unchanged).
+
+- A size of another aspect ratio is no match. A webcam often crops its sensor for such a mode: the C920's 640x480 focal length is 622 where scaling its 16:9 calibration would give 462.
+
+The entries from the FTC SDK's `teamwebcamcalibrations.xml` ship under its license, reproduced in `resources/calibration/webcam_table_license.txt`. The rest are means of this project's own charuco calibrations. An entry is one or two units of a model, and units differ: the two C960s on the rig are 4 percent apart in focal length. The FTC C920 entry scales to 923.9 px at 1280x720 against 924.1 measured here.
+
+`createNominalMonoIntrinsics` (`src/Calibration/CameraMath.cpp`) builds the nominal lens from a field of view across the frame's diagonal, the figure a webcam's box quotes, 78 degrees by default: one focal length, the principal point at the centre, no distortion. Both it and a table entry go through `createMonoIntrinsics`, which derives the undistorted matrix and field of view the way the solve does and applies the same plausibility window.
+
+Only the guided setup's single-front variant writes a table or nominal lens (the lens step, architecture.md). The Calibration panel names the source and keeps offering the wizard, whose result replaces it as `calibrated`. The Pipeline panel's direct solver notes a nominal lens.
+
 ## Extrinsics (all cameras at once)
 
-`ExtrinsicsWizard` (`src/UI/ExtrinsicsWizard.cpp`) calibrates every camera in one session against a single printed ArUco marker lying flat on the table. Every camera needs calibrated intrinsics first; the wizard refuses to start otherwise, since the pose solve runs on undistorted points through the calibrated camera matrix. A charuco board was evaluated for this target and rejected as a fit: at the 60 to 70 cm desk working distance the largest squares that fit on letter paper do not resolve enough corner detail to detect, while one large ArUco square does (see the `ExtrinsicsConfig` comment in `src/App/AppConfig.h` and [LEARNINGS.md](../../LEARNINGS.md)).
+`ExtrinsicsWizard` (`src/UI/ExtrinsicsWizard.cpp`) calibrates every camera in one session against a single printed ArUco marker lying flat on the table. Every camera needs calibrated intrinsics first (`IntrinsicsConfig::isCalibrated`, so not a table or nominal lens); the wizard refuses to start otherwise, since the pose solve runs on undistorted points through the calibrated camera matrix. A charuco board was evaluated for this target and rejected as a fit: at the 60 to 70 cm desk working distance the largest squares that fit on letter paper do not resolve enough corner detail to detect, while one large ArUco square does (see the `ExtrinsicsConfig` comment in `src/App/AppConfig.h` and [LEARNINGS.md](../../LEARNINGS.md)).
 
 The marker is the world anchor: it defines the tracking world's origin and its axes, and it stays on the table during tracking. The printed sheet carries FORWARD/LEFT/RIGHT axis labels because laying it down turned produces tracking that is self-consistent and points the wrong way. The world frame it pins (+X forward, +Z up out of the table) and the OpenCV-convention camera space the stored transform maps from are documented in [conventions.md](./conventions.md); the stored `markerFromCamera` is built in `computeWorldFromCameraPose` and right-multiplied by the wizard's `k_cvFromGlFlip` so it maps CV-convention camera points directly to world.
 
@@ -111,7 +154,7 @@ The wrist-to-middle-MCP reference length that scales the monocular PnP object mo
 
 All calibration results live in the active project's `project.json` (`AppConfig`, serialization in `src/App/AppConfig.cpp`; projects live under `%USERPROFILE%/Documents/MikanTrack/`). The intrinsics, extrinsics, and hand wizards save immediately on accept; the body and mounting wizards mark the config dirty for the auto-save (3 second cooldown).
 
-- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the board geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
+- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `source`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the pattern choice under `intrinsicsPattern` (`phone` or `printed`) and the printed board's geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
 - Extrinsics: per camera under `cameras[i].extrinsics` (`present`, `markerFromCamera`, `patternReprojectionErrorPx`, `patternCornerCount`, `markerId`, `markerLengthMm`), plus the cross-camera worst-pair metrics under top-level `extrinsicsQuality` (`worstPairReprojectionRmsPx`, `worstPairSpacingErrorMm`, `worstPairSpacingScale`, `worstPairPlanarityRmsMm`, and the pair's identity)
 - Lift depth scale: per camera under `cameras[i].liftDepthScale` (left, right), the factor on that camera's monocular lift distance, 1 until measured
 - Hand bones: `handSkeleton.left`/`handSkeleton.right` (finger bases plus phalanx lengths; neutral directions are rebuilt on load), and the reference bone under `handScale` (`present`, `refLengthMeters`)

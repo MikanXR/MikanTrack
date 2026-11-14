@@ -60,6 +60,21 @@ float VideoPreviewPanel::getCameraAspect(int cameraIndex) const
 	return 16.f / 9.f;
 }
 
+bool VideoPreviewPanel::getCameraFrameSize(int cameraIndex, int& outWidth, int& outHeight) const
+{
+	if (cameraIndex >= 0 && cameraIndex < (int)m_panes.size())
+	{
+		const CameraPane& pane= *m_panes[cameraIndex];
+		if (pane.bHasFrame && pane.texture->getWidth() > 0 && pane.texture->getHeight() > 0)
+		{
+			outWidth= pane.texture->getWidth();
+			outHeight= pane.texture->getHeight();
+			return true;
+		}
+	}
+	return false;
+}
+
 const ImageToScreenMapping& VideoPreviewPanel::getImageToScreenMapping(int cameraIndex) const
 {
 	if (cameraIndex >= 0 && cameraIndex < (int)m_panes.size())

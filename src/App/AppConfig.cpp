@@ -287,6 +287,10 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 	const json& in= j.value("intrinsics", json::object());
 	profile.intrinsics.present= in.value("present", false);
 	profile.intrinsics.reprojectionError= in.value("reprojectionError", 0.0);
+	const std::string intrinsicsSource= in.value("source", "calibrated");
+	profile.intrinsics.source= intrinsicsSource == "table"	   ? eIntrinsicsSource::Table
+							   : intrinsicsSource == "nominal" ? eIntrinsicsSource::Nominal
+															   : eIntrinsicsSource::Calibrated;
 	MikanMonoIntrinsics& mono= profile.intrinsics.intrinsics;
 	mono.pixel_width= in.value("width", 0.0);
 	mono.pixel_height= in.value("height", 0.0);
@@ -340,6 +344,9 @@ static json cameraProfileToJson(const CameraProfile& profile)
 		 {
 			 {"present", profile.intrinsics.present},
 			 {"reprojectionError", profile.intrinsics.reprojectionError},
+			 {"source", profile.intrinsics.source == eIntrinsicsSource::Table	  ? "table"
+						: profile.intrinsics.source == eIntrinsicsSource::Nominal ? "nominal"
+																				  : "calibrated"},
 			 {"width", mono.pixel_width},
 			 {"height", mono.pixel_height},
 			 {"aspectRatio", mono.aspect_ratio},
@@ -852,6 +859,11 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.charucoBoard.squareLengthMM= cb.value("squareMm", 16.0);
 	config.charucoBoard.markerLengthMM= cb.value("markerMm", 12.0);
 
+	const std::string intrinsicsPattern=
+		j.value("intrinsicsPattern", config.cameras.size() == 1 ? "phone" : "printed");
+	config.intrinsicsPattern= intrinsicsPattern == "phone" ? eIntrinsicsPattern::PhoneChessboard
+														   : eIntrinsicsPattern::PrintedCharuco;
+
 	const json& tr= j.value("tracking", json::object());
 	config.tracking.flipHandedness= tr.value("flipHandedness", true);
 	config.tracking.detectorIntervalFrames= tr.value("detectorIntervalFrames", 30);
@@ -1038,6 +1050,7 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 		{"squareMm", charucoBoard.squareLengthMM},
 		{"markerMm", charucoBoard.markerLengthMM},
 	};
+	j["intrinsicsPattern"]= intrinsicsPattern == eIntrinsicsPattern::PhoneChessboard ? "phone" : "printed";
 
 	j["tracking"]= {
 		{"flipHandedness", tracking.flipHandedness},

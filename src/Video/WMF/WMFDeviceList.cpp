@@ -4,6 +4,7 @@
 
 // -- includes -----
 #include "WMFDeviceList.h"
+#include "UsbDeviceIds.h"
 #include "WMFDeviceInfo.h"
 #include "Logger.h"
 #include "MemoryUtils.h"
@@ -129,9 +130,7 @@ static bool FetchDeviceInfo(IMFActivate** wmfDeviceList, int wmfDeviceIndex, WMF
 			char symLinkGuid[36 + 1];
 
 			// USB device symbolic link
-			if (sscanf_s(szDeviceSymbolicLink, "\\\\?\\usb#vid_%x&pid_%x#", &deviceInfo.usbVendorId,
-						 &deviceInfo.usbProductId)
-				== 2)
+			if (parseUsbDeviceIds(szDeviceSymbolicLink, deviceInfo.usbVendorId, deviceInfo.usbProductId))
 			{
 				BYTE hash[8];
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,9 +12,12 @@ class BodyCalibrationWizard;
 class ExtrinsicsWizard;
 class HandCalibrationWizard;
 class IntrinsicsWizard;
+class LensPatternPrompt;
 class MainWindow;
 class MountingWizard;
 class VideoPreviewPanel;
+struct WebcamTableMatch;
+enum class eIntrinsicsPattern;
 
 // Guided new-project setup: a chain of modal prompts and the existing
 // calibration wizards in dependency order (cameras, intrinsics per camera,
@@ -74,6 +78,7 @@ public:
 
 	SetupFlow(App* app, MainWindow* mainWindow, VideoPreviewPanel* previewPanel,
 			  const WizardSet& wizards);
+	~SetupFlow();
 
 	void begin();
 	bool isActive() const { return m_step != eStep::Inactive; }
@@ -86,6 +91,18 @@ public:
 	// The chain: the step after a completed one for a variant, Inactive when
 	// the flow finishes there. Pure, so the chains are self-tested.
 	static eStep nextStep(eTrackingSetup setup, eStep completed);
+
+	// How the single-front variant's lens step settles the camera's lens
+	enum class eLensChoice
+	{
+		Table,   // the webcam table's values for this camera model
+		Phone,   // calibrate on a chessboard shown by a phone
+		Printed, // calibrate on the printed charuco board
+		Skip,    // a pinhole from a typed field of view
+	};
+	// The step a lens choice completes: a calibration goes on to the
+	// intrinsics wizard, and a table or skipped lens passes over it
+	static eStep stepCompletedByLensChoice(eLensChoice choice);
 	static int getRequiredCameraCount(eTrackingSetup setup);
 
 private:
@@ -103,6 +120,8 @@ private:
 	void updateAvatarLoadPrompt();
 	void updateCameraSelectionPrompt();
 	void updateCharucoPrintPrompt();
+	// The single-front variant's form of that step
+	void updateLensPrompt();
 	void updateArucoPrintPrompt();
 	void updateHandednessCheckPrompt();
 	void updateNeutralCapturePrompt();
@@ -133,6 +152,9 @@ private:
 	// HandednessCheck state: whether this visit to the step has switched the
 	// flip setting, which it does once, and how long ago
 	bool m_bHandednessFlipApplied= false;
+	// Both hands have been seen on their own sides this visit. It stays set
+	// once they drop, since a hand has to come down to press Next.
+	bool m_bHandednessMatched= false;
 	float m_handednessFlipAgeSeconds= 0.f;
 
 	// CameraSelection state: chosen enumeration index per camera slot, -1 =
@@ -140,6 +162,17 @@ private:
 	std::vector<int> m_selectedDeviceIndices;
 
 	// Print-prompt edit fields (seeded from the config on step entry)
+	std::unique_ptr<LensPatternPrompt> m_patternPrompt;
+	eIntrinsicsPattern m_intrinsicsPattern;
+	// Lens step state: the choice, the camera's frame size and table match
+	// (looked up once its first frame is in), and the typed field of view
+	eLensChoice m_lensChoice= eLensChoice::Phone;
+	bool m_bLensTableChecked= false;
+	bool m_bLensTableMatch= false;
+	std::unique_ptr<WebcamTableMatch> m_lensTableMatch;
+	int m_lensFrameWidth= 0;
+	int m_lensFrameHeight= 0;
+	float m_nominalDiagonalFovDegrees= 78.f;
 	int m_boardCols= 11;
 	int m_boardRows= 8;
 	float m_boardSquareLengthMM= 16.f;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -9,10 +10,13 @@
 #include "WizardResult.h"
 
 class AppConfig;
+class LensPatternPrompt;
 class MonoLensDistortionCalibrator;
 class VisionThread;
+enum class eIntrinsicsPattern;
 
-// Charuco camera-intrinsics calibration wizard.
+// Camera-intrinsics calibration wizard, on a chessboard shown by a phone or
+// the printed charuco board.
 // Runs pattern detection on the main thread from the preview frames
 // (ML tracking and undistortion are paused while active).
 class IntrinsicsWizard
@@ -36,11 +40,14 @@ public:
 	int getCameraIndex() const { return m_cameraIndex; }
 	eWizardResult getResult() const { return m_result; }
 
-	// Called each frame while active. bgrPreview is the newest preview frame
-	// (may be empty when no stream). Overlay drawing goes to the video panel's
-	// draw list via the mapping. Returns false when the wizard wants to close.
-	bool update(float deltaSeconds, const cv::Mat& bgrPreview, ImDrawList* overlayDrawList,
-				const ImageToScreenMapping& mapping);
+	// Called each UI frame while active. bgrPreview is the newest preview frame
+	// (may be empty when no stream), frameIndex and frameTimeSeconds are that
+	// video frame's index and capture time, so the same frame arriving on
+	// several UI frames is told apart from a new one. Overlay drawing goes to
+	// the video panel's draw list via the mapping. Returns false when the
+	// wizard wants to close.
+	bool update(float deltaSeconds, const cv::Mat& bgrPreview, int64_t frameIndex, double frameTimeSeconds,
+				ImDrawList* overlayDrawList, const ImageToScreenMapping& mapping);
 
 private:
 	void drawWizardWindow(float deltaSeconds, const cv::Mat& bgrPreview);
@@ -61,7 +68,10 @@ private:
 	std::unique_ptr<MonoLensDistortionCalibrator> m_calibrator;
 	cv::Mat m_grayFrame;
 
-	// Board params being edited (copied from config on enter)
+	// The pattern and the printed board params being edited (copied from
+	// config on enter)
+	std::unique_ptr<LensPatternPrompt> m_patternPrompt;
+	eIntrinsicsPattern m_pattern;
 	int m_boardCols= 11;
 	int m_boardRows= 8;
 	float m_squareLengthMM= 16.f;

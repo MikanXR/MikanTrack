@@ -380,7 +380,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 			// marker placement (separate sessions = disagreeing world frames)
 			bool bAllIntrinsics= true;
 			for (size_t i= 0; i < config->cameraCount(); ++i)
-				bAllIntrinsics&= config->camera(i).intrinsics.present;
+				bAllIntrinsics&= config->camera(i).intrinsics.isCalibrated();
 			if (ImGui::MenuItem(locLabel("mainWindow.extrinsicsAllCameras"), nullptr, false,
 								!bWizardActive && bAllIntrinsics))
 				launchWizard(eWizardKind::Extrinsics);
@@ -1407,7 +1407,11 @@ void MainWindow::gatherPipelineInputs()
 
 	// The direct solve behind the shown pose
 	if (in.bDirect && in.directCameraIndex >= 0 && in.directCameraIndex < in.cameraCount)
-		in.bDirectIntrinsics= config->camera(in.directCameraIndex).intrinsics.present;
+	{
+		const IntrinsicsConfig& directIntrinsics= config->camera(in.directCameraIndex).intrinsics;
+		in.bDirectIntrinsics= directIntrinsics.present;
+		in.bDirectIntrinsicsNominal= directIntrinsics.present && directIntrinsics.source == eIntrinsicsSource::Nominal;
+	}
 	in.bDirectNeutral= config->direct.neutralPresent;
 	if (m_directReadout.state != nullptr)
 	{

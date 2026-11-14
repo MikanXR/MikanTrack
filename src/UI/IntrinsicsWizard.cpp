@@ -5,7 +5,8 @@
 #include "opencv2/imgproc.hpp"
 
 #include "AppConfig.h"
-#include "CalibrationPatternFinder_Charuco.h"
+#include "CalibrationPatternFinder_Chessboard.h"
+#include "LensPatternPrompt.h"
 #include "Logger.h"
 #include "MonoLensDistortionCalibrator.h"
 #include "PatternExport.h"
@@ -15,6 +16,8 @@
 IntrinsicsWizard::IntrinsicsWizard(AppConfig* config, VisionThread* visionThread)
 	: m_config(config)
 	, m_visionThread(visionThread)
+	, m_patternPrompt(std::make_unique<LensPatternPrompt>())
+	, m_pattern(config->intrinsicsPattern)
 {
 }
 
@@ -28,6 +31,7 @@ void IntrinsicsWizard::enter(int cameraIndex)
 	m_result= eWizardResult::None;
 	m_state= eState::SelectBoardParams;
 
+	m_pattern= m_config->intrinsicsPattern;
 	m_boardCols= m_config->charucoBoard.cols;
 	m_boardRows= m_config->charucoBoard.rows;
 	m_squareLengthMM= (float)m_config->charucoBoard.squareLengthMM;
@@ -56,12 +60,23 @@ void IntrinsicsWizard::beginCapture(int frameWidth, int frameHeight)
 	// propagate out of the UI as a crash
 	try
 	{
+		CalibrationPatternDesc pattern;
+		if (m_pattern == eIntrinsicsPattern::PhoneChessboard)
+		{
+			pattern= CalibrationPatternFinder_Chessboard::makePhoneBoardDesc();
+		}
+		else
+		{
+			pattern.type= eCalibrationPatternType::mode_charuco;
+			pattern.cols= m_boardCols;
+			pattern.rows= m_boardRows;
+			pattern.squareLengthMM= m_squareLengthMM;
+			pattern.markerLengthMM= m_markerLengthMM;
+			pattern.dictionary= eCharucoDictionaryType::DICT_6X6; // matches the exported board
+		}
+
 		m_calibrator= std::make_unique<MonoLensDistortionCalibrator>(
-			frameWidth, frameHeight,
-			m_boardCols, m_boardRows,
-			m_squareLengthMM, m_markerLengthMM,
-			eCharucoDictionaryType::DICT_6X6, // matches the exported board
-			12);
+			frameWidth, frameHeight, pattern, 12);
 		m_state= eState::Capture;
 	}
 	catch (const cv::Exception& e)
@@ -75,6 +90,10 @@ void IntrinsicsWizard::beginCapture(int frameWidth, int frameHeight)
 
 bool IntrinsicsWizard::areBoardParamsValid(std::string& outError) const
 {
+	// The phone board is fixed
+	if (m_pattern == eIntrinsicsPattern::PhoneChessboard)
+		return true;
+
 	if (m_boardCols < 3 || m_boardRows < 3)
 	{
 		outError= locText("intrinsicsWizard.boardTooSmallError");
@@ -99,8 +118,10 @@ void IntrinsicsWizard::applyResultToConfig()
 	if (m_calibrator->getCameraCalibration(&monoIntrinsics))
 	{
 		m_config->camera(m_cameraIndex).intrinsics.present= true;
+		m_config->camera(m_cameraIndex).intrinsics.source= eIntrinsicsSource::Calibrated;
 		m_config->camera(m_cameraIndex).intrinsics.intrinsics= monoIntrinsics;
 		m_config->camera(m_cameraIndex).intrinsics.reprojectionError= m_calibrator->getReprojectionError();
+		m_config->intrinsicsPattern= m_pattern;
 		m_config->charucoBoard.cols= m_boardCols;
 		m_config->charucoBoard.rows= m_boardRows;
 		m_config->charucoBoard.squareLengthMM= m_squareLengthMM;
@@ -110,7 +131,8 @@ void IntrinsicsWizard::applyResultToConfig()
 	}
 }
 
-bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImDrawList* overlayDrawList,
+bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, int64_t frameIndex,
+							  double frameTimeSeconds, ImDrawList* overlayDrawList,
 							  const ImageToScreenMapping& mapping)
 {
 	if (!m_bActive)
@@ -120,7 +142,7 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImD
 	if (m_state == eState::Capture && m_calibrator != nullptr && !bgrPreview.empty())
 	{
 		cv::cvtColor(bgrPreview, m_grayFrame, cv::COLOR_BGR2GRAY);
-		m_calibrator->update(deltaSeconds, &m_grayFrame);
+		m_calibrator->update(frameIndex, frameTimeSeconds, &m_grayFrame);
 
 		if (m_calibrator->hasSampledAllCalibrationPatterns())
 		{
@@ -131,8 +153,20 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImD
 
 	if (m_state == eState::Solving && m_calibrator->getIsCameraCalibrationComplete())
 	{
+		// Kept whether or not the solve passed, one file per camera that the
+		// next run overwrites
+		m_calibrator->writeCaptureSet(m_config->getProjectDirectory() / "dumps"
+									  / ("intrinsics_capture_camera" + std::to_string(m_cameraIndex + 1) + ".json"));
+
 		MikanMonoIntrinsics monoIntrinsics;
-		if (m_calibrator->getCameraCalibration(&monoIntrinsics) && monoIntrinsics.pixel_width > 0)
+		if (m_calibrator->wantsReplacementSamples())
+		{
+			// Views whose corners did not fit the rest were dropped: back to
+			// capture for their replacements
+			m_calibrator->resumeCapture();
+			m_state= eState::Capture;
+		}
+		else if (m_calibrator->getCameraCalibration(&monoIntrinsics) && monoIntrinsics.pixel_width > 0)
 		{
 			applyResultToConfig();
 			// Show the live undistorted view for verification
@@ -157,7 +191,7 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImD
 
 void IntrinsicsWizard::drawPatternOverlay(ImDrawList* drawList, const ImageToScreenMapping& mapping)
 {
-	CalibrationPatternFinder_Charuco* finder= m_calibrator->getPatternFinder();
+	CalibrationPatternFinder* finder= m_calibrator->getPatternFinder();
 	if (finder == nullptr)
 		return;
 
@@ -200,26 +234,38 @@ void IntrinsicsWizard::drawWizardWindow(float deltaSeconds, const cv::Mat& bgrPr
 	{
 		case eState::SelectBoardParams:
 		{
-			ImGui::TextWrapped(locText("intrinsicsWizard.boardInstructionsFmt"));
-
-			ImGui::InputInt(locLabel("intrinsicsWizard.columnsInput"), &m_boardCols);
-			ImGui::InputInt(locLabel("intrinsicsWizard.rowsInput"), &m_boardRows);
-			ImGui::InputFloat(locLabel("intrinsicsWizard.squareSizeInput"), &m_squareLengthMM, 0.f, 0.f, "%.1f");
-			ImGui::InputFloat(locLabel("intrinsicsWizard.markerSizeInput"), &m_markerLengthMM, 0.f, 0.f, "%.1f");
+			m_patternPrompt->drawPatternChoice(m_pattern);
+			ImGui::Separator();
 
 			std::string paramError;
 			const bool bParamsValid= areBoardParamsValid(paramError);
-			if (!bParamsValid)
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", paramError.c_str());
-
-			ImGui::BeginDisabled(!bParamsValid);
-			if (ImGui::Button(locLabel("intrinsicsWizard.exportBoardButton")))
+			if (m_pattern == eIntrinsicsPattern::PhoneChessboard)
 			{
-				exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_squareLengthMM, m_markerLengthMM,
-										  eCharucoDictionaryType::DICT_6X6);
+				m_patternPrompt->drawPhoneInstructions();
 			}
-			ImGui::SetItemTooltip(locText("intrinsicsWizard.exportBoardTooltip"));
-			ImGui::EndDisabled();
+			else
+			{
+				ImGui::TextWrapped(locText("intrinsicsWizard.boardInstructionsFmt"));
+
+				ImGui::InputInt(locLabel("intrinsicsWizard.columnsInput"), &m_boardCols);
+				ImGui::InputInt(locLabel("intrinsicsWizard.rowsInput"), &m_boardRows);
+				ImGui::InputFloat(locLabel("intrinsicsWizard.squareSizeInput"), &m_squareLengthMM, 0.f, 0.f,
+								  "%.1f");
+				ImGui::InputFloat(locLabel("intrinsicsWizard.markerSizeInput"), &m_markerLengthMM, 0.f, 0.f,
+								  "%.1f");
+
+				if (!bParamsValid)
+					ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", paramError.c_str());
+
+				ImGui::BeginDisabled(!bParamsValid);
+				if (ImGui::Button(locLabel("intrinsicsWizard.exportBoardButton")))
+				{
+					exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_squareLengthMM, m_markerLengthMM,
+											  eCharucoDictionaryType::DICT_6X6);
+				}
+				ImGui::SetItemTooltip(locText("intrinsicsWizard.exportBoardTooltip"));
+				ImGui::EndDisabled();
+			}
 
 			ImGui::Separator();
 			const bool bHasVideo= !bgrPreview.empty();
@@ -240,6 +286,14 @@ void IntrinsicsWizard::drawWizardWindow(float deltaSeconds, const cv::Mat& bgrPr
 						m_calibrator->getDesiredPatternCount(), m_calibrator->getTiltedSampleCount(),
 						MonoLensDistortionCalibrator::k_minTiltedSampleCount);
 			ImGui::ProgressBar(progress, ImVec2(-1, 0));
+
+			if (m_calibrator->getDroppedSampleCount() > 0)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.3f, 1.f));
+				ImGui::TextWrapped(locText("intrinsicsWizard.discardedCapturesFmt"),
+								   m_calibrator->getDroppedSampleCount());
+				ImGui::PopStyleColor();
+			}
 
 			if (m_calibrator->wantsTiltedSample())
 			{

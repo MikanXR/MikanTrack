@@ -7,10 +7,12 @@
 #include "App.h"
 #include "AppConfig.h"
 #include "AvatarTypes.h"
+#include "CameraMath.h"
 #include "BodyCalibrationWizard.h"
 #include "ExtrinsicsWizard.h"
 #include "HandCalibrationWizard.h"
 #include "IntrinsicsWizard.h"
+#include "LensPatternPrompt.h"
 #include "MainWindow.h"
 #include "MountingWizard.h"
 #include "LocText.h"
@@ -19,6 +21,7 @@
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
 #include "VisionThread.h"
+#include "WebcamIntrinsicsTable.h"
 
 #include "tinyfiledialogs.h"
 
@@ -48,8 +51,13 @@ SetupFlow::SetupFlow(App* app, MainWindow* mainWindow, VideoPreviewPanel* previe
 	, m_mainWindow(mainWindow)
 	, m_previewPanel(previewPanel)
 	, m_wizards(wizards)
+	, m_patternPrompt(std::make_unique<LensPatternPrompt>())
+	, m_intrinsicsPattern(eIntrinsicsPattern::PrintedCharuco)
+	, m_lensTableMatch(std::make_unique<WebcamTableMatch>())
 {
 }
+
+SetupFlow::~SetupFlow()= default;
 
 void SetupFlow::begin()
 {
@@ -105,6 +113,12 @@ int SetupFlow::getRequiredCameraCount(eTrackingSetup setup)
 		default:
 			return 2;
 	}
+}
+
+SetupFlow::eStep SetupFlow::stepCompletedByLensChoice(eLensChoice choice)
+{
+	return choice == eLensChoice::Table || choice == eLensChoice::Skip ? eStep::IntrinsicsRunning
+																		 : eStep::CharucoPrint;
 }
 
 SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
@@ -184,6 +198,15 @@ void SetupFlow::transitionTo(eStep step)
 			break;
 		}
 		case eStep::CharucoPrint:
+			// A new project has no choice stored: one camera shows the
+			// pattern on a phone, and a rig keeps the printed board
+			m_intrinsicsPattern= getRequiredCameraCount(m_trackingSetup) == 1
+									 ? eIntrinsicsPattern::PhoneChessboard
+									 : eIntrinsicsPattern::PrintedCharuco;
+			m_lensChoice= eLensChoice::Phone;
+			m_bLensTableChecked= false;
+			m_bLensTableMatch= false;
+			m_nominalDiagonalFovDegrees= (float)k_defaultNominalDiagonalFovDegrees;
 			m_boardCols= config->charucoBoard.cols;
 			m_boardRows= config->charucoBoard.rows;
 			m_boardSquareLengthMM= (float)config->charucoBoard.squareLengthMM;
@@ -199,6 +222,7 @@ void SetupFlow::transitionTo(eStep step)
 			// The direct stage picks up the intrinsics just calibrated, so
 			// its solve says where the hand slots sit against the body
 			m_bHandednessFlipApplied= false;
+			m_bHandednessMatched= false;
 			m_handednessFlipAgeSeconds= 0.f;
 			m_app->getVisionThread()->requestConfigRefresh();
 			break;
@@ -533,38 +557,210 @@ void SetupFlow::applyCameraSelection()
 	m_mainWindow->refreshDevicePanelState();
 }
 
-void SetupFlow::updateCharucoPrintPrompt()
+void SetupFlow::updateLensPrompt()
 {
 	if (!beginCenteredModal(locWindowTitle("windows.modalPrintIntrinsicsBoard")))
 		return;
 
-	ImGui::PushTextWrapPos(k_promptWrapWidth);
-	ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
-	ImGui::PopTextWrapPos();
-	ImGui::Spacing();
+	AppConfig* config= m_app->getConfig();
 
-	ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
-	ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
-	ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f, "%.2f");
-	ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
-
-	if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+	// The table is keyed by frame size, which is known once a frame is in
+	if (!m_bLensTableChecked && m_previewPanel->getCameraFrameSize(0, m_lensFrameWidth, m_lensFrameHeight))
 	{
-		exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM,
-								  m_boardMarkerLengthMM, eCharucoDictionaryType::DICT_6X6);
+		m_bLensTableChecked= true;
+		WebcamIntrinsicsTable table;
+		m_bLensTableMatch= table.load(WebcamIntrinsicsTable::getDefaultPath())
+						   && table.findForDevicePath(config->camera(0).video.devicePath, m_lensFrameWidth,
+													  m_lensFrameHeight, *m_lensTableMatch);
+		if (m_bLensTableMatch)
+			m_lensChoice= eLensChoice::Table;
 	}
 
-	const bool bParamsValid= m_boardCols >= 2 && m_boardRows >= 2 &&
-							 m_boardMarkerLengthMM > 0.f &&
-							 m_boardSquareLengthMM > m_boardMarkerLengthMM;
-	if (!bParamsValid)
-		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.lensPrompt"));
+	ImGui::Spacing();
+
+	int choice= (int)m_lensChoice;
+	if (m_bLensTableMatch)
+	{
+		const std::string tableLabel=
+			locFormat("setupFlow.lensTableRadioFmt", m_lensTableMatch->cameraName.c_str()) + "###lensTableRadio";
+		ImGui::RadioButton(tableLabel.c_str(), &choice, (int)eLensChoice::Table);
+	}
+	ImGui::RadioButton(locLabel("intrinsicsWizard.patternPhoneRadio"), &choice, (int)eLensChoice::Phone);
+	ImGui::RadioButton(locLabel("intrinsicsWizard.patternPrintedRadio"), &choice, (int)eLensChoice::Printed);
+	ImGui::RadioButton(locLabel("setupFlow.lensSkipRadio"), &choice, (int)eLensChoice::Skip);
+	m_lensChoice= (eLensChoice)choice;
+	ImGui::Separator();
+
+	bool bValid= true;
+	switch (m_lensChoice)
+	{
+		case eLensChoice::Table:
+		{
+			// Across the diagonal, the angle the Skip choice asks for and a
+			// camera's box quotes, so the two read as the same kind of number
+			const double halfDiagonal= 0.5 * std::sqrt((double)m_lensFrameWidth * m_lensFrameWidth
+													   + (double)m_lensFrameHeight * m_lensFrameHeight);
+			const double diagonalFovDegrees= 2.0 * glm::degrees(std::atan(
+													   halfDiagonal / m_lensTableMatch->intrinsics.distorted_camera_matrix.x0));
+			ImGui::Text(locText("setupFlow.lensTableDescriptionFmt"), diagonalFovDegrees);
+			break;
+		}
+
+		case eLensChoice::Phone:
+			m_patternPrompt->drawPhoneInstructions();
+			break;
+
+		case eLensChoice::Printed:
+			ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
+			ImGui::Spacing();
+
+			ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
+			ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
+			ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f,
+							  "%.2f");
+			ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
+
+			if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+			{
+				exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM, m_boardMarkerLengthMM,
+										  eCharucoDictionaryType::DICT_6X6);
+			}
+
+			bValid= m_boardCols >= 2 && m_boardRows >= 2 && m_boardMarkerLengthMM > 0.f
+					&& m_boardSquareLengthMM > m_boardMarkerLengthMM;
+			if (!bValid)
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+			break;
+
+		case eLensChoice::Skip:
+			ImGui::TextUnformatted(locText("setupFlow.lensSkipDescription"));
+			ImGui::Spacing();
+			ImGui::SetNextItemWidth(120.f);
+			ImGui::InputFloat(locLabel("setupFlow.lensDiagonalFovLabel"), &m_nominalDiagonalFovDegrees, 0.f, 0.f,
+							  "%.1f");
+
+			if (m_nominalDiagonalFovDegrees < 30.f || m_nominalDiagonalFovDegrees > 170.f)
+			{
+				bValid= false;
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.lensFovRangeWarning"));
+			}
+			else if (!m_bLensTableChecked)
+			{
+				// The pinhole needs the frame size
+				bValid= false;
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.lensNoVideoWarning"));
+			}
+			break;
+	}
+	ImGui::PopTextWrapPos();
+
+	ImGui::Separator();
+	ImGui::BeginDisabled(!bValid);
+	if (ImGui::Button(locLabel("common.continueLabel"), ImVec2(120, 0)))
+	{
+		IntrinsicsConfig& intrinsics= config->camera(0).intrinsics;
+		bool bApplied= true;
+		switch (m_lensChoice)
+		{
+			case eLensChoice::Table:
+				intrinsics.intrinsics= m_lensTableMatch->intrinsics;
+				intrinsics.source= eIntrinsicsSource::Table;
+				intrinsics.reprojectionError= 0.0;
+				intrinsics.present= true;
+				break;
+
+			case eLensChoice::Skip:
+				bApplied= createNominalMonoIntrinsics(m_lensFrameWidth, m_lensFrameHeight,
+													  (double)m_nominalDiagonalFovDegrees, intrinsics.intrinsics);
+				intrinsics.source= eIntrinsicsSource::Nominal;
+				intrinsics.reprojectionError= 0.0;
+				intrinsics.present= bApplied;
+				break;
+
+			case eLensChoice::Phone:
+				config->intrinsicsPattern= eIntrinsicsPattern::PhoneChessboard;
+				break;
+
+			case eLensChoice::Printed:
+				config->intrinsicsPattern= eIntrinsicsPattern::PrintedCharuco;
+				config->charucoBoard.cols= m_boardCols;
+				config->charucoBoard.rows= m_boardRows;
+				config->charucoBoard.squareLengthMM= m_boardSquareLengthMM;
+				config->charucoBoard.markerLengthMM= m_boardMarkerLengthMM;
+				break;
+		}
+
+		if (bApplied)
+		{
+			config->markDirty();
+			ImGui::CloseCurrentPopup();
+			advanceFrom(stepCompletedByLensChoice(m_lensChoice));
+		}
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
+void SetupFlow::updateCharucoPrintPrompt()
+{
+	// One front camera can go without a calibration, so its step offers more
+	if (m_trackingSetup == eTrackingSetup::SingleFront)
+	{
+		updateLensPrompt();
+		return;
+	}
+
+	if (!beginCenteredModal(locWindowTitle("windows.modalPrintIntrinsicsBoard")))
+		return;
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.lensPatternPrompt"));
+	ImGui::Spacing();
+	m_patternPrompt->drawPatternChoice(m_intrinsicsPattern);
+	ImGui::Separator();
+
+	const bool bPhone= m_intrinsicsPattern == eIntrinsicsPattern::PhoneChessboard;
+	const bool bParamsValid= bPhone || (m_boardCols >= 2 && m_boardRows >= 2 && m_boardMarkerLengthMM > 0.f &&
+										m_boardSquareLengthMM > m_boardMarkerLengthMM);
+	if (bPhone)
+	{
+		m_patternPrompt->drawPhoneInstructions();
+	}
+	else
+	{
+		ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
+		ImGui::Spacing();
+
+		ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
+		ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
+		ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f, "%.2f");
+		ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
+
+		if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+		{
+			exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM, m_boardMarkerLengthMM,
+									  eCharucoDictionaryType::DICT_6X6);
+		}
+
+		if (!bParamsValid)
+			ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+	}
+	ImGui::PopTextWrapPos();
 
 	ImGui::Separator();
 	ImGui::BeginDisabled(!bParamsValid);
 	if (ImGui::Button(locLabel("common.continueLabel"), ImVec2(120, 0)))
 	{
 		AppConfig* config= m_app->getConfig();
+		config->intrinsicsPattern= m_intrinsicsPattern;
 		config->charucoBoard.cols= m_boardCols;
 		config->charucoBoard.rows= m_boardRows;
 		config->charucoBoard.squareLengthMM= m_boardSquareLengthMM;
@@ -640,7 +836,8 @@ void SetupFlow::updateHandednessCheckPrompt()
 	// and the flip setting is switched to match, once. A swap still reported
 	// well after the switch is left to the user.
 	const DirectRetarget::SolveState& state= m_mainWindow->getLatestDirectState();
-	const bool bMatch= state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped;
+	if (state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped)
+		m_bHandednessMatched= true;
 	if (m_bHandednessFlipApplied)
 		m_handednessFlipAgeSeconds+= ImGui::GetIO().DeltaTime;
 	if (state.bHandednessSwapped && !m_bHandednessFlipApplied)
@@ -656,16 +853,16 @@ void SetupFlow::updateHandednessCheckPrompt()
 	ImGui::PushTextWrapPos(k_promptWrapWidth);
 	if (m_bHandednessFlipApplied)
 		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessSwitched"));
-	if (bMatch)
-		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessMatch"));
-	else if (state.bHandednessSwapped && m_handednessFlipAgeSeconds > k_handednessSettleSeconds)
+	if (state.bHandednessSwapped && m_handednessFlipAgeSeconds > k_handednessSettleSeconds)
 		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessSwapped"));
+	else if (m_bHandednessMatched)
+		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessMatch"));
 	else
 		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessWaiting"));
 	ImGui::PopTextWrapPos();
 
 	ImGui::Separator();
-	ImGui::BeginDisabled(!bMatch);
+	ImGui::BeginDisabled(!m_bHandednessMatched);
 	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();

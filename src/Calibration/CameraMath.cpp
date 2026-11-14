@@ -1,5 +1,6 @@
 #include "CameraMath.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "Logger.h"
@@ -38,13 +39,176 @@ glm::mat4 computeGLMCameraViewMatrix(const glm::mat4& poseXform)
 	return modelView;
 }
 
+// Fills the intrinsics from a distorted camera matrix and its distortion
+// coefficients (a row vector, OpenCV's order, at least 8): the undistorted
+// matrix that crops the border away, and the field of view under it. False,
+// with outHfov and outFxRatio saying why, when the lens is not plausible.
+static bool fillMonoIntrinsics(const int frameWidth, const int frameHeight,
+							   const cv::Matx33d& cvDistortedIntrinsicMatrix, const cv::Mat& cvDistCoeffsRowVector,
+							   MikanMonoIntrinsics& outIntrinsics, double& outHfov, double& outFxRatio)
+{
+	const cv::Size cvImageSize(frameWidth, frameHeight);
+
+	// Create a modified camera intrinsic matrix to crop out the unwanted border
+	cv::Mat cvUndistortedIntrinsicMatrix= cv::getOptimalNewCameraMatrix(
+		cvDistortedIntrinsicMatrix, cvDistCoeffsRowVector, cvImageSize, 0.f); // We want 0% of the garbage border
+
+	// Derive the FoV angles from the image size and the newly computed undistorted intrinsic matrix
+	double hfov, vfov;
+	double unusedFocalLength;
+	cv::Point2d ununsedPrincipalPoint;
+	double aspectRatio;
+	cv::calibrationMatrixValues(cvUndistortedIntrinsicMatrix, cvImageSize, 0.0,
+								0.0, // Don't know (and don't need) the physical aperture size of the lens
+								hfov, vfov, unusedFocalLength, ununsedPrincipalPoint, aspectRatio);
+
+	// Sanity gate: a degenerate solve (captures without enough tilt/depth
+	// variation, or distortion gone wild at the periphery) can report
+	// sub-pixel reprojection error on the samples while the recovered
+	// focal length is nonsense. Better to fail loudly than to persist
+	// intrinsics that poison every downstream solve.
+	constexpr double kMinPlausibleHfovDegrees= 20.0;
+	constexpr double kMaxPlausibleHfovDegrees= 160.0;
+	const double distortedFx= cvDistortedIntrinsicMatrix(0, 0);
+	const double undistortedFx= cvUndistortedIntrinsicMatrix.at<double>(0, 0);
+	const double fxRatio= distortedFx > 1e-6 ? undistortedFx / distortedFx : 0.0;
+	outHfov= hfov;
+	outFxRatio= fxRatio;
+	if (!std::isfinite(hfov) || hfov < kMinPlausibleHfovDegrees || hfov > kMaxPlausibleHfovDegrees || fxRatio < 0.2
+		|| fxRatio > 5.0)
+	{
+		return false;
+	}
+
+	// The solver hands back up to 14 distortion parameters, but we only want the first 8
+	// Also convert from a row vector (OpenCV format) back to a column vector (Mikan format)
+	cv::Mat cvDistCoeffsColVector;
+	cv::transpose(cvDistCoeffsRowVector.colRange(cv::Range(0, 8)), cvDistCoeffsColVector);
+
+	outIntrinsics.pixel_width= (double)frameWidth;
+	outIntrinsics.pixel_height= (double)frameHeight;
+	outIntrinsics.hfov= hfov;
+	outIntrinsics.vfov= vfov;
+	outIntrinsics.aspect_ratio= aspectRatio;
+	outIntrinsics.znear= DEFAULT_MONO_ZNEAR;
+	outIntrinsics.zfar= DEFAULT_MONO_ZFAR;
+	outIntrinsics.distortion_coefficients= cv_vec8_to_Mikan_distortion(cvDistCoeffsColVector);
+	outIntrinsics.distorted_camera_matrix= cv_mat33d_to_MikanMatrix3d(cvDistortedIntrinsicMatrix);
+	outIntrinsics.undistorted_camera_matrix= cv_mat33d_to_MikanMatrix3d(cvUndistortedIntrinsicMatrix);
+	return true;
+}
+
+bool createMonoIntrinsics(const int frameWidth, const int frameHeight, const double focalLengthX,
+						  const double focalLengthY, const double principalPointX, const double principalPointY,
+						  const MikanDistortionCoefficients& distortion, MikanMonoIntrinsics& outIntrinsics)
+{
+	outIntrinsics= MikanMonoIntrinsics();
+	if (frameWidth <= 0 || frameHeight <= 0 || focalLengthX <= 0.0 || focalLengthY <= 0.0)
+		return false;
+
+	const cv::Matx33d cvDistortedIntrinsicMatrix(focalLengthX, 0.0, principalPointX, 0.0, focalLengthY,
+												 principalPointY, 0.0, 0.0, 1.0);
+	cv::Mat cvDistCoeffsRowVector;
+	cv::transpose(cv::Mat(Mikan_distortion_to_cv_vec8(distortion)), cvDistCoeffsRowVector);
+
+	double hfov= 0.0;
+	double fxRatio= 0.0;
+	if (!fillMonoIntrinsics(frameWidth, frameHeight, cvDistortedIntrinsicMatrix, cvDistCoeffsRowVector, outIntrinsics,
+							hfov, fxRatio))
+	{
+		MIKAN_MT_LOG_ERROR("createMonoIntrinsics")
+			<< "Rejecting an implausible lens: hfov=" << hfov << " deg, undistorted/distorted fx ratio=" << fxRatio;
+		return false;
+	}
+	return true;
+}
+
+bool createNominalMonoIntrinsics(const int frameWidth, const int frameHeight, const double diagonalFovDegrees,
+								 MikanMonoIntrinsics& outIntrinsics)
+{
+	if (diagonalFovDegrees <= 0.0 || diagonalFovDegrees >= 180.0)
+	{
+		outIntrinsics= MikanMonoIntrinsics();
+		return false;
+	}
+
+	// A webcam's box quotes the field of view across the diagonal
+	const double halfDiagonal= 0.5 * std::sqrt((double)frameWidth * frameWidth + (double)frameHeight * frameHeight);
+	const double focalLength= halfDiagonal / std::tan(glm::radians(diagonalFovDegrees * 0.5));
+	return createMonoIntrinsics(frameWidth, frameHeight, focalLength, focalLength, frameWidth * 0.5, frameHeight * 0.5,
+								MikanDistortionCoefficients(), outIntrinsics);
+}
+
+bool computeMonoLensCameraCalibrationWithoutOutliers(const int frameWidth, const int frameHeight,
+													 const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
+													 const std::vector<t_opencv_point2d_list>& cvImagePointsList,
+													 const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
+													 MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError,
+													 std::vector<DroppedCalibrationView>& outDroppedViews,
+													 std::vector<double>& outViewErrors)
+{
+	outDroppedViews.clear();
+
+	// The views still in the solve, by their index in the lists handed in
+	std::vector<int> keptViewIndices;
+	for (int viewIndex= 0; viewIndex < (int)cvImagePointsList.size() && viewIndex < (int)cvImagePointIDs.size();
+		 ++viewIndex)
+	{
+		keptViewIndices.push_back(viewIndex);
+	}
+
+	while (true)
+	{
+		std::vector<t_opencv_point2d_list> keptImagePointsList;
+		std::vector<t_opencv_pointID_list> keptImagePointIDs;
+		for (const int viewIndex : keptViewIndices)
+		{
+			keptImagePointsList.push_back(cvImagePointsList[viewIndex]);
+			keptImagePointIDs.push_back(cvImagePointIDs[viewIndex]);
+		}
+
+		const bool bSuccess= computeMonoLensCameraCalibration(
+			frameWidth, frameHeight, opencvLensCalibrationGeometry, keptImagePointsList, keptImagePointIDs,
+			outIntrinsics, outReprojectionError, &outViewErrors);
+
+		std::vector<double> solvedErrors;
+		int worstKeptIndex= -1;
+		for (int keptIndex= 0; keptIndex < (int)outViewErrors.size(); ++keptIndex)
+		{
+			if (outViewErrors[keptIndex] < 0.0)
+				continue;
+
+			solvedErrors.push_back(outViewErrors[keptIndex]);
+			if (worstKeptIndex < 0 || outViewErrors[keptIndex] > outViewErrors[worstKeptIndex])
+				worstKeptIndex= keptIndex;
+		}
+		if (worstKeptIndex < 0 || (int)solvedErrors.size() <= k_minViewsForOutlierDrop)
+			return bSuccess;
+
+		std::nth_element(solvedErrors.begin(), solvedErrors.begin() + solvedErrors.size() / 2, solvedErrors.end());
+		const double medianError= solvedErrors[solvedErrors.size() / 2];
+		const double worstError= outViewErrors[worstKeptIndex];
+		if (worstError <= k_maxViewReprojectionError || worstError <= k_maxViewErrorOverMedian * medianError)
+			return bSuccess;
+
+		MIKAN_MT_LOG_INFO("computeCameraCalibration")
+			<< "Dropping view " << keptViewIndices[worstKeptIndex] << ": reprojection error " << worstError
+			<< "px against a median of " << medianError << "px";
+		outDroppedViews.push_back({keptViewIndices[worstKeptIndex], worstError});
+		keptViewIndices.erase(keptViewIndices.begin() + worstKeptIndex);
+	}
+}
+
 bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeight,
 									  const OpenCVCalibrationGeometry& opencvLensCalibrationGeometry,
 									  const std::vector<t_opencv_point2d_list>& cvImagePointsList,
 									  const std::vector<t_opencv_pointID_list>& cvImagePointIDs,
-									  MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError)
+									  MikanMonoIntrinsics& outIntrinsics, double& outReprojectionError,
+									  std::vector<double>* outViewErrors)
 {
 	bool bSuccess= true;
+	if (outViewErrors != nullptr)
+		outViewErrors->clear();
 
 	// Initialize the output intrinsics with default values
 	outIntrinsics= MikanMonoIntrinsics();
@@ -57,6 +221,8 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 	const t_opencv_point3d_list& geometryPoints= opencvLensCalibrationGeometry.points;
 	std::vector<t_opencv_point2d_list> cvValidImagePointsList;
 	std::vector<t_opencv_point3d_list> cvObjectPointsList;
+	// The index each solved sample had in the lists handed in
+	std::vector<size_t> validSampleIndices;
 	for (size_t sampleIndex= 0; sampleIndex < cvImagePointsList.size() && sampleIndex < cvImagePointIDs.size();
 		 ++sampleIndex)
 	{
@@ -87,6 +253,7 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 
 		cvValidImagePointsList.push_back(imagePoints);
 		cvObjectPointsList.push_back(objectPoints);
+		validSampleIndices.push_back(sampleIndex);
 	}
 
 	if (cvValidImagePointsList.size() == 0)
@@ -103,6 +270,7 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 
 	// Refine the camera intrinsic matrix and compute distortion parameters
 	cv::Mat cvDistCoeffsRowVector;
+	cv::Mat cvViewErrors;
 	try
 	{
 		outReprojectionError= cv::calibrateCamera(
@@ -110,6 +278,8 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 			cvDistortedIntrinsicMatrix,         // Input/Output camera intrinsic matrix
 			cvDistCoeffsRowVector,              // Output distortion coefficients
 			cv::noArray(), cv::noArray(),       // best fit board poses as rvec/tvec pairs
+			cv::noArray(), cv::noArray(),       // standard deviations of the intrinsics and the poses
+			cvViewErrors,                       // RMS reprojection error of each sample
 			cv::CALIB_FIX_ASPECT_RATIO +        // The functions considers only fy as a free parameter
 				cv::CALIB_FIX_PRINCIPAL_POINT + // The principal point is not changed during the global optimization
 				cv::CALIB_ZERO_TANGENT_DIST
@@ -124,6 +294,17 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 			cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON));
 
 		bSuccess= is_valid_float(outReprojectionError);
+
+		// A sample left out above has no error: it reads as -1
+		if (outViewErrors != nullptr)
+		{
+			outViewErrors->assign(cvImagePointsList.size(), -1.0);
+			for (size_t validIndex= 0; validIndex < validSampleIndices.size() && (int)validIndex < cvViewErrors.rows;
+				 ++validIndex)
+			{
+				(*outViewErrors)[validSampleIndices[validIndex]]= cvViewErrors.at<double>((int)validIndex, 0);
+			}
+		}
 	}
 	catch (cv::Exception* e)
 	{
@@ -133,32 +314,10 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 
 	if (bSuccess)
 	{
-		// Create a modified camera intrinsic matrix to crop out the unwanted border
-		cv::Mat cvUndistortedIntrinsicMatrix= cv::getOptimalNewCameraMatrix(
-			cvDistortedIntrinsicMatrix, cvDistCoeffsRowVector, cv::Size(frameWidth, frameHeight),
-			0.f); // We want 0% of the garbage border
-
-		// Derive the FoV angles from the image size and the newly computed undistorted intrinsic matrix
-		double hfov, vfov;
-		double unusedFocalLength;
-		cv::Point2d ununsedPrincipalPoint;
-		double aspectRatio;
-		cv::calibrationMatrixValues(cvUndistortedIntrinsicMatrix, cvImageSize, 0.0,
-									0.0, // Don't know (and don't need) the physical aperture size of the lens
-									hfov, vfov, unusedFocalLength, ununsedPrincipalPoint, aspectRatio);
-
-		// Sanity gate: a degenerate solve (captures without enough tilt/depth
-		// variation, or distortion gone wild at the periphery) can report
-		// sub-pixel reprojection error on the samples while the recovered
-		// focal length is nonsense. Better to fail the calibration loudly
-		// than to persist intrinsics that poison every downstream solve.
-		constexpr double kMinPlausibleHfovDegrees= 20.0;
-		constexpr double kMaxPlausibleHfovDegrees= 160.0;
-		const double distortedFx= cvDistortedIntrinsicMatrix(0, 0);
-		const double undistortedFx= cvUndistortedIntrinsicMatrix.at<double>(0, 0);
-		const double fxRatio= distortedFx > 1e-6 ? undistortedFx / distortedFx : 0.0;
-		if (!std::isfinite(hfov) || hfov < kMinPlausibleHfovDegrees || hfov > kMaxPlausibleHfovDegrees ||
-			fxRatio < 0.2 || fxRatio > 5.0)
+		double hfov= 0.0;
+		double fxRatio= 0.0;
+		if (!fillMonoIntrinsics(frameWidth, frameHeight, cvDistortedIntrinsicMatrix, cvDistCoeffsRowVector,
+								outIntrinsics, hfov, fxRatio))
 		{
 			MIKAN_MT_LOG_ERROR("computeCameraCalibration")
 				<< "Rejecting implausible calibration: hfov=" << hfov
@@ -169,23 +328,6 @@ bool computeMonoLensCameraCalibration(const int frameWidth, const int frameHeigh
 				<< " in several samples and held at varied distances.";
 			return false;
 		}
-
-		// cv::calibrateCamera() will return all 14 distortion parameters, but we only want the first 8
-		// Also convert from a row vector (OpenCV format) back to a column vector (Mikan format)
-		cv::Mat cvDistCoeffsColVector;
-		cv::transpose(cvDistCoeffsRowVector.colRange(cv::Range(0, 8)), cvDistCoeffsColVector);
-
-		// Write the calibration output state
-		outIntrinsics.pixel_width= (double)frameWidth;
-		outIntrinsics.pixel_height= (double)frameHeight;
-		outIntrinsics.hfov= hfov;
-		outIntrinsics.vfov= vfov;
-		outIntrinsics.aspect_ratio= aspectRatio;
-		outIntrinsics.znear= DEFAULT_MONO_ZNEAR;
-		outIntrinsics.zfar= DEFAULT_MONO_ZFAR;
-		outIntrinsics.distortion_coefficients= cv_vec8_to_Mikan_distortion(cvDistCoeffsColVector);
-		outIntrinsics.distorted_camera_matrix= cv_mat33d_to_MikanMatrix3d(cvDistortedIntrinsicMatrix);
-		outIntrinsics.undistorted_camera_matrix= cv_mat33d_to_MikanMatrix3d(cvUndistortedIntrinsicMatrix);
 	}
 
 	return bSuccess;

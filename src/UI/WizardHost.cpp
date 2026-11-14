@@ -104,7 +104,8 @@ void WizardHost::update(float deltaSeconds, const std::vector<VisionPreviewFrame
 			const int wizardCamera= m_intrinsicsWizard->getCameraIndex();
 			const VisionPreviewFrame& preview=
 				wizardCamera < (int)previews.size() ? previews[wizardCamera] : s_emptyPreview;
-			if (!m_intrinsicsWizard->update(deltaSeconds, preview.bgr, previewPanel->getLastDrawList(),
+			if (!m_intrinsicsWizard->update(deltaSeconds, preview.bgr, preview.result.frameIndex,
+											preview.result.timestampMs * 0.001, previewPanel->getLastDrawList(),
 											previewPanel->getImageToScreenMapping(wizardCamera)))
 			{
 				m_intrinsicsWizard->exit();

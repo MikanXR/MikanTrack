@@ -33,6 +33,19 @@ enum class eCharucoDictionaryType : int
 	COUNT
 };
 
+// What a lens calibration pattern is, enough to build its finder
+struct CalibrationPatternDesc
+{
+	eCalibrationPatternType type= eCalibrationPatternType::mode_charuco;
+	// Squares across and down, so the inner corner grid is one less each way
+	int cols= 11;
+	int rows= 8;
+	float squareLengthMM= 16.f;
+	// Charuco only
+	float markerLengthMM= 12.f;
+	eCharucoDictionaryType dictionary= eCharucoDictionaryType::DICT_6X6;
+};
+
 class CalibrationPatternFinder;
 typedef std::shared_ptr<CalibrationPatternFinder> CalibrationPatternFinderPtr;
 
@@ -70,6 +83,11 @@ public:
 												  t_opencv_pointID_list& outImagePointIDs,
 												  cv::Point2f outBoundingQuad[4])= 0;
 
+	// Average pixel distance between two detections of the whole pattern,
+	// corner for corner. How far the pattern moved between them.
+	virtual float computeMeanPointDistance(const t_opencv_point2d_list& pointsA,
+										   const t_opencv_point2d_list& pointsB) const;
+
 	bool areCurrentImagePointsValid() const;
 	inline float getFrameWidth() const { return m_frameWidth; }
 	inline float getFrameHeight() const { return m_frameHeight; }
@@ -85,6 +103,11 @@ public:
 	{
 		*outGeometry= m_openglSolvePnPGeometry;
 	};
+
+	// The finder for a lens calibration pattern (chessboard or charuco), owned
+	// by the caller. Throws cv::Exception on board geometry OpenCV rejects.
+	static CalibrationPatternFinder* createLensPatternFinder(const CalibrationPatternDesc& pattern, int frameWidth,
+															 int frameHeight);
 
 	static ArucoDictionaryPtr getArucoDictionary(eCharucoDictionaryType dictionaryType);
 

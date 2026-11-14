@@ -209,6 +209,7 @@ std::vector<Fault> makeFaults()
 			 in.bDirectTorso= false;
 		 }},
 		{"swapped hand labels", [](Inputs& in) { in.bDirectHandednessSwapped= true; }},
+		{"nominal lens", [](Inputs& in) { in.bDirectIntrinsicsNominal= true; }},
 		{"no avatar", [](Inputs& in) { in.bAvatarLoaded= false; }},
 		{"osc disabled", [](Inputs& in) { in.bOscEnabled= false; }},
 		{"osc socket closed", [](Inputs& in) { in.bOscRunning= false; }},
@@ -419,6 +420,12 @@ static int runPipelineModelTest(const TestArgs&)
 				  reasonOf(swapped, id(S::Filters)) == "pipeline.whyDirectHandednessSwapped" &&
 				  stateOf(swapped, id(S::Torso)) == eStageState::Running,
 			  "(f) direct with swapped hand labels: the solver and its filters degraded, naming the swap");
+
+		Inputs nominal= makeHealthy(true, 1, false, 0);
+		nominal.bDirectIntrinsicsNominal= true;
+		check(stateOf(nominal, id(S::DirectSolver)) == eStageState::Running &&
+				  reasonOf(nominal, id(S::DirectSolver)) == "pipeline.whyDirectNominalIntrinsics",
+			  "(f) direct on a nominal lens: the solver runs and notes the lens");
 	}
 
 	// (f2) A replayed frame from a take with no stage state: the stages that

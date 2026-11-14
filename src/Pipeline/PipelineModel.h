@@ -170,6 +170,8 @@ struct PipelineStatusInputs
 
 	// The direct solver's last solve
 	bool bDirectIntrinsics= false;
+	// The direct camera's lens is a pinhole from a typed field of view
+	bool bDirectIntrinsicsNominal= false;
 	bool bDirectNeutral= false;
 	bool bDirectTorso= false;
 	bool bDirectHeadMeasured= false;
