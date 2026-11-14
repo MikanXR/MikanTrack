@@ -50,9 +50,33 @@ On accept the wizard writes `IntrinsicsConfig` for that camera plus the pattern 
 
 ---
 
+### A lens without a calibration
+
+A camera's `IntrinsicsConfig` carries a `source` beside `present`:
+
+- `calibrated`: solved by the intrinsics wizard. A config without the key reads as this.
+- `table`: the shipped webcam table's values for the camera model
+- `nominal`: a pinhole from a typed field of view
+
+`present` is true for all three, so everything that needs a lens (undistortion, the direct solve, the lift) runs on any of them. `IntrinsicsConfig::isCalibrated` is the stricter test, and the extrinsics wizard and its two launch gates use it: a table or nominal lens stands in for a calibration on one camera and is not accepted for placing cameras against each other.
+
+The webcam table is `resources/calibration/webcam_table.json`, read by `WebcamIntrinsicsTable` (`src/Calibration/WebcamIntrinsicsTable.cpp`). Each camera is keyed by its USB vendor and product ids in hex, as the device path spells them (`parseUsbDeviceIds`, `src/Utility/UsbDeviceIds.cpp`), and lists calibrations by frame size: focal length, principal point, and eight distortion coefficients in OpenCV's order. The lookup rules:
+
+- A calibration at the frame size is used as stored.
+
+- Otherwise the largest calibration of the same aspect ratio is scaled by the width ratio (focal length and principal point, with the distortion unchanged).
+
+- A size of another aspect ratio is no match. A webcam often crops its sensor for such a mode: the C920's 640x480 focal length is 622 where scaling its 16:9 calibration would give 462.
+
+The entries from the FTC SDK's `teamwebcamcalibrations.xml` ship under its license, reproduced in `resources/calibration/webcam_table_license.txt`. The rest are means of this project's own charuco calibrations. An entry is one or two units of a model, and units differ: the two C960s on the rig are 4 percent apart in focal length. The FTC C920 entry scales to 923.9 px at 1280x720 against 924.1 measured here.
+
+`createNominalMonoIntrinsics` (`src/Calibration/CameraMath.cpp`) builds the nominal lens from a field of view across the frame's diagonal, the figure a webcam's box quotes, 78 degrees by default: one focal length, the principal point at the centre, no distortion. Both it and a table entry go through `createMonoIntrinsics`, which derives the undistorted matrix and field of view the way the solve does and applies the same plausibility window.
+
+Only the guided setup's single-front variant writes a table or nominal lens (the lens step, architecture.md). The Calibration panel names the source and keeps offering the wizard, whose result replaces it as `calibrated`. The Pipeline panel's direct solver notes a nominal lens.
+
 ## Extrinsics (all cameras at once)
 
-`ExtrinsicsWizard` (`src/UI/ExtrinsicsWizard.cpp`) calibrates every camera in one session against a single printed ArUco marker lying flat on the table. Every camera needs calibrated intrinsics first; the wizard refuses to start otherwise, since the pose solve runs on undistorted points through the calibrated camera matrix. A charuco board was evaluated for this target and rejected as a fit: at the 60 to 70 cm desk working distance the largest squares that fit on letter paper do not resolve enough corner detail to detect, while one large ArUco square does (see the `ExtrinsicsConfig` comment in `src/App/AppConfig.h` and [LEARNINGS.md](../../LEARNINGS.md)).
+`ExtrinsicsWizard` (`src/UI/ExtrinsicsWizard.cpp`) calibrates every camera in one session against a single printed ArUco marker lying flat on the table. Every camera needs calibrated intrinsics first (`IntrinsicsConfig::isCalibrated`, so not a table or nominal lens); the wizard refuses to start otherwise, since the pose solve runs on undistorted points through the calibrated camera matrix. A charuco board was evaluated for this target and rejected as a fit: at the 60 to 70 cm desk working distance the largest squares that fit on letter paper do not resolve enough corner detail to detect, while one large ArUco square does (see the `ExtrinsicsConfig` comment in `src/App/AppConfig.h` and [LEARNINGS.md](../../LEARNINGS.md)).
 
 The marker is the world anchor: it defines the tracking world's origin and its axes, and it stays on the table during tracking. The printed sheet carries FORWARD/LEFT/RIGHT axis labels because laying it down turned produces tracking that is self-consistent and points the wrong way. The world frame it pins (+X forward, +Z up out of the table) and the OpenCV-convention camera space the stored transform maps from are documented in [conventions.md](./conventions.md); the stored `markerFromCamera` is built in `computeWorldFromCameraPose` and right-multiplied by the wizard's `k_cvFromGlFlip` so it maps CV-convention camera points directly to world.
 
@@ -130,7 +154,7 @@ The wrist-to-middle-MCP reference length that scales the monocular PnP object mo
 
 All calibration results live in the active project's `project.json` (`AppConfig`, serialization in `src/App/AppConfig.cpp`; projects live under `%USERPROFILE%/Documents/MikanTrack/`). The intrinsics, extrinsics, and hand wizards save immediately on accept; the body and mounting wizards mark the config dirty for the auto-save (3 second cooldown).
 
-- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the pattern choice under `intrinsicsPattern` (`phone` or `printed`) and the printed board's geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
+- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `source`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the pattern choice under `intrinsicsPattern` (`phone` or `printed`) and the printed board's geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
 - Extrinsics: per camera under `cameras[i].extrinsics` (`present`, `markerFromCamera`, `patternReprojectionErrorPx`, `patternCornerCount`, `markerId`, `markerLengthMm`), plus the cross-camera worst-pair metrics under top-level `extrinsicsQuality` (`worstPairReprojectionRmsPx`, `worstPairSpacingErrorMm`, `worstPairSpacingScale`, `worstPairPlanarityRmsMm`, and the pair's identity)
 - Lift depth scale: per camera under `cameras[i].liftDepthScale` (left, right), the factor on that camera's monocular lift distance, 1 until measured
 - Hand bones: `handSkeleton.left`/`handSkeleton.right` (finger bases plus phalanx lengths; neutral directions are rebuilt on load), and the reference bone under `handScale` (`present`, `refLengthMeters`)

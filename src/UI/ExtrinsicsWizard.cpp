@@ -73,7 +73,9 @@ bool ExtrinsicsWizard::allCamerasHaveIntrinsics() const
 {
 	for (size_t i= 0; i < m_config->cameraCount(); ++i)
 	{
-		if (!m_config->camera(i).intrinsics.present)
+		// A table or nominal lens stands in for a calibration on one
+		// camera, and is not good enough to place cameras against each other
+		if (!m_config->camera(i).intrinsics.isCalibrated())
 			return false;
 	}
 	return true;

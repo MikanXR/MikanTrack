@@ -25,9 +25,22 @@ struct VideoConfig
 	std::string modeName;
 };
 
+// Where a camera's intrinsics came from. Only a calibrated lens is good
+// enough for the extrinsics solve, and the other two stand in for one on a
+// single camera that was never shown a pattern.
+enum class eIntrinsicsSource
+{
+	Calibrated, // solved by the intrinsics wizard
+	Table,      // the shipped webcam table's values for this camera model
+	Nominal,    // a pinhole from a typed field of view
+};
+
 struct IntrinsicsConfig
 {
 	bool present= false;
+	// A config without the key reads as calibrated
+	eIntrinsicsSource source= eIntrinsicsSource::Calibrated;
+	bool isCalibrated() const { return present && source == eIntrinsicsSource::Calibrated; }
 	MikanMonoIntrinsics intrinsics;
 	double reprojectionError= 0.0;
 };

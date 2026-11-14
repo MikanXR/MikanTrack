@@ -92,6 +92,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-stage-view`: Stage View: the content of every view mode and the mode names
 - `--test-pipeline-model`: pipeline model: layout per project shape, stage ids, status rules, string table coverage
 - `--test-vrm`: VRM loader and rest skeleton on synthetic in-memory files, both VRM generations
+- `--test-webcam-table`: webcam table: USB ids, table lookup and scaling, the nominal pinhole, the intrinsics source
 
 ### Hardware (need a camera or controller physically connected to mean anything)
 

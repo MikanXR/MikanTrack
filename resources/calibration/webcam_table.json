@@ -1,0 +1,74 @@
+{
+	"notice": "Entries whose origin names the FTC SDK are taken from the FIRST Tech Challenge FtcRobotController project, Copyright (c) 2014-2022 FIRST, under the license in webcam_table_license.txt.",
+	"cameras": [
+		{
+			"vendorId": "045e",
+			"productId": "0779",
+			"name": "Microsoft LifeCam HD-3000 v1",
+			"origin": "FTC SDK teamwebcamcalibrations.xml",
+			"calibrations": [
+				{"width": 640, "height": 480, "focalLength": [678.154, 678.17], "principalPoint": [318.135, 228.374], "distortion": [0.154576, -1.19143, 0, 0, 2.06105, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "045e",
+			"productId": "0810",
+			"name": "Microsoft LifeCam HD-3000 v2",
+			"origin": "FTC SDK teamwebcamcalibrations.xml",
+			"calibrations": [
+				{"width": 640, "height": 480, "focalLength": [678.154, 678.17], "principalPoint": [318.135, 228.374], "distortion": [0.154576, -1.19143, 0, 0, 2.06105, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "046d",
+			"productId": "081b",
+			"name": "Logitech HD Webcam C310",
+			"origin": "FTC SDK teamwebcamcalibrations.xml",
+			"calibrations": [
+				{"width": 640, "height": 480, "focalLength": [821.993, 821.993], "principalPoint": [330.489, 248.997], "distortion": [-0.018522, 1.03979, 0, 0, -3.3171, 0, 0, 0]},
+				{"width": 640, "height": 360, "focalLength": [715.307, 715.307], "principalPoint": [319.759, 188.917], "distortion": [-0.0258948, 1.06258, 0, 0, -3.40245, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "046d",
+			"productId": "082d",
+			"name": "Logitech HD Pro Webcam C920",
+			"origin": "FTC SDK teamwebcamcalibrations.xml",
+			"calibrations": [
+				{"width": 640, "height": 480, "focalLength": [622.001, 622.001], "principalPoint": [319.803, 241.251], "distortion": [0.1208, -0.261599, 0, 0, 0.10308, 0, 0, 0]},
+				{"width": 800, "height": 600, "focalLength": [775.79, 775.79], "principalPoint": [400.898, 300.79], "distortion": [0.112507, -0.272067, 0, 0, 0.15775, 0, 0, 0]},
+				{"width": 640, "height": 360, "focalLength": [463.566, 463.566], "principalPoint": [316.402, 176.412], "distortion": [0.111626, -0.255626, 0, 0, 0.107992, 0, 0, 0]},
+				{"width": 1920, "height": 1080, "focalLength": [1385.92, 1385.92], "principalPoint": [951.982, 534.084], "distortion": [0.117627, -0.248549, 0, 0, 0.107441, 0, 0, 0]},
+				{"width": 800, "height": 448, "focalLength": [578.272, 578.272], "principalPoint": [402.145, 221.506], "distortion": [0.12175, -0.251652, 0, 0, 0.112142, 0, 0, 0]},
+				{"width": 864, "height": 480, "focalLength": [626.909, 626.909], "principalPoint": [426.007, 236.834], "distortion": [0.120988, -0.253336, 0, 0, 0.102445, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "046d",
+			"productId": "0825",
+			"name": "Logitech HD Webcam C270",
+			"origin": "FTC SDK teamwebcamcalibrations.xml",
+			"calibrations": [
+				{"width": 640, "height": 480, "focalLength": [822.317, 822.317], "principalPoint": [319.495, 242.502], "distortion": [-0.0449369, 1.17277, 0, 0, -3.63244, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "07ca",
+			"productId": "315a",
+			"name": "AVerMedia PW315",
+			"origin": "MikanTrack, the mean of three charuco calibrations of one unit",
+			"calibrations": [
+				{"width": 1280, "height": 720, "focalLength": [639.9, 639.9], "principalPoint": [640, 360], "distortion": [0.128, -0.121, 0, 0, 0, 0, 0, 0]}
+			]
+		},
+		{
+			"vendorId": "328f",
+			"productId": "0121",
+			"name": "EMEET SmartCam C960",
+			"origin": "MikanTrack, the mean of four charuco calibrations of two units, which differ by 4 percent in focal length",
+			"calibrations": [
+				{"width": 1280, "height": 720, "focalLength": [729.6, 729.6], "principalPoint": [640, 360], "distortion": [0.02, -0.033, 0, 0, 0, 0, 0, 0]}
+			]
+		}
+	]
+}

@@ -133,6 +133,18 @@ static int runSetupFlowTest(const TestArgs&)
 	}
 	check(bHandednessSingleFrontOnly, "(d) only the single-front variant reaches the handedness check");
 
+	// The lens step's exits: a calibration runs the intrinsics wizard next,
+	// and a table or skipped lens goes straight to what follows it
+	using eLens= SetupFlow::eLensChoice;
+	auto stepAfterLens= [](eLens choice) {
+		return SetupFlow::nextStep(eSetup::SingleFront, SetupFlow::stepCompletedByLensChoice(choice));
+	};
+	check(stepAfterLens(eLens::Phone) == eStep::IntrinsicsRunning &&
+			  stepAfterLens(eLens::Printed) == eStep::IntrinsicsRunning,
+		  "(e) a phone or printed calibration goes on to the intrinsics wizard");
+	check(stepAfterLens(eLens::Table) == eStep::HandednessCheck && stepAfterLens(eLens::Skip) == eStep::HandednessCheck,
+		  "(e) a table or skipped lens passes over the intrinsics wizard");
+
 	MIKAN_LOG_INFO("test-setup-flow") << (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
 	return failures == 0 ? 0 : 1;
 }

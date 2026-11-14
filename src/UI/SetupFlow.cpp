@@ -7,6 +7,7 @@
 #include "App.h"
 #include "AppConfig.h"
 #include "AvatarTypes.h"
+#include "CameraMath.h"
 #include "BodyCalibrationWizard.h"
 #include "ExtrinsicsWizard.h"
 #include "HandCalibrationWizard.h"
@@ -20,6 +21,7 @@
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
 #include "VisionThread.h"
+#include "WebcamIntrinsicsTable.h"
 
 #include "tinyfiledialogs.h"
 
@@ -51,6 +53,7 @@ SetupFlow::SetupFlow(App* app, MainWindow* mainWindow, VideoPreviewPanel* previe
 	, m_wizards(wizards)
 	, m_patternPrompt(std::make_unique<LensPatternPrompt>())
 	, m_intrinsicsPattern(eIntrinsicsPattern::PrintedCharuco)
+	, m_lensTableMatch(std::make_unique<WebcamTableMatch>())
 {
 }
 
@@ -110,6 +113,12 @@ int SetupFlow::getRequiredCameraCount(eTrackingSetup setup)
 		default:
 			return 2;
 	}
+}
+
+SetupFlow::eStep SetupFlow::stepCompletedByLensChoice(eLensChoice choice)
+{
+	return choice == eLensChoice::Table || choice == eLensChoice::Skip ? eStep::IntrinsicsRunning
+																		 : eStep::CharucoPrint;
 }
 
 SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
@@ -194,6 +203,10 @@ void SetupFlow::transitionTo(eStep step)
 			m_intrinsicsPattern= getRequiredCameraCount(m_trackingSetup) == 1
 									 ? eIntrinsicsPattern::PhoneChessboard
 									 : eIntrinsicsPattern::PrintedCharuco;
+			m_lensChoice= eLensChoice::Phone;
+			m_bLensTableChecked= false;
+			m_bLensTableMatch= false;
+			m_nominalDiagonalFovDegrees= (float)k_defaultNominalDiagonalFovDegrees;
 			m_boardCols= config->charucoBoard.cols;
 			m_boardRows= config->charucoBoard.rows;
 			m_boardSquareLengthMM= (float)config->charucoBoard.squareLengthMM;
@@ -544,8 +557,167 @@ void SetupFlow::applyCameraSelection()
 	m_mainWindow->refreshDevicePanelState();
 }
 
+void SetupFlow::updateLensPrompt()
+{
+	if (!beginCenteredModal(locWindowTitle("windows.modalPrintIntrinsicsBoard")))
+		return;
+
+	AppConfig* config= m_app->getConfig();
+
+	// The table is keyed by frame size, which is known once a frame is in
+	if (!m_bLensTableChecked && m_previewPanel->getCameraFrameSize(0, m_lensFrameWidth, m_lensFrameHeight))
+	{
+		m_bLensTableChecked= true;
+		WebcamIntrinsicsTable table;
+		m_bLensTableMatch= table.load(WebcamIntrinsicsTable::getDefaultPath())
+						   && table.findForDevicePath(config->camera(0).video.devicePath, m_lensFrameWidth,
+													  m_lensFrameHeight, *m_lensTableMatch);
+		if (m_bLensTableMatch)
+			m_lensChoice= eLensChoice::Table;
+	}
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.lensPrompt"));
+	ImGui::Spacing();
+
+	int choice= (int)m_lensChoice;
+	if (m_bLensTableMatch)
+	{
+		const std::string tableLabel=
+			locFormat("setupFlow.lensTableRadioFmt", m_lensTableMatch->cameraName.c_str()) + "###lensTableRadio";
+		ImGui::RadioButton(tableLabel.c_str(), &choice, (int)eLensChoice::Table);
+	}
+	ImGui::RadioButton(locLabel("intrinsicsWizard.patternPhoneRadio"), &choice, (int)eLensChoice::Phone);
+	ImGui::RadioButton(locLabel("intrinsicsWizard.patternPrintedRadio"), &choice, (int)eLensChoice::Printed);
+	ImGui::RadioButton(locLabel("setupFlow.lensSkipRadio"), &choice, (int)eLensChoice::Skip);
+	m_lensChoice= (eLensChoice)choice;
+	ImGui::Separator();
+
+	bool bValid= true;
+	switch (m_lensChoice)
+	{
+		case eLensChoice::Table:
+		{
+			// Across the diagonal, the angle the Skip choice asks for and a
+			// camera's box quotes, so the two read as the same kind of number
+			const double halfDiagonal= 0.5 * std::sqrt((double)m_lensFrameWidth * m_lensFrameWidth
+													   + (double)m_lensFrameHeight * m_lensFrameHeight);
+			const double diagonalFovDegrees= 2.0 * glm::degrees(std::atan(
+													   halfDiagonal / m_lensTableMatch->intrinsics.distorted_camera_matrix.x0));
+			ImGui::Text(locText("setupFlow.lensTableDescriptionFmt"), diagonalFovDegrees);
+			break;
+		}
+
+		case eLensChoice::Phone:
+			m_patternPrompt->drawPhoneInstructions();
+			break;
+
+		case eLensChoice::Printed:
+			ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
+			ImGui::Spacing();
+
+			ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
+			ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
+			ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f,
+							  "%.2f");
+			ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
+
+			if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+			{
+				exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM, m_boardMarkerLengthMM,
+										  eCharucoDictionaryType::DICT_6X6);
+			}
+
+			bValid= m_boardCols >= 2 && m_boardRows >= 2 && m_boardMarkerLengthMM > 0.f
+					&& m_boardSquareLengthMM > m_boardMarkerLengthMM;
+			if (!bValid)
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+			break;
+
+		case eLensChoice::Skip:
+			ImGui::TextUnformatted(locText("setupFlow.lensSkipDescription"));
+			ImGui::Spacing();
+			ImGui::SetNextItemWidth(120.f);
+			ImGui::InputFloat(locLabel("setupFlow.lensDiagonalFovLabel"), &m_nominalDiagonalFovDegrees, 0.f, 0.f,
+							  "%.1f");
+
+			if (m_nominalDiagonalFovDegrees < 30.f || m_nominalDiagonalFovDegrees > 170.f)
+			{
+				bValid= false;
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.lensFovRangeWarning"));
+			}
+			else if (!m_bLensTableChecked)
+			{
+				// The pinhole needs the frame size
+				bValid= false;
+				ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.lensNoVideoWarning"));
+			}
+			break;
+	}
+	ImGui::PopTextWrapPos();
+
+	ImGui::Separator();
+	ImGui::BeginDisabled(!bValid);
+	if (ImGui::Button(locLabel("common.continueLabel"), ImVec2(120, 0)))
+	{
+		IntrinsicsConfig& intrinsics= config->camera(0).intrinsics;
+		bool bApplied= true;
+		switch (m_lensChoice)
+		{
+			case eLensChoice::Table:
+				intrinsics.intrinsics= m_lensTableMatch->intrinsics;
+				intrinsics.source= eIntrinsicsSource::Table;
+				intrinsics.reprojectionError= 0.0;
+				intrinsics.present= true;
+				break;
+
+			case eLensChoice::Skip:
+				bApplied= createNominalMonoIntrinsics(m_lensFrameWidth, m_lensFrameHeight,
+													  (double)m_nominalDiagonalFovDegrees, intrinsics.intrinsics);
+				intrinsics.source= eIntrinsicsSource::Nominal;
+				intrinsics.reprojectionError= 0.0;
+				intrinsics.present= bApplied;
+				break;
+
+			case eLensChoice::Phone:
+				config->intrinsicsPattern= eIntrinsicsPattern::PhoneChessboard;
+				break;
+
+			case eLensChoice::Printed:
+				config->intrinsicsPattern= eIntrinsicsPattern::PrintedCharuco;
+				config->charucoBoard.cols= m_boardCols;
+				config->charucoBoard.rows= m_boardRows;
+				config->charucoBoard.squareLengthMM= m_boardSquareLengthMM;
+				config->charucoBoard.markerLengthMM= m_boardMarkerLengthMM;
+				break;
+		}
+
+		if (bApplied)
+		{
+			config->markDirty();
+			ImGui::CloseCurrentPopup();
+			advanceFrom(stepCompletedByLensChoice(m_lensChoice));
+		}
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
 void SetupFlow::updateCharucoPrintPrompt()
 {
+	// One front camera can go without a calibration, so its step offers more
+	if (m_trackingSetup == eTrackingSetup::SingleFront)
+	{
+		updateLensPrompt();
+		return;
+	}
+
 	if (!beginCenteredModal(locWindowTitle("windows.modalPrintIntrinsicsBoard")))
 		return;
 

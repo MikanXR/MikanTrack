@@ -118,6 +118,7 @@ void IntrinsicsWizard::applyResultToConfig()
 	if (m_calibrator->getCameraCalibration(&monoIntrinsics))
 	{
 		m_config->camera(m_cameraIndex).intrinsics.present= true;
+		m_config->camera(m_cameraIndex).intrinsics.source= eIntrinsicsSource::Calibrated;
 		m_config->camera(m_cameraIndex).intrinsics.intrinsics= monoIntrinsics;
 		m_config->camera(m_cameraIndex).intrinsics.reprojectionError= m_calibrator->getReprojectionError();
 		m_config->intrinsicsPattern= m_pattern;

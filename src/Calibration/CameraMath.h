@@ -84,6 +84,20 @@ void extractCameraIntrinsicMatrixParameters(const cv::Matx33f& intrinsic_matrix,
 
 void createDefautMonoIntrinsics(int pixelWidth, int pixelHeight, struct MikanMonoIntrinsics& outIntrinsics);
 
+// A lens from its distorted camera matrix values and distortion, with the
+// undistorted matrix and field of view derived as the lens solve derives
+// them. False for a lens outside the solve's plausibility window.
+bool createMonoIntrinsics(const int frameWidth, const int frameHeight, const double focalLengthX,
+						  const double focalLengthY, const double principalPointX, const double principalPointY,
+						  const struct MikanDistortionCoefficients& distortion,
+						  struct MikanMonoIntrinsics& outIntrinsics);
+// A pinhole from a field of view across the frame's diagonal, the figure a
+// webcam's box quotes: principal point at the centre, no distortion. The
+// stand-in for a lens that was never measured.
+constexpr double k_defaultNominalDiagonalFovDegrees= 78.0;
+bool createNominalMonoIntrinsics(const int frameWidth, const int frameHeight, const double diagonalFovDegrees,
+								 struct MikanMonoIntrinsics& outIntrinsics);
+
 void computeOpenGLProjMatFromCameraIntrinsics(const struct MikanMonoIntrinsics& intrinsics, glm::mat4& outProjection,
 											  int* outViewport= nullptr);
 

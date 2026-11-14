@@ -287,6 +287,10 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 	const json& in= j.value("intrinsics", json::object());
 	profile.intrinsics.present= in.value("present", false);
 	profile.intrinsics.reprojectionError= in.value("reprojectionError", 0.0);
+	const std::string intrinsicsSource= in.value("source", "calibrated");
+	profile.intrinsics.source= intrinsicsSource == "table"	   ? eIntrinsicsSource::Table
+							   : intrinsicsSource == "nominal" ? eIntrinsicsSource::Nominal
+															   : eIntrinsicsSource::Calibrated;
 	MikanMonoIntrinsics& mono= profile.intrinsics.intrinsics;
 	mono.pixel_width= in.value("width", 0.0);
 	mono.pixel_height= in.value("height", 0.0);
@@ -340,6 +344,9 @@ static json cameraProfileToJson(const CameraProfile& profile)
 		 {
 			 {"present", profile.intrinsics.present},
 			 {"reprojectionError", profile.intrinsics.reprojectionError},
+			 {"source", profile.intrinsics.source == eIntrinsicsSource::Table	  ? "table"
+						: profile.intrinsics.source == eIntrinsicsSource::Nominal ? "nominal"
+																				  : "calibrated"},
 			 {"width", mono.pixel_width},
 			 {"height", mono.pixel_height},
 			 {"aspectRatio", mono.aspect_ratio},

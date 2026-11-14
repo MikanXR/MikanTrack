@@ -33,7 +33,18 @@ CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraI
 	if (bOpen)
 	{
 		ImGui::SeparatorText(locText("calibrationPanel.intrinsicsHeader"));
-		if (profile.intrinsics.present)
+		if (profile.intrinsics.present && !profile.intrinsics.isCalibrated())
+		{
+			// A lens that stands in for a calibration: say which, and leave
+			// the wizard on offer below
+			const bool bTable= profile.intrinsics.source == eIntrinsicsSource::Table;
+			ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s",
+							   locText(bTable ? "calibrationPanel.tableLensStatus" : "calibrationPanel.nominalLensStatus"));
+			ImGui::Text(locText("calibrationPanel.fovFmt"),
+						profile.intrinsics.intrinsics.hfov,
+						profile.intrinsics.intrinsics.vfov);
+		}
+		else if (profile.intrinsics.present)
 		{
 			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
 			ImGui::Text(locText("calibrationPanel.intrinsicsSummaryFmt"),
@@ -79,7 +90,7 @@ CalibrationPanel::DrawResult CalibrationPanel::drawExtrinsicsSection(bool bWizar
 	ImGui::SeparatorText(locText("calibrationPanel.extrinsicsAllHeader"));
 	bool bAllIntrinsics= true;
 	for (size_t i= 0; i < m_config->cameraCount(); ++i)
-		bAllIntrinsics&= m_config->camera(i).intrinsics.present;
+		bAllIntrinsics&= m_config->camera(i).intrinsics.isCalibrated();
 
 	ImGui::TextWrapped("%s", locText("calibrationPanel.extrinsicsAllDescription"));
 	ImGui::BeginDisabled(bWizardActive || !bAllIntrinsics);

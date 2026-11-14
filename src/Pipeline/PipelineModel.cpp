@@ -328,6 +328,8 @@ StageStatus computeDirect(const Inputs& in, S stage)
 	if (!in.bAvatarLoaded)
 		return notConfigured(text("valNoAvatar"), text("whyDirectNoAvatar"));
 	const StageText noNeutral= in.bDirectNeutral ? StageText() : text("whyDirectNoNeutral");
+	// The solver runs on an assumed lens, which a running stage still says
+	const StageText nominalLens= in.bDirectIntrinsicsNominal ? text("whyDirectNominalIntrinsics") : StageText();
 	const int resting= countDirect(in, &Inputs::DirectArm::bResting);
 	const bool bEasing= (in.directArms[0].bResting && in.directArms[0].restBlend < 1.f) ||
 		(in.directArms[1].bResting && in.directArms[1].restBlend < 1.f);
@@ -338,12 +340,12 @@ StageStatus computeDirect(const Inputs& in, S stage)
 		if (!in.bDirectNeutral)
 			return degraded(text("valNoNeutral"), noNeutral);
 		if (!in.bDirectTorso)
-			return running(text("valNoPerson"));
+			return running(text("valNoPerson"), nominalLens);
 		if (in.bDirectHandednessSwapped)
 			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
 		if (resting == 2)
-			return running(text("valArmsResting"));
-		return running(text("valDepthFmt", in.directShoulderDepthMeters));
+			return running(text("valArmsResting"), nominalLens);
+		return running(text("valDepthFmt", in.directShoulderDepthMeters), nominalLens);
 	case S::Filters:
 		if (in.bDirectHandednessSwapped)
 			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
