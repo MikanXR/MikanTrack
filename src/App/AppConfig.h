@@ -90,6 +90,14 @@ struct HandSkeletonConfig
 	std::array<HandSkeleton, 2> skeleton{};
 };
 
+// The pattern the lens calibration looks for: a chessboard shown on a phone
+// screen, or the printed charuco board
+enum class eIntrinsicsPattern
+{
+	PhoneChessboard,
+	PrintedCharuco,
+};
+
 struct CharucoBoardConfig
 {
 	int cols= 11;
@@ -459,6 +467,9 @@ public:
 	HandScaleConfig handScale;
 	HandSkeletonConfig handSkeleton;
 	CharucoBoardConfig charucoBoard;
+	// A config without the key reads as the phone for one camera and the
+	// printed board for more
+	eIntrinsicsPattern intrinsicsPattern= eIntrinsicsPattern::PhoneChessboard;
 	TrackingConfig tracking;
 	OscConfig osc;
 	FusionConfig fusion;

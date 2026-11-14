@@ -10,10 +10,13 @@
 #include "WizardResult.h"
 
 class AppConfig;
+class LensPatternPrompt;
 class MonoLensDistortionCalibrator;
 class VisionThread;
+enum class eIntrinsicsPattern;
 
-// Charuco camera-intrinsics calibration wizard.
+// Camera-intrinsics calibration wizard, on a chessboard shown by a phone or
+// the printed charuco board.
 // Runs pattern detection on the main thread from the preview frames
 // (ML tracking and undistortion are paused while active).
 class IntrinsicsWizard
@@ -65,7 +68,10 @@ private:
 	std::unique_ptr<MonoLensDistortionCalibrator> m_calibrator;
 	cv::Mat m_grayFrame;
 
-	// Board params being edited (copied from config on enter)
+	// The pattern and the printed board params being edited (copied from
+	// config on enter)
+	std::unique_ptr<LensPatternPrompt> m_patternPrompt;
+	eIntrinsicsPattern m_pattern;
 	int m_boardCols= 11;
 	int m_boardRows= 8;
 	float m_squareLengthMM= 16.f;

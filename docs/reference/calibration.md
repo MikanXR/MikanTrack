@@ -20,7 +20,13 @@ The calibration subsystem in `src/Calibration`, built on OpenCV, plus the ImGui 
 
 ## Lens intrinsics (per camera)
 
-`IntrinsicsWizard` (`src/UI/IntrinsicsWizard.cpp`) drives `MonoLensDistortionCalibrator` for one camera at a time. On entry it disables tracking and undistortion for that camera (samples need raw distorted frames); the other cameras keep tracking. The user shows a printed charuco board, whose geometry comes from the `CharucoBoardConfig` block and is edited in the wizard.
+`IntrinsicsWizard` (`src/UI/IntrinsicsWizard.cpp`) drives `MonoLensDistortionCalibrator` for one camera at a time. On entry it disables tracking and undistortion for that camera (samples need raw distorted frames); the other cameras keep tracking. The user shows one of two patterns, chosen in the wizard's first screen and persisted as `AppConfig::intrinsicsPattern` (a config without the key reads as the phone for one camera and the printed board for more):
+
+- The phone chessboard: a fixed 10 by 5 board drawn by the page at `https://mikanxr.org/calibrate/` (`static/calibrate/index.html` in the website repo), which the wizard offers as a QR code rendered by `renderQrCodeImage` (`cv::QRCodeEncoder`) with the address beside it. The path has no inputs, since the solve depends on the board's proportions and not its size. An export button writes the same board as a PNG for a phone with no connection.
+
+- The printed charuco board, whose geometry comes from the `CharucoBoardConfig` block and is edited in the wizard.
+
+The choice and the phone instructions are drawn by `LensPatternPrompt` (`src/UI/LensPatternPrompt.cpp`), which the guided setup's board step shares. A charuco board on a phone screen is not offered: the screen's bloom corrupts the marker bits, so the board is rarely found whole.
 
 Sample gating, in `MonoLensDistortionCalibrator::update` and each finder's `findNewCalibrationPattern`:
 
@@ -36,7 +42,7 @@ Sample gating, in `MonoLensDistortionCalibrator::update` and each finder's `find
 
 The solve is `computeMonoLensCameraCalibration` (`src/Calibration/CameraMath.cpp`): `cv::initCameraMatrix2D` then `cv::calibrateCamera` with `CALIB_FIX_ASPECT_RATIO + CALIB_FIX_PRINCIPAL_POINT + CALIB_ZERO_TANGENT_DIST + CALIB_RATIONAL_MODEL + CALIB_FIX_K3 + CALIB_FIX_K4 + CALIB_FIX_K5 + CALIB_FIX_K6`, so only k1/k2 are estimated. k6 must be fixed along with k3/k4/k5: under the rational model a free k6 is a lone r^6 denominator degree of freedom that fits the captured corners to sub-pixel error while going wild outside them, after which `cv::getOptimalNewCameraMatrix` emits a degenerate undistorted matrix. The result then passes plausibility gates before it is accepted: hfov must land in a 20 to 160 degree window and the undistorted/distorted fx ratio in 0.2 to 5.0, because a degenerate capture set reports sub-pixel reprojection error while the recovered focal length is nonsense. Failing either gate fails the calibration loudly instead of persisting intrinsics that poison every downstream solve.
 
-On accept the wizard writes `IntrinsicsConfig` for that camera plus the board parameters, saves the config, and re-enables undistortion so the user can verify straight lines in the live preview. The undistortion maps are rebuilt from the new intrinsics unconditionally (see shared infrastructure above).
+On accept the wizard writes `IntrinsicsConfig` for that camera plus the pattern choice and the board parameters, saves the config, and re-enables undistortion so the user can verify straight lines in the live preview. The undistortion maps are rebuilt from the new intrinsics unconditionally (see shared infrastructure above).
 
 ---
 
@@ -120,7 +126,7 @@ The wrist-to-middle-MCP reference length that scales the monocular PnP object mo
 
 All calibration results live in the active project's `project.json` (`AppConfig`, serialization in `src/App/AppConfig.cpp`; projects live under `%USERPROFILE%/Documents/MikanTrack/`). The intrinsics, extrinsics, and hand wizards save immediately on accept; the body and mounting wizards mark the config dirty for the auto-save (3 second cooldown).
 
-- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the board geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
+- Intrinsics: per camera under `cameras[i].intrinsics` (`present`, `reprojectionError`, `width`, `height`, `hfov`, `vfov`, `distortedCameraMatrix`, `undistortedCameraMatrix`, `distortion`), plus the pattern choice under `intrinsicsPattern` (`phone` or `printed`) and the printed board's geometry under `charucoBoard` (`cols`, `rows`, `squareMm`, `markerMm`)
 - Extrinsics: per camera under `cameras[i].extrinsics` (`present`, `markerFromCamera`, `patternReprojectionErrorPx`, `patternCornerCount`, `markerId`, `markerLengthMm`), plus the cross-camera worst-pair metrics under top-level `extrinsicsQuality` (`worstPairReprojectionRmsPx`, `worstPairSpacingErrorMm`, `worstPairSpacingScale`, `worstPairPlanarityRmsMm`, and the pair's identity)
 - Lift depth scale: per camera under `cameras[i].liftDepthScale` (left, right), the factor on that camera's monocular lift distance, 1 until measured
 - Hand bones: `handSkeleton.left`/`handSkeleton.right` (finger bases plus phalanx lengths; neutral directions are rebuilt on load), and the reference bone under `handScale` (`present`, `refLengthMeters`)

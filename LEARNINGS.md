@@ -453,6 +453,26 @@ Decided: the webcam table stays the first source, since a listed camera is exact
 
 Learned: a single-image camera model was 10 to 24 percent off on webcam frames of a seated person, and the replay instrument cannot see an effect smaller than the solver's own response to a re-encoded frame.
 
+The board on a phone screen instead of on paper, measured afterwards on the C920 at 20 to 30 cm, as the share of recorded frames each pattern was found whole in:
+
+| Pattern on the phone | Found whole |
+|---|---|
+| Charuco, the detector as shipped | 0 to 7 percent |
+| Charuco, the detector tuned for bloom | 48 to 49 percent |
+| Circle grid | 62 percent |
+| Chessboard, sector based detector | 90 percent |
+| Chessboard, classic detector | 97 percent |
+
+- The charuco board fails on the marker bits, not the corners: the screen's white cells bloom into the black ones. Ignoring a wider margin of each cell or allowing more bit errors recovers single frames, and dimming the screen does little, since the camera's exposure follows it.
+
+- A hand-held phone moves a median of 5.6 px between frames, and motion blur biases the corners. The chessboard solved over every frame was 2.1 percent off the printed calibration, with sets of 12 views from -1.8 to +8.5. Keeping only frames within 3 px of the one before brought it to +0.6 (-1.0 to +2.0), and the sector based detector on those frames to a 0.3 px reprojection error.
+
+- A hold of 0.3 seconds under 1.5 px captured nothing on the same recording. A hand holds still for a frame or two, so the gate is one comparison against the detection 0.09 seconds earlier.
+
+Decided: the one-camera lens calibration shows a plain chessboard on a phone, found per frame with the classic detector and re-detected with the sector based one on the frames it keeps. The printed charuco board stays for a rig.
+
+Learned: a pattern that needs no decoding survives an emissive screen, and which frames are kept moved the focal length more than which detector found them.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

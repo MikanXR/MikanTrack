@@ -11,6 +11,7 @@
 #include "ExtrinsicsWizard.h"
 #include "HandCalibrationWizard.h"
 #include "IntrinsicsWizard.h"
+#include "LensPatternPrompt.h"
 #include "MainWindow.h"
 #include "MountingWizard.h"
 #include "LocText.h"
@@ -48,8 +49,12 @@ SetupFlow::SetupFlow(App* app, MainWindow* mainWindow, VideoPreviewPanel* previe
 	, m_mainWindow(mainWindow)
 	, m_previewPanel(previewPanel)
 	, m_wizards(wizards)
+	, m_patternPrompt(std::make_unique<LensPatternPrompt>())
+	, m_intrinsicsPattern(eIntrinsicsPattern::PrintedCharuco)
 {
 }
+
+SetupFlow::~SetupFlow()= default;
 
 void SetupFlow::begin()
 {
@@ -184,6 +189,11 @@ void SetupFlow::transitionTo(eStep step)
 			break;
 		}
 		case eStep::CharucoPrint:
+			// A new project has no choice stored: one camera shows the
+			// pattern on a phone, and a rig keeps the printed board
+			m_intrinsicsPattern= getRequiredCameraCount(m_trackingSetup) == 1
+									 ? eIntrinsicsPattern::PhoneChessboard
+									 : eIntrinsicsPattern::PrintedCharuco;
 			m_boardCols= config->charucoBoard.cols;
 			m_boardRows= config->charucoBoard.rows;
 			m_boardSquareLengthMM= (float)config->charucoBoard.squareLengthMM;
@@ -539,32 +549,45 @@ void SetupFlow::updateCharucoPrintPrompt()
 		return;
 
 	ImGui::PushTextWrapPos(k_promptWrapWidth);
-	ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
-	ImGui::PopTextWrapPos();
+	ImGui::TextUnformatted(locText("setupFlow.lensPatternPrompt"));
 	ImGui::Spacing();
+	m_patternPrompt->drawPatternChoice(m_intrinsicsPattern);
+	ImGui::Separator();
 
-	ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
-	ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
-	ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f, "%.2f");
-	ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
-
-	if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+	const bool bPhone= m_intrinsicsPattern == eIntrinsicsPattern::PhoneChessboard;
+	const bool bParamsValid= bPhone || (m_boardCols >= 2 && m_boardRows >= 2 && m_boardMarkerLengthMM > 0.f &&
+										m_boardSquareLengthMM > m_boardMarkerLengthMM);
+	if (bPhone)
 	{
-		exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM,
-								  m_boardMarkerLengthMM, eCharucoDictionaryType::DICT_6X6);
+		m_patternPrompt->drawPhoneInstructions();
 	}
+	else
+	{
+		ImGui::TextUnformatted(locText("setupFlow.charucoPrintPrompt"));
+		ImGui::Spacing();
 
-	const bool bParamsValid= m_boardCols >= 2 && m_boardRows >= 2 &&
-							 m_boardMarkerLengthMM > 0.f &&
-							 m_boardSquareLengthMM > m_boardMarkerLengthMM;
-	if (!bParamsValid)
-		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+		ImGui::InputInt(locLabel("setupFlow.boardColumnsLabel"), &m_boardCols);
+		ImGui::InputInt(locLabel("setupFlow.boardRowsLabel"), &m_boardRows);
+		ImGui::InputFloat(locLabel("setupFlow.blackSquareSizeMmLabel"), &m_boardSquareLengthMM, 0.f, 0.f, "%.2f");
+		ImGui::InputFloat(locLabel("setupFlow.markerSizeMmLabel"), &m_boardMarkerLengthMM, 0.f, 0.f, "%.2f");
+
+		if (ImGui::Button(locLabel("setupFlow.printBoardButton"), ImVec2(-1, 0)))
+		{
+			exportAndOpenCharucoBoard(m_boardCols, m_boardRows, m_boardSquareLengthMM, m_boardMarkerLengthMM,
+									  eCharucoDictionaryType::DICT_6X6);
+		}
+
+		if (!bParamsValid)
+			ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.charucoValidationWarning"));
+	}
+	ImGui::PopTextWrapPos();
 
 	ImGui::Separator();
 	ImGui::BeginDisabled(!bParamsValid);
 	if (ImGui::Button(locLabel("common.continueLabel"), ImVec2(120, 0)))
 	{
 		AppConfig* config= m_app->getConfig();
+		config->intrinsicsPattern= m_intrinsicsPattern;
 		config->charucoBoard.cols= m_boardCols;
 		config->charucoBoard.rows= m_boardRows;
 		config->charucoBoard.squareLengthMM= m_boardSquareLengthMM;

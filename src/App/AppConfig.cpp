@@ -852,6 +852,11 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.charucoBoard.squareLengthMM= cb.value("squareMm", 16.0);
 	config.charucoBoard.markerLengthMM= cb.value("markerMm", 12.0);
 
+	const std::string intrinsicsPattern=
+		j.value("intrinsicsPattern", config.cameras.size() == 1 ? "phone" : "printed");
+	config.intrinsicsPattern= intrinsicsPattern == "phone" ? eIntrinsicsPattern::PhoneChessboard
+														   : eIntrinsicsPattern::PrintedCharuco;
+
 	const json& tr= j.value("tracking", json::object());
 	config.tracking.flipHandedness= tr.value("flipHandedness", true);
 	config.tracking.detectorIntervalFrames= tr.value("detectorIntervalFrames", 30);
@@ -1038,6 +1043,7 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 		{"squareMm", charucoBoard.squareLengthMM},
 		{"markerMm", charucoBoard.markerLengthMM},
 	};
+	j["intrinsicsPattern"]= intrinsicsPattern == eIntrinsicsPattern::PhoneChessboard ? "phone" : "printed";
 
 	j["tracking"]= {
 		{"flipHandedness", tracking.flipHandedness},

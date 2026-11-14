@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,9 +12,11 @@ class BodyCalibrationWizard;
 class ExtrinsicsWizard;
 class HandCalibrationWizard;
 class IntrinsicsWizard;
+class LensPatternPrompt;
 class MainWindow;
 class MountingWizard;
 class VideoPreviewPanel;
+enum class eIntrinsicsPattern;
 
 // Guided new-project setup: a chain of modal prompts and the existing
 // calibration wizards in dependency order (cameras, intrinsics per camera,
@@ -74,6 +77,7 @@ public:
 
 	SetupFlow(App* app, MainWindow* mainWindow, VideoPreviewPanel* previewPanel,
 			  const WizardSet& wizards);
+	~SetupFlow();
 
 	void begin();
 	bool isActive() const { return m_step != eStep::Inactive; }
@@ -140,6 +144,8 @@ private:
 	std::vector<int> m_selectedDeviceIndices;
 
 	// Print-prompt edit fields (seeded from the config on step entry)
+	std::unique_ptr<LensPatternPrompt> m_patternPrompt;
+	eIntrinsicsPattern m_intrinsicsPattern;
 	int m_boardCols= 11;
 	int m_boardRows= 8;
 	float m_boardSquareLengthMM= 16.f;

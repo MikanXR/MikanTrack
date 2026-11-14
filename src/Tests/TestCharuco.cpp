@@ -2,6 +2,8 @@
 
 #include "CalibrationPatternFinder_Chessboard.h"
 
+#include "opencv2/objdetect.hpp"
+
 static int runCharucoTest(const TestArgs& args)
 {
 	int result= 0;
@@ -229,6 +231,18 @@ static int runCharucoTest(const TestArgs& args)
 			{
 				MIKAN_LOG_ERROR("test-charuco")
 					<< "REGRESSION: synthetic intrinsics recovery failed";
+				result= 1;
+			}
+		}
+
+		// The phone page's address survives the QR code a phone reads it from
+		{
+			MIKAN_LOG_INFO("test-charuco") << "QR code round trip";
+			const cv::Mat qrImage= renderQrCodeImage(k_phonePatternUrl, 6);
+			const std::string decoded= qrImage.empty() ? std::string() : cv::QRCodeDetector().detectAndDecode(qrImage);
+			if (decoded != k_phonePatternUrl)
+			{
+				MIKAN_LOG_ERROR("test-charuco") << "REGRESSION: QR code decoded as '" << decoded << "'";
 				result= 1;
 			}
 		}
