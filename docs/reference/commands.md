@@ -132,7 +132,7 @@ Python, no build needed:
 
 - `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
 - `tools/intrinsics_spike/`: the calibration what-if scripts over recordings (header patching, raw-equivalent frames, the `--gate-direct` sensitivity sweep and its sweep against the stereo truth, the focal length estimators), run from their own venv as its README sets out
-- `tools/kalidokit_ab/`: MediaPipe Holistic and a Kalidokit build over a take's front-camera frames, scored against the stereo truth in a `--gate-direct` CSV beside the direct chain, run as its README sets out
+- `tools/kalidokit_ab/`: MediaPipe Holistic and a Kalidokit build over a take's front-camera frames, scored against the stereo truth in a `--gate-direct` CSV beside the direct chain, and rendered beside `--render-direct` into a side-by-side video, run as its README sets out
 
 ---
 
