@@ -7,3 +7,7 @@ imgui.ini
 *.log
 resources/audio/bench/
 
+
+# The intrinsics spike venv and caches
+tools/intrinsics_spike/.venv/
+tools/**/__pycache__/

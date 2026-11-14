@@ -406,6 +406,53 @@ Decided: the stage lands for custom profiles as `blink.*`, and Auto stays on the
 
 Learned: a timing rule finds blinks on these points as well as the best threshold does, and the false events it does not remove are the points' own noise, which no rule on one ratio over time tells from a blink at the same speed.
 
+## 31. Intrinsics without a board for the front camera: what a wrong focal length costs and what estimates one
+
+The single-front chain's only print is the charuco board, and the plan was to let the user skip it. Two things were unmeasured: how far the direct retarget's output moves under a wrong focal length, and whether anything short of a board estimates one. The scripts are in `tools/intrinsics_spike`. `--gate-direct` gained the posed upper arm, forearm, hand and head rotations in its CSV, so two replays of one take under different headers compare frame by frame.
+
+What a wrong calibration costs, on three direct takes of the C920 (9056 hand frames), as the rotation of each posed bone against the unperturbed replay in degrees. Each row is the p50 averaged over the two directions of the change, with the larger p90 in brackets:
+
+| Change | Upper arm | Forearm | Hand | Head |
+|---|---|---|---|---|
+| fx 2 percent off | 1.9 (2.7) | 0.7 (2.1) | 0.3 (2.0) | 0.1 |
+| fx 5 percent off | 4.7 (6.8) | 1.6 (5.2) | 0.8 (5.1) | 0.2 |
+| fx 10 percent off | 9.3 (13.6) | 3.1 (10.7) | 1.7 (10.4) | 0.4 |
+| fx 15 percent off | 13.8 (20.3) | 5.0 (16.3) | 2.6 (15.9) | 0.6 |
+| tilt 5 degrees off | 5.8 (12.1) | 5.0 (5.5) | 5.0 (5.1) | 1.0 |
+| tilt 10 degrees off | 11.6 (24.5) | 10.0 (11.3) | 10.0 (10.3) | 2.1 |
+
+- The upper arm turns about one degree per percent of focal length error, the same in both directions, and the forearm a third of that. The head does not move.
+
+- A tilt error passes straight through to the forearm and the hand, degree for degree.
+
+- The cost of no undistortion could not be measured this way. Replaying the takes on raw-equivalent frames with a plain pinhole moved the arm bones 3.3 degrees p50 and 61 to 74 at p90. The control, one take's frames re-encoded as JPEG with the calibration untouched, moved them 8 degrees p50 and over 100 at p90. The solver's discrete choices (the wrist's near or far basin, the palm mirror) flip on pixel-level changes to its input, and that floor is above what the C920's distortion (k1 0.12, k2 -0.24) does.
+
+For scale, on the tri-camera webcam-position take the direct retarget's upper arm sits 37 to 48 degrees p50 from the position retarget of the stereo output.
+
+What estimates a focal length, as the error against the charuco value on raw-equivalent frames of seven camera views (the C920 from two positions, the PW315 and the C960s over the desk and facing the user), 24 frames each:
+
+| Source | fx error |
+|---|---|
+| A nominal 70 degree horizontal field of view | -1 percent on the C920, +23 to +44 percent on the wider cameras |
+| A nominal 78 degrees | -14 percent on the C920, +6 to +25 percent on the wider cameras |
+| MoGe-2 (`moge-2-vitl-normal`, its own focal recovery) | -12 to +12 percent |
+| GeoCalib (pinhole and simple radial weights) | -24 to +21 percent |
+| A generic six-point face over a head turn | not observable |
+
+- The C920's two charuco calibrations, made in different projects, differ by 0.5 percent, which is the reference's own noise.
+
+- MoGe-2 is the steadier of the two models. It reads the same C920 at -12 and -11 percent from two positions, and the widest camera at +12 from both of its positions.
+
+- GeoCalib reads the same C920 at -23 percent in one room view and +13 in another, both full of picture frames and door edges. Its radial term does not follow the charuco k1 on any camera (-0.03 where the board gives 0.12). Solving the 24 frames with shared intrinsics narrows the spread and leaves the median where it was, since a fixed camera's frames are one scene.
+
+- GeoCalib's pitch against the camera's tilt from the rig's extrinsics, the desk taken as level: 10 degrees short on one camera facing the user and 3 on the other, and the wrong sign on the cameras over the desk. On the one-camera project it reads 1 degree where the tilt slider is set to 21. That project has no extrinsics to say which is right.
+
+- The face solve (`cv2.calibrateCamera` over 40 views spread across the head's yaw, the principal point fixed, no distortion) returns the focal length it was started from, -31 to +48 percent over five starts on one take, or diverges, at 15 to 30 px rms. The whole-body face points against a generic face do not carry the perspective a focal length is read from.
+
+Decided: the webcam table stays the first source, since a listed camera is exact and a nominal field of view is only right for the camera it was chosen for. GeoCalib is not taken up for the focal length, the distortion or the tilt. Open, for the unlisted camera: MoGe-2's 12 percent is about 11 degrees of upper arm where a nominal 78 degrees is 6 to 25 percent off on the cameras here, and it costs a 1.3 GB model the app does not otherwise load.
+
+Learned: a single-image camera model was 10 to 24 percent off on webcam frames of a seated person, and the replay instrument cannot see an effect smaller than the solver's own response to a re-encoded frame.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

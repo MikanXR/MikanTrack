@@ -128,6 +128,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 Python, no build needed:
 
 - `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
+- `tools/intrinsics_spike/`: the calibration what-if scripts over recordings (header patching, raw-equivalent frames, the `--gate-direct` sensitivity sweep, the focal length estimators), run from their own venv as its README sets out
 
 ---
 
