@@ -239,10 +239,10 @@ private:
 	struct HandSlot
 	{
 		bool active= false;
-		// a palm detection is pending until the first landmark pass consumes it
+		// a palm detection is pending until the first landmark pass consumes
+		// it, and a pass that finds no confident hand drops the slot
 		bool hasPendingDetection= false;
-		// pending detection came from a search hint (speculative): if the
-		// first landmark pass doesn't find a confident hand, drop immediately
+		// pending detection came from a search hint, counted in the seed funnel
 		bool bSeededFromHint= false;
 		// and that hint was the body model's
 		bool bSeededFromBody= false;

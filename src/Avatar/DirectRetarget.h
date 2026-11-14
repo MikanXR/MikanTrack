@@ -345,6 +345,10 @@ private:
 		// When the chain's current unbroken run of placements began: the
 		// hold it has earned is the run's length, up to the maximum
 		double sightingStartMs= -1.0;
+		// When the arm last had evidence, a hand slot on the body wrist or a
+		// placed arm's wrist clear of the frame's edge: the clock the hold
+		// runs on
+		double evidenceTimestampMs= -1.0;
 		// The wrist's distance along its ray as the scorer chose it last
 		// frame, before the depth filter: the smoothness term's anchor and a
 		// candidate of its own

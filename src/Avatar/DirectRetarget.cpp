@@ -34,6 +34,11 @@ constexpr int kEnterFrames= 3;
 // model places a joint it cannot see somewhere plausible inside the image,
 // and that somewhere is not where the joint is
 constexpr float kFrameMarginPx= 16.f;
+// A body wrist with no hand slot on it, this close to the frame edge in
+// frame heights, is not evidence of an arm: the edge where the arm leaves is
+// where the model parks a wrist it cannot see, scored over the bar for
+// seconds at a time
+constexpr float kWristEdgeBandFrameHeights= 0.1f;
 // A hand slot farther than this from the body model's wrist, in shoulder
 // widths, is not the hand: the palm detector runs over the whole frame and
 // fires on hand-shaped things in the scene
@@ -742,10 +747,34 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// one frame is the model's score wavering on a wrist it has, and the
 		// hand's lift is what keeps the wrist's distance from flipping.
 		const bool bHadChain= arm.chain.valid &&
-			(timestampMs - arm.solvedTimestampMs) <=
-				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
+			(timestampMs - arm.evidenceTimestampMs) <=
+				earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
 		const bool bWristVisible= usable(wristIndex);
-		const bool bWristGate= advanceGate(bWristVisible, arm.wristGateFrames, arm.bWristAccepted);
+		// A body wrist takes an arm from rest only with a hand on it. The
+		// model places a wrist it cannot see at the frame's edge where the arm
+		// leaves and
+		// scores it over the bar for seconds at a time, and the hand model
+		// finds nothing there. Either slot counts, since a slot under the
+		// wrong label is still a hand at this wrist.
+		const glm::vec2 bodyWristPx= landmarkPx(wristIndex);
+		auto slotOnWrist= [&](const TrackedHand& slot) {
+			return slot.tracked && bWristVisible && shoulderWidthPx > 0.f &&
+				glm::distance(glm::vec2(slot.imagePoints[0].x, slot.imagePoints[0].y), bodyWristPx) <=
+					kHandAgreementShoulderWidths * shoulderWidthPx;
+		};
+		const bool bHandOnWrist= slotOnWrist(camera.hands[0]) || slotOnWrist(camera.hands[1]);
+		// A placed arm keeps following a wrist with no hand on it while the
+		// wrist is clear of the frame's edge, which carries it through a
+		// clasp or a hand the hand model cannot read. In the band along the
+		// edge the wrist alone only runs out the hold.
+		const float edgeBandPx= kWristEdgeBandFrameHeights * (float)cameraModel.height;
+		const bool bWristInEdgeBand= bFrameKnown &&
+			(bodyWristPx.x < edgeBandPx || bodyWristPx.y < edgeBandPx ||
+			 bodyWristPx.x > (float)cameraModel.width - edgeBandPx ||
+			 bodyWristPx.y > (float)cameraModel.height - edgeBandPx);
+		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand))
+			arm.evidenceTimestampMs= timestampMs;
+		const bool bWristGate= advanceGate(bHandOnWrist, arm.wristGateFrames, arm.bWristAccepted);
 		const bool bWristUsable= bHadChain ? bWristVisible : bWristGate;
 
 		// The hand slot is the hand only where the body model agrees: the
@@ -755,9 +784,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// measured in shoulder widths, so it scales with the user's distance,
 		// and it has to hold for the entry frames before the slot is the hand.
 		const glm::vec2 handWristPx(hand.imagePoints[0].x, hand.imagePoints[0].y);
-		const glm::vec2 bodyWristPx= landmarkPx(wristIndex);
-		const bool bHandNear= hand.tracked && bWristVisible && shoulderWidthPx > 0.f &&
-			glm::distance(handWristPx, bodyWristPx) <= kHandAgreementShoulderWidths * shoulderWidthPx;
+		const bool bHandNear= slotOnWrist(hand);
 		const bool bHandGate= advanceGate(bHandNear, arm.handGateFrames, arm.bHandAccepted);
 		// The same slot against the other arm's wrist. The body model labels
 		// a wrist by the arm it ends, so a slot there and not here carries
@@ -998,8 +1025,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		}
 
 		const bool bChainUsable= arm.chain.valid &&
-			(timestampMs - arm.solvedTimestampMs) <=
-				earnedHoldMs(arm.sightingStartMs, arm.solvedTimestampMs, frameMs);
+			(timestampMs - arm.evidenceTimestampMs) <=
+				earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
 		if (!bChainUsable)
 		{
 			// Nothing places the arm: the source says so, and the loss stage

@@ -714,8 +714,10 @@ static int runDirectRetargetTest(const TestArgs&)
 
 	// (k) A hand slot the body model disagrees with is not the hand: beside
 	// an unseen body wrist the arm rests once the hold passes, beside a seen
-	// one the body wrist places the arm, and the slot's palm and fingers
-	// stay out until it is back where the body says the wrist is
+	// one the arm stays at rest, and the slot's palm and fingers stay out
+	// until it is back where the body says the wrist is. A placed arm whose
+	// slot goes follows the body wrist clear of the frame's edge and rests
+	// past the hold in the band along it
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
@@ -764,16 +766,15 @@ static int runDirectRetargetTest(const TestArgs&)
 		// The body sees the wrists again, the slot still elsewhere
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			user.bWristSeen[sideIndex]= true;
-		AvatarPose bodyPlaced;
-		run(user, 100, 40, bodyPlaced);
-		bool bPlaced= true;
+		AvatarPose wristOnly;
+		run(user, 100, 40, wristOnly);
+		bool bStillRested= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
-			bPlaced&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
-			bPlaced&= indexBend(bodyPlaced, sideIndex) < 1e-3f;
+			bStillRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+			bStillRested&= armAtPose(wristOnly, restReference, sideIndex);
 		}
-		check(bPlaced, "(k) the body wrist places the arm past a disagreeing hand slot, its fingers at rest");
+		check(bStillRested, "(k) a body wrist with the hand slot elsewhere does not take the arm from rest");
 
 		// The slot back on the wrist: the hand is seen and its fingers bend
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -782,6 +783,41 @@ static int runDirectRetargetTest(const TestArgs&)
 		run(user, 150, 3, seen);
 		check(indexBend(seen, 0) > 0.5f && indexBend(seen, 1) > 0.5f,
 			  "(k) a hand slot on the body wrist is the hand");
+
+		// The slot gone from the placed arm, the wrist clear of the frame's
+		// edge: the body wrist carries the arm past the hold
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bHandTracked[sideIndex]= false;
+		AvatarPose carried;
+		run(user, 160, 40, carried);
+		bool bCarried= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bCarried&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bCarried, "(k) a placed arm follows a body wrist clear of the frame's edge with no hand slot");
+
+		// The wrists lowered into the band along the bottom edge, still seen
+		// and still with no slot: the arm runs out its hold and rests
+		const float frameHeight= (float)camera.model.height;
+		bool bInBand= false;
+		for (int step= 0; step < 200 && !bInBand; ++step)
+		{
+			bInBand= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.wrist[sideIndex].z-= 0.005f;
+				const float y= project(camera, user.wrist[sideIndex]).y;
+				bInBand&= y > 0.9f * frameHeight + 2.f && y < frameHeight - 18.f;
+			}
+		}
+		AvatarPose banded;
+		run(user, 200, 40, banded);
+		bool bBandRested= bInBand;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bBandRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+		check(bBandRested, "(k) a body wrist in the band along the frame's edge with no hand slot runs out the hold and rests the arm");
 	}
 
 	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
@@ -1243,14 +1279,15 @@ static int runDirectRetargetTest(const TestArgs&)
 		captureNeutral(rig, camera, solver, timestampMs);
 
 		// The elbow forward and out, the forearm swung out and up: a bend
-		// that no straight arm along a line of sight can mimic. The hands
-		// are not tracked, so only the elbow's reprojection decides.
+		// that no straight arm along a line of sight can mimic. The hand
+		// slots sit on the wrists, which an arm from rest needs, with no
+		// lift, so only the elbow's reprojection decides.
 		User user= makeNeutralUser();
 		user.bModelDepth= false;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const float sy= sideIndex == 0 ? 1.f : -1.f;
-			user.bHandTracked[sideIndex]= false;
+			user.bHandLifted[sideIndex]= false;
 			user.elbow[sideIndex]= user.shoulder[sideIndex] + glm::normalize(glm::vec3(0.4f, sy * 0.6f, -0.7f)) * kUpperArmLength;
 			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.5f, sy * 0.7f, 0.5f)) * kForearmLength;
 		}
@@ -1285,7 +1322,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		// frames of seen elbow past the hand gate's entry
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			user.bHandTracked[sideIndex]= true;
+			user.bHandLifted[sideIndex]= true;
 			user.pnpDepthScale[sideIndex]= 1.3f;
 		}
 		run(210, 40 + 3, pose);
@@ -1318,12 +1355,12 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bLift, "(l) with the elbow unseen the lift's distance places the wrist on its new ray");
 
-		// The hands drop out too and the wrist moves again with nothing to
+		// The lift drops out too and the wrist moves again with nothing to
 		// say how far: it keeps its distance along the new ray
 		const float liftDepth= glm::length(user.wrist[0]);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			user.bHandTracked[sideIndex]= false;
+			user.bHandLifted[sideIndex]= false;
 			user.wrist[sideIndex]= user.elbow[sideIndex] + glm::normalize(glm::vec3(0.3f, 0.f, -0.95f)) * kForearmLength;
 		}
 		run(340, 40, pose);
