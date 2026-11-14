@@ -574,6 +574,41 @@ Not measured: the two changes apart, the lens sweep after them, and the rig take
 
 Learned: a landmark's visibility score is not evidence that the joint is in the frame, and a tight sigma on such a landmark outvotes a metric cue that is right. And a tie between two candidates can be a fault in one of them: section 33 read it as the method's.
 
+## 35. The real Kalidokit on the level take: half the direct chain's accuracy on a typical frame, the same share of bad ones
+
+Sections 33 and 34 scored a Kalidokit-style baseline, Kalidokit's arm math on MikanTrack's body model. This runs Kalidokit itself: MediaPipe Holistic over the front camera's raw frames of the level take with the settings of Kalidokit's 3d sample, a local Kalidokit 1.1.5 build on those landmarks, and its rotations posed on a T-pose arm with the sample's dampeners and slerp (`tools/kalidokit_ab`). The reach against the stereo truth on the 3072 arm frames every candidate has, after section 34's elbow change:
+
+| Candidate | p50, degrees | p90, degrees | Over 60 degrees |
+|---|---|---|---|
+| Direct chain | 13.8 | 83.6 | 16% |
+| Kalidokit rig on the avatar | 28.4 | 78.3 | 18% |
+| Holistic world landmarks, raw | 26.2 | 57.9 | 9% |
+| Kalidokit-style baseline on the body model | 46.0 | 85.6 | 27% |
+
+- On a typical frame the direct chain is twice as near the truth as Kalidokit. On the share of frames badly wrong it has no lead, and Holistic's raw landmarks have half as many.
+
+- Kalidokit rests the arm on 15 percent of the frames by its own off-screen rule. On the frames it poses it reads 25.5 degrees with 9 percent over 60.
+
+- With the hands near the shoulders (510 frames, the truth's wrist less than 10 cm nearer the camera than the shoulder) every candidate is poor: 45.0 degrees for the direct chain, 45.4 for Kalidokit, 35.4 for Holistic's landmarks.
+
+- The direct chain is the steadiest. Its reach turns 1.3 degrees between model frames at p50 and 4.1 at p90, where the truth turns 1.5 and 4.2, Kalidokit's 1.8 and 8.3, and Holistic's landmarks 2.8 and 11.3.
+
+- The Kalidokit-style baseline is not a stand-in for Kalidokit: on the body model's depth it reads 46.0 degrees where Kalidokit on Holistic's reads 28.4.
+
+A what-if with the wrist on the direct chain's own ray at a fixed distance ahead of the shoulder, no depth solved:
+
+| Wrist | p50, degrees | p90, degrees | Over 60 degrees |
+|---|---|---|---|
+| The chain's | 13.8 | 83.6 | 16% |
+| 0.20 m ahead | 13.8 | 46.4 | 8% |
+| 0.25 m ahead | 12.4 | 49.2 | 8% |
+
+The plane matches the chain's median and halves its tail. It is fitted to this take, where 83 percent of the arm frames are a reach at the camera, and on the frames with the hands near the shoulders it is worse, 54.9 degrees at 0.20 m against the chain's 45.0 (plan.md).
+
+One take and the arms only: the face, the blinks and the fingers are not compared, and Python's Holistic stands in for the browser's.
+
+Learned: a baseline that borrows a method's math and not its inputs measures neither. And a median hides what a viewer sees: the direct chain leads by half on the typical frame and not at all on the frames that look wrong.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

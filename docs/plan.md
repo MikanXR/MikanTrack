@@ -145,6 +145,7 @@ The living plan: what is in flight now, what comes next, and the open questions.
 
 ## Open questions
 
+- Does the direct solver keep solving the wrist's distance, or fall back to a fixed distance ahead of the shoulder where its terms disagree? On the level take a plane 0.20 m ahead matched the chain's median and halved its share of frames over 60 degrees, and was worse with the hands near the shoulders (LEARNINGS.md section 35).
 - Does the single-front lens step keep the phone calibration as its default for an unlisted camera, or offer a typed field of view first with the calibration as an option? Against the stereo truth a calibrated lens did not bring the direct arm nearer than one 10 to 25 percent off on two takes from tilted cameras, and on a level one a lens 15 percent short read slightly better (LEARNINGS.md section 33).
 - Is `tracking.flipHandedness` true the right default? On the `USB2.0 HD UVC WebCam` it labelled the hands opposite to the body model on every direct take, and false fixed it. Is that webcam's feed mirrored, or is the default wrong for unmirrored webcams in general?
 - Capture-phase GPU path, if the profile justifies one: OpenCV's OpenCL T-API (`cv::UMat`, no shader code, still a CPU tensor at the ONNX boundary) or a D3D12 preprocess feeding DirectML through IoBinding (custom shaders, no readback, the larger job)?
