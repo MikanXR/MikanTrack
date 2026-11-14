@@ -117,7 +117,7 @@ void HandTrackingPipeline::process(const cv::Mat& bgrFrame, TrackingFrameResult&
 	// with a false positive that died two frames later - leaving the seed with
 	// nowhere to go (measured: 74 of 75 seeds during real gaps hit
 	// skippedNoFreeSlot). A wrong seed costs one frame: runHandLandmarkStage
-	// drops a speculative seed the same frame it fails the presence threshold.
+	// drops any slot the same frame its first pass fails the presence threshold.
 	m_bodySeedBackoff.tick();
 	applySearchHints();
 
@@ -432,11 +432,16 @@ void HandTrackingPipeline::runHandLandmarkStage(const cv::Mat& bgrFrame)
 			? HandRoi::fromPalmDetection(slot.pendingDetection)
 			: HandRoi::fromLandmarks(slot.imagePoints);
 
-		const bool bSpeculativeSeed= slot.hasPendingDetection && slot.bSeededFromHint;
+		// A slot's first landmark pass decides whether it is a hand at all,
+		// whichever way it was spawned: the palm detector fires on hand-shaped
+		// things in the scene, and a slot kept through a failed first pass is
+		// published for a frame, dies on the next, and is detected again
+		const bool bFirstPass= slot.hasPendingDetection;
+		const bool bSpeculativeSeed= bFirstPass && slot.bSeededFromHint;
 
 		m_handLandmarkModel.estimate(bgrFrame, roi, m_handResult);
 		if (!m_handResult.valid ||
-			(bSpeculativeSeed && m_handResult.confidence < m_config.handPresenceThreshold))
+			(bFirstPass && m_handResult.confidence < m_config.handPresenceThreshold))
 		{
 			if (bSpeculativeSeed)
 				(slot.bSeededFromBody ? m_seedStats.body.rejectedByModel : m_seedStats.rejectedByModel)++;
