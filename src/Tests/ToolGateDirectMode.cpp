@@ -19,12 +19,19 @@
 // shoulders), carried into the camera's own frame, so every comparison is
 // one model's view against the rig's view of the same arm.
 //
-//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]
+//   --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>]
+//       [candidates=<recording.jsonl>] [frames.csv]
 //
 // correct runs the candidates on the camera's hands with their sides
 // corrected from the recorded whole-body hands ahead of the lift, as the
 // live direct camera corrects them: the A/B for a take recorded before it
 // did, or under a changed rule.
+//
+// candidates names a copy of the one take given whose header carries another
+// calibration for the camera. The candidates then run on that copy's lens
+// and its replayed camera input (the hand lift goes through the lens), while
+// the truth stays on the take's own calibration: what a wrong lens costs
+// against the rig, where patching the take itself would move the truth too.
 //
 // cameraIndex defaults to the recording's body-pose camera. The raw frames
 // beside the recording are required (raw frame recording is opt-in). A
@@ -464,6 +471,12 @@ struct RetargetComparison
 		// under different configs can be compared frame by frame
 		bool bPose= false;
 		glm::quat boneDeltaWorld[4]; // upper arm, forearm, hand, head
+		// The posed shoulder-to-wrist vector in the camera's frame, avatar
+		// units, and the direct solver's own chain's in the user's meters:
+		// what the truth's stereo wrist and shoulder measure without the elbow
+		glm::vec3 reachCamera{0.f};
+		bool bChain= false;
+		glm::vec3 chainReachCamera{0.f};
 	};
 	std::array<std::array<FrameCandidate, kCandidateCount>, 2> frame{};
 	// This frame's palm as the direct solve read it per side, for the CSV
@@ -707,6 +720,20 @@ struct RetargetComparison
 					for (int i= 0; i < 4; ++i)
 						frameStats.boneDeltaWorld[i]= pose.bones[(int)poseBones[i]].deltaWorld;
 					frameStats.bPose= true;
+					frameStats.reachCamera= camFromWorld *
+						(candidatePosed[(int)hand].positionWorld - candidatePosed[(int)upper].positionWorld);
+					if (candidate == kDirect)
+					{
+						const DirectRetarget::ArmChain& chain= direct.getArmChain(sideIndex);
+						const float lengthScale= directConfig.userShoulderWidthMeters > 1e-3f
+							? skeleton->getShoulderWidth() / directConfig.userShoulderWidthMeters
+							: 1.f;
+						if (chain.valid && lengthScale > 1e-4f)
+						{
+							frameStats.bChain= true;
+							frameStats.chainReachCamera= camFromWorld * (chain.wrist - chain.shoulder) / lengthScale;
+						}
+					}
 				}
 
 				// The posed joints into the camera against the model's landmarks
@@ -1014,6 +1041,8 @@ void writeCsvHeader(std::ofstream& csv)
 		for (const char* bone : {"Upper", "Forearm", "Hand", "Head"})
 			for (const char* axis : {"W", "X", "Y", "Z"})
 				csv << "," << candidate << bone << "Q" << axis;
+		csv << "," << candidate << "ReachX," << candidate << "ReachY," << candidate << "ReachZ," << candidate
+			<< "Chain," << candidate << "ChainReachX," << candidate << "ChainReachY," << candidate << "ChainReachZ";
 	}
 	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain,directTwistJumpCause\n";
 }
@@ -1045,6 +1074,9 @@ void writeCsvCandidates(std::ofstream& csv, const std::array<RetargetComparison:
 			else
 				csv << ",0,0,0,0";
 		}
+		csv << "," << candidate.reachCamera.x << "," << candidate.reachCamera.y << "," << candidate.reachCamera.z << ","
+			<< (candidate.bChain ? 1 : 0) << "," << candidate.chainReachCamera.x << "," << candidate.chainReachCamera.y
+			<< "," << candidate.chainReachCamera.z;
 	}
 }
 } // namespace
@@ -1057,13 +1089,17 @@ static int runGateDirectModeTool(const TestArgs& args)
 	std::string csvPath;
 	int requestedCamera= -1;
 	bool bCorrectHandSides= false;
+	// A copy of the take whose calibration the candidates run under
+	std::string candidatesPath;
 	// The palm mirror's bars for this run in place of the configured ones
 	bool bMirrorBars= false;
 	float mirrorEnterGain= 0.f;
 	float mirrorLeaveGain= 0.f;
 	for (const std::string& arg : args)
 	{
-		if (TrackingRecording::isRecordingFile(arg))
+		if (arg.rfind("candidates=", 0) == 0)
+			candidatesPath= arg.substr(11);
+		else if (TrackingRecording::isRecordingFile(arg))
 			recordings.push_back(arg);
 		else if (arg == "correct")
 			bCorrectHandSides= true;
@@ -1082,7 +1118,12 @@ static int runGateDirectModeTool(const TestArgs& args)
 	}
 	if (recordings.empty())
 	{
-		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]";
+		MIKAN_LOG_ERROR(tag) << "Usage: --gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [candidates=<recording.jsonl>] [frames.csv]";
+		return 1;
+	}
+	if (!candidatesPath.empty() && recordings.size() != 1)
+	{
+		MIKAN_LOG_ERROR(tag) << "candidates= takes one recording, the take it is a copy of";
 		return 1;
 	}
 	std::ofstream csv;
@@ -1196,6 +1237,41 @@ static int runGateDirectModeTool(const TestArgs& args)
 			replay.runWhatIf(params);
 		}
 
+		std::unique_ptr<TrackingReplay> candidateReplay;
+		if (!candidatesPath.empty())
+		{
+			candidateReplay= std::make_unique<TrackingReplay>();
+			if (!candidateReplay->load(candidatesPath, error))
+			{
+				MIKAN_LOG_ERROR(tag) << candidatesPath << ": load failed: " << error;
+				return 1;
+			}
+			const AppConfig& candidateConfig= candidateReplay->getRecordedConfig();
+			if (candidateReplay->getFrameCount() != replay.getFrameCount() ||
+				cameraIndex >= (int)candidateConfig.cameraCount() ||
+				!candidateConfig.camera(cameraIndex).intrinsics.present)
+			{
+				MIKAN_LOG_ERROR(tag) << candidatesPath << ": not a copy of " << recordingName << " with a lens for camera "
+									 << cameraIndex;
+				return 1;
+			}
+			const MikanMatrix3d& candidateMatrix=
+				candidateConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
+			cameraModel.fx= (float)candidateMatrix.x0;
+			cameraModel.fy= (float)candidateMatrix.y1;
+			cameraModel.cx= (float)candidateMatrix.z0;
+			cameraModel.cy= (float)candidateMatrix.z1;
+			candidateReplay->runAll();
+			if (bCorrectHandSides)
+			{
+				TrackingReplay::WhatIfParams params= candidateReplay->makeDefaultWhatIfParams();
+				params.correctHandSidesCamera= cameraIndex;
+				candidateReplay->runWhatIf(params);
+			}
+			MIKAN_LOG_INFO(tag) << "the candidates run under " << candidatesPath << ": fx " << cameraModel.fx << " against the take's "
+								<< geometry.fx;
+		}
+
 		std::array<SideStats, 2> sides{};
 		Stats inferenceMs;
 		int framesRun= 0;
@@ -1237,10 +1313,12 @@ static int runGateDirectModeTool(const TestArgs& args)
 			// The retargets: the camera's recorded hands with the observation
 			// just run, against the replayed fused frame
 			bool bCompared= false;
-			if (observation.valid && cameraIndex < (int)frame.perCamera.size() && frame.perCameraValid[cameraIndex])
+			const TrackingReplay::ReplayFrame& inputFrame= candidateReplay ? candidateReplay->getFrame(frameIndex) : frame;
+			if (observation.valid && cameraIndex < (int)inputFrame.perCamera.size() &&
+				inputFrame.perCameraValid[cameraIndex])
 			{
 				TrackingFrameResult cameraInput=
-					bCorrectHandSides ? frame.whatIfPerCamera[cameraIndex] : frame.perCamera[cameraIndex];
+					bCorrectHandSides ? inputFrame.whatIfPerCamera[cameraIndex] : inputFrame.perCamera[cameraIndex];
 				if (cameraInput.hands[0].bSideCorrected || cameraInput.hands[1].bSideCorrected)
 					correctedFrames++;
 				cameraInput.body= observation;

@@ -24,6 +24,8 @@ GeoCalib (Apache-2.0) downloads its two checkpoints into the torch hub cache on 
 
 - `sweep_sensitivity.py <MikanTrack.exe> <work_dir> <recording.jsonl>... [--camera N] [--fx-scales ...] [--tilt-deltas ...] [--no-undistort]`: replays each take through `--gate-direct` under each perturbed calibration and reports the rotation of the direct retarget's posed upper arm, forearm, hand and head against the unperturbed run, p50 and p90 in degrees. It reads the posed bone columns of the tool's CSV. A finished variant is kept under the work folder and not replayed again.
 
+- `sweep_truth.py <MikanTrack.exe> <work_dir> <recording.jsonl> --camera N [--tilt DEG] [--fx-scales ...]`: replays a take that has stereo truth through `--gate-direct` with the candidates under each scaled focal length (`candidates=`) and the truth on the take's own calibration, and reports each candidate's shoulder-to-wrist reach against the truth's stereo wrist and shoulder, with the tool's own numbers against the position retarget. `--tilt` sets the direct tilt in every copy, for a take whose header does not carry the camera's own.
+
 - `estimate_fx.py <recording.jsonl> <raw_frames_dir> [--camera N] [--samples M] [--methods nominal,moge,geocalib] [--label NAME]`: nominal fields of view, MoGe-2 and GeoCalib on the raw-equivalent frames against the header's charuco focal length, with GeoCalib's radial term and gravity.
 
 - `face_fx.py <recording.jsonl>... [--camera N] [--views M]`: the focal length solved from the recorded face points over a head turn against a generic six-point face.

@@ -489,6 +489,42 @@ One take's right arm entered five frames later under the new entry rule and sett
 
 Learned: the first count of frames with the arm up took the most common upper arm rotation as the rest pose and missed the take where the phantom pose was the most common one. The posed wrist's reprojection against the landmark, which is several hundred pixels for an arm at rest, showed it.
 
+## 33. A wrong lens against the stereo truth: the calibration does not bring the direct arm nearer the rig's
+
+Section 31 measured how far a wrong focal length moves the direct retarget's output, against its own unperturbed replay. Two things were left unmeasured: whether that movement is toward the truth, and whether placing the joints on calibrated rays beats the learned depth the webcam tools use. `--gate-direct` gained `candidates=`, which runs the candidates under a copy of the take with another lens while the truth keeps the take's own calibration. Patching the take itself moves the truth too, since the replay triangulates through the header. The CSV gained each candidate's shoulder-to-wrist reach in the camera's frame, compared here with the truth's stereo wrist and ray-and-width shoulder, which do not depend on the elbow. `tools/intrinsics_spike/sweep_truth.py` runs the sweep.
+
+Two takes, the tilt slider set to each camera's pitch from its extrinsics: the tri-camera webcam-position take (the C920, 18.7 degrees down, no IMUs, 1042 arm frames) and the rig take of 2026-11-12 (a C960, 39.4 degrees down, the IMUs on, mostly head sweeps, 4879 arm frames). Each count is the arm frames with a truth wrist that every lens posed. The table is the angle between the reach and the truth's at p50 in degrees, for the direct solver's chain and the Kalidokit-style baseline's posed avatar, with the chain's depth error on the first take in cm:
+
+| Focal length scale | Direct, first take | Depth error, first take | Baseline, first take | Direct, second take | Baseline, second take |
+|---|---|---|---|---|---|
+| 0.85 | 30.4 | 13.5 | 26.6 | 14.3 | 14.6 |
+| 0.90 | 30.5 | 12.4 | 26.9 | 14.9 | 14.6 |
+| 0.95 | 26.5 | 13.8 | 27.3 | 15.0 | 14.6 |
+| 1.00 | 26.4 | 15.9 | 27.3 | 15.8 | 14.7 |
+| 1.05 | 21.2 | 14.9 | 27.5 | 15.6 | 14.8 |
+| 1.10 | 20.6 | 16.5 | 27.8 | 15.4 | 14.8 |
+| 1.15 | 17.2 | 19.4 | 28.0 | 15.3 | 14.8 |
+| 1.25 | 15.8 | 19.3 | 28.4 | 15.3 | 14.8 |
+| 1.50 | 13.8 | 20.2 | 28.9 | 15.5 | 14.9 |
+
+- The calibration is not where the error is least. On the first take the direction error falls as the assumed lens gets longer, from 30 degrees at 0.85 to 14 at 1.50, and the depth error rises with it, from 13 to 20 cm. On the second take neither moves: 14.3 to 15.8 degrees, the wrist 10 cm from the truth's at every lens.
+
+- The baseline matches the direct chain at the calibrated lens on both takes, 27.3 against 26.4 and 14.7 against 15.8.
+
+- The error is the depth. On the first take the truth's wrist is 24 cm nearer the camera than the shoulder (15 to 29 from p10 to p90). The chain's is 15 cm nearer at the median and 7 to 46 from p10 to p90.
+
+- The longer lens is not a gain. From 1.15 up the first take's chain sits at full reach toward the camera, 0.44 m against the truth's 0.26. On a take of hands raised at the camera that points nearer the truth while the wrist lands farther from it.
+
+- Against the position retarget the first take's direct upper arm is 39 to 42 degrees and its forearm 30 to 33 over these lenses, where the baseline's are 38 and 34 to 38.
+
+- On the second take the direct retarget's right upper arm is 136 degrees p50 from the position retarget where the baseline's is 16, and its posed reach is 30 degrees from the truth where its own chain's is 16. The take's recorded tilt gives the same. Not explained (plan.md).
+
+- A lens far from the calibration changes which frames are posed. At 3.00 the first take posed 527 of the 1042 arm frames, and a table over the frames every lens shares then read 23.0 degrees at the calibration and no order across the lenses. The sweep prints each lens's own frame count beside the shared one for this reason.
+
+Both cameras look down, the first take's truth elbow is not independent of the model, and the second take has few frames with the hands up. A take from a level front camera with the IMUs worn is still to be made (plan.md).
+
+Learned: a sensitivity is not an accuracy. The output moving a degree per percent of focal length said nothing about which way, and against the truth the calibrated lens is no optimum: the wrist's depth sets the error, and the lens only trades direction against distance. A what-if made by patching a shared header moves the truth with the candidate, so the candidate needs its own copy. And a comparison over the frames every variant shares is only as wide as its narrowest variant.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
