@@ -539,11 +539,40 @@ Both of those cameras look down, the first take's truth elbow is not independent
 
 - The calibration is again no optimum. The direction stays between 16.5 and 20.2 degrees, and the depth error grows with the assumed focal length from 5.9 to 11.8 cm, so a lens 15 percent short reads slightly better than the calibrated one.
 
-- The direct error is two populations. On 17 percent of the left arm's frames and 32 percent of the right's the chain is over 60 degrees off: the truth's wrist is about 20 cm nearer the camera than the shoulder, and the chain's is out to the side at the shoulder's depth. The rest read 11.4 and 14.3 degrees at p50 with the depth 4.5 and 6.4 cm off. The bad frames come in runs. Not explained (plan.md).
+- The direct error is two populations. On 17 percent of the left arm's frames and 32 percent of the right's the chain is over 60 degrees off: the truth's wrist is about 20 cm nearer the camera than the shoulder, and the chain's is out to the side at the shoulder's depth. The rest read 11.4 and 14.3 degrees at p50 with the depth 4.5 and 6.4 cm off. The bad frames come in runs. Section 34 finds the cause.
 
 - Against the position retarget the direct forearm is 78 degrees p50 on the left and 58 on the right where the baseline's is 44 and 45, and it moves with the lens, from 96 at 0.85 to 53 at 1.50 as the mean of the sides. The reference was not verified on this take, whose right mounting was captured minutes before it with a 36 degree pose spread (plan.md).
 
 Learned: a sensitivity is not an accuracy. The output moving a degree per percent of focal length said nothing about which way, and against the truth the calibrated lens is no optimum: the wrist's depth sets the error, and the lens only trades direction against distance. A what-if made by patching a shared header moves the truth with the candidate, so the candidate needs its own copy. And a comparison over the frames every variant shares is only as wide as its narrowest variant. And a tie on a tilted camera did not carry to a level one, where the rays beat the learned depth by 26 degrees at every lens tried.
+
+## 34. An elbow below the frame, placed at its edge and scored as seen, pushed the direct wrist away from the camera
+
+Section 33 left the level take's direct error in two populations. The bad frames are one pose: both hands reached at the camera, palms down, the forearms foreshortened behind them. `--gate-direct` gained the solver's wrist distance state in its CSV to read them: the reach along the ray, the model's depth prior, the lift, the chosen and filtered distance, the elbow's miss and the cost.
+
+- The hand lift was right. It read within 6 cm of the stereo wrist's distance at p50 on the good and the bad frames alike. The solver chose 0.76 to 0.80 m where the truth and the lift read 0.46 to 0.55.
+
+- The elbow outvoted it. With the arm reached at the camera the elbow is below the frame, and the body model puts one on the forearm where it leaves the image, over the visibility bar: 87 percent of the accepted elbows sat in the bottom tenth of the frame. At the true wrist distance the chain's elbow misses that pixel by about 200 px against a sigma of 20, and the distance that fits it best is 0.9 to 1.1 m.
+
+- The frames over 60 degrees off were 47 percent of the 673 with an accepted elbow in the bottom tenth, 7 percent of the 73 with one above it, and 19 percent of the 1697 with none.
+
+Two changes followed: an elbow in the edge band the wrist already had (0.1 frame heights) is unseen, and the elbow's reprojection counts up to 3 sigmas and no further. The reach against the stereo truth at the calibrated lens, p50:
+
+| Take | Direct before, degrees | Direct after, degrees | Depth error before, cm | Depth error after, cm | Baseline, degrees |
+|---|---|---|---|---|---|
+| Level camera | 19.9 | 13.8 | 7.5 | 5.9 | 46.0 |
+| Webcam position, 18.7 degrees down | 26.4 | 12.8 | 15.9 | 5.6 | 27.3 |
+
+- The tie with the baseline on the tilted take in section 33 was this fault, not the camera's tilt. After the change the direct chain reads 12.8 degrees against the baseline's 27.3.
+
+- On the level take the right arm's frames over 60 degrees fall from 32 percent to 14. The left arm's stay at 17 to 18.
+
+- What holds the left arm is the entry (plan.md). On its reach the model's depth prior reads the wrist 1.35 m behind the shoulder, more than the arm is long. The arm starts at the far end of its ray before the hand lift arrives, and the motion terms hold it there against the lift for some 200 frames.
+
+- With the palms beside the head the truth's wrist is 9 to 11 cm from the shoulder, nearer than the 13.6 cm the chain allows on the project's 0.169 m forearm. The mounting wizard had written the curl's elbow-to-controller radius over the forearm length (plan.md). At the user's 0.26 m the frames over 60 degrees among those with the hands near the shoulders fall from 43 percent to 33, and the take's p90 from 83.6 degrees to 67.6.
+
+Not measured: the two changes apart, the lens sweep after them, and the rig take of 2026-11-12 (plan.md).
+
+Learned: a landmark's visibility score is not evidence that the joint is in the frame, and a tight sigma on such a landmark outvotes a metric cue that is right. And a tie between two candidates can be a fault in one of them: section 33 read it as the method's.
 
 ## Cross-cutting lessons
 

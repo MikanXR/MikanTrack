@@ -37,8 +37,10 @@ constexpr float kFrameMarginPx= 16.f;
 // A body wrist with no hand slot on it, this close to the frame edge in
 // frame heights, is not evidence of an arm: the edge where the arm leaves is
 // where the model parks a wrist it cannot see, scored over the bar for
-// seconds at a time
-constexpr float kWristEdgeBandFrameHeights= 0.1f;
+// seconds at a time. An elbow in the band is unseen for the same reason: on
+// an arm reached at the camera the elbow is below the frame, and the model
+// puts one on the forearm where it leaves the image.
+constexpr float kEdgeBandFrameHeights= 0.1f;
 // A hand slot farther than this from the body model's wrist, in shoulder
 // widths, is not the hand: the palm detector runs over the whole frame and
 // fires on hand-shaped things in the scene
@@ -76,6 +78,10 @@ constexpr int kDepthRefineSteps= 4;
 // against its ray in pixels, the dominant term while the elbow is seen; the
 // same sigma sets the elbow's place around its bone circle against the ray.
 constexpr float kElbowPixelSigma= 20.f;
+// The elbow's reprojection counts up to this many sigmas and no further: an
+// elbow pixel the chain cannot reach from the distance the other terms agree
+// on is a wrong pixel, and uncapped it outweighs the hand lift
+constexpr float kElbowMaxSigmas= 3.f;
 // The distance a joint may move per second (the wrist along its ray, the
 // elbow from where it was), in reach, and the floor on the per-frame sigma
 // so a long frame does not void the term
@@ -566,6 +572,12 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		return point.x >= kFrameMarginPx && point.y >= kFrameMarginPx &&
 			point.x <= (float)cameraModel.width - kFrameMarginPx && point.y <= (float)cameraModel.height - kFrameMarginPx;
 	};
+	auto inEdgeBand= [&](const glm::vec2& px) {
+		const float bandPx= kEdgeBandFrameHeights * (float)cameraModel.height;
+		return bFrameKnown &&
+			(px.x < bandPx || px.y < bandPx || px.x > (float)cameraModel.width - bandPx ||
+			 px.y > (float)cameraModel.height - bandPx);
+	};
 	auto rayThrough= [&](const glm::vec2& px) {
 		return worldFromCam *
 			glm::normalize(glm::vec3((px.x - cameraModel.cx) / cameraModel.fx, (px.y - cameraModel.cy) / cameraModel.fy, 1.f));
@@ -767,11 +779,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// wrist is clear of the frame's edge, which carries it through a
 		// clasp or a hand the hand model cannot read. In the band along the
 		// edge the wrist alone only runs out the hold.
-		const float edgeBandPx= kWristEdgeBandFrameHeights * (float)cameraModel.height;
-		const bool bWristInEdgeBand= bFrameKnown &&
-			(bodyWristPx.x < edgeBandPx || bodyWristPx.y < edgeBandPx ||
-			 bodyWristPx.x > (float)cameraModel.width - edgeBandPx ||
-			 bodyWristPx.y > (float)cameraModel.height - edgeBandPx);
+		const bool bWristInEdgeBand= inEdgeBand(bodyWristPx);
 		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand))
 			arm.evidenceTimestampMs= timestampMs;
 		const bool bWristGate= advanceGate(bHandOnWrist, arm.wristGateFrames, arm.bWristAccepted);
@@ -831,7 +839,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		{
 			arm.wristPixelFilter.reset();
 		}
-		const bool bElbowSeen= usable(elbowIndex);
+		const bool bElbowSeen= usable(elbowIndex) && !inEdgeBand(landmarkPx(elbowIndex));
 		glm::vec2 elbowPx(0.f);
 		if (bElbowSeen)
 			elbowPx= arm.elbowPixelFilter.filter(landmarkPx(elbowIndex), dtSeconds);
@@ -926,7 +934,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 					if (bElbowSeen)
 					{
 						out.elbowPx= pixelsOffRay(elbow, elbowRay);
-						const float ratio= out.elbowPx / kElbowPixelSigma;
+						const float ratio= std::min(out.elbowPx / kElbowPixelSigma, kElbowMaxSigmas);
 						out.cost+= ratio * ratio;
 					}
 					const glm::vec3 drift= elbow - elbowTarget;

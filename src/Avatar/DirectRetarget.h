@@ -227,7 +227,7 @@ public:
 		{
 			ArmChain chain;
 			bool bHandSeen= false;  // the hand slot agreed with the body model's wrist
-			bool bElbowSeen= false; // the body model's elbow passed the visibility gate
+			bool bElbowSeen= false; // the body model's elbow passed the visibility gate, clear of the edge band
 			bool bDepthChosen= false;
 			float depthLow= 0.f;  // the wrist distances the arm reaches along its ray
 			float depthHigh= 0.f;
