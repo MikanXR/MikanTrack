@@ -209,6 +209,7 @@ void SetupFlow::transitionTo(eStep step)
 			// The direct stage picks up the intrinsics just calibrated, so
 			// its solve says where the hand slots sit against the body
 			m_bHandednessFlipApplied= false;
+			m_bHandednessMatched= false;
 			m_handednessFlipAgeSeconds= 0.f;
 			m_app->getVisionThread()->requestConfigRefresh();
 			break;
@@ -663,7 +664,8 @@ void SetupFlow::updateHandednessCheckPrompt()
 	// and the flip setting is switched to match, once. A swap still reported
 	// well after the switch is left to the user.
 	const DirectRetarget::SolveState& state= m_mainWindow->getLatestDirectState();
-	const bool bMatch= state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped;
+	if (state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped)
+		m_bHandednessMatched= true;
 	if (m_bHandednessFlipApplied)
 		m_handednessFlipAgeSeconds+= ImGui::GetIO().DeltaTime;
 	if (state.bHandednessSwapped && !m_bHandednessFlipApplied)
@@ -679,16 +681,16 @@ void SetupFlow::updateHandednessCheckPrompt()
 	ImGui::PushTextWrapPos(k_promptWrapWidth);
 	if (m_bHandednessFlipApplied)
 		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessSwitched"));
-	if (bMatch)
-		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessMatch"));
-	else if (state.bHandednessSwapped && m_handednessFlipAgeSeconds > k_handednessSettleSeconds)
+	if (state.bHandednessSwapped && m_handednessFlipAgeSeconds > k_handednessSettleSeconds)
 		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessSwapped"));
+	else if (m_bHandednessMatched)
+		ImGui::TextColored(k_colorGood, "%s", locText("setupFlow.handednessMatch"));
 	else
 		ImGui::TextColored(k_colorWait, "%s", locText("setupFlow.handednessWaiting"));
 	ImGui::PopTextWrapPos();
 
 	ImGui::Separator();
-	ImGui::BeginDisabled(!bMatch);
+	ImGui::BeginDisabled(!m_bHandednessMatched);
 	if (ImGui::Button(locLabel("common.next"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();

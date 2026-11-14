@@ -137,6 +137,9 @@ private:
 	// HandednessCheck state: whether this visit to the step has switched the
 	// flip setting, which it does once, and how long ago
 	bool m_bHandednessFlipApplied= false;
+	// Both hands have been seen on their own sides this visit. It stays set
+	// once they drop, since a hand has to come down to press Next.
+	bool m_bHandednessMatched= false;
 	float m_handednessFlipAgeSeconds= 0.f;
 
 	// CameraSelection state: chosen enumeration index per camera slot, -1 =
