@@ -477,6 +477,16 @@ Decided: the one-camera lens calibration shows a plain chessboard on a phone, fo
 
 Learned: a pattern that needs no decoding survives an emissive screen, and which frames are kept moved the focal length more than which detector found them.
 
+## 32. An arm held up by a wrist the body model could not see
+
+With both hands below the frame the direct avatar kept its right arm raised. The hand slots were not the cause. The palm detector did fire on the chair every other frame, but the solver's wrist rule turned every one of those slots away. The arm was placed from the body model's wrist alone: with the hand out of view the model parked the right wrist 29 to 51 px above the bottom edge and scored it 0.52 to 0.69, over the 0.5 bar for runs of up to 38 frames, where a wrist in view scored 0.80 to 0.85. The hand model's presence at that wrist was 0.00 throughout. The three-frame entry gate was built for a one-frame flicker and did nothing for a steady score. Five of twelve direct takes had it, one for over 700 frames.
+
+The first rule tried: no arm without a hand slot on the wrist, at entry or after, with the wrist alone running out the hold. It removed every phantom run. It also rested a real arm in nine runs, about 110 frames, where the wrist was in view and no slot was on it for longer than the hold: clasped hands, crossed hands, palms held out at the camera. Six checks and two golden cases that assert the carry through a hand dropout failed. The rule kept: an arm at rest needs a slot on the wrist to enter, and a placed arm follows a wrist with no slot only while the wrist is farther than a tenth of the frame's height from every edge. The clasp and crossed-hand runs came back, the phantom runs stayed gone, and the golden compare is bit-identical to the frozen solver again. A hand pointing forward at the bottom edge is lost under either rule.
+
+One take's right arm entered five frames later under the new entry rule and settled on a different wrist distance for the rest of the take, 93 px against 72 px in wrist reprojection. The wrist depth depends on the frame the arm enters on, which is open in plan.md.
+
+Learned: the first count of frames with the arm up took the most common upper arm rotation as the rest pose and missed the take where the phantom pose was the most common one. The posed wrist's reprojection against the landmark, which is several hundred pixels for an arm at rest, showed it.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

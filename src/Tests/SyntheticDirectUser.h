@@ -89,6 +89,9 @@ struct User
 	glm::vec3 nose;
 	glm::quat palm[2];
 	bool bHandTracked[2]= {true, true};
+	// Whether a tracked slot's lift solved: a slot without it is a hand on
+	// the wrist with no distance to offer
+	bool bHandLifted[2]= {true, true};
 	bool bElbowSeen[2]= {true, true};
 	bool bWristSeen[2]= {true, true};
 	// The body model's visibility on a seen wrist
@@ -181,7 +184,7 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 		pose.tracked= true;
 		pose.presence= 1.f;
 		pose.confidence= 1.f;
-		pose.hasCameraPose= true;
+		pose.hasCameraPose= user.bHandLifted[sideIndex];
 		pose.palmOrientationCamera= camera.cameraFromWorld * user.palm[sideIndex];
 		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]) * user.pnpDepthScale[sideIndex];
 		pose.fingers= user.fingers[sideIndex];
