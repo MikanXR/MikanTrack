@@ -86,7 +86,9 @@ def main():
     args = parser.parse_args()
 
     scales = sorted(set([float(s) for s in args.fx_scales.split(",")] + [1.0]))
-    exe_dir = os.path.dirname(os.path.abspath(args.exe))
+    # The tool runs from its own folder, so a relative path to it would not resolve there
+    args.exe = os.path.abspath(args.exe)
+    exe_dir = os.path.dirname(args.exe)
     stem = os.path.splitext(os.path.basename(args.recording))[0]
     os.makedirs(args.work_dir, exist_ok=True)
 
