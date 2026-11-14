@@ -351,9 +351,8 @@ struct DirectConfig
 	// The camera whose landmarks drive the avatar
 	int cameraIndex= 0;
 	// The camera's downward pitch, degrees, positive looking down, set by
-	// the user alone (a webcam on top of the monitor by default; nothing
-	// measures it)
-	float cameraTiltDegrees= 10.f;
+	// the user alone (a level camera by default; nothing measures it)
+	float cameraTiltDegrees= 0.f;
 	bool neutralPresent= false;
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};

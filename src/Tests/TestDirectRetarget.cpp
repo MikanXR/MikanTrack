@@ -1607,9 +1607,9 @@ static int runDirectRetargetTest(const TestArgs&)
 				  nearlyEqual(face.browHeight[0], 0.21f, 1e-6f) && nearlyEqual(face.browInnerHeight, 0.19f, 1e-6f),
 			  "(i) the face neutral round-trips through the project JSON");
 		AppConfig fresh;
-		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f) &&
-				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 10.f, 1e-5f),
-			  "(i) a fresh config tilts the camera 10 degrees down, with or without a direct section");
+		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f) &&
+				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f),
+			  "(i) a fresh config has a level camera, with or without a direct section");
 
 		AvatarRigSettings rig;
 		rig.sides[1].curlGain= 1.5f;
