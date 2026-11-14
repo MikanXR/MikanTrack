@@ -1,4 +1,4 @@
-#include "CalibrationPatternFinder_Charuco.h"
+#include "CalibrationPatternFinder.h"
 #include "Logger.h"
 #include "MathUtility.h"
 #include "MonoLensDistortionCalibrator.h"
@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <thread>
 
 #include "opencv2/opencv.hpp"
@@ -18,6 +19,13 @@ struct MonoLensDistortionCalibrationState
 		Running,
 		Succeded,
 		Failed
+	};
+
+	// One whole-pattern detection and the capture time of its video frame
+	struct DetectionSample
+	{
+		double timeSeconds;
+		t_opencv_point2d_list points;
 	};
 
 	// Static Input
@@ -34,8 +42,10 @@ struct MonoLensDistortionCalibrationState
 	std::vector<t_opencv_point2d_list> imagePointsList;
 	std::vector<t_opencv_pointID_list> imagePointIDList;
 
-	// Image point stability state
-	float imagePointsStabilityTimer;
+	// Steadiness state
+	int64_t lastFrameSequence;
+	std::deque<DetectionSample> recentDetections;
+	float steadyFraction;
 
 	// Async Calibration Compute
 	std::thread* asyncComputeTask;
@@ -58,6 +68,12 @@ struct MonoLensDistortionCalibrationState
 		resetCalibration();
 	}
 
+	void resetSteadiness()
+	{
+		recentDetections.clear();
+		steadyFraction= 0.f;
+	}
+
 	void resetCalibration()
 	{
 		// Reset the capture state
@@ -68,8 +84,9 @@ struct MonoLensDistortionCalibrationState
 		imagePointsList.clear();
 		imagePointIDList.clear();
 
-		// Reset the stability state
-		imagePointsStabilityTimer= 0.f;
+		// Reset the steadiness state
+		lastFrameSequence= -1;
+		resetSteadiness();
 
 		// Reset the async task state
 		asyncComputeTask= nullptr;
@@ -82,21 +99,17 @@ struct MonoLensDistortionCalibrationState
 };
 
 //-- MonoDistortionCalibrator ----
-MonoLensDistortionCalibrator::MonoLensDistortionCalibrator(int frameWidth, int frameHeight, int charucoCols,
-														   int charucoRows, float charucoSquareLengthMM,
-														   float charucoMarkerLengthMM,
-														   eCharucoDictionaryType charucoDictionaryType,
+MonoLensDistortionCalibrator::MonoLensDistortionCalibrator(int frameWidth, int frameHeight,
+														   const CalibrationPatternDesc& pattern,
 														   int desiredSampleCount)
 	: m_calibrationState(new MonoLensDistortionCalibrationState)
 {
-	m_patternFinder= new CalibrationPatternFinder_Charuco(frameWidth, frameHeight, charucoCols, charucoRows,
-														  charucoSquareLengthMM, charucoMarkerLengthMM,
-														  charucoDictionaryType);
+	m_patternFinder= CalibrationPatternFinder::createLensPatternFinder(pattern, frameWidth, frameHeight);
 
 	this->frameWidth= (float)frameWidth;
 	this->frameHeight= (float)frameHeight;
-	m_cornerCols= charucoCols - 1;
-	m_cornerRows= charucoRows - 1;
+	m_cornerCols= pattern.cols - 1;
+	m_cornerRows= pattern.rows - 1;
 
 	m_calibrationState->init(m_patternFinder, frameWidth, frameHeight, desiredSampleCount);
 }
@@ -113,59 +126,90 @@ MonoLensDistortionCalibrator::~MonoLensDistortionCalibrator()
 	delete m_calibrationState;
 }
 
-void MonoLensDistortionCalibrator::update(float deltaSeconds, const cv::Mat* grayscaleFrame,
-										  const float minSeperationDist)
+void MonoLensDistortionCalibrator::update(int64_t frameSequence, double frameTimeSeconds,
+										  const cv::Mat* grayscaleFrame, const float minSeperationDist)
 {
+	MonoLensDistortionCalibrationState* state= m_calibrationState;
+
 	// Feed the latest grayscale frame to the pattern finder
 	m_patternFinder->setGrayscaleFrame(grayscaleFrame);
 
 	if (hasSampledAllCalibrationPatterns())
 		return;
 
+	// The same video frame again says nothing new about how still the pattern is
+	if (frameSequence == state->lastFrameSequence)
+		return;
+	state->lastFrameSequence= frameSequence;
+
 	// Update the pattern capture state
 	findNewCalibrationPattern(minSeperationDist);
 
-	// Update the image point stability timer.
-	// Once the pattern has been held valid (in a new location) for the stability
-	// duration, capture it as a calibration sample and restart the hold cycle.
-	//
-	// The timer MUST reset on capture (not just when the points go invalid):
-	// a fast board move or a disjoint partial-board detection can produce a
-	// valid detection on the very next frame after a capture, and waiting for
-	// an invalid frame to reset the hold state would stall capture forever.
-	if (areCurrentImagePointsValid())
+	t_opencv_point2d_list imagePoints;
+	cv::Point2f unusedQuad[4];
+	if (!m_patternFinder->getCurrentCalibrationPattern(imagePoints, unusedQuad))
 	{
-		m_calibrationState->imagePointsStabilityTimer+= deltaSeconds;
-		if (m_calibrationState->imagePointsStabilityTimer >= k_imagePointStabilityDuration)
-		{
-			// Tilt quota: focal length is only observable from perspective, so
-			// once the flat-board quota is full, only tilted boards are
-			// accepted. A rejected flat board does NOT touch the finder's
-			// last-valid points, so tilting the board in place re-arms the
-			// hold cycle and captures immediately.
-			const bool bTilted= computeCurrentPatternKeystone() >= k_tiltKeystoneThreshold;
-			const int flatQuota=
-				int_max(m_calibrationState->desiredPatternCount - k_minTiltedSampleCount, 0);
-			const int flatCount=
-				m_calibrationState->capturedPatternCount - m_calibrationState->tiltedPatternCount;
+		state->resetSteadiness();
+		return;
+	}
 
-			if (!bTilted && flatCount >= flatQuota)
-			{
-				m_calibrationState->bWantsTiltedSample= true;
-			}
-			else if (captureLastFoundCalibrationPattern())
-			{
-				if (bTilted)
-					++m_calibrationState->tiltedPatternCount;
-				m_calibrationState->bWantsTiltedSample= false;
-			}
-			m_calibrationState->imagePointsStabilityTimer= 0.f;
+	// A frame time that runs backwards is a restarted stream, and one that
+	// jumps ahead leaves nothing recent enough to compare against
+	if (!state->recentDetections.empty())
+	{
+		const double sinceLastDetection= frameTimeSeconds - state->recentDetections.back().timeSeconds;
+		if (sinceLastDetection < 0.0 || sinceLastDetection > (double)k_steadyMaxFrameGapSeconds)
+			state->resetSteadiness();
+	}
+
+	// Compare against the newest earlier detection that is at least a baseline old
+	state->steadyFraction= 0.f;
+	for (auto it= state->recentDetections.rbegin(); it != state->recentDetections.rend(); ++it)
+	{
+		if (frameTimeSeconds - it->timeSeconds >= (double)k_steadyBaselineSeconds)
+		{
+			const float movement= m_patternFinder->computeMeanPointDistance(imagePoints, it->points);
+			state->steadyFraction= movement > k_steadyMaxMovement ? k_steadyMaxMovement / movement : 1.f;
+			break;
 		}
 	}
-	else
+
+	state->recentDetections.push_back({frameTimeSeconds, imagePoints});
+	// Only one detection older than the baseline is ever read
+	while (state->recentDetections.size() > 1
+		   && frameTimeSeconds - state->recentDetections[1].timeSeconds >= (double)k_steadyBaselineSeconds)
 	{
-		m_calibrationState->imagePointsStabilityTimer= 0.f;
+		state->recentDetections.pop_front();
 	}
+
+	if (state->steadyFraction < 1.f)
+		return;
+
+	// Tilt quota: focal length is only observable from perspective, so
+	// once the flat-board quota is full, only tilted boards are
+	// accepted. A rejected flat board does NOT touch the finder's
+	// last-valid points, so tilting the board in place re-arms the
+	// hold cycle and captures as soon as it is still again.
+	const bool bTilted= computeCurrentPatternKeystone() >= k_tiltKeystoneThreshold;
+	const int flatQuota= int_max(state->desiredPatternCount - k_minTiltedSampleCount, 0);
+	const int flatCount= state->capturedPatternCount - state->tiltedPatternCount;
+
+	if (!bTilted && flatCount >= flatQuota)
+	{
+		state->bWantsTiltedSample= true;
+	}
+	else if (captureLastFoundCalibrationPattern())
+	{
+		if (bTilted)
+			++state->tiltedPatternCount;
+		state->bWantsTiltedSample= false;
+	}
+
+	// The comparison MUST start over on every attempt, captured or not: a
+	// fast board move can produce a valid detection on the very next frame
+	// after a capture, and that frame has to be judged against detections of
+	// its own pose, not the captured one.
+	state->resetSteadiness();
 }
 
 float MonoLensDistortionCalibrator::computeCurrentPatternKeystone() const
@@ -176,7 +220,7 @@ float MonoLensDistortionCalibrator::computeCurrentPatternKeystone() const
 		return 1.f;
 
 	// Full-board detection is enforced by the finder, so the corner list is
-	// the complete grid in charuco-id (row-major) order
+	// the complete grid in row-major order
 	const int cornerCount= m_cornerCols * m_cornerRows;
 	if ((int)imagePoints.size() != cornerCount || m_cornerCols < 2 || m_cornerRows < 2)
 		return 1.f;
@@ -204,6 +248,8 @@ bool MonoLensDistortionCalibrator::wantsTiltedSample() const
 {
 	return m_calibrationState->bWantsTiltedSample && !hasSampledAllCalibrationPatterns();
 }
+
+int MonoLensDistortionCalibrator::getCapturedSampleCount() const { return m_calibrationState->capturedPatternCount; }
 
 int MonoLensDistortionCalibrator::getTiltedSampleCount() const
 {
@@ -248,10 +294,7 @@ bool MonoLensDistortionCalibrator::areCurrentImagePointsValid() const
 	return m_patternFinder->areCurrentImagePointsValid();
 }
 
-float MonoLensDistortionCalibrator::getStabilityFraction() const
-{
-	return std::min(m_calibrationState->imagePointsStabilityTimer / k_imagePointStabilityDuration, 1.f);
-}
+float MonoLensDistortionCalibrator::getStabilityFraction() const { return m_calibrationState->steadyFraction; }
 
 float MonoLensDistortionCalibrator::computeCalibrationProgress() const
 {

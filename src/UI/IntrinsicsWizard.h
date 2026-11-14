@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -36,11 +37,14 @@ public:
 	int getCameraIndex() const { return m_cameraIndex; }
 	eWizardResult getResult() const { return m_result; }
 
-	// Called each frame while active. bgrPreview is the newest preview frame
-	// (may be empty when no stream). Overlay drawing goes to the video panel's
-	// draw list via the mapping. Returns false when the wizard wants to close.
-	bool update(float deltaSeconds, const cv::Mat& bgrPreview, ImDrawList* overlayDrawList,
-				const ImageToScreenMapping& mapping);
+	// Called each UI frame while active. bgrPreview is the newest preview frame
+	// (may be empty when no stream), frameIndex and frameTimeSeconds are that
+	// video frame's index and capture time, so the same frame arriving on
+	// several UI frames is told apart from a new one. Overlay drawing goes to
+	// the video panel's draw list via the mapping. Returns false when the
+	// wizard wants to close.
+	bool update(float deltaSeconds, const cv::Mat& bgrPreview, int64_t frameIndex, double frameTimeSeconds,
+				ImDrawList* overlayDrawList, const ImageToScreenMapping& mapping);
 
 private:
 	void drawWizardWindow(float deltaSeconds, const cv::Mat& bgrPreview);

@@ -93,6 +93,45 @@ bool generateCharucoBoardPng(const std::filesystem::path& pngPath, int charucoCo
 	return true;
 }
 
+cv::Mat renderChessboardImage(int squareCols, int squareRows, int squareSizePx)
+{
+	const int marginPx= squareSizePx / 2;
+	cv::Mat boardImage(squareRows * squareSizePx + 2 * marginPx, squareCols * squareSizePx + 2 * marginPx, CV_8UC1,
+					   cv::Scalar(255));
+
+	for (int row= 0; row < squareRows; ++row)
+	{
+		for (int col= 0; col < squareCols; ++col)
+		{
+			if ((row + col) % 2 != 0)
+				continue;
+
+			const cv::Rect square(marginPx + col * squareSizePx, marginPx + row * squareSizePx, squareSizePx,
+								  squareSizePx);
+			boardImage(square).setTo(cv::Scalar(0));
+		}
+	}
+
+	return boardImage;
+}
+
+bool generateChessboardPng(const std::filesystem::path& pngPath, int squareCols, int squareRows, int squareSizePx)
+{
+	if (squareCols < 3 || squareRows < 3 || squareSizePx <= 0)
+	{
+		MIKAN_LOG_ERROR("generateChessboardPng") << "Invalid board parameters";
+		return false;
+	}
+
+	if (!cv::imwrite(pngPath.string(), renderChessboardImage(squareCols, squareRows, squareSizePx)))
+	{
+		MIKAN_LOG_ERROR("generateChessboardPng") << "Failed to write PNG to: " << pngPath.string();
+		return false;
+	}
+
+	return true;
+}
+
 bool generateArucoMarkerPng(const std::filesystem::path& pngPath, int arucoId,
 							eCharucoDictionaryType arucoDictionaryType, int markerSizePx,
 							float markerLengthMM)

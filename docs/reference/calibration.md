@@ -6,7 +6,12 @@ The calibration subsystem in `src/Calibration`, built on OpenCV, plus the ImGui 
 
 ## Shared infrastructure
 
-- `CalibrationPatternFinder` (`src/Calibration/CalibrationPatternFinder.h`) is the pattern-detection base class with two subclasses: `CalibrationPatternFinder_Charuco` (`cv::aruco::CharucoDetector`, used by intrinsics) and `CalibrationPatternFinder_Aruco` (`cv::aruco::ArucoDetector`, used by extrinsics). Both use the `DICT_6X6` dictionary.
+- `CalibrationPatternFinder` (`src/Calibration/CalibrationPatternFinder.h`) is the pattern-detection base class with three subclasses:
+	- `CalibrationPatternFinder_Charuco` (`cv::aruco::CharucoDetector`), the printed board for intrinsics
+	- `CalibrationPatternFinder_Chessboard` (`cv::findChessboardCorners`), the plain chessboard a phone screen shows for intrinsics
+	- `CalibrationPatternFinder_Aruco` (`cv::aruco::ArucoDetector`), the origin marker for extrinsics
+
+	The charuco and ArUco finders use the `DICT_6X6` dictionary. `CalibrationPatternFinder::createLensPatternFinder` builds either intrinsics finder from a `CalibrationPatternDesc`.
 - `PatternPoseSampler` (`src/Calibration/PatternPoseSampler.h`) samples one camera's view of a static pattern for extrinsics. It pools per-corner pixel observations across captures (keyed by pattern point ID) and solves one pose from the averages, rather than averaging per-frame poses, which attacks detection noise where it enters and yields one meaningful reprojection error.
 - `CVVideoFrameProcessor` (`src/Calibration/CVVideoFrameProcessor.cpp`) bakes intrinsics into X/Y remap maps via `cv::initUndistortRectifyMap` and applies them with `cv::remap`. `VisionThread` recreates it unconditionally on every config refresh: gating on frame dimensions alone once kept a previous calibration's maps alive after recalibrating at the same resolution.
 - `PatternExport` (`src/Calibration/PatternExport.cpp`) writes the printable patterns to `resources/calibration` and opens them with `PathUtils::openFileWithDefaultApplication`. The wizards expose this as export buttons, and the same generators run headless as `--export-board [cols rows squareMM markerMM]` (`src/Tests/ToolExportBoard.cpp`) and `--export-marker [markerId markerLengthMM]` (`src/Tests/ToolExportMarker.cpp`), defaulting to the saved config's parameters. Both sheets must print at 100% scale: a rescaled print silently rescales the whole tracking world.
@@ -17,11 +22,15 @@ The calibration subsystem in `src/Calibration`, built on OpenCV, plus the ImGui 
 
 `IntrinsicsWizard` (`src/UI/IntrinsicsWizard.cpp`) drives `MonoLensDistortionCalibrator` for one camera at a time. On entry it disables tracking and undistortion for that camera (samples need raw distorted frames); the other cameras keep tracking. The user shows a printed charuco board, whose geometry comes from the `CharucoBoardConfig` block and is edited in the wizard.
 
-Sample gating, in `MonoLensDistortionCalibrator::update` and `CalibrationPatternFinder_Charuco::findNewCalibrationPattern`:
+Sample gating, in `MonoLensDistortionCalibrator::update` and each finder's `findNewCalibrationPattern`:
 
-- Full board required. Partial detections technically calibrate (the solve matches corners by charuco ID), but they are exactly the marginal-condition samples that fed wild focal-length solves, so every corner must be detected.
+- Full board required. Partial detections technically calibrate (the solve matches corners by charuco ID), but they are exactly the marginal-condition samples that fed wild focal-length solves, so every corner must be detected. A chessboard has no corner identity, so it is only ever found whole.
 
-- A sample auto-captures after the board holds steady for `k_imagePointStabilityDuration` (1 s) in a new location (`k_defaultMinSeperationDist`, 10 px average corner movement).
+- A sample auto-captures when the board is held still in a new location (`k_defaultMinSeperationDist`, 10 px average corner movement from the last sample). Still means the corners moved no more than `k_steadyMaxMovement` (3 px on average) against the detection `k_steadyBaselineSeconds` (0.09 s) earlier. A moving board is blurred and its corners land off: on a hand-held phone, samples taken without this test put the solved focal length up to 8.5 percent out, and with it inside 2.3 percent. One comparison is the whole test, because a hand-held board is only that still for a frame or two at a time.
+
+- The gate advances once per video frame. The wizard runs on the UI frame and reads a latest-wins preview, so it passes the preview's frame index and capture time, and a frame seen again is ignored.
+
+- The chessboard finder detects with `cv::findChessboardCorners` on every frame and re-detects the captured frame with `cv::findChessboardCornersSB`, whose corners the sample keeps. The second detector places corners better on a soft or bloomed image (0.3 px reprojection against 0.7 px) at 40 to 55 ms a frame. When it does not find the board the capture is refused.
 
 - Tilt quota: focal length is only observable from perspective, so at least `k_minTiltedSampleCount` (4) of the 12 samples must show keystone at or above `k_tiltKeystoneThreshold` (1.10, the ratio of opposite outer edge lengths). Once the flat-board quota fills, fronto-parallel boards are rejected and the wizard prompts for tilt.
 

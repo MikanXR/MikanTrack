@@ -5,7 +5,7 @@
 #include "opencv2/imgproc.hpp"
 
 #include "AppConfig.h"
-#include "CalibrationPatternFinder_Charuco.h"
+#include "CalibrationPatternFinder.h"
 #include "Logger.h"
 #include "MonoLensDistortionCalibrator.h"
 #include "PatternExport.h"
@@ -56,12 +56,16 @@ void IntrinsicsWizard::beginCapture(int frameWidth, int frameHeight)
 	// propagate out of the UI as a crash
 	try
 	{
+		CalibrationPatternDesc pattern;
+		pattern.type= eCalibrationPatternType::mode_charuco;
+		pattern.cols= m_boardCols;
+		pattern.rows= m_boardRows;
+		pattern.squareLengthMM= m_squareLengthMM;
+		pattern.markerLengthMM= m_markerLengthMM;
+		pattern.dictionary= eCharucoDictionaryType::DICT_6X6; // matches the exported board
+
 		m_calibrator= std::make_unique<MonoLensDistortionCalibrator>(
-			frameWidth, frameHeight,
-			m_boardCols, m_boardRows,
-			m_squareLengthMM, m_markerLengthMM,
-			eCharucoDictionaryType::DICT_6X6, // matches the exported board
-			12);
+			frameWidth, frameHeight, pattern, 12);
 		m_state= eState::Capture;
 	}
 	catch (const cv::Exception& e)
@@ -110,7 +114,8 @@ void IntrinsicsWizard::applyResultToConfig()
 	}
 }
 
-bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImDrawList* overlayDrawList,
+bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, int64_t frameIndex,
+							  double frameTimeSeconds, ImDrawList* overlayDrawList,
 							  const ImageToScreenMapping& mapping)
 {
 	if (!m_bActive)
@@ -120,7 +125,7 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImD
 	if (m_state == eState::Capture && m_calibrator != nullptr && !bgrPreview.empty())
 	{
 		cv::cvtColor(bgrPreview, m_grayFrame, cv::COLOR_BGR2GRAY);
-		m_calibrator->update(deltaSeconds, &m_grayFrame);
+		m_calibrator->update(frameIndex, frameTimeSeconds, &m_grayFrame);
 
 		if (m_calibrator->hasSampledAllCalibrationPatterns())
 		{
@@ -157,7 +162,7 @@ bool IntrinsicsWizard::update(float deltaSeconds, const cv::Mat& bgrPreview, ImD
 
 void IntrinsicsWizard::drawPatternOverlay(ImDrawList* drawList, const ImageToScreenMapping& mapping)
 {
-	CalibrationPatternFinder_Charuco* finder= m_calibrator->getPatternFinder();
+	CalibrationPatternFinder* finder= m_calibrator->getPatternFinder();
 	if (finder == nullptr)
 		return;
 

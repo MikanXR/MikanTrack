@@ -4,12 +4,20 @@
 
 #include <filesystem>
 
+#include "opencv2/core/mat.hpp"
+
 // Renders a printable ChArUco board image and writes it to a PNG file.
 // Adapted from MikanXR's MarkerObjectSystem::printMarker (minus the libharu PDF output).
 // pixelsPerMM controls the output resolution (e.g. 11.811f ~= 300 DPI).
 bool generateCharucoBoardPng(const std::filesystem::path& pngPath, int charucoCols, int charucoRows,
 							 float charucoSquareLengthMM, float charucoMarkerLengthMM,
 							 eCharucoDictionaryType charucoDictionaryType, float pixelsPerMM);
+
+// A plain chessboard, squares across and down, with a white margin half a
+// square wide: the pattern a phone screen shows for lens calibration. The top
+// left square is black.
+cv::Mat renderChessboardImage(int squareCols, int squareRows, int squareSizePx);
+bool generateChessboardPng(const std::filesystem::path& pngPath, int squareCols, int squareRows, int squareSizePx);
 
 // Writes a printable pattern to the standard calibration resource path and
 // opens it in the OS's default image viewer, ready to print. Returns the
