@@ -490,6 +490,24 @@ struct RetargetComparison
 		int jumpCause= -1;
 	};
 	std::array<FramePalm, 2> framePalm{};
+	// This frame's wrist distance as the direct solve scored it per side, for
+	// the CSV: the reach along the ray, the two priors and the choice, in the
+	// user's meters
+	struct FrameDepth
+	{
+		bool bChosen= false;
+		bool bElbowSeen= false;
+		bool bHandSeen= false;
+		float depthLow= 0.f;
+		float depthHigh= 0.f;
+		float modelDepthDelta= 0.f;
+		float liftDepth= 0.f; // zero without a lift
+		float chosenDepth= 0.f;
+		float filteredDepth= 0.f;
+		float chosenElbowPx= 0.f;
+		float chosenCost= 0.f;
+	};
+	std::array<FrameDepth, 2> frameDepth{};
 
 	static int signOf(float value) { return value > 0.f ? 1 : (value < 0.f ? -1 : 0); }
 	static PalmSignals readPalmSignals(const TrackedHand& hand, const HandPose& pose, bool bMirrored)
@@ -541,6 +559,20 @@ struct RetargetComparison
 			// the held palm when it clears is a reacquire, not a jump
 			const bool bRead= arm.bHandSeen && arm.bHandMeasured && !arm.bHandCut;
 			framePalm[sideIndex]= FramePalm{bRead, glm::degrees(arm.twist), arm.bPalmMirrored, arm.palmMirrorGain};
+			const float userPerAvatar= skeleton->getShoulderWidth() > 1e-4f
+				? directConfig.userShoulderWidthMeters / skeleton->getShoulderWidth()
+				: 1.f;
+			frameDepth[sideIndex]= FrameDepth{arm.bDepthChosen,
+											  arm.bElbowSeen,
+											  arm.bHandSeen,
+											  arm.depthLow * userPerAvatar,
+											  arm.depthHigh * userPerAvatar,
+											  arm.modelDepthDelta * userPerAvatar,
+											  arm.liftDepth * userPerAvatar,
+											  arm.chosenDepth * userPerAvatar,
+											  arm.filteredDepth * userPerAvatar,
+											  arm.chosenElbowPx,
+											  arm.chosenCost};
 
 			std::array<PalmSignals, kTwistJumpCauseFrames + 1>& history= palmSignals[sideIndex];
 			for (int slot= 0; slot < kTwistJumpCauseFrames; ++slot)
@@ -1044,7 +1076,9 @@ void writeCsvHeader(std::ofstream& csv)
 		csv << "," << candidate << "ReachX," << candidate << "ReachY," << candidate << "ReachZ," << candidate
 			<< "Chain," << candidate << "ChainReachX," << candidate << "ChainReachY," << candidate << "ChainReachZ";
 	}
-	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain,directTwistJumpCause\n";
+	csv << ",directTwistDeg,directPalmMirrored,directPalmMirrorGain,directTwistJumpCause";
+	csv << ",directElbowSeen,directHandSeen,directDepthLow,directDepthHigh,directModelDepthDelta,directLiftDepth,"
+		   "directChosenDepth,directFilteredDepth,directChosenElbowPx,directChosenCost\n";
 }
 
 // The direct solve's palm columns: -1 on a frame that did not read the hand
@@ -1054,6 +1088,17 @@ void writeCsvPalm(std::ofstream& csv, const RetargetComparison::FramePalm& palm)
 		csv << "," << palm.twistDeg << "," << (palm.bMirrored ? 1 : 0) << "," << palm.mirrorGain << "," << palm.jumpCause;
 	else
 		csv << ",-1,-1,-1,-1";
+}
+
+// The direct solve's wrist distance columns: -1 on a frame that chose none
+void writeCsvDepth(std::ofstream& csv, const RetargetComparison::FrameDepth& depth)
+{
+	if (depth.bChosen)
+		csv << "," << (depth.bElbowSeen ? 1 : 0) << "," << (depth.bHandSeen ? 1 : 0) << "," << depth.depthLow << ","
+			<< depth.depthHigh << "," << depth.modelDepthDelta << "," << depth.liftDepth << "," << depth.chosenDepth
+			<< "," << depth.filteredDepth << "," << depth.chosenElbowPx << "," << depth.chosenCost;
+	else
+		csv << ",-1,-1,-1,-1,-1,-1,-1,-1,-1,-1";
 }
 
 // The candidates' columns: a number not measured this frame is written as -1
@@ -1338,6 +1383,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 							csv << ",-1";
 						writeCsvCandidates(csv, comparison.frame[sideIndex]);
 						writeCsvPalm(csv, comparison.framePalm[sideIndex]);
+						writeCsvDepth(csv, comparison.frameDepth[sideIndex]);
 						csv << "\n";
 					}
 				}
@@ -1478,6 +1524,7 @@ static int runGateDirectModeTool(const TestArgs& args)
 					else
 						writeCsvCandidates(csv, std::array<RetargetComparison::FrameCandidate, kCandidateCount>{});
 					writeCsvPalm(csv, bCompared ? comparison.framePalm[sideIndex] : RetargetComparison::FramePalm{});
+					writeCsvDepth(csv, bCompared ? comparison.frameDepth[sideIndex] : RetargetComparison::FrameDepth{});
 					csv << "\n";
 				}
 			}
