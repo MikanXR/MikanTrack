@@ -1,6 +1,7 @@
 #include "TrackingRecorder.h"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 using json= nlohmann::json;
 
@@ -93,6 +94,7 @@ void TrackingRecorder::stop(bool bAborted, const std::string& reason)
 
 void TrackingRecorder::writerLoop()
 {
+	MIKAN_PROFILE_THREAD("Recorder writer");
 	while (true)
 	{
 		RecordedFrame frame;
@@ -109,6 +111,7 @@ void TrackingRecorder::writerLoop()
 			m_queue.pop_front();
 		}
 
+		MIKAN_PROFILE_SCOPE("Write tracking frame");
 		const std::string line= TrackingRecording::frameToJson(frame).dump();
 		m_file << line << '\n';
 		m_bytesWritten+= line.size() + 1;

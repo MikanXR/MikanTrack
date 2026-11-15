@@ -4,6 +4,7 @@
 
 #include "AudioTypes.h"
 #include "Logger.h"
+#include "Profiler.h"
 
 bool AudioRecorder::start(const std::string& filePath)
 {
@@ -98,6 +99,7 @@ void AudioRecorder::stop()
 
 void AudioRecorder::writerLoop()
 {
+	MIKAN_PROFILE_THREAD("Audio writer");
 	while (true)
 	{
 		QueuedBlock block;
@@ -114,6 +116,7 @@ void AudioRecorder::writerLoop()
 			m_queue.pop_front();
 		}
 
+		MIKAN_PROFILE_SCOPE("Write audio block");
 		if (block.silentSamplesBefore > 0)
 		{
 			m_writer.writeSilence((size_t)block.silentSamplesBefore);

@@ -121,6 +121,28 @@ Rule this watchdog enforces: anything that can block for hundreds of millisecond
 
 ---
 
+## Profiling (Tracy)
+
+A local build carries the Tracy client: the project generation scripts configure with `MIKANTRACK_TRACY` ([build.md](./build.md)). It records nothing until a viewer connects, and listens on localhost alone, on port 8286. `RunProfiler.bat` in the repo root starts the viewer connected to this machine, and the viewer waits for the app if it is not running yet.
+
+- Frames: the main loop's frame is the default frame set, and the vision thread's iterations that did work are the `Vision` frame set
+
+- Vision thread zones: each stage of the loop, each timed section of `CameraContext::process`, each model stage, and `ONNX run` on every ONNX Runtime call with the model's file name as its text. The time a model spends on the GPU shows as the length of its `ONNX run` zone, since the call blocks until the result is back
+
+- Main thread zones: events, the window update with the fused result fetch and the stage view, the ImGui render and draw, the platform windows, the swap and the frame wait
+
+- GPU zones: the scene and the ImGui draw, timed by OpenGL timer queries. These are the app's own rendering and not the models, which run on DirectML
+
+- Plots: the body pose and hand pipeline times, the camera queue age and the body score
+
+- Other threads are named, with a zone per unit of work: the recorder writers, IMU discovery, the audio service, the Joy-Con reader, and the camera sample callback
+
+Run the app as administrator for context switches and the sampled call stacks, which show whether a thread was running or waiting. Every self test and tool is the same exe, so the client starts in those runs too and records nothing with no viewer connected.
+
+Application code uses the macros in `src/Utility/Profiler.h` and `src/Render/ProfilerGpu.h` and never Tracy's own, so a build without the option compiles them away. A zone's name is a string literal. A GPU zone belongs only in code the app's own window reaches: the headless tools draw with no profiler GPU context, and a GPU zone there faults once a viewer connects.
+
+What Tracy does not show is why the GPU took as long as it did. For that, log the GPU beside the run with `nvidia-smi dmon`, which prints utilisation, clocks, power and temperature each second, or take a PIX timing capture, which shows the D3D12 queue DirectML runs on.
+
 ## Capture timing
 
 The hitch watchdog only speaks when an iteration overruns; the steady-state cost of each capture step is measured on every frame. `CameraContext::process` (`src/App/CameraContext.cpp`) laps the steady clock between its steps and publishes them on the per-camera result as `TrackingFrameResult::captureTimings`:

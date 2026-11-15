@@ -30,6 +30,8 @@
 #include "LogPanel.h"
 #include "MainWindow.h"
 #include "PathUtils.h"
+#include "Profiler.h"
+#include "ProfilerGpu.h"
 #include "ProjectManager.h"
 #include "RetargetChains.h"
 #include "VideoCaptureSystem.h"
@@ -95,6 +97,8 @@ int App::exec(int argc, char** argv)
 		return 1;
 	}
 
+	MIKAN_PROFILE_THREAD("Main");
+
 	auto lastFrameTime= std::chrono::steady_clock::now();
 	while (!m_bShutdownRequested)
 	{
@@ -106,8 +110,12 @@ int App::exec(int argc, char** argv)
 		deltaSeconds= std::min(deltaSeconds, 0.1f);
 
 		tick(deltaSeconds);
+		MIKAN_PROFILE_FRAME();
 
-		frameTimer.waitForNextFrame();
+		{
+			MIKAN_PROFILE_SCOPE("Frame wait");
+			frameTimer.waitForNextFrame();
+		}
 	}
 
 	shutdown();
@@ -181,6 +189,7 @@ bool App::startup()
 	}
 	MIKAN_LOG_INFO("App::startup") << "OpenGL " << (const char*)glGetString(GL_VERSION)
 		<< " on " << (const char*)glGetString(GL_RENDERER);
+	MIKAN_PROFILE_GPU_CONTEXT();
 
 	// ImGui (docking), and ImPlot's context beside it before the theme
 	// styles both
@@ -834,28 +843,35 @@ void App::tick(float deltaSeconds)
 	// mid-draw
 	applyPendingProjectAction();
 
-	// SDL events
-	SDL_Event event;
-	while (SDL_PollEvent(&event))
 	{
-		ImGui_ImplSDL2_ProcessEvent(&event);
-		if (event.type == SDL_QUIT)
-			m_bShutdownRequested= true;
-		if (event.type == SDL_WINDOWEVENT &&
-			event.window.event == SDL_WINDOWEVENT_CLOSE &&
-			event.window.windowID == SDL_GetWindowID(m_sdlWindow))
+		MIKAN_PROFILE_SCOPE("Events");
+
+		// SDL events
+		SDL_Event event;
+		while (SDL_PollEvent(&event))
 		{
-			m_bShutdownRequested= true;
+			ImGui_ImplSDL2_ProcessEvent(&event);
+			if (event.type == SDL_QUIT)
+				m_bShutdownRequested= true;
+			if (event.type == SDL_WINDOWEVENT &&
+				event.window.event == SDL_WINDOWEVENT_CLOSE &&
+				event.window.windowID == SDL_GetWindowID(m_sdlWindow))
+			{
+				m_bShutdownRequested= true;
+			}
 		}
+
+		// The automation channel's commands run here, between frames, so a project
+		// action or a window move lands the way the UI's own would. An input it
+		// injects sits in SDL's queue for the next tick's event loop.
+		m_automationServer->poll();
 	}
 
-	// The automation channel's commands run here, between frames, so a project
-	// action or a window move lands the way the UI's own would. An input it
-	// injects sits in SDL's queue for the next tick's event loop.
-	m_automationServer->poll();
-
 	// Pump the device manager (hotplug HWND lives on this thread)
-	m_videoCapture->update(deltaSeconds);
+	{
+		MIKAN_PROFILE_SCOPE("Video capture update");
+		m_videoCapture->update(deltaSeconds);
+	}
 
 	// UI frame
 	ImGui_ImplOpenGL3_NewFrame();
@@ -866,28 +882,48 @@ void App::tick(float deltaSeconds)
 	// Begin that follows
 	GuiViewports::applyPendingFloatRequests();
 
-	m_mainWindow->update(deltaSeconds);
+	{
+		MIKAN_PROFILE_SCOPE("Main window update");
+		m_mainWindow->update(deltaSeconds);
+	}
 
-	ImGui::Render();
+	{
+		MIKAN_PROFILE_SCOPE("ImGui render");
+		ImGui::Render();
+	}
 
 	int drawableWidth= 0, drawableHeight= 0;
 	SDL_GL_GetDrawableSize(m_sdlWindow, &drawableWidth, &drawableHeight);
-	glViewport(0, 0, drawableWidth, drawableHeight);
-	glClearColor(0.08f, 0.08f, 0.09f, 1.f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	{
+		MIKAN_PROFILE_SCOPE("ImGui draw");
+		MIKAN_PROFILE_GPU_SCOPE("ImGui draw");
+		glViewport(0, 0, drawableWidth, drawableHeight);
+		glClearColor(0.08f, 0.08f, 0.09f, 1.f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+	}
 
 	// A pending screenshot reads a back buffer before it presents
 	m_automationServer->servicePendingWindowCapture(drawableWidth, drawableHeight);
-	renderPlatformWindows();
+	{
+		MIKAN_PROFILE_SCOPE("Platform windows");
+		renderPlatformWindows();
+	}
 	m_automationServer->failUnservicedViewportCapture();
 
-	SDL_GL_SwapWindow(m_sdlWindow);
+	{
+		MIKAN_PROFILE_SCOPE("Swap");
+		SDL_GL_SwapWindow(m_sdlWindow);
+	}
+	MIKAN_PROFILE_GPU_COLLECT();
 
-	m_config->updateAutoSave(deltaSeconds);
-	updateAvatarRigAutoSave(deltaSeconds);
-	updateFaceProfileAutoSave(deltaSeconds);
+	{
+		MIKAN_PROFILE_SCOPE("Autosave");
+		m_config->updateAutoSave(deltaSeconds);
+		updateAvatarRigAutoSave(deltaSeconds);
+		updateFaceProfileAutoSave(deltaSeconds);
+	}
 }
 
 void App::renderPlatformWindows()

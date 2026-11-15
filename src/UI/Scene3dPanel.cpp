@@ -18,6 +18,7 @@
 #include "HandPoseModel.h"
 #include "MikanVideoSourceTypes.h"
 #include "OrbitCamera.h"
+#include "ProfilerGpu.h"
 
 #include "glm/gtc/quaternion.hpp"
 #include "opencv2/imgproc.hpp"
@@ -343,6 +344,7 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 								 const std::vector<const TrackingFrameResult*>& perCameraResults,
 								 const SceneGizmos& gizmos, glm::vec2& outImageMin, glm::vec2& outImageSize)
 {
+	MIKAN_PROFILE_GPU_SCOPE("Scene");
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const uint16_t fbWidth= (uint16_t)std::max(64.f, panelSize.x);
 	const uint16_t fbHeight= (uint16_t)std::max(64.f, panelSize.y);

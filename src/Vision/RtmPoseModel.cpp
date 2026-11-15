@@ -6,6 +6,7 @@
 #include "opencv2/imgproc.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 static constexpr float kSimccSplitRatio= 2.f;
 static constexpr float kBoxPadding= 1.25f;
@@ -117,6 +118,7 @@ static int argmax(const float* row, int count, float& outPeak)
 void RtmPoseModel::estimate(const cv::Mat& bgrFrame, const glm::vec2& boxMin, const glm::vec2& boxMax,
 							RtmPoseResult& outResult)
 {
+	MIKAN_PROFILE_FUNCTION();
 	outResult= RtmPoseResult();
 	if (!m_session.isValid() || bgrFrame.empty())
 		return;

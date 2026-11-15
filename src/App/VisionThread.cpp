@@ -13,6 +13,7 @@
 #include "FaceService.h"
 #include "Logger.h"
 #include "OscStreamer.h"
+#include "Profiler.h"
 #include "SteadyClock.h"
 #include "ThreadUtils.h"
 #include "VideoCaptureSystem.h"
@@ -83,6 +84,7 @@ void VisionThread::reportHitchIfSlow(double totalMs, const double* phaseMs)
 
 void VisionThread::publishTelemetry(Telemetry::ePath path, double timestampMs, double totalMs, const double* phaseMs)
 {
+	MIKAN_PROFILE_SCOPE("Publish telemetry");
 	// Gathered outside the lock: the streamer and the cameras publish their
 	// own atomics, and the vision thread owns both lists
 	Telemetry snapshot;
@@ -799,6 +801,7 @@ void VisionThread::applyOscConfigOnThread()
 
 void VisionThread::threadLoop()
 {
+	MIKAN_PROFILE_THREAD("Vision");
 	MIKAN_MT_LOG_INFO("VisionThread") << "Vision thread started";
 
 	// A new run streams to a fresh streamer: nothing held or frozen in the
@@ -830,8 +833,11 @@ void VisionThread::threadLoop()
 		runCaptureStage(iteration);
 		lapPhase(eVisionPhase::Capture);
 
-		if (m_faceService != nullptr)
-			m_faceService->update(steadyNowMs());
+		{
+			MIKAN_PROFILE_SCOPE("Face update");
+			if (m_faceService != nullptr)
+				m_faceService->update(steadyNowMs());
+		}
 		lapPhase(eVisionPhase::Face);
 
 		if (!iteration.bAnyNewResult)
@@ -889,6 +895,7 @@ void VisionThread::threadLoop()
 				// status the UI reads keeps describing the wrists, and the
 				// wizard's requests (a bias calibration is taken with the
 				// hands away) are not held until a hand appears
+				MIKAN_PROFILE_SCOPE("IMU stage");
 				serviceImuRequests();
 				m_imuService->update();
 				serviceImuMountingCapture();
@@ -909,6 +916,8 @@ void VisionThread::threadLoop()
 		reportHitchIfSlow(totalMs, phaseMs);
 
 		publishTelemetry(getCameraIterationPath(iteration), iteration.outputResult.timestampMs, totalMs, phaseMs);
+
+		MIKAN_PROFILE_FRAME_NAMED("Vision");
 	}
 
 	// Finalize an in-flight recording before the contexts are torn down
@@ -962,6 +971,7 @@ bool VisionThread::fetchFaceAnchorCapture(glm::quat& outAnchor)
 
 void VisionThread::servicePendingRequests()
 {
+	MIKAN_PROFILE_SCOPE("Service requests");
 	if (m_bConfigRefreshRequested.exchange(false))
 	{
 		// A refresh wipes fusion inputs and resets fusion state - a hard
@@ -1009,6 +1019,7 @@ void VisionThread::servicePendingRequests()
 
 void VisionThread::runCaptureStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Capture stage");
 	// Process whichever cameras have a new frame (sequential; DirectML
 	// serializes on one GPU queue anyway)
 	// The recording taps inside process() are live only while a recording
@@ -1044,6 +1055,7 @@ void VisionThread::runCaptureStage(IterationState& iteration)
 
 void VisionThread::runFusionStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Fusion stage");
 	// Fuse the cameras' world-space results (single fresh candidate passes
 	// through exactly; stale/uncalibrated cameras are excluded)
 	for (const std::unique_ptr<CameraContext>& context : m_cameras)
@@ -1098,6 +1110,7 @@ bool VisionThread::isDirectModeActive() const
 
 void VisionThread::runDirectStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Direct stage");
 	// Every camera still feeds the diagnostics; the output is the direct
 	// camera's result as it stands, camera space, no fusion
 	for (const std::unique_ptr<CameraContext>& context : m_cameras)
@@ -1121,6 +1134,7 @@ void VisionThread::runDirectStage(IterationState& iteration)
 
 bool VisionThread::solveDirectRetarget(const IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Direct retarget");
 	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
 	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
 		return false;
@@ -1140,6 +1154,7 @@ bool VisionThread::solveDirectRetarget(const IterationState& iteration)
 
 void VisionThread::runImuStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("IMU stage");
 	// Integrate every buffered inertial sample (they carry their own
 	// timestamps, so running at camera rate loses no information), then let
 	// the fused palm orientation anchor yaw, then publish the forearm
@@ -1258,6 +1273,7 @@ void VisionThread::publishImuStatus()
 
 void VisionThread::runBodySolveStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Body solve stage");
 	// Vision body pose: elbows for sides the IMU didn't claim, plus shoulders
 	// and head. Runs AFTER the IMU forearm fill (IMU wins) and after the IMU
 	// recording tap (so recordings keep pure IMU output and replay can re-run
@@ -1307,6 +1323,7 @@ void VisionThread::runBodySolveStage(IterationState& iteration)
 
 void VisionThread::runOutputStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Output stage");
 	if (iteration.bAnyNewResult)
 		m_lastCameraOutputMs= iteration.outputResult.timestampMs;
 	applyFaceToOutput(iteration.outputResult, steadyNowMs(), iteration.bAnyNewResult);
@@ -1495,6 +1512,7 @@ bool VisionThread::runFaceOnlyOutput(IterationState& iteration, double nowMs)
 
 void VisionThread::runCalibrationCaptures()
 {
+	MIKAN_PROFILE_SCOPE("Calibration captures");
 	// Bone calibration: accumulate the stereo-triangulated landmarks over an
 	// open window. Only triangulated frames carry measured geometry - a
 	// monocular pose is the landmark model's shape wearing a pose, which is
@@ -1608,6 +1626,7 @@ void VisionThread::runCalibrationCaptures()
 
 void VisionThread::runDiagnosticsStage(IterationState& iteration)
 {
+	MIKAN_PROFILE_SCOPE("Diagnostics stage");
 	// Diagnostic history (compact copies - cheap enough for every frame)
 	{
 		const int dominant[2]= {m_dominantCamera[0].load(), m_dominantCamera[1].load()};

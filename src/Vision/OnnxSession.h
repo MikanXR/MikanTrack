@@ -73,6 +73,8 @@ private:
 
 	std::unique_ptr<Ort::Session> m_session;
 	std::string m_activeEp= "none";
+	// The path create() was given, carried as the text of each run's profiler zone
+	std::string m_modelPath;
 
 	std::vector<std::string> m_inputNames;
 	std::vector<std::string> m_outputNames;

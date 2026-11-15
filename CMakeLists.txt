@@ -65,6 +65,26 @@ else()
     message(STATUS "Oculus LipSync SDK not found under deps/OVRLipSyncNative: the Oculus mouth model is not built")
 endif()
 
+# Tracy (instrumented profiler), compiled directly into the exe when asked
+# for. The project generation scripts ask for it, so a local build carries
+# it. Off by default here: a configure that does not pass the option includes
+# no Tracy header and links no Tracy code, which is what a release build
+# wants. Nothing is recorded until a viewer connects, and the client listens
+# on localhost alone, on a port of its own: Tracy's default belongs to
+# whichever program took it first, and another on the machine may carry a
+# client of another version.
+set(MIKANTRACK_TRACY_PORT 8286)
+option(MIKANTRACK_TRACY "Build with the Tracy profiler client" OFF)
+set(TRACY_DIR ${THIRDPARTY_DIR}/tracy/public)
+set(TRACY_SOURCES)
+if(MIKANTRACK_TRACY)
+    if(NOT EXISTS ${TRACY_DIR}/TracyClient.cpp)
+        message(FATAL_ERROR "MIKANTRACK_TRACY is on and thirdparty/tracy is empty: run git submodule update --init --recursive")
+    endif()
+    set(TRACY_SOURCES ${TRACY_DIR}/TracyClient.cpp)
+    message(STATUS "Tracy profiler client: built in")
+endif()
+
 # Header-only submodules
 set(GLM_INCLUDE_DIR ${THIRDPARTY_DIR}/glm)
 set(NLOHMANN_JSON_INCLUDE_DIR ${THIRDPARTY_DIR}/nlohmann_json/single_include)
@@ -145,6 +165,7 @@ add_executable(MikanTrack WIN32
     ${IMGUI_SOURCES}
     ${IMPLOT_SOURCES}
     ${TINYFD_SOURCES}
+    ${TRACY_SOURCES}
 )
 
 source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
@@ -155,6 +176,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
 source_group("thirdparty\\implot" FILES ${IMPLOT_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
+source_group("thirdparty\\tracy" FILES ${TRACY_SOURCES})
 
 target_include_directories(MikanTrack PRIVATE
     ${ROOT_DIR}/src
@@ -213,6 +235,14 @@ target_link_libraries(MikanTrack PRIVATE
 
 # ImGui GL loader: use GLEW (already linked) instead of the built-in loader
 target_compile_definitions(MikanTrack PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLEW GLEW_NO_GLU)
+
+if(MIKANTRACK_TRACY)
+    target_compile_definitions(MikanTrack PRIVATE
+        MIKANTRACK_TRACY TRACY_ENABLE TRACY_ON_DEMAND TRACY_ONLY_LOCALHOST TRACY_NO_BROADCAST
+        TRACY_DATA_PORT=${MIKANTRACK_TRACY_PORT})
+    target_include_directories(MikanTrack PRIVATE ${TRACY_DIR})
+    target_link_libraries(MikanTrack PRIVATE dbghelp)
+endif()
 
 if(MIKANTRACK_OVRLIPSYNC)
     target_compile_definitions(MikanTrack PRIVATE MIKANTRACK_OVRLIPSYNC)

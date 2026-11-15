@@ -33,6 +33,14 @@ cmake --build build --target MikanTrack --config Release --parallel
 
 Or open `build\MikanTrack.sln` in Visual Studio 2022 and build there. There is only the one target, `MikanTrack`.
 
+The build the generation scripts configure carries the Tracy profiler client. To profile, start the viewer and run the app:
+
+```
+RunProfiler.bat
+```
+
+It starts `deps\tracy\tracy-profiler.exe` connected to this machine on port 8286, fetching the viewer first where `deps\` has none, and the viewer waits for the app. `deps\tracy\tracy-capture.exe -p 8286 -o <file.tracy>` records a run without the viewer, and `tracy-csvexport.exe <file.tracy>` lists its zones.
+
 ---
 
 ## Automation server

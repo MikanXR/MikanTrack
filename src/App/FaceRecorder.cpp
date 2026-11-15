@@ -8,6 +8,7 @@
 
 #include "Logger.h"
 #include "PathUtils.h"
+#include "Profiler.h"
 
 using json= nlohmann::json;
 
@@ -74,6 +75,7 @@ void FaceRecorder::stop()
 
 void FaceRecorder::writerLoop()
 {
+	MIKAN_PROFILE_THREAD("Face writer");
 	for (;;)
 	{
 		std::deque<RecordedFaceSample> batch;
@@ -84,6 +86,7 @@ void FaceRecorder::writerLoop()
 			batch.swap(m_queue);
 			bExit= m_bWriterShouldExit;
 		}
+		MIKAN_PROFILE_SCOPE("Write face samples");
 		for (const RecordedFaceSample& sample : batch)
 		{
 			m_file << FaceSidecar::sampleToLine(sample) << '\n';

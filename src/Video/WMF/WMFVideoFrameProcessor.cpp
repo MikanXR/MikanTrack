@@ -1,6 +1,7 @@
 #include "Logger.h"
 #include "MemoryUtils.h"
 #include "MikanWMFVideoDevice.h"
+#include "Profiler.h"
 #include "WMFDeviceInfo.h"
 #include "WMFVideoFrameProcessor.h"
 #include "WMFUtility.h"
@@ -441,6 +442,8 @@ void WMFVideoFrameProcessor::stopVideoFrameStream()
 STDMETHODIMP WMFVideoFrameProcessor::OnReadSample(HRESULT hrStatus, DWORD dwStreamIndex, DWORD dwStreamFlags,
 												  LONGLONG llTimestamp, IMFSample* pSample)
 {
+	MIKAN_PROFILE_SCOPE("Camera sample");
+
 	// Check if we're still running
 	if (m_state != State::Running)
 	{
