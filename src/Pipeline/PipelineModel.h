@@ -185,7 +185,6 @@ struct PipelineStatusInputs
 		bool bHandMeasured= false;
 		bool bResting= false;
 		float restBlend= 0.f;
-		float elbowMissPx= 0.f;
 	};
 	DirectArm directArms[2];
 	// The hand slots sit on the opposite side's body wrists

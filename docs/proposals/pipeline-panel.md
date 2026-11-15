@@ -186,7 +186,7 @@ Every section of today's panels, and the stage and inspector section that receiv
 
 ### New readouts the stages make room for
 
-- Direct solver and its sub-stages: the solve state that today reaches only the F9 dump (landmark visibility and the entry gate, shoulder depth, lean, head source, the reach interval, the chosen depth, the elbow miss, the depth prior, the lift distance and scale, each group's hold and rest state).
+- Direct solver and its sub-stages: the solve state that today reaches only the F9 dump (landmark visibility and the entry gate, shoulder depth, lean, head source, the reach interval, the depth plane, the wrist distance, what the elbow follows, each group's hold and rest state).
 - Body solver: the elbow's source (measured or dead reckoned) and the shoulder confidence.
 - Body model: the person box source and the mean keypoint score.
 - Output: the send rate, the bundle sizes and the avatar announcement.

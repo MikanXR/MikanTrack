@@ -439,7 +439,6 @@ DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const Ava
 {
 	DirectRetargetConfig direct;
 	direct.cameraTiltRadians= glm::radians(config.direct.cameraTiltDegrees);
-	direct.bWristDepthPlanes= config.direct.wristDepth == eDirectWristDepth::Planes;
 	direct.nearPlaneReachFraction= config.direct.nearPlaneReachFraction;
 	direct.farPlaneReachFraction= config.direct.farPlaneReachFraction;
 	direct.neutral.present= config.direct.neutralPresent;
@@ -842,8 +841,6 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.direct.enabled= dr.value("enabled", false);
 	config.direct.cameraIndex= dr.value("cameraIndex", 0);
 	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", config.direct.cameraTiltDegrees);
-	config.direct.wristDepth= dr.value("wristDepth", std::string("solved")) == "planes" ? eDirectWristDepth::Planes
-																						 : eDirectWristDepth::Solved;
 	config.direct.nearPlaneReachFraction= dr.value("nearPlaneReachFraction", config.direct.nearPlaneReachFraction);
 	config.direct.farPlaneReachFraction= dr.value("farPlaneReachFraction", config.direct.farPlaneReachFraction);
 	if (dr.value("neutralPresent", false))
@@ -1033,7 +1030,6 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 			{"enabled", direct.enabled},
 			{"cameraIndex", direct.cameraIndex},
 			{"cameraTiltDegrees", direct.cameraTiltDegrees},
-			{"wristDepth", direct.wristDepth == eDirectWristDepth::Planes ? "planes" : "solved"},
 			{"nearPlaneReachFraction", direct.nearPlaneReachFraction},
 			{"farPlaneReachFraction", direct.farPlaneReachFraction},
 			{"neutralPresent", direct.neutralPresent},

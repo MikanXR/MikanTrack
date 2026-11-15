@@ -184,9 +184,7 @@ static int runDumpTest(const TestArgs& args)
 			arm.chain.shoulder= state.shoulder[sideIndex];
 			arm.chain.elbow= arm.chain.shoulder - glm::vec3(0.f, 0.f, 0.25f);
 			arm.chain.wrist= arm.chain.elbow - glm::vec3(0.f, 0.f, 0.25f);
-			arm.bDepthChosen= true;
-			arm.chosenDepth= 1.3f;
-			arm.filteredDepth= 1.31f;
+			arm.wristDepth= 1.31f;
 		}
 
 		DiagAvatarSnapshot avatar;
@@ -231,7 +229,7 @@ static int runDumpTest(const TestArgs& args)
 			const std::string content(
 				(std::istreambuf_iterator<char>(jsonFile)), std::istreambuf_iterator<char>());
 			for (const char* needle : {"\"avatar\"", "\"solveState\"", "\"cameraToWorld\"", "\"LeftUpperArm\"",
-									   "\"chosenDepth\"", "\"compare\""})
+									   "\"wristDepth\"", "\"compare\""})
 			{
 				if (content.find(needle) == std::string::npos)
 				{

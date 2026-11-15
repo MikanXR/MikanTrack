@@ -304,8 +304,8 @@ void drawDirectEnableControl(const TrackingSectionContext& context);
 void drawDirectCameraControl(const TrackingSectionContext& context);
 void drawDirectNeutralControl(const TrackingSectionContext& context);
 void drawDirectTiltControl(const TrackingSectionContext& context);
-// The wrist's distance: solved, or on the depth planes with each plane's
-// distance ahead of the shoulder as a fraction of the arm's reach
+// The two depth planes the wrist sits on, each one's distance ahead of the
+// shoulder as a fraction of the arm's reach
 void drawDirectWristDepthControls(const TrackingSectionContext& context);
 // The direct readouts, reading the shown frame's solve (context.direct), one
 // dim line when the shown frame has none. Summary: whether a torso is seen

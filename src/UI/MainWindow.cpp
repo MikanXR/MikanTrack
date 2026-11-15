@@ -1431,7 +1431,6 @@ void MainWindow::gatherPipelineInputs()
 			out.bHandMeasured= arm.bHandMeasured;
 			out.bResting= arm.bResting;
 			out.restBlend= arm.restBlend;
-			out.elbowMissPx= arm.chosenElbowPx;
 		}
 	}
 

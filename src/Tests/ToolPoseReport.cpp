@@ -293,21 +293,17 @@ int runPoseReportTool(const TestArgs& args)
 			const float wristBend= degrees(std::min(wristAngle, glm::two_pi<float>() - wristAngle));
 			armJson["elbowBendDegrees"]= elbowBend;
 			armJson["wristBendDegrees"]= wristBend;
-			armJson["wristDistance"]= arm.filteredDepth;
-			armJson["chosenDepth"]= arm.chosenDepth;
+			armJson["wristDistance"]= arm.wristDepth;
 			armJson["depthInterval"]= {arm.depthLow, arm.depthHigh};
-			armJson["modelDepthDelta"]= arm.modelDepthDelta;
-			armJson["pnpDistance"]= arm.pnpDistance;
-			armJson["liftDepth"]= arm.liftDepth;
+			armJson["nearPlane"]= arm.bNearPlane;
+			armJson["planeDistance"]= arm.planeDistance;
+			armJson["elbowDirectionWeight"]= arm.elbowDirectionWeight;
 			MIKAN_LOG_INFO(kTag) << sideName << " arm: elbow bend " << elbowBend << " deg (180 straight), wrist bend "
-								 << wristBend << " deg, wrist distance " << arm.filteredDepth << " (chosen "
-								 << arm.chosenDepth << ", reach " << arm.depthLow << " to " << arm.depthHigh
-								 << ", model depth delta " << arm.modelDepthDelta << ", lift distance "
-								 << arm.pnpDistance << " scored at " << arm.liftDepth << ", measured scale "
-								 << arm.pnpScale.scale << "), elbow "
-								 << (arm.bElbowSeen ? "seen" : "unseen") << ", hand "
-								 << (arm.bHandSeen ? "seen" : "unseen") << ", chosen elbow miss "
-								 << arm.chosenElbowPx << " px";
+								 << wristBend << " deg, wrist distance " << arm.wristDepth << " (reach "
+								 << arm.depthLow << " to " << arm.depthHigh << ", on the "
+								 << (arm.bNearPlane ? "near" : "far") << " plane at " << arm.planeDistance
+								 << "), elbow " << (arm.bElbowSeen ? "seen" : "unseen") << " at direction weight "
+								 << arm.elbowDirectionWeight << ", hand " << (arm.bHandSeen ? "seen" : "unseen");
 		}
 		if (arm.bHandMeasured)
 		{

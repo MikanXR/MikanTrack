@@ -5,18 +5,20 @@
 #include "glm/gtx/quaternion.hpp"
 
 #include "AvatarSkeleton.h"
+#include "DirectRetarget.h"
 #include "MathGLM.h"
 #include "RetargetGolden.h"
 #include "SyntheticAvatar.h"
 #include "SyntheticDirectUser.h"
 
-// The retarget golden test: the live retarget path beside the frozen copy of
-// it over synthetic sequences that walk every loss, hold and restart branch
-// of both pipelines. Every frame must agree bit for bit: the avatar pose, the
-// direct solve state, and the encoded VMC packets. A case that is expected to
-// differ after a deliberate change states the difference here: (p7), where
-// the live stage steps on the source's step clock across the backward steps
-// face-only frames make.
+// The retarget golden test: the live position retarget path beside the frozen
+// copy of it over synthetic sequences that walk every loss, hold and restart
+// branch of the position pipeline. Every frame must agree bit for bit: the
+// avatar pose and the encoded VMC packets. A case that is expected to differ
+// after a deliberate change states the difference here: (p7), where the live
+// stage steps on the source's step clock across the backward steps face-only
+// frames make. The direct pipeline has no frozen copy: only its source pose's
+// clock and group states are checked, against the live solver alone.
 
 namespace
 {
@@ -312,23 +314,9 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConf
 	return result;
 }
 
-// -- The direct pipeline's input ----------------------------------------------
+// -- The direct source pose's input -------------------------------------------
 
 constexpr float kTiltDegrees= 10.f;
-
-struct DirectRig
-{
-	AvatarModel model;
-	std::shared_ptr<const AvatarSkeleton> skeleton;
-};
-
-DirectRig makeDirectRig(eVrmVersion version, bool rotateLeftUpperArmNode)
-{
-	DirectRig rig;
-	rig.model= makeModel(version, rotateLeftUpperArmNode);
-	rig.skeleton= std::make_shared<AvatarSkeleton>(rig.model);
-	return rig;
-}
 
 DirectRetargetConfig makeDirectConfig()
 {
@@ -373,114 +361,6 @@ User makeMovingUser(double motionMs)
 	}
 	user.nose+= sway + glm::vec3(0.f, 0.03f * sinf(0.8f * t), 0.02f * sinf(0.7f * t));
 	return user;
-}
-
-struct DirectStep
-{
-	int index= 0;
-	User user;
-	double timeShiftMs= 0.0;
-	DirectRetargetConfig config;
-	TrackingFrameResult::HeadPose phoneHead;
-	// The avatar changed: the app resets the solver and swaps the skeleton
-	std::shared_ptr<const AvatarSkeleton> skeleton;
-	bool bSkeletonDirty= false;
-};
-
-struct DirectResult
-{
-	Tally tally;
-	// Frames the frozen solver spent in each state, per side
-	int chainFrames[2]= {};
-	int restingFrames[2]= {};
-	int easingFrames[2]= {};
-	int handHeldFrames[2]= {};
-	int torsoFrames= 0;
-};
-
-DirectResult runDirectSequence(const DirectRig& rig, const DirectRetargetConfig& baseConfig, int frameCount,
-							   const std::function<void(DirectStep&)>& edit,
-							   const std::function<void(DirectRetargetConfig&)>& skewLive= nullptr)
-{
-	DirectResult result;
-	const Camera camera= makeCamera(kTiltDegrees);
-	DirectPair direct;
-	StreamPair stream;
-	std::string why;
-	const TrackingFrameResult::HeadPose noPhone;
-
-	DirectStep step;
-	step.config= baseConfig;
-	step.skeleton= rig.skeleton;
-	stream.setConfig(makeStreamConfig(step.skeleton));
-
-	// The neutral capture, as the app runs it: a few frames of the neutral
-	// user, then both solvers' captures must agree before either is used
-	double timestampMs= 0.0;
-	{
-		const User neutralUser= makeNeutralUser();
-		for (int repeat= 0; repeat < 3; ++repeat)
-		{
-			const TrackingFrameResult frame= makeFrame(camera, neutralUser, *step.skeleton, timestampMs, repeat);
-			const bool bSame= direct.solve(frame, camera.model, noPhone, timestampMs, *step.skeleton, step.config, why);
-			result.tally.note(bSame, repeat, "neutral solve", why);
-			timestampMs+= kFrameMs;
-		}
-		result.tally.note(direct.captureNeutral(step.config.neutral, why), 0, "neutral capture", why);
-	}
-	const double startMs= timestampMs;
-
-	for (int index= 0; index < frameCount; ++index)
-	{
-		const double motionMs= index * kFrameMs;
-		step.index= index;
-		step.user= makeMovingUser(motionMs);
-		step.phoneHead= noPhone;
-		step.bSkeletonDirty= false;
-		if (edit)
-			edit(step);
-		if (step.bSkeletonDirty)
-		{
-			direct.reset();
-			stream.setConfig(makeStreamConfig(step.skeleton));
-		}
-		timestampMs= startMs + motionMs + step.timeShiftMs;
-		const TrackingFrameResult frame= makeFrame(camera, step.user, *step.skeleton, timestampMs, index + 3);
-		result.tally.frames++;
-
-		// A skew leaves the frozen side on the true config and hands the live
-		// side another, which the compare must notice
-		if (skewLive)
-		{
-			DirectRetargetConfig skewed= step.config;
-			skewLive(skewed);
-			direct.live.solve(frame, camera.model, step.phoneHead, timestampMs, *step.skeleton, skewed,
-							  direct.livePose);
-			direct.frozen.solve(frame, toFrozen(camera.model), step.phoneHead, timestampMs, *step.skeleton,
-								toFrozen(step.config), direct.frozenPose);
-			result.tally.note(samePose(direct.livePose, direct.frozenPose, why), index, "direct", why);
-		}
-		else
-		{
-			const bool bSame=
-				direct.solve(frame, camera.model, step.phoneHead, timestampMs, *step.skeleton, step.config, why);
-			result.tally.note(bSame, index, "direct", why);
-		}
-		result.tally.note(stream.encodeDirect(frame, direct.livePose, direct.frozenPose, why), index, "stream", why);
-
-		const Frozen::DirectRetarget::SolveState& state= direct.frozen.getSolveState();
-		result.torsoFrames+= state.torsoValid ? 1 : 0;
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		{
-			const Frozen::DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
-			result.chainFrames[sideIndex]+= arm.chain.valid ? 1 : 0;
-			result.restingFrames[sideIndex]+= arm.bResting ? 1 : 0;
-			result.easingFrames[sideIndex]+= (arm.bResting && arm.restBlend > 0.f && arm.restBlend < 1.f) ? 1 : 0;
-			result.handHeldFrames[sideIndex]+=
-				(arm.chain.valid && !arm.bResting && !step.user.bHandTracked[sideIndex]) ? 1 : 0;
-		}
-	}
-	return result;
 }
 
 bool inRange(int index, int first, int last)
@@ -810,169 +690,6 @@ static int runRetargetGoldenTest(const TestArgs&)
 				  "(p11) decimating send rate, within tolerance");
 	}
 
-	// -- Direct pipeline -------------------------------------------------------
-
-	const DirectRig directRig= makeDirectRig(eVrmVersion::Vrm1, false);
-	const DirectRig otherDirectRig= makeDirectRig(eVrmVersion::Vrm0, true);
-	const DirectRetargetConfig directConfig= makeDirectConfig();
-
-	// (d1) Steady motion: both chains placed on every frame
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 150, nullptr);
-		MIKAN_LOG_INFO(kTag) << "  (d1) chains placed on " << result.chainFrames[0] << " and " << result.chainFrames[1]
-							 << " of " << result.tally.frames << " frames";
-		checkSame(result.tally,
-				  result.chainFrames[0] > 140 && result.chainFrames[1] > 140 && result.torsoFrames == 150,
-				  "(d1) steady motion");
-	}
-
-	// (d2) The hand lost while its arm stays placed: the palm and the fingers hold
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 100, [](DirectStep& step) {
-			if (inRange(step.index, 30, 60))
-				step.user.bHandTracked[0]= false;
-		});
-		checkSame(result.tally, result.handHeldFrames[0] > 20, "(d2) hand lost on a placed arm");
-	}
-
-	// (d3) The wrist lost for less than the hold, then for longer: the arm
-	// holds, eases to rest, and takes the wrist back in the middle of an ease
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 170, [](DirectStep& step) {
-			const bool bLost= inRange(step.index, 30, 35) || inRange(step.index, 60, 100) ||
-				inRange(step.index, 120, 139);
-			if (bLost)
-			{
-				step.user.bWristSeen[0]= false;
-				step.user.bHandTracked[0]= false;
-			}
-		});
-		MIKAN_LOG_INFO(kTag) << "  (d3) left arm resting on " << result.restingFrames[0] << " frames, easing on "
-							 << result.easingFrames[0];
-		checkSame(result.tally, result.restingFrames[0] > 20 && result.easingFrames[0] > 4,
-				  "(d3) wrist lost: hold, ease to rest, return mid-ease");
-	}
-
-	// (d4) A rest blend of zero snaps to the rest pose
-	{
-		DirectRetargetConfig config= directConfig;
-		config.restBlendMs= 0.f;
-		const DirectResult result= runDirectSequence(directRig, config, 110, [](DirectStep& step) {
-			if (inRange(step.index, 40, 80))
-			{
-				step.user.bWristSeen[1]= false;
-				step.user.bHandTracked[1]= false;
-			}
-		});
-		checkSame(result.tally, result.restingFrames[1] > 10 && result.easingFrames[1] == 0, "(d4) rest blend zero");
-	}
-
-	// (d5) A gap over the hold, then a timestamp regression: both restart the solver
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 120, [](DirectStep& step) {
-			if (step.index == 40)
-				step.timeShiftMs+= 900.0;
-			if (step.index == 80)
-				step.timeShiftMs-= 3000.0;
-		});
-		checkSame(result.tally, result.chainFrames[0] > 100, "(d5) gap and timestamp regression");
-	}
-
-	// (d6) The phone head takes the head over and hands it back
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 100, [](DirectStep& step) {
-			if (inRange(step.index, 30, 70))
-			{
-				const float t= (float)step.index * 0.033f;
-				step.phoneHead.valid= true;
-				step.phoneHead.orientationWorld= glm::angleAxis(0.6f * sinf(1.5f * t), glm::vec3(0.f, 0.f, 1.f)) *
-					glm::angleAxis(0.3f * sinf(1.1f * t), glm::vec3(0.f, 1.f, 0.f));
-				step.phoneHead.confidence= 1.f;
-			}
-		});
-		checkSame(result.tally, result.torsoFrames == 100, "(d6) phone head");
-	}
-
-	// (d7) Weak evidence: an unseen elbow, no model depth, a biased hand
-	// lift, a hand slot on something else, a wrist flickering across the bar
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 200, [](DirectStep& step) {
-			if (inRange(step.index, 20, 50))
-				step.user.bElbowSeen[0]= false;
-			if (inRange(step.index, 60, 90))
-				step.user.bModelDepth= false;
-			if (inRange(step.index, 100, 130))
-				step.user.pnpDepthScale[1]= 1.3f;
-			if (inRange(step.index, 140, 160))
-				step.user.handPixelOffset[0]= glm::vec2(140.f, -90.f);
-			if (inRange(step.index, 170, 195))
-				step.user.wristVisibility[1]= (step.index % 2 == 0) ? 0.45f : 0.55f;
-		});
-		checkSame(result.tally, result.chainFrames[0] > 150, "(d7) weak evidence");
-	}
-
-	// (d8) The avatar swapped for another and back, and the rig edited, in
-	// the middle of the stream
-	{
-		const DirectResult result= runDirectSequence(directRig, directConfig, 190, [&](DirectStep& step) {
-			if (step.index == 40)
-			{
-				step.skeleton= otherDirectRig.skeleton;
-				step.bSkeletonDirty= true;
-			}
-			if (step.index == 80)
-			{
-				step.skeleton= directRig.skeleton;
-				step.bSkeletonDirty= true;
-			}
-			if (step.index == 110)
-			{
-				step.config.headTrimRadians= glm::vec3(0.1f, -0.05f, 0.2f);
-				step.config.sides[0].handTrimRadians= glm::vec3(0.2f, 0.1f, -0.15f);
-				step.config.sides[0].forearmRollTrimRadians= 0.3f;
-				step.config.sides[0].elbowHintOffset= glm::vec3(-0.05f, 0.1f, -0.35f);
-				step.config.sides[1].curlGain= 1.4f;
-				step.config.sides[1].splayGain= 0.6f;
-				step.config.sides[1].fingerEnabled[(int)eFinger::Ring]= false;
-				step.config.sides[1].bThumbPronationOverride= true;
-				step.config.sides[1].thumbPronationRad= -0.7f;
-				step.config.sides[1].restWristOffset= glm::vec3(0.2f, 0.1f, -0.3f);
-				step.config.sides[1].restFingerCurlRadians= 0.5f;
-				step.config.restBlendMs= 150.f;
-			}
-			if (inRange(step.index, 130, 170))
-			{
-				step.user.bWristSeen[1]= false;
-				step.user.bHandTracked[1]= false;
-			}
-		});
-		checkSame(result.tally, result.restingFrames[1] > 10, "(d8) avatar swap and rig edit");
-	}
-
-	// (d9) The rest pose the preview shows, under the default rig and an
-	// edited one
-	{
-		Tally tally;
-		std::string why;
-		DirectRetargetConfig edited= directConfig;
-		edited.sides[0].restElbowOffset= glm::vec3(0.1f, 0.05f, -0.25f);
-		edited.sides[1].restWristOffset= glm::vec3(0.2f, 0.1f, -0.3f);
-		edited.sides[1].restPalmNormal= glm::vec3(0.f, -0.3f, -1.f);
-		edited.sides[0].restFingerCurlRadians= 0.5f;
-		edited.sides[0].handTrimRadians= glm::vec3(0.2f, 0.1f, -0.15f);
-		const DirectRetargetConfig* configs[2]= {&directConfig, &edited};
-		for (int index= 0; index < 2; ++index)
-		{
-			AvatarPose livePose;
-			Frozen::AvatarPose frozenPose;
-			DirectRetarget::makeRestPose(*directRig.skeleton, *configs[index], livePose);
-			Frozen::DirectRetarget::makeRestPose(*directRig.skeleton, toFrozen(*configs[index]), frozenPose);
-			tally.frames++;
-			tally.note(samePose(livePose, frozenPose, why), index, "rest pose", why);
-		}
-		checkSame(tally, true, "(d9) rest pose");
-	}
-
 	// -- The source pose's clock and group states ------------------------------
 
 	// (c1) The position source pose: the clock is the frame's, its interval
@@ -1044,6 +761,7 @@ static int runRetargetGoldenTest(const TestArgs&)
 	// reads as measured with its confidence
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
+		const DirectRetargetConfig directConfig= makeDirectConfig();
 		DirectRetarget retarget;
 		SourcePose source;
 		using eGroupState= SourcePose::eGroupState;
@@ -1098,8 +816,8 @@ static int runRetargetGoldenTest(const TestArgs&)
 			}
 			restarts+= (bRestart && index != 0) ? 1u : 0u;
 			const double timestampMs= index * kFrameMs + timeShiftMs;
-			const TrackingFrameResult frame= makeFrame(camera, user, *directRig.skeleton, timestampMs, index);
-			retarget.measure(frame, camera.model, phoneHead, timestampMs, *directRig.skeleton, directConfig, source);
+			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, index);
+			retarget.measure(frame, camera.model, phoneHead, timestampMs, *rig.skeleton, directConfig, source);
 			if (index == 0)
 				firstEpoch= source.clock.resetEpoch;
 
@@ -1177,25 +895,10 @@ static int runRetargetGoldenTest(const TestArgs&)
 		check(result.tally.mismatches > 0, "(s3) a skewed live elbow weight is detected in the stream");
 	}
 
-	// (s2) A live direct solver configured with another rest blend must differ
-	{
-		const DirectResult result= runDirectSequence(
-			directRig, directConfig, 110,
-			[](DirectStep& step) {
-				if (inRange(step.index, 40, 80))
-				{
-					step.user.bWristSeen[0]= false;
-					step.user.bHandTracked[0]= false;
-				}
-			},
-			[](DirectRetargetConfig& config) { config.restBlendMs= 120.f; });
-		check(result.tally.mismatches > 0, "(s2) a skewed live rest blend is detected in the direct pose");
-	}
-
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";
 	return failures == 0 ? 0 : 1;
 }
 
 MIKAN_REGISTER_TEST("--test-retarget-golden",
-					"Retarget golden: the live retarget path against its frozen copy, bit for bit",
+					"Retarget golden: the live position retarget path against its frozen copy, bit for bit",
 					eTestCategory::SelfTest, runRetargetGoldenTest)

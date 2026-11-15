@@ -1410,33 +1410,12 @@ void SettingsPanels::drawDirectTiltControl(const TrackingSectionContext& context
 void SettingsPanels::drawDirectWristDepthControls(const TrackingSectionContext& context)
 {
 	DirectConfig& direct= context.config->direct;
-	bool bChanged= false;
-
-	const char* modeKeys[]= {"trackingPanel.directDepthSolved", "trackingPanel.directDepthPlanes"};
-	if (ImGui::BeginCombo(locLabel("trackingPanel.directDepth"), locText(modeKeys[(int)direct.wristDepth])))
-	{
-		for (int mode= 0; mode < 2; ++mode)
-		{
-			if (ImGui::Selectable(locText(modeKeys[mode]), (int)direct.wristDepth == mode))
-			{
-				direct.wristDepth= (eDirectWristDepth)mode;
-				bChanged= true;
-			}
-		}
-		ImGui::EndCombo();
-	}
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directDepthTooltip"));
-
-	if (direct.wristDepth == eDirectWristDepth::Planes)
-	{
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directFarPlane"), &direct.farPlaneReachFraction, 0.1f, 1.f,
+	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.directFarPlane"), &direct.farPlaneReachFraction, 0.1f, 1.f,
 									  "%.2f");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.directFarPlaneTooltip"));
-		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directNearPlane"), &direct.nearPlaneReachFraction, 0.f,
-									  1.f, "%.2f");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.directNearPlaneTooltip"));
-	}
-
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directFarPlaneTooltip"));
+	bChanged|=
+		ImGui::SliderFloat(locLabel("trackingPanel.directNearPlane"), &direct.nearPlaneReachFraction, 0.f, 1.f, "%.2f");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directNearPlaneTooltip"));
 	if (bChanged)
 		commitTrackingConfigChange(context);
 }
@@ -1628,9 +1607,22 @@ void SettingsPanels::drawDirectArmChainReadout(const TrackingSectionContext& con
 	if (state == nullptr || !beginDirectTable("directArmChain", true))
 		return;
 
-	// The reach interval, and the model's prior with it, are measured only
-	// where the wrist's ray crosses the arm's reach, and the interval is
-	// never empty there
+	// Every row is measured only where the wrist's ray crosses the arm's
+	// reach, and the interval is never empty there
+	drawDirectRowLabel("directStage.plane");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	{
+		if (arm.depthHigh > 0.f)
+			drawDirectTextCell(locText(arm.bNearPlane ? "directStage.planeNear" : "directStage.planeFar"));
+		else
+			drawDirectValueCell(false, "", 0.f);
+	}
+	drawDirectRowLabel("directStage.planeDistance");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.depthHigh > 0.f, "%.2f", arm.planeDistance);
+	drawDirectRowLabel("directStage.wristDistance");
+	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+		drawDirectValueCell(arm.depthHigh > 0.f, "%.2f", arm.wristDepth);
 	drawDirectRowLabel("directStage.reachInterval");
 	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
 	{
@@ -1640,42 +1632,19 @@ void SettingsPanels::drawDirectArmChainReadout(const TrackingSectionContext& con
 		else
 			ImGui::TextDisabled("-");
 	}
-	drawDirectRowLabel("directStage.depthChosen");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectYesNoCell(arm.bDepthChosen);
-	drawDirectRowLabel("directStage.chosenDepth");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.chosenDepth);
-	drawDirectRowLabel("directStage.chosenCost");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.chosenCost);
-	// The miss is scored only against a seen elbow
-	drawDirectRowLabel("directStage.elbowMiss");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.bDepthChosen && arm.bElbowSeen, "%.1f", arm.chosenElbowPx);
-	drawDirectRowLabel("directStage.modelDepth");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.depthHigh > 0.f, "%+.2f", arm.modelDepthDelta);
-	drawDirectRowLabel("directStage.filteredDepth");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.bDepthChosen, "%.2f", arm.filteredDepth);
-	// The hand lift's wrist distance is zero without a lift
-	drawDirectRowLabel("directStage.liftDistance");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.pnpDistance > 0.f, "%.2f", arm.pnpDistance);
-	drawDirectRowLabel("directStage.liftDepth");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.pnpDistance > 0.f, "%.2f", arm.liftDepth);
-	// The scale is reported only for an arm the chain places, and before its
-	// first sample it is the avatar-to-user length ratio
-	drawDirectRowLabel("directStage.liftScale");
+	// The elbow sits by the rig's hint at weight 0 and along the forearm the
+	// camera sees at 1, easing between
+	drawDirectRowLabel("directStage.elbowSource");
 	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
 	{
-		ImGui::TableNextColumn();
-		if (arm.chain.valid)
-			ImGui::Text(locText("directStage.liftScaleFmt"), arm.pnpScale.scale, arm.pnpScale.sampleCount);
+		if (arm.depthHigh <= 0.f)
+			drawDirectValueCell(false, "", 0.f);
+		else if (arm.elbowDirectionWeight <= 0.f)
+			drawDirectTextCell(locText("directStage.elbowSourceHint"));
+		else if (arm.elbowDirectionWeight >= 1.f)
+			drawDirectTextCell(locText("directStage.elbowSourceLandmark"));
 		else
-			ImGui::TextDisabled("-");
+			drawDirectValueCell(true, locText("directStage.elbowSourceEasingFmt"), 100.f * arm.elbowDirectionWeight);
 	}
 	ImGui::EndTable();
 }

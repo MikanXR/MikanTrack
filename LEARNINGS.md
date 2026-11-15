@@ -609,6 +609,14 @@ One take and the arms only: the face, the blinks and the fingers are not compare
 
 Learned: a baseline that borrows a method's math and not its inputs measures neither. And a median hides what a viewer sees: the direct chain leads by half on the typical frame and not at all on the frames that look wrong.
 
+## 36. The wrist distance scorer retired for two depth planes
+
+The side-by-side video settled what the numbers had not. At desk distance a webcam's field of view leaves the hands a band about 10 cm deep, and an estimate inside that band bought less expression than XY and the fingers already gave. The scorer's cost was visible: a distance that jumped, and an elbow that followed it. Kalidokit's arm read as more natural on screen with a worse chain, because its joints stay inside limits.
+
+The direct solver now puts the wrist where its ray crosses a plane ahead of the shoulder, at 0.667 of the reach, or at 0.25 while the palm is at the head. The near test is a ratio of pixels against the ear separation, so no distance enters it. The first version compared the hand lift's distance with the head's and never fired: the two were 0.2 m apart on a hand touching the head. The elbow follows the image direction from the wrist to the body model's elbow, which holds even where the model has placed that elbow by guess.
+
+The scorer, its depth prior, its lift scale, the stereo-truth gate tool and the frozen copy the golden compared it with were deleted in the same change. The planes were judged by eye and not scored against the truth.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
