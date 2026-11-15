@@ -358,6 +358,13 @@ struct AvatarConfig
 // world. The neutral capture is the user's rest (sitting square, hands
 // resting), the zero every relative rotation is measured from, stored in the
 // camera-fixed frame at zero tilt.
+// How the direct solver sets the wrist's distance along its ray
+enum class eDirectWristDepth : int
+{
+	Solved= 0, // scored from the elbow, the hand lift and the model's depth
+	Planes= 1, // on one of two planes ahead of the shoulders
+};
+
 struct DirectConfig
 {
 	bool enabled= false;
@@ -366,6 +373,11 @@ struct DirectConfig
 	// The camera's downward pitch, degrees, positive looking down, set by
 	// the user alone (a level camera by default; nothing measures it)
 	float cameraTiltDegrees= 0.f;
+	// The wrist's distance, and the two planes' distances ahead of the
+	// shoulder as fractions of the arm's reach (shoulder to wrist, straight)
+	eDirectWristDepth wristDepth= eDirectWristDepth::Solved;
+	float nearPlaneReachFraction= 0.25f;
+	float farPlaneReachFraction= 0.667f;
 	bool neutralPresent= false;
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};

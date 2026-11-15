@@ -83,6 +83,17 @@ struct DirectRetargetConfig
 	// proportions, and the avatar's bones take the chain's directions
 	float userUpperArmLengthMeters= 0.42f;
 	float userForearmLengthMeters= 0.25f;
+	// The wrist's distance along its ray. Solved: scored from the elbow's
+	// reprojection, the hand lift and the model's depth. Planes: where the
+	// ray crosses a plane parallel to the shoulders, a fraction of the arm's
+	// reach toward the camera from the arm's shoulder, the near fraction
+	// with the palm at the head and the far one otherwise, capped at the
+	// reach, with the elbow on its bone circle where the forearm runs along
+	// the image line from the wrist to the body model's elbow, or nearest
+	// the rig's hint without one.
+	bool bWristDepthPlanes= false;
+	float nearPlaneReachFraction= 0.25f;
+	float farPlaneReachFraction= 0.667f;
 	// The rig's head trim, applied under the measured head the way the
 	// position retarget applies it
 	glm::vec3 headTrimRadians{0.f};
@@ -227,7 +238,10 @@ public:
 		{
 			ArmChain chain;
 			bool bHandSeen= false;  // the hand slot agreed with the body model's wrist
-			bool bElbowSeen= false; // the body model's elbow passed the visibility gate, clear of the edge band
+			// The body model's elbow is read: past the visibility gate and
+			// clear of the edge band for the solved distance, past the
+			// visibility bar alone for the planes' elbow direction
+			bool bElbowSeen= false;
 			bool bDepthChosen= false;
 			float depthLow= 0.f;  // the wrist distances the arm reaches along its ray
 			float depthHigh= 0.f;
@@ -238,6 +252,10 @@ public:
 			float chosenCost= 0.f;
 			float chosenElbowPx= 0.f; // the chosen elbow's miss from its ray
 			float filteredDepth= 0.f; // the chain's wrist distance after the depth filter
+			// On the depth planes: the arm is on the near one, and the
+			// plane's distance ahead of the shoulder as eased, avatar units
+			bool bNearPlane= false;
+			float planeDistance= 0.f;
 			PnpScale pnpScale;
 			bool bHandMeasured= false;
 			float twist= 0.f;
@@ -353,6 +371,14 @@ private:
 		// frame, before the depth filter: the smoothness term's anchor and a
 		// candidate of its own
 		float lastChosenDepth= 0.f;
+		// On the depth planes: the near plane is the one in force, and the
+		// plane's distance ahead of the shoulder as it eases between the two
+		bool bNearPlane= false;
+		bool bPlaneDistance= false;
+		float planeDistance= 0.f;
+		// and how far the elbow has eased from the rig's hint onto the body
+		// model's elbow direction, 0 to 1
+		float elbowDirectionWeight= 0.f;
 		// The hand lift's depth scale (see PnpScale): the ring of samples,
 		// and the median over them
 		std::array<float, kPnpScaleSamples> pnpScaleSamples{};
@@ -403,6 +429,9 @@ private:
 		bool bMeasured= false; // by the camera; the phone head never lands here
 		double solvedTimestampMs= -1.0;
 		glm::quat frame{1.f, 0.f, 0.f, 0.f};
+		// The head's centre and width in the image, from the ear pixels
+		glm::vec2 earMidPx{0.f};
+		float earSeparationPx= 0.f;
 		OneEuroFilterVec2 nosePixelFilter;
 		OneEuroFilterVec2 earPixelFilter[2];
 		OneEuroFilter depthFilter;

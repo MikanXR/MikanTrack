@@ -1605,12 +1605,153 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(o) the vec2 One Euro filter runs the scalar filter per component");
 	}
 
+	// (s) The depth planes: the wrist on its ray where it crosses the plane
+	// ahead of the shoulder, capped at the reach, the near plane with a small
+	// hand at the head, the far one otherwise, eased between, and the elbow
+	// along the body model's elbow direction in the image, or by the rig's
+	// hint without one
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		rig.config.bWristDepthPlanes= true;
+		rig.config.nearPlaneReachFraction= 0.25f;
+		rig.config.farPlaneReachFraction= 0.5f;
+		const float reach= kUpperArmLength + kForearmLength;
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		AvatarPose pose;
+		// The synthetic hand is a point at the wrist; this spreads its knuckle
+		// row so it has a size in the image, in head widths
+		float handSizeHeadWidths= 0.f;
+		auto run= [&](const User& user, int frames) {
+			const float earSeparationPx= glm::distance(project(camera, user.ear[0]), project(camera, user.ear[1]));
+			for (int repeat= 0; repeat < frames; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, repeat);
+				for (TrackedHand& hand : frame.hands)
+				{
+					const float half= 0.5f * handSizeHeadWidths * earSeparationPx / 1.2f;
+					hand.imagePoints[(int)eHandLandmark::INDEX_MCP].x+= half;
+					hand.imagePoints[(int)eHandLandmark::PINKY_MCP].x-= half;
+				}
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+
+		// A wrist truly on the far plane comes back where it is
+		User user= makeNeutralUser();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex]= user.shoulder[sideIndex] + glm::vec3(0.5f * reach, 0.f, -0.1f);
+		run(user, 6);
+		bool bOnPlane= true;
+		bool bLengths= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bOnPlane&= chain.valid && glm::length(chain.wrist - user.wrist[sideIndex]) < 2e-3f &&
+				!solver.getSolveState().arms[sideIndex].bNearPlane;
+			bLengths&= nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f) &&
+				nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
+		}
+		check(bOnPlane, "(s) a wrist on the far plane is solved where its ray crosses the plane");
+		check(bLengths, "(s) the chain on a plane keeps both bone lengths");
+
+		// With the body model's elbow unseen the elbow sits by the rig's hint.
+		// A seen elbow turned about the shoulder-to-wrist line from there
+		// turns the chain's elbow onto its image direction from the wrist,
+		// and losing it eases the elbow back.
+		user.bElbowSeen[0]= user.bElbowSeen[1]= false;
+		run(user, 12);
+		glm::vec3 hintElbow[2];
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			hintElbow[sideIndex]= chain.elbow;
+			const glm::vec3 axis= glm::normalize(chain.wrist - chain.shoulder);
+			const glm::vec3 centre= chain.shoulder + axis * glm::dot(chain.elbow - chain.shoulder, axis);
+			const float turn= glm::radians(sideIndex == 0 ? 40.f : -40.f);
+			user.elbow[sideIndex]= centre + glm::angleAxis(turn, axis) * (chain.elbow - centre);
+			user.bElbowSeen[sideIndex]= true;
+		}
+		run(user, 15);
+		bool bFollows= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const glm::vec2 seen= glm::normalize(project(camera, chain.elbow) - project(camera, chain.wrist));
+			const glm::vec2 wanted=
+				glm::normalize(project(camera, user.elbow[sideIndex]) - project(camera, user.wrist[sideIndex]));
+			bFollows&= acosf(std::clamp(glm::dot(seen, wanted), -1.f, 1.f)) < glm::radians(3.f) &&
+				glm::length(chain.elbow - hintElbow[sideIndex]) > 0.02f &&
+				nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f) &&
+				nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
+		}
+		check(bFollows, "(s) a seen elbow turns the chain's elbow onto its image direction from the wrist");
+		user.bElbowSeen[0]= user.bElbowSeen[1]= false;
+		run(user, 12);
+		bool bBackToHint= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bBackToHint&= glm::length(solver.getArmChain(sideIndex).elbow - hintElbow[sideIndex]) < 1e-3f;
+		check(bBackToHint, "(s) an elbow the body model loses eases back to the rig's hint");
+
+		// A plane further ahead than the arm reaches straightens the arm
+		rig.config.farPlaneReachFraction= 1.5f;
+		run(user, 12);
+		bool bCapped= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bCapped&= chain.valid && nearlyEqual(glm::length(chain.wrist - chain.shoulder), reach, 0.01f * reach) &&
+				glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+		}
+		check(bCapped, "(s) a plane crossing out of reach is capped at a straight arm on the wrist's pixel");
+		rig.config.farPlaneReachFraction= 0.5f;
+
+		// The hand beside the head takes the near plane, by an ease
+		const glm::vec3 headCentre= 0.5f * (user.ear[0] + user.ear[1]);
+		auto besideHead= [&](float headWidths) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex]= headCentre + glm::vec3(0.f, (sideIndex == 0 ? 1.f : -1.f) * headWidths * 0.15f, 0.f);
+		};
+		// long enough for the distance to ease back from the plane out of reach
+		run(user, 45);
+		besideHead(0.8f);
+		run(user, 2);
+		const DirectRetarget::SolveState::Arm& left= solver.getSolveState().arms[0];
+		check(left.bNearPlane && left.planeDistance < 0.5f * reach - 1e-4f && left.planeDistance > 0.25f * reach + 1e-4f,
+			  "(s) a hand at the head switches to the near plane and eases toward it");
+		run(user, 12);
+		check(left.bNearPlane && nearlyEqual(left.planeDistance, 0.25f * reach, 1e-4f),
+			  "(s) the eased distance settles on the near plane");
+
+		// Between the enter and leave bars the near plane holds; past the
+		// leave bar the far one returns
+		besideHead(1.55f);
+		run(user, 3);
+		const bool bHeld= left.bNearPlane;
+		besideHead(2.f);
+		run(user, 12);
+		check(bHeld && !left.bNearPlane && nearlyEqual(left.planeDistance, 0.5f * reach, 1e-4f),
+			  "(s) the near plane holds inside the leave bar and gives way to the far one past it");
+
+		// A hand over the head that is large in the image is ahead of the
+		// face, and stays far
+		handSizeHeadWidths= 1.f;
+		besideHead(0.8f);
+		run(user, 6);
+		check(!left.bNearPlane, "(s) a hand over the head that is large in the image stays on the far plane");
+	}
+
 	// (i) The config section round-trips through the project JSON
 	{
 		AppConfig config;
 		config.direct.enabled= true;
 		config.direct.cameraIndex= 2;
 		config.direct.cameraTiltDegrees= 12.5f;
+		config.direct.wristDepth= eDirectWristDepth::Planes;
+		config.direct.nearPlaneReachFraction= 0.2f;
+		config.direct.farPlaneReachFraction= 0.7f;
 		config.direct.neutralPresent= true;
 		config.direct.neutralTorso= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
 		config.direct.neutralShoulderMidpoint= glm::vec3(-0.8f, 0.01f, -0.2f);
@@ -1625,6 +1766,9 @@ static int runDirectRetargetTest(const TestArgs&)
 				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f),
 			  "(i) the direct section round-trips through the project JSON");
 		check(!direct.neutralFacePresent, "(i) a neutral captured with the face unseen loads with no face neutral");
+		check(direct.wristDepth == eDirectWristDepth::Planes && nearlyEqual(direct.nearPlaneReachFraction, 0.2f, 1e-6f) &&
+				  nearlyEqual(direct.farPlaneReachFraction, 0.7f, 1e-6f),
+			  "(i) the wrist depth mode and the planes' fractions round-trip through the project JSON");
 
 		// The face neutral rides the neutral capture behind its own flag
 		config.direct.neutralFacePresent= true;
@@ -1647,10 +1791,16 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f) &&
 				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f),
 			  "(i) a fresh config has a level camera, with or without a direct section");
+		check(fresh.direct.wristDepth == eDirectWristDepth::Solved && nearlyEqual(fresh.direct.nearPlaneReachFraction, 0.25f, 1e-6f) &&
+				  nearlyEqual(fresh.direct.farPlaneReachFraction, 0.667f, 1e-6f),
+			  "(i) a project without the keys solves the wrist's distance, with the planes at their defaults");
 
 		AvatarRigSettings rig;
 		rig.sides[1].curlGain= 1.5f;
 		const DirectRetargetConfig solverConfig= makeDirectRetargetConfig(loaded, rig);
+		check(solverConfig.bWristDepthPlanes && nearlyEqual(solverConfig.nearPlaneReachFraction, 0.2f, 1e-6f) &&
+				  nearlyEqual(solverConfig.farPlaneReachFraction, 0.7f, 1e-6f),
+			  "(i) makeDirectRetargetConfig carries the wrist depth mode and the planes onto the solver");
 		check(nearlyEqual(solverConfig.cameraTiltRadians, glm::radians(12.5f), 1e-5f) && solverConfig.neutral.present &&
 				  nearlyEqual(solverConfig.sides[1].curlGain, 1.5f, 1e-5f) &&
 				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f) &&

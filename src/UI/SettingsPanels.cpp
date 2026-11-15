@@ -1407,6 +1407,40 @@ void SettingsPanels::drawDirectTiltControl(const TrackingSectionContext& context
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
 }
 
+void SettingsPanels::drawDirectWristDepthControls(const TrackingSectionContext& context)
+{
+	DirectConfig& direct= context.config->direct;
+	bool bChanged= false;
+
+	const char* modeKeys[]= {"trackingPanel.directDepthSolved", "trackingPanel.directDepthPlanes"};
+	if (ImGui::BeginCombo(locLabel("trackingPanel.directDepth"), locText(modeKeys[(int)direct.wristDepth])))
+	{
+		for (int mode= 0; mode < 2; ++mode)
+		{
+			if (ImGui::Selectable(locText(modeKeys[mode]), (int)direct.wristDepth == mode))
+			{
+				direct.wristDepth= (eDirectWristDepth)mode;
+				bChanged= true;
+			}
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.directDepthTooltip"));
+
+	if (direct.wristDepth == eDirectWristDepth::Planes)
+	{
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directFarPlane"), &direct.farPlaneReachFraction, 0.1f, 1.f,
+									  "%.2f");
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directFarPlaneTooltip"));
+		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.directNearPlane"), &direct.nearPlaneReachFraction, 0.f,
+									  1.f, "%.2f");
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.directNearPlaneTooltip"));
+	}
+
+	if (bChanged)
+		commitTrackingConfigChange(context);
+}
+
 void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& context)
 {
 	DirectConfig& direct= context.config->direct;

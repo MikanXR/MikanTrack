@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/geometric.hpp"
@@ -107,6 +108,31 @@ constexpr float kLiftDepthSigmaFraction= 0.15f;
 constexpr float kPnpScaleMin= 0.5f;
 constexpr float kPnpScaleMax= 2.0f;
 constexpr float kPnpSampleMaxReach= 0.98f;
+// The depth planes. The near plane is in force while the palm's centre sits
+// within the enter bar of the head's centre in the image and the hand is no
+// larger in the image than its bar, both in head widths (the ear pixels'
+// separation), and until either passes its leave bar. Everything is a ratio
+// of pixels, so no distance and no calibration enters: a hand on the head
+// reads 0.9 to 1.4 head widths away and 0.55 to 0.7 in size, a reach at the
+// camera 1.5 and up away and 0.8 to 1.25 in size. The plane's distance and
+// the elbow's source ease over the blend time.
+constexpr float kNearEnterHeadWidths= 1.4f;
+constexpr float kNearLeaveHeadWidths= 1.7f;
+constexpr float kNearEnterHandSize= 0.75f;
+constexpr float kNearLeaveHandSize= 0.9f;
+constexpr float kPlaneBlendSeconds= 0.25f;
+// The hand's size in the image: the wrist to the middle finger's base, or
+// the knuckle row's width times this, whichever is longer, so a palm seen
+// end-on still has a size
+constexpr float kKnuckleRowToPalmLength= 1.2f;
+// The planes' elbow follows the image direction from the wrist to the body
+// model's elbow, which holds for an elbow below the frame placed on the
+// forearm where it leaves the image. The direction's sigma against the weak
+// pull to the rig's hint that picks between the two elbows sharing it, and
+// the shortest wrist-to-elbow span that gives a direction, in shoulder widths
+constexpr float kElbowDirectionSigmaRadians= 15.f * glm::pi<float>() / 180.f;
+constexpr float kElbowDirectionMinShoulderWidths= 0.25f;
+constexpr int kElbowDirectionSamples= 72;
 // A raw palm this far from the filtered one is held out as the lift's
 // mirror until it persists this many consecutive frames
 constexpr float kPalmJumpRadians= 60.f * glm::pi<float>() / 180.f;
@@ -693,6 +719,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				if (frameFromForwardAndLeft(forward, left, frame))
 				{
 					m_head.frame= frame;
+					m_head.earMidPx= 0.5f * (leftEarPx + rightEarPx);
+					m_head.earSeparationPx= glm::distance(leftEarPx, rightEarPx);
 					m_head.bMeasured= true;
 					m_head.solvedTimestampMs= timestampMs;
 				}
@@ -839,7 +867,11 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		{
 			arm.wristPixelFilter.reset();
 		}
-		const bool bElbowSeen= usable(elbowIndex) && !inEdgeBand(landmarkPx(elbowIndex));
+		// The planes read the elbow as an image direction, which the edge
+		// band does not spoil, so the visibility bar alone gates it there
+		const bool bElbowSeen= config.bWristDepthPlanes
+			? body.valid && body.isProvided(elbowIndex) && body.visibility[elbowIndex] >= kMinVisibility
+			: usable(elbowIndex) && !inEdgeBand(landmarkPx(elbowIndex));
 		glm::vec2 elbowPx(0.f);
 		if (bElbowSeen)
 			elbowPx= arm.elbowPixelFilter.filter(landmarkPx(elbowIndex), dtSeconds);
@@ -893,7 +925,155 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				bInterval= depthHigh >= depthLow;
 			}
 
-			if (bInterval)
+			if (bInterval && config.bWristDepthPlanes)
+			{
+				// Near or far, held through a frame with no hand or no head
+				if (bHandSeen && bHeadUsable && m_head.earSeparationPx > 1.f)
+				{
+					auto handPx= [&](eHandLandmark landmark) {
+						return glm::vec2(hand.imagePoints[(int)landmark].x, hand.imagePoints[(int)landmark].y);
+					};
+					const glm::vec2 palmPx= handPx(eHandLandmark::MIDDLE_MCP);
+					const float awayHeadWidths= glm::distance(palmPx, m_head.earMidPx) / m_head.earSeparationPx;
+					// A hand well ahead of the face is larger than one on it
+					const float handSize=
+						std::max(glm::distance(handPx(eHandLandmark::WRIST), palmPx),
+								 kKnuckleRowToPalmLength *
+									 glm::distance(handPx(eHandLandmark::INDEX_MCP), handPx(eHandLandmark::PINKY_MCP))) /
+						m_head.earSeparationPx;
+					arm.bNearPlane= arm.bNearPlane
+						? awayHeadWidths <= kNearLeaveHeadWidths && handSize <= kNearLeaveHandSize
+						: awayHeadWidths <= kNearEnterHeadWidths && handSize <= kNearEnterHandSize;
+				}
+				const float targetDistance=
+					(arm.bNearPlane ? config.nearPlaneReachFraction : config.farPlaneReachFraction) * reach;
+				if (!arm.bPlaneDistance || !bHadChain)
+				{
+					arm.planeDistance= targetDistance;
+				}
+				else
+				{
+					const float span=
+						std::max(std::fabs(config.farPlaneReachFraction - config.nearPlaneReachFraction), 0.1f) * reach;
+					const float maxStep= span * dtSeconds / kPlaneBlendSeconds;
+					arm.planeDistance+= std::clamp(targetDistance - arm.planeDistance, -maxStep, maxStep);
+				}
+				arm.bPlaneDistance= true;
+
+				// Where the wrist's ray crosses the plane, a vertical one
+				// facing the camera, kept within what the arm reaches
+				glm::vec3 towardCamera(-cameraForward.x, -cameraForward.y, 0.f);
+				towardCamera= glm::dot(towardCamera, towardCamera) > 1e-6f ? glm::normalize(towardCamera) : -cameraForward;
+				const float rayAlong= glm::dot(wristRay, towardCamera);
+				float depth= depthHigh;
+				if (rayAlong < -1e-3f)
+					depth= (arm.planeDistance + glm::dot(shoulder, towardCamera)) / rayAlong;
+				depth= std::clamp(depth, depthLow, depthHigh);
+				// and nearer the camera until the arm can fold that far
+				for (int step= 0; step < 16 && depth > depthLow && glm::length(wristRay * depth - shoulder) < minReach;
+					 ++step)
+				{
+					depth= std::max(depthLow, depth - 0.05f * reach);
+				}
+
+				const glm::vec3 wrist= wristRay * depth;
+				arm.lastChosenDepth= depth;
+				armState.depthLow= depthLow;
+				armState.depthHigh= depthHigh;
+				armState.bDepthChosen= true;
+				armState.chosenDepth= depth;
+				armState.filteredDepth= depth;
+				armState.bNearPlane= arm.bNearPlane;
+				armState.planeDistance= arm.planeDistance;
+				arm.chain.shoulder= shoulder;
+				arm.chain.wrist= wrist;
+				// The elbow nearest the rig's hint, turned about the
+				// shoulder-to-wrist line onto the body model's elbow direction
+				// as that eases in
+				const glm::vec3 hintTarget= shoulder + sideConfig.elbowHintOffset;
+				glm::vec3 elbow= solveElbow(shoulder, wrist, upperArm, forearm, false, glm::vec3(0.f), 0.f, hintTarget, 0.f);
+				const glm::vec2 elbowSpanPx= elbowPx - wristPx;
+				const bool bElbowDirection= bElbowSeen && shoulderWidthPx > 0.f &&
+					glm::length(elbowSpanPx) >= kElbowDirectionMinShoulderWidths * shoulderWidthPx;
+				const float weightTarget= bElbowDirection ? 1.f : 0.f;
+				if (!bHadChain)
+				{
+					arm.elbowDirectionWeight= weightTarget;
+				}
+				else
+				{
+					const float maxStep= dtSeconds / kPlaneBlendSeconds;
+					arm.elbowDirectionWeight+= std::clamp(weightTarget - arm.elbowDirectionWeight, -maxStep, maxStep);
+				}
+				const glm::vec3 span= wrist - shoulder;
+				const float spanLength= glm::length(span);
+				if (bElbowDirection && arm.elbowDirectionWeight > 0.f && spanLength > 1e-4f)
+				{
+					// The elbow's circle: where the two bone spheres meet
+					const glm::vec3 axis= span / spanLength;
+					const float along= (upperArm * upperArm - forearm * forearm + spanLength * spanLength) / (2.f * spanLength);
+					const float radiusSquared= upperArm * upperArm - along * along;
+					const glm::vec3 centre= shoulder + axis * along;
+					const glm::vec3 fromCentre= elbow - centre;
+					if (radiusSquared > 1e-6f && glm::dot(fromCentre, fromCentre) > 1e-8f)
+					{
+						const float radius= sqrtf(radiusSquared);
+						const glm::vec3 u= glm::normalize(fromCentre); // the hint's elbow, angle zero
+						const glm::vec3 v= glm::cross(axis, u);
+						const glm::quat camFromWorld= glm::inverse(worldFromCam);
+						const glm::vec2 direction= glm::normalize(elbowSpanPx);
+						auto cost= [&](float angle) {
+							const glm::vec3 candidate= centre + radius * (cosf(angle) * u + sinf(angle) * v);
+							const glm::vec3 inCamera= camFromWorld * candidate;
+							if (inCamera.z <= 1e-3f)
+								return std::numeric_limits<float>::max();
+							const glm::vec2 px(cameraModel.fx * inCamera.x / inCamera.z + cameraModel.cx,
+											   cameraModel.fy * inCamera.y / inCamera.z + cameraModel.cy);
+							const glm::vec2 seen= px - wristPx;
+							const float seenLength= glm::length(seen);
+							const float off=
+								seenLength > 1e-3f ? acosf(std::clamp(glm::dot(seen / seenLength, direction), -1.f, 1.f))
+												   : glm::pi<float>();
+							const float ratio= off / kElbowDirectionSigmaRadians;
+							const glm::vec3 fromHint= candidate - hintTarget;
+							return ratio * ratio + glm::dot(fromHint, fromHint) / (reach * reach);
+						};
+						float bestAngle= 0.f;
+						float bestCost= cost(0.f);
+						float step= glm::two_pi<float>() / (float)kElbowDirectionSamples;
+						for (int sample= 1; sample < kElbowDirectionSamples; ++sample)
+						{
+							// Angles in (-pi, pi], so the ease below turns the short way
+							const float angle= -glm::pi<float>() + step * (float)sample;
+							const float sampleCost= cost(angle);
+							if (sampleCost < bestCost)
+							{
+								bestCost= sampleCost;
+								bestAngle= angle;
+							}
+						}
+						for (int refine= 0; refine < 4; ++refine)
+						{
+							step*= 0.5f;
+							for (const float angle : {bestAngle - step, bestAngle + step})
+							{
+								const float sampleCost= cost(angle);
+								if (sampleCost < bestCost)
+								{
+									bestCost= sampleCost;
+									bestAngle= angle;
+								}
+							}
+						}
+						const float eased= bestAngle * arm.elbowDirectionWeight;
+						elbow= centre + radius * (cosf(eased) * u + sinf(eased) * v);
+					}
+				}
+				arm.chain.elbow= elbow;
+				arm.chain.valid= true;
+				arm.solvedTimestampMs= timestampMs;
+			}
+			else if (bInterval)
 			{
 				// The hand lift's wrist distance, scored in the avatar's units
 				// and measured against the chain
@@ -1043,6 +1223,9 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			arm.wristPixelFilter.reset();
 			arm.elbowPixelFilter.reset();
 			arm.depthFilter.reset();
+			arm.bNearPlane= false;
+			arm.bPlaneDistance= false;
+			arm.elbowDirectionWeight= 0.f;
 			continue;
 		}
 		armState.chain= arm.chain;

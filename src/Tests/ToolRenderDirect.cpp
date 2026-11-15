@@ -23,7 +23,7 @@
 // so the sequence lines up with the raw frames for a side-by-side video.
 //
 //   --render-direct <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>]
-//       [forearm=<meters>] [view=front]
+//       [forearm=<meters>] [view=front] [depth=solved|planes] [near=<fraction>] [far=<fraction>]
 //
 // The take need not be a direct-mode recording: the camera given (the first
 // with body pose by default) becomes the direct camera. vrm names the avatar
@@ -31,6 +31,8 @@
 // direct tilt and forearm length. view=front draws the avatar from a camera
 // in front of it that rides with its hips, in place of the tracking camera,
 // so the arms stay in the picture when the user's hands leave the frame.
+// depth sets the wrist's distance mode in place of the recorded one, and
+// near and far the depth planes' fractions of the reach.
 namespace
 {
 constexpr const char* kTag= "render-direct";
@@ -50,8 +52,26 @@ int runRenderDirectTool(const TestArgs& args)
 	float tiltDegrees= 0.f;
 	float forearmMeters= 0.f;
 	bool bFrontView= false;
+	std::string depthArg;
+	float nearFraction= -1.f;
+	float farFraction= -1.f;
 	for (const std::string& arg : args)
 	{
+		if (arg.rfind("depth=", 0) == 0)
+		{
+			depthArg= arg.substr(6);
+			continue;
+		}
+		if (arg.rfind("near=", 0) == 0)
+		{
+			nearFraction= (float)atof(arg.substr(5).c_str());
+			continue;
+		}
+		if (arg.rfind("far=", 0) == 0)
+		{
+			farFraction= (float)atof(arg.substr(4).c_str());
+			continue;
+		}
 		if (arg == "view=front")
 		{
 			bFrontView= true;
@@ -73,10 +93,11 @@ int runRenderDirectTool(const TestArgs& args)
 		else
 			requestedCamera= atoi(arg.c_str());
 	}
-	if (recordingPath.empty() || outDirArg.empty())
+	if (recordingPath.empty() || outDirArg.empty() || (!depthArg.empty() && depthArg != "solved" && depthArg != "planes"))
 	{
 		MIKAN_LOG_ERROR(kTag) << "Usage: --render-direct <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] "
-								 "[tilt=<degrees>] [forearm=<meters>] [view=front]";
+								 "[tilt=<degrees>] [forearm=<meters>] [view=front] [depth=solved|planes] "
+								 "[near=<fraction>] [far=<fraction>]";
 		return 1;
 	}
 	const std::filesystem::path outDir= PathUtils::utf8ToPath(outDirArg);
@@ -107,6 +128,12 @@ int runRenderDirectTool(const TestArgs& args)
 		config.direct.cameraTiltDegrees= tiltDegrees;
 	if (forearmMeters > 0.f)
 		config.body.forearmLengthMeters= forearmMeters;
+	if (!depthArg.empty())
+		config.direct.wristDepth= depthArg == "planes" ? eDirectWristDepth::Planes : eDirectWristDepth::Solved;
+	if (nearFraction >= 0.f)
+		config.direct.nearPlaneReachFraction= nearFraction;
+	if (farFraction >= 0.f)
+		config.direct.farPlaneReachFraction= farFraction;
 	if (!vrmArg.empty())
 		config.avatar.modelPath= vrmArg;
 	if (config.avatar.modelPath.empty())
@@ -173,6 +200,10 @@ int runRenderDirectTool(const TestArgs& args)
 	int framesRendered= 0;
 	int framesMissing= 0;
 	int framesUnposed= 0;
+	// On the depth planes: the raw frames each arm spent on the near plane,
+	// and the first of them, by the count of raw frames rendered
+	int nearFrames[2]= {0, 0};
+	int firstNearFrame[2]= {-1, -1};
 	{
 		Scene3dPanel scene;
 		scene.setAvatar(loaded.model, skeleton, 1);
@@ -210,6 +241,13 @@ int runRenderDirectTool(const TestArgs& args)
 				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
 				stage.solveDirect(cameraInput, cameraModel, noPhoneHead, cameraInput.timestampMs, result);
 
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					if (!result.directState.arms[sideIndex].bNearPlane)
+						continue;
+					if (nearFrames[sideIndex]++ == 0)
+						firstNearFrame[sideIndex]= framesRendered;
+				}
 				const glm::mat4 cameraToWorld=
 					DirectRetarget::makeCameraToWorld(*skeleton, result.pose, result.directState);
 				scene.setAvatarPose(&result.pose);
@@ -259,11 +297,16 @@ int runRenderDirectTool(const TestArgs& args)
 	MIKAN_LOG_INFO(kTag) << recordingPath << ": camera " << cameraIndex << ", " << framesRendered << " frames to "
 						 << outDir << " (" << framesUnposed << " with no camera result, " << framesMissing
 						 << " raw frames missing)";
+	if (config.direct.wristDepth == eDirectWristDepth::Planes)
+	{
+		MIKAN_LOG_INFO(kTag) << "near plane: left on " << nearFrames[0] << " frames from frame " << firstNearFrame[0]
+							 << ", right on " << nearFrames[1] << " from frame " << firstNearFrame[1];
+	}
 	return framesRendered > 0 ? 0 : 1;
 }
 } // namespace
 
 MIKAN_REGISTER_TEST("--render-direct",
 					"Render the avatar a direct project would show for every raw frame of a take, from the camera "
-					"(<recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>] [forearm=<meters>] [view=front])",
+					"(<recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>] [forearm=<meters>] [view=front] [depth=solved|planes] [near=<fraction>] [far=<fraction>])",
 					eTestCategory::Tool, runRenderDirectTool);

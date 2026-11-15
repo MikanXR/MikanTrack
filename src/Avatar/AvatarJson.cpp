@@ -54,6 +54,8 @@ json armToJson(const DirectRetarget::SolveState::Arm& arm)
 		{"chosenCost", arm.chosenCost},
 		{"chosenElbowPx", arm.chosenElbowPx},
 		{"filteredDepth", arm.filteredDepth},
+		{"nearPlane", arm.bNearPlane},
+		{"planeDistance", arm.planeDistance},
 		{"pnpScale", arm.pnpScale.scale},
 		{"pnpScaleSamples", arm.pnpScale.sampleCount},
 		{"handMeasured", arm.bHandMeasured},

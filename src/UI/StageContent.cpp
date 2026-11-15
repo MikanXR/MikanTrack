@@ -240,6 +240,7 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			SettingsPanels::drawDirectEnableControl(m_tracking);
 			SettingsPanels::drawDirectTiltControl(m_tracking);
+			SettingsPanels::drawDirectWristDepthControls(m_tracking);
 			// The proportions the arm chain and the head are solved with
 			ImGui::SeparatorText(locText("directStage.bodySection"));
 			SettingsPanels::drawBodyDimensionControls(m_tracking);
