@@ -109,7 +109,7 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--export-marker`: writes + opens the printable origin Aruco marker PNG
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
 - `--gate-wholebody`: the whole-body model's face and hand blocks on one camera's raw frames, at every frame and at the live divider: face point jitter, the face shape ratios and blinks against the phone's face sidecar, the blink evaluation's face model candidates found in `models/`, the body model's hands and the hand slot's side against the stereo rig's triangulated hands, and the hand slots the direct solver turns away on the other arm's wrist, split by what the hands were doing and what the slot was (`labels` runs that report alone)
-- `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
+- `--replay-bodypose <recording.jsonl> [cameraIndex] [rtmpose|rtmw3d] [divider=<n>]`: re-run body pose over a recording's raw frames, on the recorded backend or a named one. `divider` runs the models every nth frame as the live stage does, and the report counts the model frames the person was lost on and the longest stage time
 - `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
 - `--replay-extrinsics`: A/B a candidate extrinsics config against a recording
