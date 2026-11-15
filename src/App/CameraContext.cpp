@@ -31,6 +31,7 @@ CameraContext::~CameraContext()= default;
 
 bool CameraContext::fetchPreviewFrame(VisionPreviewFrame& outFrame)
 {
+	MIKAN_PROFILE_FUNCTION();
 	std::lock_guard<std::mutex> lock(m_previewMutex);
 	if (!m_bPreviewFresh)
 		return false;

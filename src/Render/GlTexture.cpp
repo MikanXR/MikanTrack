@@ -1,6 +1,7 @@
 #include "GlTexture.h"
 #include "GlUtils.h"
 #include "Logger.h"
+#include "Profiler.h"
 
 #include "GL/glew.h"
 
@@ -84,6 +85,7 @@ void GlTexture::dispose()
 
 void GlTexture::uploadBGR(const cv::Mat& bgr)
 {
+	MIKAN_PROFILE_FUNCTION();
 	if (bgr.empty() || bgr.type() != CV_8UC3)
 	{
 		MIKAN_LOG_ERROR("GlTexture::uploadBGR") << "Expected a non-empty CV_8UC3 (BGR) mat";
