@@ -147,6 +147,8 @@ Application code uses the macros in `src/Utility/Profiler.h` and `src/Render/Pro
 
 What Tracy does not show is why the GPU took as long as it did. For that, log the GPU beside the run with `nvidia-smi dmon`, which prints utilisation, clocks, power and temperature each second, or take a PIX timing capture, which shows the D3D12 queue DirectML runs on.
 
+OpenCV's parallel loops are capped at 4 threads at startup (`src/main.cpp`), since uncapped they split each frame's remap and conversions across every core and spin the worker pool between calls. Setting `OPENCV_FOR_THREADS_NUM` before launch replaces the cap, which is how a capture compares thread counts.
+
 ## Capture timing
 
 The hitch watchdog only speaks when an iteration overruns; the steady-state cost of each capture step is measured on every frame. `CameraContext::process` (`src/App/CameraContext.cpp`) laps the steady clock between its steps and publishes them on the per-camera result as `TrackingFrameResult::captureTimings`:
