@@ -310,7 +310,7 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 	const json& bp= j.value("bodyPose", json::object());
 	profile.bodyPose.enabled= bp.value("enabled", false);
 	profile.bodyPose.backend= bp.value("backend", "rtmpose");
-	profile.bodyPose.poseFrameDivider= bp.value("poseFrameDivider", 2);
+	profile.bodyPose.poseFrameDivider= bp.value("poseFrameDivider", 1);
 	profile.bodyPose.detectorIntervalFrames= bp.value("detectorIntervalFrames", 20);
 
 	const json& lift= j.value("liftDepthScale", json::array());

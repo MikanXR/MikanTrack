@@ -625,6 +625,27 @@ The cause was the drift guard. Every 20 model frames the tracker took the person
 
 The detector's box is now scored against the tracked one before it is used, on the divided-out frame after the model frame, where the landmark model is idle. Replayed at the live cadence the same take loses the person on no model frame, and no frame's stage time passes 26 ms. Scoring it on the model frame itself would have cost about 41 ms against a 32 ms camera period.
 
+## 38. The body model on every frame: it fits a 30 fps period, and both models run faster for it
+
+On the one-camera project the avatar's elbows, torso and head read as choppy beside a wrist that moved smoothly. The wrist comes from the hand model at 30 Hz, and the rest from the whole-body model, which ran every other frame. Two Tracy captures of the same project, one at each divider:
+
+| Zone | Divider 2, p50 | Divider 1, p50 | Divider 1, max |
+|---|---|---|---|
+| `RtmPoseModel::estimate` | 15.8 ms | 10.7 ms | 13.3 ms |
+| `HandLandmarkModel::estimate` | 1.8 ms | 1.2 ms | 2.3 ms |
+| Camera process, one model run | 21 ms | 15.6 ms | 19 ms |
+| Camera process, challenge frame | | 28 ms | 31.4 ms |
+
+- At a divider of 1 the loop held 30.0 fps over 1216 frames, and no frame passed the 32 ms camera period. The choppiness went.
+
+- The models ran a third faster with the GPU busy on every frame. GPU clocks were not logged, so power management is the likely cause and not a measured one.
+
+- The challenge frame, one in 20, runs the landmark model twice and peaked 0.7 ms inside the period. At the divider 2 capture's model speed it would not have fit.
+
+- In both captures about every 12th camera frame arrived 46 ms after the one before, behind frames of ordinary length. Where that comes from was not looked at.
+
+Learned: the divider was set when the model was measured at 18 to 24 ms, and nobody had measured the frame it was protecting. A cadence chosen to save time can cost the speed it was saving.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.

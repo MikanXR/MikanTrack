@@ -122,7 +122,7 @@ The stage is opt-in per camera via `BodyPoseCameraConfig` on `CameraProfile` (`s
 
 - `bodyPose.enabled` (default false)
 - `bodyPose.backend` (default `rtmpose`, or `rtmw3d`)
-- `bodyPose.poseFrameDivider` (default 2)
+- `bodyPose.poseFrameDivider` (default 1, written into the project file, so a project saved under an earlier default keeps the value it has)
 - `bodyPose.detectorIntervalFrames` (default 20)
 
 Cameras with the stage disabled pay nothing. The person detector only fires on cameras that see the user upright, so it stays off for overhead cameras.

@@ -27,7 +27,7 @@ struct BodyPoseTrackerConfig
 {
 	eBodyPoseBackend backend= eBodyPoseBackend::RtmPoseBody;
 	// Models run every Nth processed frame
-	int frameDivider= 2;
+	int frameDivider= 1;
 	// Re-run the person detector every Nth MODEL frame no matter how
 	// confident the landmark model is. Without this the person box is only
 	// ever rebuilt from the previous keypoints, so a drifting or wrongly

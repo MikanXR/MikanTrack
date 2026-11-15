@@ -195,7 +195,7 @@ struct BodyPoseCameraConfig
 	// per keypoint). See eBodyPoseBackend.
 	std::string backend= "rtmpose";
 	// Pose models run every Nth frame on this camera
-	int poseFrameDivider= 2;
+	int poseFrameDivider= 1;
 	// Rebuild the region of interest from the image every Nth model frame,
 	// regardless of model confidence
 	int detectorIntervalFrames= 20;

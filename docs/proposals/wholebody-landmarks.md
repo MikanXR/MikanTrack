@@ -26,7 +26,7 @@ The model already computes these points. Carrying them costs no inference. What 
 
 - Blinks are a requirement of the `webcam.*` source. Whether they need a second, face-only model or the whole-body face points are enough is decided by measurement (piece 4b). Both face model candidates are run, and they are measured beside the whole-body points on the same take.
 
-- The blink evaluation measures every candidate at two cadences, every camera frame and the live `poseFrameDivider`. At the default divider of 2 a 30 Hz webcam samples the eyes at 15 Hz, where a fast blink is one or two samples. The cadence a face model runs at is decided at the 4b review stop from those numbers.
+- The blink evaluation measures every candidate at two cadences, every camera frame and the live `poseFrameDivider`. At a divider of 2 a 30 Hz webcam samples the eyes at 15 Hz, where a fast blink is one or two samples. The cadence a face model runs at is decided at the 4b review stop from those numbers.
 
 - The Auto profile falls back to `webcam.*` when the phone is not tracked (piece 5). On the mouth, Auto combines the webcam's shape and the microphone's with max, in the manner of `max(webcam.jawOpen, viseme.aa)`. That is a default: how the sources combine is the user's choice through their own profile.
 
