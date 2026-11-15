@@ -1,10 +1,12 @@
-"""Tile a take's raw frames, the --render-direct images and the Kalidokit page's images into one video.
+"""Tile a take's raw frames and rendered avatar sequences into one video.
 
-  python make_video.py <recording_frames_dir> <cameraIndex> <mikan_dir> <kalidokit_dir> <out.mp4> [fps]
+  python make_video.py <recording_frames_dir> <cameraIndex> <out.mp4> <fps> <label>=<dir>[,mirror] ...
 
-One row of three panels per raw frame that all three have: the camera, MikanTrack's direct retarget, and
-Kalidokit. Kalidokit's avatar is a mirror of the user, so the camera and the MikanTrack panels are flipped
-to read the same way round. Needs ffmpeg on the path.
+The camera is the first panel, then one panel per <label>=<dir> of frame_<frameIndex>.jpg images, as
+--render-direct and the Kalidokit page write them. Up to three panels sit in one row and four in a square.
+Kalidokit's avatar is a mirror of the user, so the camera is flipped to read the same way round, and so
+is a panel given with ,mirror, which a --render-direct sequence needs. Only the frames every panel has
+are written. Needs ffmpeg on the path.
 """
 
 import glob
@@ -16,8 +18,7 @@ import sys
 import cv2
 import numpy as np
 
-frames_dir, camera, mikan_dir, kalidokit_dir, out_path = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
-fps = float(sys.argv[6]) if len(sys.argv) > 6 else 30.0
+frames_dir, camera, out_path, fps = sys.argv[1], int(sys.argv[2]), sys.argv[3], float(sys.argv[4])
 PANEL = (854, 480)
 
 
@@ -25,10 +26,16 @@ def indices(pattern):
     return {int(re.search(r"_(\d+)\.jpg$", path).group(1)) for path in glob.glob(pattern)}
 
 
-shared = sorted(indices(os.path.join(frames_dir, f"cam{camera}_*.jpg")) & indices(os.path.join(mikan_dir, "frame_*.jpg")) &
-                indices(os.path.join(kalidokit_dir, "frame_*.jpg")))
-if not shared:
-    raise RuntimeError("no frame index is in all three folders")
+panels = []
+shared = indices(os.path.join(frames_dir, f"cam{camera}_*.jpg"))
+for arg in sys.argv[5:]:
+    label, _, rest = arg.partition("=")
+    directory, _, flag = rest.partition(",")
+    panels.append((label, directory, flag == "mirror"))
+    shared &= indices(os.path.join(directory, "frame_*.jpg"))
+shared = sorted(shared)
+if not panels or not shared:
+    raise RuntimeError("no panel given, or no frame index is in every folder")
 
 
 def panel(path, label, mirror):
@@ -40,17 +47,19 @@ def panel(path, label, mirror):
     return image
 
 
-width, height = PANEL[0] * 3, PANEL[1]
+columns = 2 if len(panels) == 3 else len(panels) + 1
+rows = -(-(len(panels) + 1) // columns)
+width, height = PANEL[0] * columns, PANEL[1] * rows
 ffmpeg = subprocess.Popen(
     ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps),
      "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", out_path], stdin=subprocess.PIPE)
 for count, index in enumerate(shared):
-    row = np.hstack([
-        panel(os.path.join(frames_dir, f"cam{camera}_{index}.jpg"), f"Camera  frame {count}", True),
-        panel(os.path.join(mikan_dir, f"frame_{index}.jpg"), "MikanTrack direct", True),
-        panel(os.path.join(kalidokit_dir, f"frame_{index}.jpg"), "Kalidokit", False),
-    ])
-    ffmpeg.stdin.write(row.tobytes())
+    tiles = [panel(os.path.join(frames_dir, f"cam{camera}_{index}.jpg"), f"Camera  frame {count}", True)]
+    tiles += [panel(os.path.join(directory, f"frame_{index}.jpg"), label, mirror) for label, directory, mirror in panels]
+    while len(tiles) < columns * rows:
+        tiles.append(np.zeros_like(tiles[0]))
+    frame = np.vstack([np.hstack(tiles[row * columns:(row + 1) * columns]) for row in range(rows)])
+    ffmpeg.stdin.write(frame.tobytes())
 ffmpeg.stdin.close()
 if ffmpeg.wait() != 0:
     raise RuntimeError("ffmpeg failed")
