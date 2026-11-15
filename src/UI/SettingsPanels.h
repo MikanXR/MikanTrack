@@ -232,11 +232,9 @@ void commitOscConfigChange(const OscSectionContext& context);
 // hands, the fusion detail, the per-camera skeletons toggle and the
 // hold-still test are the Fusion stage's; the wrist IMU pieces are the IMU
 // stage's; the body pieces are the Body solver stage's; the face stream
-// pieces are the Phone stage's; and the direct pieces, with the hand
-// calibration block, Measure My Body, the body proportions and the
-// hold-still test again, are the Direct solver stages'. The Tracking panel
-// itself draws only the direct mode switch while direct mode is off and the
-// dump buttons.
+// pieces are the Phone stage's; and the direct pieces, with the body
+// proportions and the hold-still test again, are the Direct solver stages'.
+// The Tracking panel itself draws only the dump buttons.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -290,17 +288,11 @@ void drawBodyPoseIntro();
 // One camera's body pose enable and, when enabled, its model. Draws nothing
 // for a camera index the config does not have.
 void drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex);
-// The direct mode switch as the Tracking panel shows it while direct mode is
-// off: the intro and the enable, under the Direct Retarget heading. A
-// multi-camera project has no Direct solver stage to turn the mode on from.
-void drawDirectEnableSection(const TrackingSectionContext& context);
-// The direct pieces, no headers, editing the live config. Enable: the mode
-// switch, which also cancels a neutral countdown when it turns the mode off.
-// Camera: keeps the direct camera index in range and draws the camera combo
+// The direct pieces, no headers, editing the live config. The mode itself
+// has no control: the guided setup's tracking variant sets it. Camera: keeps the direct camera index in range and draws the camera combo
 // only with more than one camera. Neutral: Capture neutral and Clear, the
 // countdown updateTrackingState runs, and the neutral's state line. Tilt: the
 // camera's downward pitch.
-void drawDirectEnableControl(const TrackingSectionContext& context);
 void drawDirectCameraControl(const TrackingSectionContext& context);
 void drawDirectNeutralControl(const TrackingSectionContext& context);
 void drawDirectTiltControl(const TrackingSectionContext& context);

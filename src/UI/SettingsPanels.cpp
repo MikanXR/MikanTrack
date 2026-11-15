@@ -1340,27 +1340,6 @@ void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context)
 
 // -- Direct solver -------------------------------------------------------------
 
-void SettingsPanels::drawDirectEnableSection(const TrackingSectionContext& context)
-{
-	ImGui::SeparatorText(locText("trackingPanel.directSection"));
-	ImGui::TextWrapped("%s", locText("trackingPanel.directIntro"));
-	drawDirectEnableControl(context);
-}
-
-void SettingsPanels::drawDirectEnableControl(const TrackingSectionContext& context)
-{
-	DirectConfig& direct= context.config->direct;
-	if (ImGui::Checkbox(locLabel("trackingPanel.directEnabled"), &direct.enabled))
-	{
-		// updateTrackingState cancels a countdown while the mode is off; this
-		// stops it on the same frame
-		if (!direct.enabled)
-			context.state->directNeutral.reset();
-		commitTrackingConfigChange(context);
-	}
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directEnabledTooltip"));
-}
-
 void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& context)
 {
 	AppConfig* config= context.config;
@@ -1890,12 +1869,6 @@ void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext
 	// residual references, detector cadence) live in config.json and the
 	// Timeline what-if panel, where they can be swept against a recording.
 	// The live panel holds rig facts, calibration, and readouts only.
-
-	// A multi-camera project's pipeline has no Direct solver stage, whose
-	// settings hold the switch, so the panel keeps the switch while the mode
-	// is off
-	if (!context.config->direct.enabled)
-		drawDirectEnableSection(context);
 	drawDiagnosticsSection(context);
 
 	ImGui::End();
