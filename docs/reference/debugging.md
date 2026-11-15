@@ -137,6 +137,10 @@ A local build carries the Tracy client: the project generation scripts configure
 
 - Other threads are named, with a zone per unit of work: the recorder writers, IMU discovery, the audio service, the Joy-Con reader, and the camera sample callback
 
+With vsync on, the main thread's wait for the next frame lands in the first OpenGL call after the swap that has to sync with the driver, not in the `Swap` zone. In a trace that is Tracy's own GPU collect, which reads the timer queries back after the swap and so holds most of each frame. Before the profiler it was the framebuffer bind's state reads, which a CPU sampling profiler showed as driver time while NVIDIA's threaded optimization spun on the wait.
+
+`RunTracyMcp.bat` starts Tracy's MCP server, through which an AI assistant loads captures, connects to the running app, and queries zones, frames, plots, context switches and sampled call stacks with Tracy's own analysis code ([commands.md](./commands.md)).
+
 Run the app as administrator for context switches and the sampled call stacks, which show whether a thread was running or waiting. Every self test and tool is the same exe, so the client starts in those runs too and records nothing with no viewer connected.
 
 Application code uses the macros in `src/Utility/Profiler.h` and `src/Render/ProfilerGpu.h` and never Tracy's own, so a build without the option compiles them away. A zone's name is a string literal. A GPU zone belongs only in code the app's own window reaches: the headless tools draw with no profiler GPU context, and a GPU zone there faults once a viewer connects.

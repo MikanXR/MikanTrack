@@ -45,6 +45,7 @@ Three steps, in order:
 | ONNX Runtime | 1.20.1, DirectML flavor | `deps/onnxruntime` | NuGet package `microsoft.ml.onnxruntime.directml` |
 | DirectML | 1.15.4 | `deps/directml` | NuGet package `microsoft.ai.directml` |
 | Tracy viewer | 0.15.0 | `deps/tracy` | GitHub release zip, the profiler's viewer and capture tools. `RunProfiler.bat` fetches it on first use where `deps/` predates it |
+| Tracy MCP server | 0.15.0 | `deps/tracy-mcp` | A venv with `extra/mcp/requirements.txt` from PyPI, and Tracy's server Python bindings built from `thirdparty/tracy` (pybind11 and the server's libraries fetched by its CMake). `RunTracyMcp.bat` makes both on first use |
 
 ### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
 

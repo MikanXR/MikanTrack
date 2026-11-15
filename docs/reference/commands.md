@@ -41,6 +41,14 @@ RunProfiler.bat
 
 It starts `deps\tracy\tracy-profiler.exe` connected to this machine on port 8286, fetching the viewer first where `deps\` has none, and the viewer waits for the app. `deps\tracy\tracy-capture.exe -p 8286 -o <file.tracy>` records a run without the viewer, and `tracy-csvexport.exe <file.tracy>` lists its zones.
 
+To let an AI assistant query captures, start Tracy's MCP server:
+
+```
+RunTracyMcp.bat
+```
+
+It serves `http://127.0.0.1:47380/mcp` from its own window, building its venv and Tracy's Python server bindings into `deps\tracy-mcp` on first use. Claude Code registers it once with `claude mcp add --transport http --scope user tracy http://127.0.0.1:47380/mcp`.
+
 ---
 
 ## Automation server
