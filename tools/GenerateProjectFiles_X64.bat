@@ -20,8 +20,10 @@ IF %ERRORLEVEL% NEQ 0 (
 for %%I in ("%~dp0..") do set REPO_ROOT_PATH=%%~fI
 
 IF NOT EXIST "%REPO_ROOT_PATH%\build" mkdir "%REPO_ROOT_PATH%\build"
+:: A local build carries the Tracy profiler client, which records nothing until
+:: a viewer connects. A release build is configured without the option.
 pushd "%REPO_ROOT_PATH%\build"
-cmake .. -G "%~1" -A x64
+cmake .. -G "%~1" -A x64 -DMIKANTRACK_TRACY=ON
 IF %ERRORLEVEL% NEQ 0 (
   echo "Error generating project files"
   popd

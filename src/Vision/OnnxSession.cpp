@@ -8,6 +8,7 @@
 #include <dxgi1_6.h>
 
 #include "Logger.h"
+#include "Profiler.h"
 
 #pragma comment(lib, "dxgi.lib")
 
@@ -85,6 +86,7 @@ bool OnnxSession::create(const std::string& modelPath, const std::string& prefer
 
 	m_session= nullptr;
 	m_activeEp= "none";
+	m_modelPath= modelPath;
 
 	if (preferredEp == "directml")
 	{
@@ -220,6 +222,7 @@ int OnnxSession::findOutputByLastDim(int64_t lastDim) const
 
 std::vector<Ort::Value> OnnxSession::run(const Ort::Value* inputs, size_t inputCount)
 {
+	MIKAN_PROFILE_SCOPE_TEXT("ONNX run", m_modelPath.c_str(), m_modelPath.size());
 	return m_session->Run(
 		Ort::RunOptions{nullptr},
 		m_inputNamePtrs.data(), inputs, inputCount,
@@ -230,6 +233,7 @@ std::vector<Ort::Value> OnnxSession::runOutputs(
 	const Ort::Value* inputs, size_t inputCount,
 	const int* outputIndices, size_t outputIndexCount)
 {
+	MIKAN_PROFILE_SCOPE_TEXT("ONNX run", m_modelPath.c_str(), m_modelPath.size());
 	std::vector<const char*> requestedNames;
 	requestedNames.reserve(outputIndexCount);
 	for (size_t i= 0; i < outputIndexCount; ++i)

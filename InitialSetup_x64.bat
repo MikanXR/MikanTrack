@@ -7,7 +7,7 @@ setlocal
 
 set UNZIP_EXE=%~dp0tools\7zip\7za.exe
 
-:: Make sure git submodules are present (imgui, implot, glm, nlohmann_json, readerwriterqueue, cgltf)
+:: Make sure git submodules are present (imgui, implot, glm, nlohmann_json, readerwriterqueue, cgltf, tracy)
 echo "Updating git submodules..."
 git submodule update --init --recursive
 IF %ERRORLEVEL% NEQ 0 (
@@ -100,6 +100,22 @@ IF %ERRORLEVEL% NEQ 0 (
   goto failure
 )
 del directml.nupkg
+
+:: ---------------------------------------------------------------- Tracy viewer
+:: The profiler's viewer and capture tools, the same version as the client
+:: source under thirdparty\tracy. Only a build with MIKANTRACK_TRACY uses them.
+echo "Downloading Tracy 0.15.0 viewer..."
+curl -L https://github.com/wolfpld/tracy/releases/download/v0.15.0/windows-0.15.0.zip --output tracy.zip
+IF %ERRORLEVEL% NEQ 0 (
+  echo "Error downloading Tracy windows-0.15.0.zip"
+  goto failure
+)
+%UNZIP_EXE% x tracy.zip -otracy -y > nul
+IF %ERRORLEVEL% NEQ 0 (
+  echo "Error unzipping tracy.zip"
+  goto failure
+)
+del tracy.zip
 
 popd
 

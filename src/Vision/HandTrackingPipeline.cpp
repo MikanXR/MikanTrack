@@ -7,6 +7,7 @@
 #include "glm/geometric.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 static float boxIou(
 	const glm::vec2& aMin, const glm::vec2& aMax,
@@ -84,6 +85,7 @@ int HandTrackingPipeline::countActiveSlots() const
 
 void HandTrackingPipeline::process(const cv::Mat& bgrFrame, TrackingFrameResult& outResult)
 {
+	MIKAN_PROFILE_FUNCTION();
 	const auto startTime= std::chrono::steady_clock::now();
 
 	outResult.palmDetections.clear();

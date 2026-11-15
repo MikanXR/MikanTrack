@@ -6,6 +6,7 @@
 #include "opencv2/imgproc.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 static constexpr int kPalmInputSize= 192;
 static constexpr int kPalmKeypointCount= 7;
@@ -64,6 +65,7 @@ DetectionBox PalmDetector::toDebugBox(const PalmDetection& detection)
 
 void PalmDetector::detect(const cv::Mat& bgrFrame, std::vector<PalmDetection>& outDetections)
 {
+	MIKAN_PROFILE_FUNCTION();
 	outDetections.clear();
 	if (!m_session.isValid() || bgrFrame.empty())
 		return;

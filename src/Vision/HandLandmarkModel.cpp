@@ -8,6 +8,7 @@
 #include "opencv2/imgproc.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 static constexpr int kHandInputSize= 224;
 
@@ -81,6 +82,7 @@ void HandLandmarkModel::estimate(
 	const HandRoi& roi,
 	HandLandmarkResult& outResult)
 {
+	MIKAN_PROFILE_FUNCTION();
 	outResult= HandLandmarkResult();
 	if (!m_session.isValid() || bgrFrame.empty())
 		return;

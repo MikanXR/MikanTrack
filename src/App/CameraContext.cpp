@@ -13,6 +13,7 @@
 #include "HandTrackingPipeline.h"
 #include "LandmarkTo3D.h"
 #include "Logger.h"
+#include "Profiler.h"
 #include "SpaceTransforms.h"
 #include "SteadyClock.h"
 #include "VideoCaptureSystem.h"
@@ -301,6 +302,8 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 	if (block == nullptr)
 		return false;
 
+	MIKAN_PROFILE_SCOPE("Camera process");
+
 	// Per-step wall time, published with the result so a slow step names
 	// itself in the tracking panel and the dump instead of only tripping the
 	// vision thread's hitch watchdog
@@ -324,10 +327,15 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 	m_lastFrameTimestampMs= block->timestampMs;
 
 	// Raw -> BGR
-	VideoCaptureSystem::convertFrameToBGR(*block, m_bgrScratch);
-	const int64_t frameIndex= block->frameIndex;
-	const double timestampMs= block->timestampMs;
-	videoCapture->releaseFrame(m_cameraIndex, block);
+	int64_t frameIndex= 0;
+	double timestampMs= 0.0;
+	{
+		MIKAN_PROFILE_SCOPE("Convert to BGR");
+		VideoCaptureSystem::convertFrameToBGR(*block, m_bgrScratch);
+		frameIndex= block->frameIndex;
+		timestampMs= block->timestampMs;
+		videoCapture->releaseFrame(m_cameraIndex, block);
+	}
 	timings.convertMs= lapMs();
 
 	if (m_bgrScratch.empty())
@@ -337,15 +345,18 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 	// Undistort when calibrated (ML + preview both use the undistorted image)
 	cv::Mat* activeFrame= &m_bgrScratch;
-	if (m_bUndistortEnabled &&
-		m_undistorter != nullptr &&
-		m_bgrScratch.cols == m_undistorter->getFrameWidth() &&
-		m_bgrScratch.rows == m_undistorter->getFrameHeight())
 	{
-		m_undistorter->processColorFrame(m_bgrScratch, m_undistortedScratch);
-		activeFrame= &m_undistortedScratch;
+		MIKAN_PROFILE_SCOPE("Undistort");
+		if (m_bUndistortEnabled &&
+			m_undistorter != nullptr &&
+			m_bgrScratch.cols == m_undistorter->getFrameWidth() &&
+			m_bgrScratch.rows == m_undistorter->getFrameHeight())
+		{
+			m_undistorter->processColorFrame(m_bgrScratch, m_undistortedScratch);
+			activeFrame= &m_undistortedScratch;
+		}
+		m_lastActiveFrame= activeFrame;
 	}
-	m_lastActiveFrame= activeFrame;
 	timings.undistortMs= lapMs();
 
 	TrackingFrameResult result;
@@ -357,9 +368,12 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 	// Luminance-oscillation diagnostics run on every processed frame (cheap
 	// decimated mean), so flicker is measurable even before a hand shows up
-	m_flickerTracker.addFrame(*activeFrame, timestampMs);
-	result.lumaInstability= m_flickerTracker.getInstability();
-	result.lumaFlickerHz= m_flickerTracker.getDominantHz();
+	{
+		MIKAN_PROFILE_SCOPE("Flicker");
+		m_flickerTracker.addFrame(*activeFrame, timestampMs);
+		result.lumaInstability= m_flickerTracker.getInstability();
+		result.lumaFlickerHz= m_flickerTracker.getDominantHz();
+	}
 	timings.flickerMs= lapMs();
 
 	bool bProducedTracking= false;
@@ -372,18 +386,24 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		// offered against 1659 that ever reached a decision.
 		// The two sources never meet: the direct camera has no fused world
 		// result, so its hints come from its own body observation
-		if (m_bBodyHandHints)
-			seedBodyHandHints();
-		else if (seedFromFused != nullptr)
-			seedSearchHints(*seedFromFused, autoScaleFactor);
+		{
+			MIKAN_PROFILE_SCOPE("Hand pipeline");
+			if (m_bBodyHandHints)
+				seedBodyHandHints();
+			else if (seedFromFused != nullptr)
+				seedSearchHints(*seedFromFused, autoScaleFactor);
 
-		m_pipeline->process(*activeFrame, result);
+			m_pipeline->process(*activeFrame, result);
+		}
 
 		// Raw frame capture, taken here so what lands on disk is EXACTLY what
 		// the models consumed (undistorted, same pixels), which is what makes
 		// an offline model comparison meaningful
-		if (frameRecorder != nullptr)
-			frameRecorder->enqueueFrame(m_cameraIndex, result.frameIndex, *activeFrame);
+		{
+			MIKAN_PROFILE_SCOPE("Frame enqueue");
+			if (frameRecorder != nullptr)
+				frameRecorder->enqueueFrame(m_cameraIndex, result.frameIndex, *activeFrame);
+		}
 
 		// The hand pipeline reports its own inferenceMs; restart the lap so
 		// the body-pose stage below is measured on its own
@@ -391,30 +411,36 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 		// Opt-in body-pose stage, same undistorted frame the hand pipeline
 		// consumed (so its imagePoints share the undistorted camera matrix)
-		m_pendingRecordInput.bHaveBodyPose= false;
-		if (m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded())
 		{
-			m_bodyPoseTracker->process(*activeFrame, result.body);
-
-			// Recording tap: the stage's cadence (divider re-emits) is baked
-			// into the observation, so replay never re-runs the pose models
+			MIKAN_PROFILE_SCOPE("Body pose");
+			m_pendingRecordInput.bHaveBodyPose= false;
+			if (m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded())
 			{
-				m_pendingRecordInput.bHaveBodyPose= true;
-				m_pendingRecordInput.body= result.body;
+				m_bodyPoseTracker->process(*activeFrame, result.body);
+
+				// Recording tap: the stage's cadence (divider re-emits) is baked
+				// into the observation, so replay never re-runs the pose models
+				{
+					m_pendingRecordInput.bHaveBodyPose= true;
+					m_pendingRecordInput.body= result.body;
+				}
 			}
 		}
 		timings.bodyPoseMs= lapMs();
 
-		// The hand model's left and right are a view-dependent guess made
-		// sticky. The body model labels a hand by the arm it ends, so on the
-		// direct camera its hands name each slot's side, here, where the
-		// recording and the lift both see the hand under its true side.
-		if (m_bHandSideCorrection)
-			applyHandSideCorrection(result);
+		{
+			MIKAN_PROFILE_SCOPE("ROI quality");
+			// The hand model's left and right are a view-dependent guess made
+			// sticky. The body model labels a hand by the arm it ends, so on the
+			// direct camera its hands name each slot's side, here, where the
+			// recording and the lift both see the hand under its true side.
+			if (m_bHandSideCorrection)
+				applyHandSideCorrection(result);
 
-		// Lighting/exposure diagnostics on the exact image the model consumed
-		for (TrackedHand& hand : result.hands)
-			HandRoiQuality::analyzeHand(*activeFrame, hand);
+			// Lighting/exposure diagnostics on the exact image the model consumed
+			for (TrackedHand& hand : result.hands)
+				HandRoiQuality::analyzeHand(*activeFrame, hand);
+		}
 		timings.roiQualityMs= lapMs();
 
 		// Recording tap, part 1: the pipeline-output hands, exactly as the
@@ -445,6 +471,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		// Image space -> camera space (needs intrinsics + hand scale)
 		if (m_landmarkTo3D != nullptr)
 		{
+			MIKAN_PROFILE_SCOPE("Lift");
 			// Recording tap, part 2: the hand scale in effect for this exact
 			// process() call (the auto-scale EMA feedback loop becomes a
 			// recorded input)
@@ -502,6 +529,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 
 	// Publish this camera's preview (latest-wins)
 	{
+		MIKAN_PROFILE_SCOPE("Preview publish");
 		std::lock_guard<std::mutex> lock(m_previewMutex);
 		activeFrame->copyTo(m_previewFrame.bgr);
 		// Timed inside the lock so the published copy carries its own cost;
@@ -514,6 +542,18 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		m_bPreviewFresh= true;
 	}
 	m_lastResult.result= result;
+
+	// One sample per vision iteration: the first camera stands for the rest
+	if (bProducedTracking && m_cameraIndex == 0)
+	{
+		MIKAN_PROFILE_PLOT("Body pose ms", timings.bodyPoseMs);
+		MIKAN_PROFILE_PLOT("Hand pipeline ms", result.inferenceMs);
+		MIKAN_PROFILE_PLOT("Camera queue age ms", timings.queueAgeMs);
+		if (result.body.valid)
+		{
+			MIKAN_PROFILE_PLOT("Body score", result.body.confidence);
+		}
+	}
 
 	return bProducedTracking;
 }

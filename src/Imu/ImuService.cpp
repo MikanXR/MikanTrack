@@ -6,6 +6,7 @@
 
 #include "JoyconDeviceManager.h"
 #include "Logger.h"
+#include "Profiler.h"
 
 // Frames between scans for newly-paired controllers (~5s at camera rate)
 static constexpr int k_rescanCooldownFrames= 150;
@@ -105,6 +106,8 @@ void ImuService::requestReopen(const std::shared_ptr<IImuDevice>& device)
 
 void ImuService::discoveryLoop()
 {
+	MIKAN_PROFILE_THREAD("IMU discovery");
+
 	// Sole owner of m_deviceManager while this thread runs (created before the
 	// thread starts, destroyed after it joins), so the blocking HID calls here
 	// never contend with the frame loop
@@ -128,6 +131,7 @@ void ImuService::discoveryLoop()
 			reopenBatch.swap(m_reopenRequests);
 		}
 
+		MIKAN_PROFILE_SCOPE("IMU discovery pass");
 		// Reopens first: a controller that went silent matters more than
 		// finding a new one, and the service has already stopped draining it
 		for (const std::shared_ptr<IImuDevice>& device : reopenBatch)

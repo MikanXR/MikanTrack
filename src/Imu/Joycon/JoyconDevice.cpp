@@ -11,7 +11,7 @@ extern "C"
 }
 
 #include "Logger.h"
-#include "ThreadUtils.h"
+#include "Profiler.h"
 
 // Raw -> physical scales (dekuNukem reverse-engineering notes)
 static constexpr float k_accelScaleG= 0.000244f;      // g per LSB (+/-8g range)
@@ -228,7 +228,7 @@ void JoyconDevice::close()
 
 void JoyconDevice::readThreadLoop()
 {
-	ThreadUtils::setCurrentThreadName("JoyconRead");
+	MIKAN_PROFILE_THREAD("JoyconRead");
 
 	std::vector<unsigned char> report(m_inputReportLength, 0);
 	HANDLE readEvent= ::CreateEvent(nullptr, TRUE, FALSE, nullptr);
@@ -287,6 +287,7 @@ void JoyconDevice::readThreadLoop()
 			continue;
 		}
 
+		MIKAN_PROFILE_SCOPE("Joycon report");
 		const double arrivalMs= nowSteadyMs();
 
 		// Battery: high nibble of byte 2, 8=full .. 0=empty

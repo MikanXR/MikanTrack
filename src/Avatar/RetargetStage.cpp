@@ -4,6 +4,7 @@
 
 #include "AvatarRetargetMath.h"
 #include "AvatarSkeleton.h"
+#include "Profiler.h"
 #include "SourcePoseInputs.h"
 
 namespace
@@ -148,6 +149,7 @@ void RetargetStage::reset()
 
 void RetargetStage::solvePosition(const TrackingFrameResult& frame, RetargetResult& outResult)
 {
+	MIKAN_PROFILE_SCOPE("Position retarget");
 	m_position.fillSource(frame, m_config.user, outResult.source);
 	outResult.hands.poses= frame.poses;
 	m_loss.apply(m_config.positionLoss, m_config.skeleton.get(), m_config.position.sides, outResult.source,

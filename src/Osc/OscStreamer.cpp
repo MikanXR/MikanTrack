@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "Logger.h"
+#include "Profiler.h"
 #include "TrackingTypes.h"
 
 // VMC protocol addresses (https://protocol.vmc.info)
@@ -105,6 +106,7 @@ void OscStreamer::setConfig(const OscStreamerConfig& config)
 
 void OscStreamer::sendFrame(const TrackingFrameResult& frame, const RetargetResult& retarget)
 {
+	MIKAN_PROFILE_SCOPE("OSC send");
 	std::lock_guard<std::mutex> lock(m_mutex);
 
 	if (!m_isRunning || !m_config.enabled || !m_socket.isOpen())

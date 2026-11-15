@@ -7,6 +7,7 @@
 #include "opencv2/imgcodecs.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 std::string FrameRecorder::makeFramePath(const std::string& frameDirectory, int cameraIndex, int64_t frameIndex)
 {
@@ -94,6 +95,7 @@ void FrameRecorder::stop()
 
 void FrameRecorder::writerLoop()
 {
+	MIKAN_PROFILE_THREAD("Frame writer");
 	const std::vector<int> encodeParams= {cv::IMWRITE_JPEG_QUALITY, m_jpegQuality};
 	std::vector<uint8_t> encoded;
 
@@ -113,6 +115,7 @@ void FrameRecorder::writerLoop()
 			m_queue.pop_front();
 		}
 
+		MIKAN_PROFILE_SCOPE("Write frame");
 		encoded.clear();
 		if (!cv::imencode(".jpg", queued.image, encoded, encodeParams))
 		{

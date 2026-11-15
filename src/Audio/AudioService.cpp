@@ -9,8 +9,8 @@
 #include "AudioRecorder.h"
 #include "Logger.h"
 #include "MouthBackend.h"
+#include "Profiler.h"
 #include "SteadyClock.h"
-#include "ThreadUtils.h"
 
 namespace
 {
@@ -212,14 +212,17 @@ void AudioService::onCaptured(const float* samples, int sampleCount)
 
 void AudioService::threadLoop()
 {
-	ThreadUtils::setCurrentThreadName("AudioService");
+	MIKAN_PROFILE_THREAD("AudioService");
 
 	AudioBlock block;
 	while (m_bRunning)
 	{
 		applyPendingConfig();
 		if (m_blocks.wait_dequeue_timed(block, std::chrono::milliseconds(5)))
+		{
+			MIKAN_PROFILE_SCOPE("Audio block");
 			processBlock(block);
+		}
 	}
 
 	closeDevice();

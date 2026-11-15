@@ -44,6 +44,7 @@ Three steps, in order:
 | OpenCV | 4.10.0, `opencv_world` build | `deps/opencv` | GitHub release self-extracting `.exe`, unpacked with `7za` |
 | ONNX Runtime | 1.20.1, DirectML flavor | `deps/onnxruntime` | NuGet package `microsoft.ml.onnxruntime.directml` |
 | DirectML | 1.15.4 | `deps/directml` | NuGet package `microsoft.ai.directml` |
+| Tracy viewer | 0.15.0 | `deps/tracy` | GitHub release zip, the profiler's viewer and capture tools. `RunProfiler.bat` fetches it on first use where `deps/` predates it |
 
 ### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
 
@@ -64,6 +65,7 @@ Then rerun `GenerateProjectFiles_X64_VS2022.bat`. CMake detects `Include/OVRLipS
 - `thirdparty/nlohmann_json`: header-only, the include path is `thirdparty/nlohmann_json/single_include`.
 - `thirdparty/readerwriterqueue`: header-only.
 - `thirdparty/cgltf`: header-only glTF 2.0 parser behind the VRM avatar loader; the one `CGLTF_IMPLEMENTATION` is in `src/Avatar/VrmLoader.cpp`.
+- `thirdparty/tracy`: the Tracy profiler, pinned to the `v0.15.0` tag. Only `public/TracyClient.cpp` is compiled, and only with `MIKANTRACK_TRACY` on, which the project generation scripts pass. The viewer under `deps/tracy` is the same version, which the two must be.
 - `thirdparty/tinyfiledialogs`: native file dialogs, vendored directly (two files, not a submodule), compiled into the exe. Needs `comdlg32` and `ole32` in `target_link_libraries`.
 
 ---
@@ -88,7 +90,13 @@ Each model's exact tensor input/output contract (shapes, layout, normalization, 
 
 ## Configuring and the target
 
-Both `GenerateProjectFiles_X64_VS*.bat` wrappers call `tools/GenerateProjectFiles_X64.bat` with their generator name, which runs `cmake .. -G <generator> -A x64` from a `build/` directory it creates. A `build/` tree keeps the generator that first configured it, so switching Visual Studio versions means deleting `build/` first. There are no project-specific `-D` cache variables to pass; every dependency path is a fixed relative path under `deps/` or `thirdparty/` set directly in `CMakeLists.txt`.
+Both `GenerateProjectFiles_X64_VS*.bat` wrappers call `tools/GenerateProjectFiles_X64.bat` with their generator name, which runs `cmake .. -G <generator> -A x64 -DMIKANTRACK_TRACY=ON` from a `build/` directory it creates. A `build/` tree keeps the generator that first configured it, so switching Visual Studio versions means deleting `build/` first. Every dependency path is a fixed relative path under `deps/` or `thirdparty/` set directly in `CMakeLists.txt`. The one cache variable is `MIKANTRACK_TRACY`, which builds the Tracy profiler client into the exe. It is off by default in `CMakeLists.txt` and the generation scripts turn it on, so a local build carries the profiler and a release build is a configure that does not pass it:
+
+```
+cmake -S . -B <release build dir> -G <generator> -A x64
+```
+
+An existing `build/` tree keeps the value it was configured with until the generation script, or `cmake -S . -B build -DMIKANTRACK_TRACY=ON`, runs again. With the option on, `TracyClient.cpp` joins the exe's sources and the target is compiled with `MIKANTRACK_TRACY`, `TRACY_ENABLE`, `TRACY_ON_DEMAND`, `TRACY_ONLY_LOCALHOST`, `TRACY_NO_BROADCAST` and `TRACY_DATA_PORT` at 8286 (`MIKANTRACK_TRACY_PORT`). The port is the app's own because Tracy's default, 8086, goes to whichever program on the machine took it first, and a viewer pointed there reaches that program. With it off no Tracy header is included and no Tracy code is linked: `src/Utility/Profiler.h` and `src/Render/ProfilerGpu.h` define their macros as empty. See [debugging.md](./debugging.md) for using it.
 
 The build defines one target: `add_executable(MikanTrack WIN32 ...)`. `WIN32` means a GUI subsystem with no console window attached, so the logger writes to `.log` files next to the exe rather than stdout being visible interactively (console output still appears when the exe is launched from a terminal). ImGui's `.cpp` files are listed directly in the target's sources and compiled into the exe; there is no separate ImGui static library.
 

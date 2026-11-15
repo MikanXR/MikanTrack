@@ -7,6 +7,7 @@
 #include "opencv2/imgproc.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 static constexpr int kPersonInputSize= 224;
 static constexpr int kPersonKeypointCount= 4;
@@ -67,6 +68,7 @@ DetectionBox PoseDetector::toDebugBox(const PersonDetection& detection)
 
 void PoseDetector::detect(const cv::Mat& bgrFrame, std::vector<PersonDetection>& outDetections)
 {
+	MIKAN_PROFILE_FUNCTION();
 	outDetections.clear();
 	if (!m_session.isValid() || bgrFrame.empty())
 		return;

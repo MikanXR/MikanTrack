@@ -42,6 +42,7 @@ linked, so this app builds standalone.
 - **nlohmann/json** — MIT — `thirdparty/nlohmann_json` (submodule)
 - **readerwriterqueue** — BSD-2 — `thirdparty/readerwriterqueue` (submodule)
 - **cgltf** — MIT — `thirdparty/cgltf` (submodule), the glTF 2.0 parser behind the VRM avatar loader
+- **Tracy** 0.15.0 (profiler client, compiled into local builds and left out of one configured without `MIKANTRACK_TRACY`) — BSD-3-Clause — `thirdparty/tracy` (submodule), its viewer prebuilt in `deps/`
 - **SDL2** 2.30.10 — zlib — prebuilt in `deps/`
 - **GLEW** 2.2.0 — BSD/MIT — prebuilt in `deps/`
 - **OpenCV** 4.10.0 — Apache-2.0 — prebuilt in `deps/`

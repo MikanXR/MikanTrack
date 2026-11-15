@@ -5,6 +5,7 @@
 #include "glm/geometric.hpp"
 
 #include "Logger.h"
+#include "Profiler.h"
 
 // Grow the box around the tracked keypoints. The model applies its own 1.25
 // padding on top; this only has to cover motion between model frames.
@@ -233,6 +234,7 @@ void BodyPoseTracker::fillObservation(const RtmPoseResult& result, BodyPoseObser
 
 void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outObservation)
 {
+	MIKAN_PROFILE_FUNCTION();
 	const int64_t frameIndex= m_frameIndex++;
 	if ((frameIndex % (int64_t)m_config.frameDivider) != 0)
 	{

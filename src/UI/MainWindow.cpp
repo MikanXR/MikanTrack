@@ -40,6 +40,7 @@
 #include "PinnedStageWindows.h"
 #include "PipelinePanel.h"
 #include "PipelineText.h"
+#include "Profiler.h"
 #include "ProjectManager.h"
 #include "RetargetChains.h"
 #include "Scene3dPanel.h"
@@ -480,6 +481,7 @@ void MainWindow::toggleRecording()
 
 void MainWindow::update(float deltaSeconds)
 {
+	MIKAN_PROFILE_FUNCTION();
 	if (m_app->getAppState() == App::eAppState::MainMenu)
 	{
 		// A closed project's pinned stages close with it, and the scene's
@@ -512,7 +514,10 @@ void MainWindow::update(float deltaSeconds)
 			m_videoPreviewPanel->setFrame(cameraIndex, m_latestPreviews[cameraIndex].bgr);
 		}
 	}
-	visionThread->fetchFusedResult(m_latestFused, &m_latestRetarget, &m_latestFusionDiagnostics);
+	{
+		MIKAN_PROFILE_SCOPE("Fetch fused result");
+		visionThread->fetchFusedResult(m_latestFused, &m_latestRetarget, &m_latestFusionDiagnostics);
+	}
 
 	// Newest per-camera results, for the preview overlays and the 3D scene
 	std::vector<const TrackingFrameResult*> perCameraResults;
@@ -652,10 +657,13 @@ void MainWindow::update(float deltaSeconds)
 	stageFrame.sceneCameras= m_shown.bReplay ? &replayCameras : &sceneCameras;
 	stageFrame.scenePerCamera= &m_shown.perCamera;
 	stageFrame.gizmos= &gizmos;
-	if (!m_bShowStageViewPanel)
-		m_videoPreviewPanel->clearLastDrawList();
-	else
-		m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
+	{
+		MIKAN_PROFILE_SCOPE("Stage view");
+		if (!m_bShowStageViewPanel)
+			m_videoPreviewPanel->clearLastDrawList();
+		else
+			m_stageView->draw(&m_bShowStageViewPanel, stageFrame);
+	}
 	applyGizmoDrags(gizmos);
 	// A click on the Retarget view's source pose selects that chain, for the
 	// Inspector drawn below
