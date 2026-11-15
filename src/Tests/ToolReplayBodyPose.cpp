@@ -11,13 +11,20 @@
 // Frames are only present when raw frame recording was turned on for that
 // session (opt-in, off by default).
 //
-// usage: --replay-bodypose <recording.jsonl> [camera] [rtmpose|rtmw3d]
+// usage: --replay-bodypose <recording.jsonl> [camera] [rtmpose|rtmw3d] [divider=<n>]
 //
 // The backend defaults to the one the recording ran; naming the other
-// re-runs the same frames through it, the model A/B.
+// re-runs the same frames through it, the model A/B. divider runs the
+// models every nth frame as the live stage does, for a take that stored
+// every frame: the tracker's cadence between model and held frames is then
+// the live one, and the report counts the model frames the person was lost
+// on.
 
 namespace
 {
+// A body observation whose mean keypoint score is under this has lost the
+// person: a tracked crop on a seated user scores about 0.5
+constexpr float kLostConfidence= 0.3f;
 struct JointStats
 {
 	const char* name;
@@ -55,17 +62,21 @@ static int runReplayBodyPose(const TestArgs& args)
 {
 	if (args.empty())
 	{
-		MIKAN_LOG_ERROR("replay-bodypose") << "usage: --replay-bodypose <recording.jsonl> [cameraIndex]";
+		MIKAN_LOG_ERROR("replay-bodypose")
+			<< "usage: --replay-bodypose <recording.jsonl> [cameraIndex] [rtmpose|rtmw3d] [divider=<n>]";
 		return 1;
 	}
 
 	const std::string recordingPath= args[0];
 	int requestedCamera= -1;
 	std::string requestedBackend;
+	int frameDivider= 1;
 	for (size_t i= 1; i < args.size(); ++i)
 	{
 		if (args[i] == "rtmpose" || args[i] == "rtmw3d")
 			requestedBackend= args[i];
+		else if (args[i].rfind("divider=", 0) == 0)
+			frameDivider= std::max(atoi(args[i].c_str() + 8), 1);
 		else
 			requestedCamera= atoi(args[i].c_str());
 	}
@@ -107,9 +118,8 @@ static int runReplayBodyPose(const TestArgs& args)
 	}
 
 	BodyPoseTrackerConfig trackerConfig;
-	// Every stored frame is fed through: the recorded divider already decided
-	// which frames exist, and re-dividing here would just sample them again
-	trackerConfig.frameDivider= 1;
+	// Every stored frame runs the models unless a divider is given
+	trackerConfig.frameDivider= frameDivider;
 	trackerConfig.detectorIntervalFrames=
 		replay.getRecordedConfig().camera(cameraIndex).bodyPose.detectorIntervalFrames;
 	trackerConfig.backend= bodyPoseBackendFromString(
@@ -138,6 +148,11 @@ static int runReplayBodyPose(const TestArgs& args)
 	int framesMissing= 0;
 	int observationsValid= 0;
 	int boxSourceCounts[4]= {0, 0, 0, 0};
+	int64_t lastModelFrameIndex= -1;
+	int modelFrames= 0;
+	int lostModelFrames= 0;
+	int lostRun= 0;
+	int longestLostRun= 0;
 	std::vector<float> inferenceMs;
 
 	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
@@ -164,6 +179,23 @@ static int runReplayBodyPose(const TestArgs& args)
 			inferenceMs.push_back(
 				(float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
 					.count());
+
+			// A held frame repeats the last model result and adds nothing
+			if (observation.valid && observation.modelFrameIndex == lastModelFrameIndex)
+				continue;
+			lastModelFrameIndex= observation.modelFrameIndex;
+			modelFrames++;
+			// The person is lost where the body's mean score is under the bar
+			if (!observation.valid || observation.confidence < kLostConfidence)
+			{
+				lostModelFrames++;
+				lostRun++;
+				longestLostRun= std::max(longestLostRun, lostRun);
+			}
+			else
+			{
+				lostRun= 0;
+			}
 
 			boxSourceCounts[(int)observation.boxSource]++;
 			if (!observation.valid)
@@ -210,7 +242,12 @@ static int runReplayBodyPose(const TestArgs& args)
 		<< boxSourceCounts[(int)eBodyBoxSource::Tracked] << ", full frame "
 		<< boxSourceCounts[(int)eBodyBoxSource::FullFrame] << ", none "
 		<< boxSourceCounts[(int)eBodyBoxSource::None];
-	MIKAN_LOG_INFO("replay-bodypose") << "inference median " << median(inferenceMs) << " ms";
+	MIKAN_LOG_INFO("replay-bodypose") << "model frames " << modelFrames << ", person lost (body score under "
+									  << kLostConfidence << ") on " << lostModelFrames << ", longest run "
+									  << longestLostRun;
+	MIKAN_LOG_INFO("replay-bodypose") << "stage time per frame: median " << median(inferenceMs) << " ms, longest "
+									  << (inferenceMs.empty() ? 0.f : *std::max_element(inferenceMs.begin(), inferenceMs.end()))
+									  << " ms";
 
 	MIKAN_LOG_INFO("replay-bodypose") << "per-joint score and 2D step between model results:";
 	for (JointStats& joint : joints)

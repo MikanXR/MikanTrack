@@ -34,7 +34,12 @@ struct BodyPoseTrackerConfig
 	// scaled box feeds itself: measured live, landmark confidence never once
 	// fell under its reset gate (minimum 0.52 over 338 model frames) while
 	// the geometry was visibly wrong. The hand pipeline carries the same
-	// guard for the same reason.
+	// guard for the same reason. While a box is tracked the detector's box
+	// is a challenger, not a replacement: the tracked box takes the model
+	// frame, and the detector's box is scored on the next divided-out frame
+	// (the same frame with a divider of 1) and taken over only where its
+	// landmarks score higher. On a subject truncated at a desk the
+	// detector's box often scores a third of the tracked one's.
 	int detectorIntervalFrames= 20;
 	// A keypoint below this does not contribute to the tracked box
 	float keypointScoreThreshold= 0.3f;
@@ -84,9 +89,18 @@ public:
 	static void fillObservation(const RtmPoseResult& result, BodyPoseObservation& outObservation);
 
 private:
-	// Person box for this model frame, from tracking or from the detector
-	eBodyBoxSource acquireBox(const cv::Mat& bgrFrame, bool bForceDetect,
-							  glm::vec2& outBoxMin, glm::vec2& outBoxMax);
+	// Person box for this model frame: the tracked one, else the detector's,
+	// else the whole frame
+	eBodyBoxSource acquireBox(const cv::Mat& bgrFrame, glm::vec2& outBoxMin, glm::vec2& outBoxMax);
+	// The detector's person box, clipped to the image. False when it finds
+	// no usable person.
+	bool detectPersonBox(const cv::Mat& bgrFrame, glm::vec2& outBoxMin, glm::vec2& outBoxMax);
+	// The next frame's box from a model result's confident body keypoints.
+	// False when too few scored or their extent has collapsed.
+	bool makeTrackedBox(const RtmPoseResult& result, glm::vec2& outBoxMin, glm::vec2& outBoxMax) const;
+	// Scores the detector's box against the tracked one's last result and
+	// takes its keypoints' box over when it scores higher
+	void challengeTrackedBox(const cv::Mat& bgrFrame);
 
 	bool m_bLoaded= false;
 	BodyPoseTrackerConfig m_config;
@@ -102,8 +116,11 @@ private:
 	int64_t m_frameIndex= 0;
 	int64_t m_modelFrameIndex= 0;
 	int64_t m_lastDetectModelFrame= -1000;
+	// The periodic detect is due and waits for a frame to score its box on
+	bool m_bChallengePending= false;
 
 	// Preallocated scratch (steady-state: no per-frame heap churn)
 	std::vector<PersonDetection> m_detections;
 	RtmPoseResult m_landmarkResult;
+	RtmPoseResult m_challengeResult;
 };

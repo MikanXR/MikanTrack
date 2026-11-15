@@ -116,23 +116,11 @@ void BodyPoseTracker::reset()
 	m_frameIndex= 0;
 	m_modelFrameIndex= 0;
 	m_lastDetectModelFrame= -1000;
+	m_bChallengePending= false;
 }
 
-eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, bool bForceDetect,
-										   glm::vec2& outBoxMin, glm::vec2& outBoxMax)
+bool BodyPoseTracker::detectPersonBox(const cv::Mat& bgrFrame, glm::vec2& outBoxMin, glm::vec2& outBoxMax)
 {
-	if (!bForceDetect && m_bBoxTracked)
-	{
-		outBoxMin= m_trackedBoxMin;
-		outBoxMax= m_trackedBoxMax;
-		return eBodyBoxSource::Tracked;
-	}
-
-	// Counted whether or not it fires. The person detector is trained on
-	// whole people, so on a subject truncated at a desk it misses often; if a
-	// miss did not count as an attempt, every later frame would re-run it and
-	// stay latched in detection until one happened to succeed.
-	m_lastDetectModelFrame= m_modelFrameIndex;
 	m_detector.detect(bgrFrame, m_detections);
 
 	for (const PersonDetection& detection : m_detections)
@@ -160,11 +148,13 @@ eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, bool bForceD
 
 		outBoxMin= clippedMin;
 		outBoxMax= clippedMax;
-		return eBodyBoxSource::Detector;
+		return true;
 	}
+	return false;
+}
 
-	// A failed re-detect must not cost a working track: the periodic detect
-	// is a drift guard, not a requirement
+eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, glm::vec2& outBoxMin, glm::vec2& outBoxMax)
+{
 	if (m_bBoxTracked)
 	{
 		outBoxMin= m_trackedBoxMin;
@@ -172,11 +162,77 @@ eBodyBoxSource BodyPoseTracker::acquireBox(const cv::Mat& bgrFrame, bool bForceD
 		return eBodyBoxSource::Tracked;
 	}
 
+	// Counted whether or not it fires. The person detector is trained on
+	// whole people, so on a subject truncated at a desk it misses often, and
+	// the periodic detect is not due again the frame after a miss.
+	m_lastDetectModelFrame= m_modelFrameIndex;
+	if (detectPersonBox(bgrFrame, outBoxMin, outBoxMax))
+		return eBodyBoxSource::Detector;
+
 	// Nothing to go on. A top-down model still reads a centered subject from
 	// the whole frame, which beats reporting nothing until the detector fires.
 	outBoxMin= glm::vec2(0.f, 0.f);
 	outBoxMax= glm::vec2((float)bgrFrame.cols, (float)bgrFrame.rows);
 	return eBodyBoxSource::FullFrame;
+}
+
+bool BodyPoseTracker::makeTrackedBox(const RtmPoseResult& result, glm::vec2& outBoxMin, glm::vec2& outBoxMax) const
+{
+	// The confident BODY keypoints' extent. No full-body assumption is
+	// involved, so a truncated subject simply produces a smaller box instead
+	// of a fabricated one. The whole body model's face and hand points stay
+	// out of it: they sit inside the body's extent when present and would
+	// only add their own misses.
+	glm::vec2 trackedMin(FLT_MAX);
+	glm::vec2 trackedMax(-FLT_MAX);
+	int confidentCount= 0;
+	for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
+	{
+		if (result.scores[keypoint] < m_config.keypointScoreThreshold)
+			continue;
+		const glm::vec2 point(result.points[keypoint]);
+		trackedMin= glm::min(trackedMin, point);
+		trackedMax= glm::max(trackedMax, point);
+		confidentCount++;
+	}
+	if (confidentCount < 3 || (trackedMax.x - trackedMin.x) < kMinBoxSize || (trackedMax.y - trackedMin.y) < kMinBoxSize)
+		return false;
+
+	const glm::vec2 boxCenter= (trackedMin + trackedMax) * 0.5f;
+	const glm::vec2 halfExtent= (trackedMax - trackedMin) * 0.5f * kTrackedBoxExpansion;
+	outBoxMin= boxCenter - halfExtent;
+	outBoxMax= boxCenter + halfExtent;
+	return true;
+}
+
+void BodyPoseTracker::challengeTrackedBox(const cv::Mat& bgrFrame)
+{
+	m_bChallengePending= false;
+	if (!m_bBoxTracked || !m_lastObservation.valid)
+		return;
+
+	glm::vec2 boxMin(0.f);
+	glm::vec2 boxMax(0.f);
+	if (!detectPersonBox(bgrFrame, boxMin, boxMax))
+		return;
+	m_landmarkModel.estimate(bgrFrame, boxMin, boxMax, m_challengeResult);
+	if (!m_challengeResult.valid)
+		return;
+
+	// The observation's confidence, on the challenger
+	float scoreSum= 0.f;
+	for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
+		scoreSum+= std::clamp(m_challengeResult.scores[keypoint], 0.f, 1.f);
+	if (scoreSum / (float)COCO_KEYPOINT_COUNT <= m_lastObservation.confidence)
+		return;
+
+	glm::vec2 challengerMin(0.f);
+	glm::vec2 challengerMax(0.f);
+	if (makeTrackedBox(m_challengeResult, challengerMin, challengerMax))
+	{
+		m_trackedBoxMin= challengerMin;
+		m_trackedBoxMax= challengerMax;
+	}
 }
 
 // The observation's blocks are sized by the model's layout
@@ -238,7 +294,10 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 	{
 		// Divided-out frame: hold the last model result. Recording taps sit
 		// downstream, so this cadence is baked into recorded observations and
-		// replay never needs to know the divider.
+		// replay never needs to know the divider. The frame is free of the
+		// landmark model, so a due detect scores its box here.
+		if (m_bChallengePending && m_bLoaded && !bgrFrame.empty())
+			challengeTrackedBox(bgrFrame);
 		outObservation= m_lastObservation;
 		return;
 	}
@@ -246,51 +305,23 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 	outObservation= BodyPoseObservation();
 	if (m_bLoaded && !bgrFrame.empty())
 	{
-		// Drift guard: periodically rebuild the person box from the image
-		// rather than from the previous keypoints, whatever the model claims
-		// about its own confidence
-		const bool bForceDetect=
-			(m_modelFrameIndex - m_lastDetectModelFrame) >= (int64_t)m_config.detectorIntervalFrames;
+		// Drift guard: periodically score a person box built from the image
+		// against the one built from the previous keypoints, whatever the
+		// model claims about its own confidence
+		if (m_bBoxTracked && (m_modelFrameIndex - m_lastDetectModelFrame) >= (int64_t)m_config.detectorIntervalFrames)
+		{
+			m_lastDetectModelFrame= m_modelFrameIndex;
+			m_bChallengePending= true;
+		}
 
 		glm::vec2 boxMin(0.f);
 		glm::vec2 boxMax(0.f);
-		const eBodyBoxSource boxSource= acquireBox(bgrFrame, bForceDetect, boxMin, boxMax);
+		const eBodyBoxSource boxSource= acquireBox(bgrFrame, boxMin, boxMax);
 
 		m_landmarkModel.estimate(bgrFrame, boxMin, boxMax, m_landmarkResult);
 		if (m_landmarkResult.valid)
 		{
-			// Next frame's box is the confident BODY keypoints' extent. No
-			// full-body assumption is involved, so a truncated subject simply
-			// produces a smaller box instead of a fabricated one. The whole
-			// body model's face and hand points stay out of it: they sit
-			// inside the body's extent when present and would only add their
-			// own misses.
-			glm::vec2 trackedMin(FLT_MAX);
-			glm::vec2 trackedMax(-FLT_MAX);
-			int confidentCount= 0;
-			for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
-			{
-				if (m_landmarkResult.scores[keypoint] < m_config.keypointScoreThreshold)
-					continue;
-				const glm::vec2 point(m_landmarkResult.points[keypoint]);
-				trackedMin= glm::min(trackedMin, point);
-				trackedMax= glm::max(trackedMax, point);
-				confidentCount++;
-			}
-
-			if (confidentCount >= 3 && (trackedMax.x - trackedMin.x) >= kMinBoxSize &&
-				(trackedMax.y - trackedMin.y) >= kMinBoxSize)
-			{
-				const glm::vec2 boxCenter= (trackedMin + trackedMax) * 0.5f;
-				const glm::vec2 halfExtent= (trackedMax - trackedMin) * 0.5f * kTrackedBoxExpansion;
-				m_trackedBoxMin= boxCenter - halfExtent;
-				m_trackedBoxMax= boxCenter + halfExtent;
-				m_bBoxTracked= true;
-			}
-			else
-			{
-				m_bBoxTracked= false;
-			}
+			m_bBoxTracked= makeTrackedBox(m_landmarkResult, m_trackedBoxMin, m_trackedBoxMax);
 
 			outObservation.valid= true;
 			outObservation.boxSource= boxSource;
@@ -306,4 +337,7 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 	}
 
 	m_lastObservation= outObservation;
+	// Every frame is a model frame, so the challenge shares this one
+	if (m_bChallengePending && m_config.frameDivider == 1 && m_bLoaded && !bgrFrame.empty())
+		challengeTrackedBox(bgrFrame);
 }

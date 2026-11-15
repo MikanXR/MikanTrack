@@ -617,6 +617,14 @@ The direct solver now puts the wrist where its ray crosses a plane ahead of the 
 
 The scorer, its depth prior, its lift scale, the stereo-truth gate tool and the frozen copy the golden compared it with were deleted in the same change. The planes were judged by eye and not scored against the truth.
 
+## 37. The body tracker's periodic re-detect lost a seated user for seconds
+
+A direct take showed both arms dropping to rest for 1.9 s with the hands in view and both hand slots tracked at 0.99. The body model had lost the person: its mean keypoint score fell from 0.53 to about 0.15 and it put both wrists on one pixel.
+
+The cause was the drift guard. Every 20 model frames the tracker took the person detector's box in place of its tracked one. On 9 of that take's 12 re-detects the detector's crop scored 0.09 to 0.36. A frame with fewer than three confident keypoints then dropped the tracked box, so the next frame ran the detector again, and the tracker stayed on detector crops until one worked: 42 of 294 model frames lost, 29 of them in a row.
+
+The detector's box is now scored against the tracked one before it is used, on the divided-out frame after the model frame, where the landmark model is idle. Replayed at the live cadence the same take loses the person on no model frame, and no frame's stage time passes 26 ms. Scoring it on the model frame itself would have cost about 41 ms against a 32 ms camera period.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
