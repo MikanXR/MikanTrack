@@ -1714,19 +1714,9 @@ void SettingsPanels::drawHandCalibrationSection(const TrackingSectionContext& co
 				config->fusedRestAngles.present[0] ? locText("common.yes") : locText("common.no"),
 				config->fusedRestAngles.present[1] ? locText("common.yes") : locText("common.no"));
 
-	// The wizard measures bones against the desk marker or by stereo and
-	// zeroes the fingers from the fuse, none of which a direct project
-	// runs or needs
-	if (config->direct.enabled)
-	{
-		ImGui::TextWrapped("%s", locText("trackingPanel.directHandsNote"));
-	}
-	else
-	{
-		if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
-			context.state->bLaunchHandCalibrationWizard= true;
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
-	}
+	if (ImGui::Button(locLabel("trackingPanel.calibrateHands"), ImVec2(-1, 0)))
+		context.state->bLaunchHandCalibrationWizard= true;
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.calibrateHandsTooltip"));
 
 	const bool bAnyHandCalibration= config->handSkeleton.present[0] ||
 		config->handSkeleton.present[1] || config->fusedRestAngles.present[0] ||

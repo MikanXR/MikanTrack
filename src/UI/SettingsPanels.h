@@ -322,8 +322,7 @@ void drawDirectTorsoReadout(const TrackingSectionContext& context);
 void drawDirectArmChainReadout(const TrackingSectionContext& context);
 void drawDirectPalmReadout(const TrackingSectionContext& context);
 void drawDirectHoldRestReadout(const TrackingSectionContext& context);
-// The hand calibration state, the wizard button (the direct mode note in a
-// direct project) and Clear, under its heading
+// The hand calibration state, the wizard button and Clear, under its heading
 void drawHandCalibrationSection(const TrackingSectionContext& context);
 // The view toggles, no headers. Hand: the preview's skeleton overlay,
 // detection boxes and, in direct mode, every hand slot. Body: the preview's

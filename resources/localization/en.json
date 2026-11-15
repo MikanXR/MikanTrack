@@ -530,7 +530,6 @@
 		"directCountdownFmt": "Get ready - sit neutral... %d",
 		"directEnabled": "Direct retarget",
 		"directEnabledTooltip": "While on, this camera's landmarks drive the avatar directly\nand the fused stereo path is bypassed.",
-		"directHandsNote": "Direct mode measures no hand bones and needs no finger zero.",
 		"directIntro": "One camera, no world calibration: the avatar's own bone lengths set the scale and the camera is the world.",
 		"directSection": "Direct Retarget",
 		"directStatusCaptured": "Neutral captured.",

@@ -232,9 +232,6 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			SettingsPanels::drawDirectCameraControl(m_tracking);
 			SettingsPanels::drawDirectNeutralControl(m_tracking);
-			SettingsPanels::drawHandCalibrationSection(m_tracking);
-			ImGui::SeparatorText(locText("directStage.bodySection"));
-			SettingsPanels::drawBodyCalibrationControl(m_tracking);
 		}
 		else if (section == eStageSection::Settings)
 		{

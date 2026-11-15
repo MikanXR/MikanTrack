@@ -530,7 +530,6 @@
 		"directCountdownFmt": "準備してください - 自然に座ってください... %d",
 		"directEnabled": "ダイレクトリターゲット",
 		"directEnabledTooltip": "オンの間、このカメラのランドマークがアバターを直接動かし、\n融合したステレオ経路は使用されません。",
-		"directHandsNote": "ダイレクトモードでは手のボーンを測定せず、指のゼロ点も不要です。",
 		"directIntro": "カメラ1台でワールドキャリブレーションは不要です。アバター自身のボーン長がスケールを決め、カメラがワールドになります。",
 		"directSection": "ダイレクトリターゲット",
 		"directStatusCaptured": "ニュートラルを取得しました。",
