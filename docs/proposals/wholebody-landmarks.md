@@ -103,7 +103,7 @@ Before any consumer is built, measure what the points are worth from the webcam 
 
 - **The take:** raw frames on, the webcam at the monitor, the phone streaming with its face sidecar, and the tri-camera rig recording. The script: a neutral hold, slow and fast blinks, each eye alone, the mouth through the vowels and a wide smile, brows up and down, the head through yaw, pitch and roll, the same head sweep again wearing over-ear headphones, the hands crossing, clasping and passing near the face, and each hand dropping out of frame and returning. It is recorded in the same session as the IMU and depth-sweep take that plan.md's direct stage 1 item owes, as a second take on the same setup and calibration.
 
-- **The tool:** `--gate-wholebody` (or a mode of `--gate-direct`) re-runs RTMW3D over the webcam's raw frames and reports, per group:
+- **The tool:** `--gate-wholebody` re-runs RTMW3D over the webcam's raw frames and reports, per group:
 	- rest jitter of each face point, in pixels and in face-widths
 	- the eye openness ratio against the phone's `eyeBlinkLeft` and `eyeBlinkRight`, the mouth opening against `jawOpen`, the mouth width against `mouthSmileLeft` and `mouthSmileRight`, the brow height against `browInnerUp`: correlation and the separability of a blink
 	- the head from a face fit against the phone head, after the anchor alignment, beside the current ear and nose head against the same truth, reported apart for the ears-visible sweep and the headphones sweep

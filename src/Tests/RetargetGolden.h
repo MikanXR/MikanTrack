@@ -8,15 +8,12 @@
 #include <vector>
 
 #include "AvatarRetarget.h"
-#include "DirectRetarget.h"
-#include "DirectStageSolver.h"
 #include "LossStage.h"
 #include "OscStreamer.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
 
 #include "FrozenAvatarRetarget.h"
-#include "FrozenDirectRetarget.h"
 #include "FrozenOscStreamer.h"
 
 // The retarget golden comparison: the live retarget path run beside the frozen
@@ -162,46 +159,6 @@ inline Frozen::AvatarRetargetConfig toFrozen(const AvatarRetargetConfig& config,
 	return out;
 }
 
-inline Frozen::DirectCameraModel toFrozen(const DirectCameraModel& camera)
-{
-	Frozen::DirectCameraModel out;
-	out.fx= camera.fx;
-	out.fy= camera.fy;
-	out.cx= camera.cx;
-	out.cy= camera.cy;
-	out.width= camera.width;
-	out.height= camera.height;
-	return out;
-}
-
-inline Frozen::DirectNeutralPose toFrozen(const DirectNeutralPose& neutral)
-{
-	Frozen::DirectNeutralPose out;
-	out.present= neutral.present;
-	out.torso= neutral.torso;
-	out.shoulderMidpoint= neutral.shoulderMidpoint;
-	out.head= neutral.head;
-	return out;
-}
-
-inline Frozen::DirectRetargetConfig toFrozen(const DirectRetargetConfig& config)
-{
-	Frozen::DirectRetargetConfig out;
-	out.cameraTiltRadians= config.cameraTiltRadians;
-	out.neutral= toFrozen(config.neutral);
-	out.userShoulderWidthMeters= config.userShoulderWidthMeters;
-	out.headWidthMeters= config.headWidthMeters;
-	out.noseForwardMeters= config.noseForwardMeters;
-	out.userUpperArmLengthMeters= config.userUpperArmLengthMeters;
-	out.userForearmLengthMeters= config.userForearmLengthMeters;
-	out.headTrimRadians= config.headTrimRadians;
-	// The direct solve never read the elbow threshold
-	out.sides[0]= toFrozen(config.sides[0], k_defaultElbowHintConfidence);
-	out.sides[1]= toFrozen(config.sides[1], k_defaultElbowHintConfidence);
-	out.restBlendMs= config.restBlendMs;
-	return out;
-}
-
 inline Frozen::OscStreamerConfig toFrozen(const StreamConfig& config)
 {
 	Frozen::OscStreamerConfig out;
@@ -245,80 +202,6 @@ bool samePose(const A& a, const B& b, std::string& outWhy)
 			return false;
 		}
 	}
-	return true;
-}
-
-template <typename A, typename B>
-bool sameChain(const A& a, const B& b, const std::string& prefix, std::string& outWhy)
-{
-	GOLDEN_FIELD(valid)
-	GOLDEN_FIELD(shoulder)
-	GOLDEN_FIELD(elbow)
-	GOLDEN_FIELD(wrist)
-	return true;
-}
-
-template <typename A, typename B>
-bool sameSolveArm(const A& a, const B& b, const std::string& prefix, std::string& outWhy)
-{
-	if (!sameChain(a.chain, b.chain, prefix + "chain.", outWhy))
-		return false;
-	GOLDEN_FIELD(bHandSeen)
-	GOLDEN_FIELD(bElbowSeen)
-	GOLDEN_FIELD(bDepthChosen)
-	GOLDEN_FIELD(depthLow)
-	GOLDEN_FIELD(depthHigh)
-	GOLDEN_FIELD(modelDepthDelta)
-	GOLDEN_FIELD(pnpDistance)
-	GOLDEN_FIELD(liftDepth)
-	GOLDEN_FIELD(chosenDepth)
-	GOLDEN_FIELD(chosenCost)
-	GOLDEN_FIELD(chosenElbowPx)
-	GOLDEN_FIELD(filteredDepth)
-	GOLDEN_FIELD(pnpScale.scale)
-	GOLDEN_FIELD(pnpScale.sampleCount)
-	GOLDEN_FIELD(bHandMeasured)
-	GOLDEN_FIELD(twist)
-	GOLDEN_FIELD(wristRotation)
-	GOLDEN_FIELD(filteredPalm)
-	GOLDEN_FIELD(measuredFingers)
-	GOLDEN_FIELD(fingers)
-	GOLDEN_FIELD(bResting)
-	GOLDEN_FIELD(restBlend)
-	return true;
-}
-
-template <typename A, typename B>
-bool sameSolveState(const A& a, const B& b, std::string& outWhy)
-{
-	const std::string prefix= "state.";
-	GOLDEN_FIELD(camera.fx)
-	GOLDEN_FIELD(camera.fy)
-	GOLDEN_FIELD(camera.cx)
-	GOLDEN_FIELD(camera.cy)
-	GOLDEN_FIELD(camera.width)
-	GOLDEN_FIELD(camera.height)
-	GOLDEN_FIELD(tiltRadians)
-	GOLDEN_FIELD(torsoValid)
-	GOLDEN_FIELD(shoulder)
-	GOLDEN_FIELD(shoulderMidpoint)
-	GOLDEN_FIELD(torsoFrame)
-	GOLDEN_FIELD(spineDelta)
-	GOLDEN_FIELD(headMeasured)
-	GOLDEN_FIELD(headFrame)
-	GOLDEN_FIELD(headDelta)
-	return sameSolveArm(a.arms[0], b.arms[0], prefix + "arms[0].", outWhy) &&
-		sameSolveArm(a.arms[1], b.arms[1], prefix + "arms[1].", outWhy);
-}
-
-template <typename A, typename B>
-bool sameNeutral(const A& a, const B& b, std::string& outWhy)
-{
-	const std::string prefix= "neutral.";
-	GOLDEN_FIELD(present)
-	GOLDEN_FIELD(torso)
-	GOLDEN_FIELD(shoulderMidpoint)
-	GOLDEN_FIELD(head)
 	return true;
 }
 
@@ -755,19 +638,6 @@ struct StreamPair
 		}
 		return bSame;
 	}
-
-	// The direct path: each side streams the pose its own solver produced
-	bool encodeDirect(const TrackingFrameResult& frame, const AvatarPose& livePose,
-					  const Frozen::AvatarPose& frozenPose, std::string& outWhy)
-	{
-		RetargetResult liveResult;
-		liveResult.pose= livePose;
-		live.streamer.encodeFrame(frame, liveResult, livePackets);
-		frozen.encodeFrame(frame, frozenPackets, &frozenPose);
-		maskStreamClock(livePackets);
-		maskStreamClock(frozenPackets);
-		return samePackets(livePackets, frozenPackets, outWhy);
-	}
 };
 
 // The position retarget on an unresolved frame, which also compares what the
@@ -821,135 +691,6 @@ struct PositionPair
 		{
 			outWhy= "fill then solve: " + outWhy;
 			return false;
-		}
-		return true;
-	}
-};
-
-// The frozen solver takes the lifted palm's mirror wherever the mirror
-// continues the forearm better at all. The live one takes it on evidence, a
-// gain over an enter bar and kept over a leave bar, which is a deliberate
-// change in output: on a real take it changes the palm on the frames the
-// gain sits between zero and the bars. The bars are config, and both at zero
-// is the frozen rule, so the pair runs the live side there and holds
-// everything else to the frozen bits. What the bars themselves do is the
-// direct retarget test's, and the recording tool counts the frames they
-// change on its take.
-inline DirectRetargetConfig atFrozenPalmMirror(DirectRetargetConfig config)
-{
-	config.palmMirrorEnterGain= 0.f;
-	config.palmMirrorLeaveGain= 0.f;
-	config.handCutLandmarks= 0;
-	return config;
-}
-
-// The frozen solver measures the fingers against a palmar side from the
-// hand's own evidence. The live one takes it from the hand's side where the
-// direct camera decided that side, so the pair gives the live side its hands
-// with no side decided.
-inline TrackingFrameResult atFrozenHandSides(TrackingFrameResult frame)
-{
-	for (TrackedHand& hand : frame.hands)
-		hand.bSideDecided= false;
-	return frame;
-}
-
-// The direct retarget: the pose, the solve state, the chains and the lift
-// scale. Two live paths run beside the frozen solver: the retarget stage,
-// and the pieces it is made of run by hand (measure, the loss stage under the
-// direct rules, place, and the rest readout written into the solve state).
-struct DirectPair
-{
-	DirectStageSolver live;
-	DirectRetarget liveSplit;
-	LossStage liveSplitLoss;
-	Frozen::DirectRetarget frozen;
-	AvatarPose livePose;
-	AvatarPose liveSplitPose;
-	SourcePose liveSource;
-	DirectRetarget::SolveState liveSplitState;
-	Frozen::AvatarPose frozenPose;
-
-	void reset()
-	{
-		live.reset();
-		liveSplit.reset();
-		liveSplitLoss.reset();
-		frozen.reset();
-	}
-
-	bool solve(const TrackingFrameResult& callerFrame, const DirectCameraModel& cameraModel,
-			   const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
-			   const DirectRetargetConfig& callerConfig, std::string& outWhy)
-	{
-		const DirectRetargetConfig config= atFrozenPalmMirror(callerConfig);
-		const TrackingFrameResult cameraFrame= atFrozenHandSides(callerFrame);
-		live.solve(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, livePose);
-		liveSplit.measure(cameraFrame, cameraModel, phoneHead, timestampMs, skeleton, config, liveSource);
-		// The direct rules built straight from the config, where the stage
-		// builds them from the chains, so the two are held to each other too
-		liveSplitLoss.apply(makeDirectLossPolicy(config.restBlendMs), &skeleton, config.sides, liveSource, nullptr);
-		liveSplit.place(liveSource, skeleton, config, liveSplitPose);
-		liveSplitState= liveSplit.getSolveState();
-		RetargetStage::writeDirectRestReadout(liveSource, liveSplitState);
-		frozen.solve(cameraFrame, toFrozen(cameraModel), phoneHead, timestampMs, skeleton, toFrozen(config),
-					 frozenPose);
-		if (!sameAsFrozen(live.getStage().getDirectRetarget(), live.getSolveState(), livePose, skeleton, outWhy))
-			return false;
-		if (!sameAsFrozen(liveSplit, liveSplitState, liveSplitPose, skeleton, outWhy))
-		{
-			outWhy= "measure, loss, place: " + outWhy;
-			return false;
-		}
-		return true;
-	}
-
-	bool captureNeutral(DirectNeutralPose& outNeutral, std::string& outWhy)
-	{
-		Frozen::DirectNeutralPose frozenNeutral;
-		DirectNeutralPose splitNeutral;
-		const bool bLive= live.captureNeutral(outNeutral);
-		const bool bSplit= liveSplit.captureNeutral(splitNeutral);
-		const bool bFrozen= frozen.captureNeutral(frozenNeutral);
-		if (bLive != bFrozen || bSplit != bFrozen)
-		{
-			outWhy= "captureNeutral result";
-			return false;
-		}
-		if (!sameNeutral(splitNeutral, frozenNeutral, outWhy))
-		{
-			outWhy= "measure, loss, place: " + outWhy;
-			return false;
-		}
-		return sameNeutral(outNeutral, frozenNeutral, outWhy);
-	}
-
-private:
-	// solver: the measuring solver, for its chains and its lift scale
-	bool sameAsFrozen(const DirectRetarget& solver, const DirectRetarget::SolveState& state, const AvatarPose& pose,
-					  const AvatarSkeleton& skeleton, std::string& outWhy) const
-	{
-		if (!samePose(pose, frozenPose, outWhy) || !sameSolveState(state, frozen.getSolveState(), outWhy))
-			return false;
-		const glm::mat4 cameraToWorld= DirectRetarget::makeCameraToWorld(skeleton, pose, state);
-		const glm::mat4 frozenCameraToWorld=
-			Frozen::DirectRetarget::makeCameraToWorld(skeleton, frozenPose, frozen.getSolveState());
-		if (!sameBits(cameraToWorld, frozenCameraToWorld))
-		{
-			outWhy= "makeCameraToWorld";
-			return false;
-		}
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		{
-			const std::string prefix= "getArmChain(" + std::to_string(sideIndex) + ").";
-			if (!sameChain(solver.getArmChain(sideIndex), frozen.getArmChain(sideIndex), prefix, outWhy))
-				return false;
-			if (!sameBits(solver.getPnpScale(sideIndex).scale, frozen.getPnpScale(sideIndex).scale) ||
-				!sameBits(solver.getPnpScale(sideIndex).sampleCount, frozen.getPnpScale(sideIndex).sampleCount))
-			{
-				outWhy= "getPnpScale(" + std::to_string(sideIndex) + ")";
-				return false;
-			}
 		}
 		return true;
 	}

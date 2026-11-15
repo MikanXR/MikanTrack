@@ -4,7 +4,7 @@ Built and checked live, 2026-11-12. The reference docs carry the current state (
 
 ## Goal
 
-The direct solver takes a hand slot as the hand of an arm only when the slot's wrist is within half a shoulder width of that arm's body wrist (`bHandNear`, `src/Avatar/DirectRetarget.cpp:768`). A slot published under the wrong side sits on the other arm's wrist, so the solver turns it away. The arm stays placed from the body wrist, the palm and the fingers hold their last values, and the wrist depth scorer loses the hand lift's distance, for as long as the label is wrong. `SolveState::oppositeWristRejections` counts those frames. Live sessions of 2026-11-12 counted 468 and 1010 (left, right) over several minutes, 84 and 95 in 46 seconds, and 14 and 10 in 49 seconds.
+The direct solver takes a hand slot as the hand of an arm only when the slot's wrist is within half a shoulder width of that arm's body wrist (`bHandNear`, `src/Avatar/DirectRetarget.cpp:768`). A slot published under the wrong side sits on the other arm's wrist, so the solver turns it away. The arm stays placed from the body wrist, and the palm and the fingers hold their last values, for as long as the label is wrong. `SolveState::oppositeWristRejections` counts those frames. Live sessions of 2026-11-12 counted 468 and 1010 (left, right) over several minutes, 84 and 95 in 46 seconds, and 14 and 10 in 49 seconds.
 
 `matchHandSideByShape` (`src/Vision/HandSideMatch.h`) already names a slot's side from the whole-body model's two hands, and was right on every one of the 2158 slot frames it decided on the rig take of 2026-11-12. It feeds the swapped-hands report alone. The goal is that a real hand under a wrong label keeps driving its own arm, and that nothing which is not a hand is taken as one because of it.
 
@@ -50,7 +50,7 @@ Decided at the review of this document:
 
 - A direct take records the hands as the lift consumes them and the body observation with its whole-body block, so the label, `rightProb`, the slot's 21 points and both whole-body hands are in the recording on every frame. `--gate-wholebody` (`src/Tests/ToolGateWholeBody.cpp`) re-runs the body model over a take's raw frames for a take recorded without the block.
 
-- The checksum of a direct take hashes the lifted hand poses. The solver is not a checksummed stage. `--retarget-golden` compares the live solver against its frozen copy bit for bit.
+- The checksum of a direct take hashes the lifted hand poses. The solver is not a checksummed stage and has no frozen copy.
 
 ## Design
 
@@ -149,7 +149,7 @@ The live take of 2026-11-12, recorded on the build with the first form of the ru
 | Slot frames moved to the other side | | 173 |
 | Side changes of a tracked slot | 38 | 38 |
 
-The 46 left on the other arm's hand are a second slot on a hand that already has one, most of them with the other whole-body hand unscored. Through `--gate-direct` the same take reads twist jumps on 13 of 955 frame pairs as published and 10 of 1032 with the rule, and mirrored-palm frames on 35 of 1102 and 30 of 1175.
+The 46 left on the other arm's hand are a second slot on a hand that already has one, most of them with the other whole-body hand unscored. Measured on the same take, it reads twist jumps on 13 of 955 frame pairs as published and 10 of 1032 with the rule, and mirrored-palm frames on 35 of 1102 and 30 of 1175.
 
 ### 4. Where it applies: in the direct camera, before the lift
 
@@ -163,7 +163,7 @@ What this changes downstream, and what it does not:
 
 - **The earned hold and the per-side measurements.** Unchanged, and that is the point of correcting upstream: `ArmState` is indexed by the arm, and the hand that reaches it is now that arm's hand on every frame the rule decides. The palm filters, the palm hold, the finger filters and the solver's palmar memory no longer reset at each label flip, and the held twist, wrist and fingers are held only when the hand is really gone.
 
-- **The wrist depth.** The lift's distance stays in the scorer through the episode. plan.md's lift item records that the scorer is bistable without it.
+- **The wrist depth.** The direct solver does not read the lift's distance.
 
 - **Recordings.** A new take records the corrected hands, with `bSideCorrected` as an optional key per hand that reads false when missing. `k_formatVersion` does not move. The recorded label can be recovered from the flag, so a take stays reversible. Existing takes are untouched: `--replay-verify` passes on them with no divergence, since nothing in a replayed stage moves.
 
@@ -171,7 +171,7 @@ What this changes downstream, and what it does not:
 
 The alternative considered, and turned down at the review, is to correct inside `DirectRetarget::measure`: each arm picks the slot whose matched side is the arm's. It keeps recordings as the pipeline published them, so every existing take replays through it. It fits less well. The slot was already lifted under the wrong label, so its palm comes from a memory keyed to the other side, which after a clasp holds the other hand's palm normal: the palm can come back mirrored on exactly the frames the correction is for. The solver would also need the side passed around the label in `measureMonoFingers`, and the overlay, the dump and the stream would still show the wrong side. Correcting the pipeline's own label was also considered: the pipeline runs before the body tracker, so it would act on the previous model frame, and its stickiness guards multi-camera views this proposal does not touch.
 
-The correction has no setting. The A/B is the tool's: `--gate-wholebody` and `--gate-direct` run a take with and without the rule.
+The correction has no setting. The A/B is the tool's: `--gate-wholebody` runs a take with and without the rule.
 
 ### 5. The report, the counts and the Flip handedness prompt
 
@@ -211,7 +211,7 @@ Self-tests:
 	- a slot far from both hands under either label is not moved
 - `--test-direct-retarget`, cases (k2) and (k3) extended: with corrected slots in the frame both hands are seen and nothing is counted as turned away, the report still comes up after a second of corrected slots and not before, one uncorrected slot the match decides for its label ends it, `sideCorrections` counts, and with the block absent the cases read as they do today.
 - `--test-replay`: a recording with `bSideCorrected` round-trips it, and one without it loads with the flag false.
-- `--test-retarget-golden`: every case passes unchanged. With no slot flagged the solver's output is the frozen copy's bit for bit.
+- `--test-retarget-golden`: every case passes unchanged.
 
 Replay checks on the recorded takes:
 
@@ -221,7 +221,7 @@ Replay checks on the recorded takes:
 	- no slot on no hand is taken on any take
 	- neither side's hand frames fall on any take
 	- the side changes of a tracked slot do not rise
-- `--gate-direct` on the direct takes with the rule applied ahead of the lift: its twist jumps and mirrored-palm frames per hand do not rise. This is the check on the palm through a corrected episode. Measured on the four direct takes: hands read on 118 more frames, mirrored-palm frames 16 to 4, twist jumps 6 to 8. The rise in twist jumps was accepted at the review. The one traced is the lift's per-side memory surviving a change of the slot under a side, which plan.md tracks.
+- The direct takes with the rule applied ahead of the lift: their twist jumps and mirrored-palm frames per hand do not rise. This is the check on the palm through a corrected episode. Measured on the four direct takes: hands read on 118 more frames, mirrored-palm frames 16 to 4, twist jumps 6 to 8. The rise in twist jumps was accepted at the review. The one traced is the lift's per-side memory surviving a change of the slot under a side, which plan.md tracks.
 - A take recorded on the new build verifies in replay and carries the flag. Three did on 2026-11-12, the third with Flip handedness at the wrong value: 996 of its 1543 frames carry the flag, 431 of them with one hand in view, 9 slot frames are turned away, and the rule moves nothing on its own recorded outcome.
 
 Live checks, direct mode on the webcam with an avatar loaded:

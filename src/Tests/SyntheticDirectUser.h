@@ -18,7 +18,7 @@ namespace SyntheticDirectUser
 using namespace SyntheticAvatar;
 
 // The model's relative depth arrives compressed (measured 0.6 of truth on
-// the webcam take); the solver may read only its sign
+// the webcam take); the solver does not read it
 constexpr float kModelDepthScale= 0.6f;
 
 // The torso length the synthetic rig is authored with (shoulder height
@@ -96,10 +96,6 @@ struct User
 	bool bWristSeen[2]= {true, true};
 	// The body model's visibility on a seen wrist
 	float wristVisibility[2]= {1.f, 1.f};
-	// Whether the body model reports its relative depth
-	bool bModelDepth= true;
-	// The hand lift's wrist distance as a multiple of the truth
-	float pnpDepthScale[2]= {1.f, 1.f};
 	// Where the hand slot sits relative to the wrist's true pixel: a slot
 	// on something else in the scene
 	glm::vec2 handPixelOffset[2]{};
@@ -149,7 +145,7 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 	body.boxSource= eBodyBoxSource::Detector;
 	body.modelFrameIndex= frameIndex;
 	body.confidence= 1.f;
-	body.hasDepth= user.bModelDepth;
+	body.hasDepth= true;
 	const float hipDepth= toCamera(camera, 0.5f * (user.hip[0] + user.hip[1])).z;
 	setLandmark(body, camera, (int)ePoseLandmark::NOSE, user.nose, hipDepth, true);
 	setLandmark(body, camera, (int)ePoseLandmark::LEFT_EAR, user.ear[0], hipDepth, true);
@@ -186,7 +182,7 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 		pose.confidence= 1.f;
 		pose.hasCameraPose= user.bHandLifted[sideIndex];
 		pose.palmOrientationCamera= camera.cameraFromWorld * user.palm[sideIndex];
-		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]) * user.pnpDepthScale[sideIndex];
+		pose.palmPositionCamera= toCamera(camera, user.wrist[sideIndex]);
 		pose.fingers= user.fingers[sideIndex];
 		pose.skeleton= skeleton.getHand((eHandSide)sideIndex).skeleton;
 

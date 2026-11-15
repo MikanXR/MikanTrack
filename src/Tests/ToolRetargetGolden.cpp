@@ -6,15 +6,15 @@
 #include "RetargetGolden.h"
 #include "SyntheticAvatar.h"
 
-// The retarget golden comparison over a recording: the live retarget path
-// beside its frozen copy on every replayed frame, bit for bit. A direct-mode
-// recording drives the direct retarget from its camera's replayed result. Any
-// other recording drives the retarget stage (the gate, hold, freeze and
-// position retarget the frozen stream ran itself) from the replayed fused
-// output, bit for bit where every frame is sent and within the decimated
-// tolerance on the sent frames alone. Both run on the shared synthetic
-// rig with default rig settings, so the comparison pins no avatar file and no
-// sidecar: it asks whether the two code paths agree, not what the avatar did.
+// The retarget golden comparison over a recording: the live position retarget
+// path beside its frozen copy on every replayed frame. A fused recording
+// drives the retarget stage (the gate, hold, freeze and position retarget the
+// frozen stream ran itself) from the replayed fused output, bit for bit where
+// every frame is sent and within the decimated tolerance on the sent frames
+// alone. A direct-mode recording is not compared: the direct retarget has no
+// frozen copy. The run uses the shared synthetic rig with default rig
+// settings, so the comparison pins no avatar file and no sidecar: it asks
+// whether the two code paths agree, not what the avatar did.
 // The one difference by design is the step clock: from a take's first small
 // backward step in the frame clock on, a frame that differs is counted and
 // reported apart, with the largest difference, rather than failing.
@@ -160,86 +160,6 @@ StreamConfig makeStreamConfig(const AppConfig& config, const AvatarRigSettings& 
 	return oscConfig;
 }
 
-int runDirect(const TrackingReplay& replay, const AppConfig& config, const AvatarRigSettings& rig,
-			  const std::shared_ptr<const AvatarSkeleton>& skeleton)
-{
-	const int cameraIndex= config.direct.cameraIndex;
-	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount() ||
-		!config.camera(cameraIndex).intrinsics.present)
-	{
-		MIKAN_LOG_ERROR(kTag) << "the direct camera " << cameraIndex << " has no intrinsics";
-		return 1;
-	}
-	const MikanMatrix3d& cameraMatrix= config.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
-	const DirectRetargetConfig directConfig= makeDirectRetargetConfig(config, rig);
-	const TrackingFrameResult::HeadPose noPhoneHead;
-
-	DirectPair direct;
-	StreamPair stream;
-	stream.setConfig(makeStreamConfig(config, rig, skeleton));
-	Tally tally;
-	std::string why;
-	int placedFrames= 0;
-	DirectStageSolver atOwnBars;
-	AvatarPose atOwnBarsPose;
-	int palmFrames= 0;
-	int mirrorChangedFrames= 0;
-	BackwardSteps backward;
-	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
-	{
-		const TrackingReplay::ReplayFrame& frame= replay.getFrame(frameIndex);
-		if (cameraIndex >= (int)frame.perCamera.size() || !frame.perCameraValid[cameraIndex])
-			continue;
-		const TrackingFrameResult& cameraFrame= frame.perCamera[cameraIndex];
-		backward.step(cameraFrame.timestampMs);
-		DirectCameraModel cameraModel;
-		cameraModel.fx= (float)cameraMatrix.x0;
-		cameraModel.fy= (float)cameraMatrix.y1;
-		cameraModel.cx= (float)cameraMatrix.z0;
-		cameraModel.cy= (float)cameraMatrix.z1;
-		cameraModel.width= cameraFrame.frameWidth;
-		cameraModel.height= cameraFrame.frameHeight;
-
-		tally.frames++;
-		const bool bSame= direct.solve(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs, *skeleton,
-									   directConfig, why);
-		tally.note(bSame, frameIndex, "direct", why);
-		tally.note(stream.encodeDirect(cameraFrame, direct.livePose, direct.frozenPose, why), frameIndex, "stream",
-				   why);
-		const Frozen::DirectRetarget::SolveState& state= direct.frozen.getSolveState();
-		placedFrames+= (state.arms[0].chain.valid || state.arms[1].chain.valid) ? 1 : 0;
-
-		// The one deliberate difference from the frozen path, counted: the
-		// same frames under the take's own palm mirror bars, against the
-		// compared solver at the frozen rule
-		atOwnBars.solve(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs, *skeleton, directConfig,
-						atOwnBarsPose);
-		bool bPalmRead= false;
-		bool bMirrorDiffers= false;
-		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		{
-			const DirectRetarget::SolveState::Arm& own= atOwnBars.getSolveState().arms[sideIndex];
-			const DirectRetarget::SolveState::Arm& compared= direct.live.getSolveState().arms[sideIndex];
-			bPalmRead= bPalmRead || own.palmMirrorGain != 0.f || compared.palmMirrorGain != 0.f;
-			bMirrorDiffers= bMirrorDiffers || own.bPalmMirrored != compared.bPalmMirrored;
-		}
-		palmFrames+= bPalmRead ? 1 : 0;
-		mirrorChangedFrames+= bMirrorDiffers ? 1 : 0;
-	}
-	MIKAN_LOG_INFO(kTag) << "direct camera " << cameraIndex << ": an arm placed on " << placedFrames << " of "
-						 << tally.frames << " frames";
-	MIKAN_LOG_INFO(kTag) << "the palm mirror's bars (enter " << directConfig.palmMirrorEnterGain << ", leave "
-						 << directConfig.palmMirrorLeaveGain << "), the deliberate difference from the frozen path, "
-						 << "change the mirror on " << mirrorChangedFrames << " of the " << palmFrames
-						 << " frames with a palm read. The compare below runs the live side at the frozen rule.";
-	// The direct solver restarts on any backward step, so none of them is a
-	// difference by design here
-	MIKAN_LOG_INFO(kTag) << backward.steps << " backward steps in the frame clock, the largest " << backward.largestMs
-						 << " ms";
-	report(tally, "direct retarget and stream");
-	return tally.mismatches == 0 && tally.frames > 0 ? 0 : 1;
-}
-
 int runPosition(const TrackingReplay& replay, const AppConfig& config, const AvatarRigSettings& rig,
 				const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
@@ -373,17 +293,21 @@ static int runRetargetGoldenTool(const TestArgs& args)
 	}
 	replay.runAll();
 	const AppConfig& config= replay.getRecordedConfig();
+	if (config.direct.enabled)
+	{
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": direct mode, not compared: the direct retarget has no frozen copy";
+		return 1;
+	}
 
 	const AvatarModel avatarModel= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
 	const std::shared_ptr<const AvatarSkeleton> skeleton= std::make_shared<AvatarSkeleton>(avatarModel);
 	const AvatarRigSettings rig;
 
-	MIKAN_LOG_INFO(kTag) << recordingPath << ": " << replay.getFrameCount() << " frames, "
-						 << (config.direct.enabled ? "direct mode" : "fused");
-	return config.direct.enabled ? runDirect(replay, config, rig, skeleton)
-								 : runPosition(replay, config, rig, skeleton);
+	MIKAN_LOG_INFO(kTag) << recordingPath << ": " << replay.getFrameCount() << " frames, fused";
+	return runPosition(replay, config, rig, skeleton);
 }
 
 MIKAN_REGISTER_TEST("--retarget-golden",
-					"Retarget golden over a recording: the live retarget path against its frozen copy <recording.jsonl>",
+					"Retarget golden over a recording: the live position retarget path against its frozen copy "
+					"<recording.jsonl>",
 					eTestCategory::Tool, runRetargetGoldenTool)

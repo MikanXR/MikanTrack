@@ -86,8 +86,8 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--test-vmc`: VMC retarget: axis conversion, rest identity, chain round trip, the face profile binding and blend messages
 - `--test-avatar-retarget`: avatar retarget: rest identity, reach scaling, two-bone IK, hands, fingers, root, VMC
 - `--test-avatar-rig`: avatar rig: sidecar round trip, mapping overrides, trims, finger tweaks, elbow hint
-- `--test-direct-retarget`: direct retarget: camera world, neutral capture, depth sign, unseen elbow, hold and rest, determinism, the body-wrist gate on hand slots
-- `--test-retarget-golden`: retarget golden: the live retarget path against its frozen copy, bit for bit, over synthetic sequences
+- `--test-direct-retarget`: direct retarget: camera world, neutral capture, the depth planes, unseen elbow, hold and rest, determinism, the body-wrist gate on hand slots
+- `--test-retarget-golden`: retarget golden: the live position retarget path against its frozen copy, bit for bit, over synthetic sequences, and the direct source pose's clock and group states on the live solver alone
 - `--test-setup-flow`: guided setup: the step chain of every tracking variant
 - `--test-stage-view`: Stage View: the content of every view mode and the mode names
 - `--test-pipeline-model`: pipeline model: layout per project shape, stage ids, status rules, string table coverage
@@ -109,7 +109,6 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--export-marker`: writes + opens the printable origin Aruco marker PNG
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
 - `--gate-wholebody`: the whole-body model's face and hand blocks on one camera's raw frames, at every frame and at the live divider: face point jitter, the face shape ratios and blinks against the phone's face sidecar, the blink evaluation's face model candidates found in `models/`, the body model's hands and the hand slot's side against the stereo rig's triangulated hands, and the hand slots the direct solver turns away on the other arm's wrist, split by what the hands were doing and what the slot was (`labels` runs that report alone)
-- `--gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [frames.csv]`: whole-body 3D arm directions on one camera's raw frames against the stereo rig's output, the single-camera direct mode's gate, with the direct retarget and a Kalidokit-style baseline measured side by side (a direct-mode take runs their truth-free metrics alone), and the direct solve's twist jumps and mirrored-palm frames per hand. `correct` runs the candidates on the camera's hands with their sides corrected from the recorded whole-body hands ahead of the lift (`TrackingReplay::WhatIfParams::correctHandSidesCamera`), the A/B on a take recorded before the direct camera corrected them
 - `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
 - `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
@@ -118,9 +117,10 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--replay-mono-baseline`: single-camera output of a recording measured against its multi-camera output, with the single-camera plan's acceptance gates
 - `--replay-popmetrics`: pop statistics of a recording: baseline vs hand estimator
 - `--render-avatar`: renders a VRM at rest (or a canned retargeted pose with a trailing `demo`) to a PNG through the scene renderer from a hidden window, with the model's rig sidecar applied
+- `--render-direct <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>] [forearm=<meters>] [view=front] [near=<fraction>] [far=<fraction>]`: renders the avatar a one-camera direct project would show for every raw frame of a take, from the camera at the frame's size, one `frame_<frameIndex>.jpg` per raw frame. The whole-body model runs over the camera's raw frames, the hands are the recorded ones, and the retarget stage is the app's for a direct project on that camera (the first with body pose by default), so the take need not be a direct-mode recording. `vrm` names the avatar in place of the recorded one, and `tilt` and `forearm` stand in for the recorded direct tilt and forearm length. `view=front` draws the avatar from a 35 degree lens 1.4 m ahead of its hips in place of the tracking camera, so the arms stay in the picture when the user's hands leave the frame. `near` and `far` stand in for the depth planes' fractions of the reach. The face is at rest
 - `--pose-report <recording.jsonl> [frameIndex] [outDir]`: re-solves one frame of a direct-mode take or a dump's `dump.jsonl` through the retarget stage under the take's own chain settings and reports the posed avatar against the landmarks (reprojection per joint, each arm's mapping and IK weight with its wrist goal, arm angles and depths, finger angles) with a compare image, the loop after a solver change or a chain edit
 - `--replay-verify`: re-runs a recording and verifies every frame checksum
-- `--retarget-golden <recording.jsonl>`: the live retarget path against its frozen copy over a recording, bit for bit
+- `--retarget-golden <recording.jsonl>`: the live position retarget path against its frozen copy over a recording, bit for bit (a direct-mode take is not compared and exits 1)
 - `--replay-audio <recording.jsonl> [out.json] [--model loudness|mfcc|ovrlipsync] [--profile path] [--gain db] [--gate dbfs]`: re-runs the microphone mouth stage over a recording's audio sidecar on the live hop grid (under the recording's model unless `--model` names another) and reports the per-viseme difference against the recorded frames, the A/B for a model, profile, gain, or gate change; the JSON carries the `recorded` and `replayed` series, `model`, and `recordedModel` for `--render-mouth`
 - `--viseme-bench <clip.wav> [out.json] [--model loudness|mfcc|ovrlipsync] [--hop ms] [--window ms] [--lookahead frames] [--profile path] [--cutoff hz] [--beta b]`: runs a mouth model over a wav clip under the live rolling-window policy (defaults: `mfcc`, volume-only without a profile, the live hop, window, and lookahead) and reports the share of frames each viseme dominated, the chunked frames' drift from one whole-clip run, the per-run inference p50 and p95 against the hop, and the viseme weights as JSON (the `offline`, `chunked`, and `filtered` series, with `model`)
 - `--render-mouth <file.vrm> <bench.json> [out.png] [tiles] [chunked|offline|filtered]`: renders a contact sheet of the avatar's face under a bench JSON's viseme frames through the scene renderer and the avatar's Auto face profile from a hidden window, tiles spread evenly over the clip and labelled with the frame index and the dominant viseme
@@ -130,7 +130,8 @@ Prints every registered command grouped by category (self-tests, hardware requir
 Python, no build needed:
 
 - `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
-- `tools/intrinsics_spike/`: the calibration what-if scripts over recordings (header patching, raw-equivalent frames, the `--gate-direct` sensitivity sweep, the focal length estimators), run from their own venv as its README sets out
+- `tools/intrinsics_spike/`: the lens what-if scripts over recordings (header patching, raw-equivalent frames, the focal length estimators, the phone pattern probes), run from their own venv as its README sets out
+- `tools/kalidokit_ab/`: Kalidokit's 3d sample page fed a take's front-camera frames, rendered beside `--render-direct` into a side-by-side video, run as its README sets out
 
 ---
 

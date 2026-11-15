@@ -366,6 +366,10 @@ struct DirectConfig
 	// The camera's downward pitch, degrees, positive looking down, set by
 	// the user alone (a level camera by default; nothing measures it)
 	float cameraTiltDegrees= 0.f;
+	// The two depth planes the wrist sits on, as distances ahead of the
+	// shoulder in fractions of the arm's reach (shoulder to wrist, straight)
+	float nearPlaneReachFraction= 0.25f;
+	float farPlaneReachFraction= 0.667f;
 	bool neutralPresent= false;
 	glm::quat neutralTorso{1.f, 0.f, 0.f, 0.f};
 	glm::vec3 neutralShoulderMidpoint{0.f};

@@ -21,11 +21,11 @@ class AvatarSkeleton;
 // calibration. The camera is the world, the avatar's own bone lengths are
 // the scale, and every joint sits on the ray through its landmark, so the
 // posed avatar reprojects onto what the camera saw. The one thing a single
-// view cannot see, the wrist's distance along its ray, is scored over the
-// reach the arm allows: the elbow's reprojection, the model's relative
-// depth and the last frame's chain each pull on it, and the hand lift's
-// depth is measured against the result. Pixels are filtered lightly and
-// depths heavily, so pixel noise never becomes a depth jump. Pure math over
+// view cannot see, the wrist's distance along its ray, is not estimated: the
+// wrist sits where its ray crosses one of two depth planes ahead of the
+// shoulder, the near one with the hand at the head. Pixels are filtered
+// lightly and the torso's and head's depths heavily, so pixel noise never
+// becomes a depth jump. Pure math over
 // the frame it is given plus filter and hold state advanced on frame
 // timestamps, so a replayed recording poses identically.
 
@@ -79,10 +79,18 @@ struct DirectRetargetConfig
 	// shoulder landmark sits inboard of the joint, so the upper arm runs
 	// longer than the anatomical one), the same lengths the body solver
 	// uses; the arm chain is solved with these through the ratio, so the
-	// elbow's reprojection fixes the wrist's distance with the user's
-	// proportions, and the avatar's bones take the chain's directions
+	// reach and the depth planes follow the user's proportions, and the
+	// avatar's bones take the chain's directions
 	float userUpperArmLengthMeters= 0.42f;
 	float userForearmLengthMeters= 0.25f;
+	// The wrist's distance along its ray: where the ray crosses a plane
+	// parallel to the shoulders, a fraction of the arm's reach toward the
+	// camera from the arm's shoulder, the near fraction with the palm at the
+	// head and the far one otherwise, capped at the reach, with the elbow on
+	// its bone circle where the forearm runs along the image line from the
+	// wrist to the body model's elbow, or nearest the rig's hint without one.
+	float nearPlaneReachFraction= 0.25f;
+	float farPlaneReachFraction= 0.667f;
 	// The rig's head trim, applied under the measured head the way the
 	// position retarget applies it
 	glm::vec3 headTrimRadians{0.f};
@@ -206,18 +214,6 @@ public:
 	};
 	const ArmChain& getArmChain(int sideIndex) const { return m_arms[sideIndex].chain; }
 
-	// The hand lift's depth against the chain's, as measured so far: the
-	// factor the lift's wrist distance would be multiplied by to match the
-	// chain, and how many frames with a seen elbow set it. Before any sample
-	// it is the avatar-to-user length ratio. A measurement the gate tool
-	// reports; the score does not read it.
-	struct PnpScale
-	{
-		float scale= 1.f;
-		int sampleCount= 0;
-	};
-	PnpScale getPnpScale(int sideIndex) const;
-
 	// What the last solve measured and chose, world space (the camera at
 	// the origin), for the diagnostic dump and the pose report: the pose
 	// says where the bones went, this says why
@@ -227,18 +223,17 @@ public:
 		{
 			ArmChain chain;
 			bool bHandSeen= false;  // the hand slot agreed with the body model's wrist
-			bool bElbowSeen= false; // the body model's elbow passed the visibility gate
-			bool bDepthChosen= false;
-			float depthLow= 0.f;  // the wrist distances the arm reaches along its ray
+			bool bElbowSeen= false; // the body model's elbow is past the visibility bar
+			float depthLow= 0.f;    // the wrist distances the arm reaches along its ray
 			float depthHigh= 0.f;
-			float modelDepthDelta= 0.f; // the model's shoulder-to-wrist depth, avatar units
-			float pnpDistance= 0.f;     // the hand lift's wrist distance, zero without one
-			float liftDepth= 0.f;       // the same in the avatar's units, the scorer's pull
-			float chosenDepth= 0.f;     // the scorer's choice this frame
-			float chosenCost= 0.f;
-			float chosenElbowPx= 0.f; // the chosen elbow's miss from its ray
-			float filteredDepth= 0.f; // the chain's wrist distance after the depth filter
-			PnpScale pnpScale;
+			float wristDepth= 0.f; // the chain's wrist distance along its ray
+			// The arm is on the near depth plane, and the plane's distance
+			// ahead of the shoulder as eased, avatar units
+			bool bNearPlane= false;
+			float planeDistance= 0.f;
+			// How far the elbow has eased from the rig's hint onto the body
+			// model's elbow direction, 0 to 1
+			float elbowDirectionWeight= 0.f;
 			bool bHandMeasured= false;
 			float twist= 0.f;
 			glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
@@ -324,9 +319,6 @@ public:
 	// the tests
 	static void makeRestPose(const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose);
 
-	// The running median's window, frames with a seen elbow
-	static constexpr int kPnpScaleSamples= 90;
-
 	// The hand model's bend on a straight finger facing the camera, radians
 	// (proximal, intermediate, distal): 10, 25 and 16 degrees for the four
 	// fingers, 21, 10 and 0.5 for the thumb, the medians over held open hands
@@ -349,16 +341,14 @@ private:
 		// placed arm's wrist clear of the frame's edge: the clock the hold
 		// runs on
 		double evidenceTimestampMs= -1.0;
-		// The wrist's distance along its ray as the scorer chose it last
-		// frame, before the depth filter: the smoothness term's anchor and a
-		// candidate of its own
-		float lastChosenDepth= 0.f;
-		// The hand lift's depth scale (see PnpScale): the ring of samples,
-		// and the median over them
-		std::array<float, kPnpScaleSamples> pnpScaleSamples{};
-		int pnpScaleSampleCount= 0;
-		int pnpScaleNextSample= 0;
-		float pnpScale= 1.f;
+		// The near depth plane is the one in force, and the plane's distance
+		// ahead of the shoulder as it eases between the two
+		bool bNearPlane= false;
+		bool bPlaneDistance= false;
+		float planeDistance= 0.f;
+		// and how far the elbow has eased from the rig's hint onto the body
+		// model's elbow direction, 0 to 1
+		float elbowDirectionWeight= 0.f;
 		// The entry gates on the body wrist and on the hand slot's agreement
 		// with it: consecutive frames of evidence, and whether in
 		int wristGateFrames= 0;
@@ -380,10 +370,9 @@ private:
 		int palmJumpFrames= 0;
 		// The lifted palm's mirror along the view ray is the one in force
 		bool bPalmMirrored= false;
-		// Pixels lightly, the depth heavily, the palm axes as directions
+		// Pixels lightly, the palm axes as directions
 		OneEuroFilterVec2 elbowPixelFilter;
 		OneEuroFilterVec2 wristPixelFilter;
-		OneEuroFilter depthFilter;
 		OneEuroFilterVec3 palmXFilter;
 		OneEuroFilterVec3 palmZFilter;
 		std::array<OneEuroFilter, FINGER_COUNT * 4> fingerFilters;
@@ -403,6 +392,9 @@ private:
 		bool bMeasured= false; // by the camera; the phone head never lands here
 		double solvedTimestampMs= -1.0;
 		glm::quat frame{1.f, 0.f, 0.f, 0.f};
+		// The head's centre and width in the image, from the ear pixels
+		glm::vec2 earMidPx{0.f};
+		float earSeparationPx= 0.f;
 		OneEuroFilterVec2 nosePixelFilter;
 		OneEuroFilterVec2 earPixelFilter[2];
 		OneEuroFilter depthFilter;

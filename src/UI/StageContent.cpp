@@ -232,14 +232,11 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			SettingsPanels::drawDirectCameraControl(m_tracking);
 			SettingsPanels::drawDirectNeutralControl(m_tracking);
-			SettingsPanels::drawHandCalibrationSection(m_tracking);
-			ImGui::SeparatorText(locText("directStage.bodySection"));
-			SettingsPanels::drawBodyCalibrationControl(m_tracking);
 		}
 		else if (section == eStageSection::Settings)
 		{
-			SettingsPanels::drawDirectEnableControl(m_tracking);
 			SettingsPanels::drawDirectTiltControl(m_tracking);
+			SettingsPanels::drawDirectWristDepthControls(m_tracking);
 			// The proportions the arm chain and the head are solved with
 			ImGui::SeparatorText(locText("directStage.bodySection"));
 			SettingsPanels::drawBodyDimensionControls(m_tracking);

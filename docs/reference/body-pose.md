@@ -27,7 +27,7 @@ The detector's output box is a face box, not a person box. Only its keypoints ar
 The backend per camera (`eBodyPoseBackend`, `bodyPose.backend` in the camera config, the Model combo beside the camera's checkbox in the camera's Body model stage):
 
 - `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model and the metric rig's choice, where depth comes from the triangulated wrists
-- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint, the single-camera direct mode's choice, where that depth is all the depth there is
+- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint, the single-camera direct mode's choice
 
 Contract for `rtmpose_body.onnx`:
 
@@ -78,7 +78,7 @@ On a model frame, `acquireBox` prefers the tracked box: the confident-keypoint e
 
 ## The world solver
 
-`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own 3D is deliberately not consumed: the body backend produces none, and the whole-body backend's per-keypoint depth is for the single-camera direct mode (`DirectRetarget`, see [avatar.md](./avatar.md)), which reads only its sign, and `--gate-direct` measures it. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
+`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own 3D is deliberately not consumed: the body backend produces none, and no solver reads the whole-body backend's per-keypoint depth. The single-camera direct mode (`DirectRetarget`, see [avatar.md](./avatar.md)) places the wrist on depth planes. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
 
 Only a new `modelFrameIndex` triggers a re-solve (`solveFromObservation`). Re-solving a repeated observation against a moved wrist would slide the estimate along a stale ray, so repeated observations hold: the forearm direction is held and the elbow rides the fresh wrist through it, while shoulders and head hold their world positions (they hang off the torso, not the wrist). A model gap longer than `kMaxHoldMs` (500 ms) resets the solver. Estimated depths outside `kMinBodyDepthMeters` (0.15) to `kMaxBodyDepthMeters` (2.0) are rejected: any solve that divides a known separation by an apparent one blows up when the model collapses that pair, and the window keeps a wild value out of the estimates that hang off it.
 

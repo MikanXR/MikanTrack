@@ -51,7 +51,6 @@ public:
 	{
 		return m_stage.getDirectRetarget().getArmChain(sideIndex);
 	}
-	DirectRetarget::PnpScale getPnpScale(int sideIndex) const { return m_stage.getDirectRetarget().getPnpScale(sideIndex); }
 	bool captureNeutral(DirectNeutralPose& outNeutral) const { return m_stage.captureNeutral(outNeutral); }
 
 	const RetargetResult& getResult() const { return m_result; }

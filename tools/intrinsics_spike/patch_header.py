@@ -82,7 +82,7 @@ def main():
 
     if args.tilt_delta != 0.0:
         direct = config.setdefault("direct", {})
-        direct["cameraTiltDegrees"] = float(direct.get("cameraTiltDegrees", 10.0)) + args.tilt_delta
+        direct["cameraTiltDegrees"] = float(direct.get("cameraTiltDegrees", 0.0)) + args.tilt_delta
 
     lines[0] = json.dumps(header, separators=(",", ":")) + "\n"
     with open(args.out, "w", encoding="utf-8", newline="\n") as out:
