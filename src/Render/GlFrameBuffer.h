@@ -23,11 +23,14 @@ public:
 	// Destroys the FBO and its attachments
 	void dispose();
 
-	// Binds the FBO for rendering, saving the previous framebuffer binding and
-	// viewport, then sets the viewport to cover the full FBO
+	// Binds the FBO for rendering and sets the viewport to cover it. The
+	// binding it replaces is tracked rather than queried from GL, since a
+	// query is a round trip to the driver.
 	void bindFrameBuffer();
 
-	// Restores the previously bound framebuffer and viewport
+	// Rebinds the GlFrameBuffer this one replaced with its full viewport, or
+	// the default framebuffer, whose viewport is left to whoever draws there
+	// next
 	void unbindFrameBuffer();
 
 	uint32_t getColorTextureId() const { return m_glColorTextureId; }
@@ -42,8 +45,16 @@ private:
 	uint16_t m_width= 0;
 	uint16_t m_height= 0;
 
-	// Saved state for bind/unbind
-	int32_t m_prevFrameBufferId= 0;
-	int32_t m_prevViewport[4]= {0, 0, 0, 0};
+	// Binds this FBO, or the default framebuffer for null, with the full
+	// viewport of an FBO
+	static void bindTarget(const GlFrameBuffer* target);
+
+	// The GlFrameBuffer bound when this one was, null for the default
+	// framebuffer
+	GlFrameBuffer* m_prevBound= nullptr;
 	bool m_bIsBound= false;
+
+	// The GlFrameBuffer currently bound on the GL thread, null for the default
+	// framebuffer
+	static GlFrameBuffer* s_currentBound;
 };

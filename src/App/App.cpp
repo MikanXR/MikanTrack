@@ -190,6 +190,7 @@ bool App::startup()
 	MIKAN_LOG_INFO("App::startup") << "OpenGL " << (const char*)glGetString(GL_VERSION)
 		<< " on " << (const char*)glGetString(GL_RENDERER);
 	MIKAN_PROFILE_GPU_CONTEXT();
+	glGenQueries(1, &m_swapQuery);
 
 	// ImGui (docking), and ImPlot's context beside it before the theme
 	// styles both
@@ -824,6 +825,11 @@ void App::shutdown()
 
 	if (m_glContext != nullptr)
 	{
+		if (m_swapQuery != 0)
+		{
+			glDeleteQueries(1, &m_swapQuery);
+			m_swapQuery= 0;
+		}
 		SDL_GL_DeleteContext(m_glContext);
 		m_glContext= nullptr;
 	}
@@ -912,9 +918,20 @@ void App::tick(float deltaSeconds)
 	}
 	m_automationServer->failUnservicedViewportCapture();
 
+	// With vsync on, the wait for the next frame lands in the first call after
+	// the swap that syncs with the driver. Under NVIDIA's threaded optimization
+	// a state query or a fence wait there spins on the driver's worker thread
+	// for the whole wait, where reading a query result sleeps. So the wait is
+	// taken here, on a timestamp written before the swap.
+	glQueryCounter(m_swapQuery, GL_TIMESTAMP);
 	{
 		MIKAN_PROFILE_SCOPE("Swap");
 		SDL_GL_SwapWindow(m_sdlWindow);
+	}
+	{
+		MIKAN_PROFILE_SCOPE("Swap wait");
+		GLuint64 swapTimestamp= 0;
+		glGetQueryObjectui64v(m_swapQuery, GL_QUERY_RESULT, &swapTimestamp);
 	}
 	MIKAN_PROFILE_GPU_COLLECT();
 

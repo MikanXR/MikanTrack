@@ -6,6 +6,8 @@
 
 #include <cstdio>
 
+GlFrameBuffer* GlFrameBuffer::s_currentBound= nullptr;
+
 GlFrameBuffer::~GlFrameBuffer() { dispose(); }
 
 bool GlFrameBuffer::init(uint16_t width, uint16_t height)
@@ -20,10 +22,6 @@ bool GlFrameBuffer::init(uint16_t width, uint16_t height)
 
 	m_width= width;
 	m_height= height;
-
-	// Save the currently bound framebuffer so we can restore it after setup
-	GLint prevFrameBufferId= 0;
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFrameBufferId);
 
 	// Color attachment: RGBA8 texture
 	glGenTextures(1, &m_glColorTextureId);
@@ -47,7 +45,7 @@ bool GlFrameBuffer::init(uint16_t width, uint16_t height)
 	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_glDepthRenderBufferId);
 
 	const GLenum status= glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	glBindFramebuffer(GL_FRAMEBUFFER, prevFrameBufferId);
+	glBindFramebuffer(GL_FRAMEBUFFER, s_currentBound != nullptr ? s_currentBound->m_glFrameBufferId : 0);
 
 	if (status != GL_FRAMEBUFFER_COMPLETE)
 	{
@@ -79,6 +77,9 @@ bool GlFrameBuffer::resize(uint16_t width, uint16_t height)
 
 void GlFrameBuffer::dispose()
 {
+	// Deleting a bound FBO would leave the tracked binding stale
+	unbindFrameBuffer();
+
 	if (m_glFrameBufferId != 0)
 	{
 		glDeleteFramebuffers(1, &m_glFrameBufferId);
@@ -99,7 +100,6 @@ void GlFrameBuffer::dispose()
 
 	m_width= 0;
 	m_height= 0;
-	m_bIsBound= false;
 }
 
 void GlFrameBuffer::bindFrameBuffer()
@@ -109,12 +109,9 @@ void GlFrameBuffer::bindFrameBuffer()
 		return;
 	}
 
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &m_prevFrameBufferId);
-	glGetIntegerv(GL_VIEWPORT, m_prevViewport);
-
-	glBindFramebuffer(GL_FRAMEBUFFER, m_glFrameBufferId);
-	glViewport(0, 0, m_width, m_height);
-
+	m_prevBound= s_currentBound;
+	bindTarget(this);
+	s_currentBound= this;
 	m_bIsBound= true;
 }
 
@@ -125,8 +122,20 @@ void GlFrameBuffer::unbindFrameBuffer()
 		return;
 	}
 
-	glBindFramebuffer(GL_FRAMEBUFFER, m_prevFrameBufferId);
-	glViewport(m_prevViewport[0], m_prevViewport[1], m_prevViewport[2], m_prevViewport[3]);
-
+	bindTarget(m_prevBound);
+	s_currentBound= m_prevBound;
+	m_prevBound= nullptr;
 	m_bIsBound= false;
+}
+
+void GlFrameBuffer::bindTarget(const GlFrameBuffer* target)
+{
+	if (target == nullptr)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		return;
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, target->m_glFrameBufferId);
+	glViewport(0, 0, target->m_width, target->m_height);
 }

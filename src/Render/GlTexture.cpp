@@ -9,6 +9,11 @@
 
 #include <cstring>
 
+// GL's own default, which an upload that changes the unpack alignment puts
+// back rather than reading the previous value, since a query is a round trip
+// to the driver
+static constexpr GLint k_defaultUnpackAlignment= 4;
+
 GlTexture::~GlTexture() { dispose(); }
 
 bool GlTexture::init(uint16_t width, uint16_t height)
@@ -29,6 +34,7 @@ bool GlTexture::init(uint16_t width, uint16_t height)
 	glBindTexture(GL_TEXTURE_2D, m_glTextureId);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, m_width, m_height, 0, GL_BGR, GL_UNSIGNED_BYTE, nullptr);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, k_defaultUnpackAlignment);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -101,9 +107,8 @@ void GlTexture::uploadBGR(const cv::Mat& bgr)
 		}
 	}
 
-	// Rows are tightly packed in the PBO (width*3 bytes), so tell GL not to assume 4-byte alignment
-	GLint prevUnpackAlignment= 4;
-	glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpackAlignment);
+	// Rows are tightly packed in the PBO (width*3 bytes), so tell GL not to
+	// assume 4-byte alignment
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
 	glBindTexture(GL_TEXTURE_2D, m_glTextureId);
@@ -149,5 +154,5 @@ void GlTexture::uploadBGR(const cv::Mat& bgr)
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpackAlignment);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, k_defaultUnpackAlignment);
 }

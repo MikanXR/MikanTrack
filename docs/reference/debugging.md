@@ -137,7 +137,7 @@ A local build carries the Tracy client: the project generation scripts configure
 
 - Other threads are named, with a zone per unit of work: the recorder writers, IMU discovery, the audio service, the Joy-Con reader, and the camera sample callback
 
-With vsync on, the main thread's wait for the next frame lands in the first OpenGL call after the swap that has to sync with the driver, not in the `Swap` zone. In a trace that is Tracy's own GPU collect, which reads the timer queries back after the swap and so holds most of each frame. Before the profiler it was the framebuffer bind's state reads, which a CPU sampling profiler showed as driver time while NVIDIA's threaded optimization spun on the wait.
+With vsync on, the main thread's wait for the next frame is the `Swap wait` zone: `App::tick` writes a timestamp query before the swap and reads it after, because under NVIDIA's threaded optimization the driver sleeps in a query read where a state read or a fence wait spins on its worker thread for the whole wait. A `glGetIntegerv` or `glGetError` placed before that read takes the wait instead, and spins.
 
 `RunTracyMcp.bat` starts Tracy's MCP server, through which an AI assistant loads captures, connects to the running app, and queries zones, frames, plots, context switches and sampled call stacks with Tracy's own analysis code ([commands.md](./commands.md)).
 

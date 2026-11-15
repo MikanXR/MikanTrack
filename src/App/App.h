@@ -242,6 +242,9 @@ private:
 
 	SDL_Window* m_sdlWindow= nullptr;
 	SDL_GLContext m_glContext= nullptr;
+	// A timestamp written before each swap and read after it, where the wait
+	// for vsync is taken
+	uint32_t m_swapQuery= 0;
 
 	eAppState m_appState= eAppState::MainMenu;
 	bool m_bStartSetupFlowOnEnter= false;
