@@ -109,7 +109,6 @@ Prints every registered command grouped by category (self-tests, hardware requir
 - `--export-marker`: writes + opens the printable origin Aruco marker PNG
 - `--fit-angle-prior`: fit the finger-angle prior from recordings' stereo frames
 - `--gate-wholebody`: the whole-body model's face and hand blocks on one camera's raw frames, at every frame and at the live divider: face point jitter, the face shape ratios and blinks against the phone's face sidecar, the blink evaluation's face model candidates found in `models/`, the body model's hands and the hand slot's side against the stereo rig's triangulated hands, and the hand slots the direct solver turns away on the other arm's wrist, split by what the hands were doing and what the slot was (`labels` runs that report alone)
-- `--gate-direct <recording.jsonl>... [cameraIndex] [correct] [mirror=<enter>,<leave>] [candidates=<recording.jsonl>] [frames.csv]`: whole-body 3D arm directions on one camera's raw frames against the stereo rig's output, the single-camera direct mode's gate, with the direct retarget and a Kalidokit-style baseline measured side by side (a direct-mode take runs their truth-free metrics alone), and the direct solve's twist jumps and mirrored-palm frames per hand. `correct` runs the candidates on the camera's hands with their sides corrected from the recorded whole-body hands ahead of the lift (`TrackingReplay::WhatIfParams::correctHandSidesCamera`), the A/B on a take recorded before the direct camera corrected them. `candidates=<recording.jsonl>` runs the candidates under a copy of the one take given whose header carries another lens for the camera, with the truth on the take's own calibration.
 - `--replay-bodypose`: re-run body pose over a recording's raw frames, on the recorded backend or a named one (`rtmpose` or `rtmw3d`)
 - `--replay-hands <recording.jsonl> [cameraIndex] [out.csv]`: re-run the hand landmark model over a recording's raw frames from the recorded ROIs, reporting estimate time and the landmark difference against the recording
 - `--replay-dump`: emits a recording frame range with regenerated fusion diagnostics
@@ -131,8 +130,8 @@ Prints every registered command grouped by category (self-tests, hardware requir
 Python, no build needed:
 
 - `python tools/finger_bias.py <dump.json> [cameraIndex]`: the hand model's bend on a straight finger (the direct retarget's open-hand bias) from a dump taken with the hands held up open, palms to the camera: per-joint medians per hand and pooled
-- `tools/intrinsics_spike/`: the calibration what-if scripts over recordings (header patching, raw-equivalent frames, the `--gate-direct` sensitivity sweep and its sweep against the stereo truth, the focal length estimators), run from their own venv as its README sets out
-- `tools/kalidokit_ab/`: MediaPipe Holistic and a Kalidokit build over a take's front-camera frames, scored against the stereo truth in a `--gate-direct` CSV beside the direct chain, and rendered beside `--render-direct` into a side-by-side video, run as its README sets out
+- `tools/intrinsics_spike/`: the lens what-if scripts over recordings (header patching, raw-equivalent frames, the focal length estimators, the phone pattern probes), run from their own venv as its README sets out
+- `tools/kalidokit_ab/`: Kalidokit's 3d sample page fed a take's front-camera frames, rendered beside `--render-direct` into a side-by-side video, run as its README sets out
 
 ---
 
