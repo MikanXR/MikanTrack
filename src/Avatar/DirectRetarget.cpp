@@ -105,6 +105,28 @@ constexpr float kKnuckleRowToPalmLength= 1.2f;
 constexpr float kElbowDirectionSigmaRadians= 15.f * glm::pi<float>() / 180.f;
 constexpr float kElbowDirectionMinShoulderWidths= 0.25f;
 constexpr int kElbowDirectionSamples= 72;
+// An elbow landmark in the band along the frame's edge is the model's pin on
+// an elbow outside the frame, and the direction to it is the forearm's only
+// while the wrist stands clear of that edge. With the wrist at the edge too
+// the pin sits somewhere along it and the direction runs along the edge, at
+// the body. The direction's weight runs from 0 to 1 over these wrist-to-elbow
+// spans across the edge, in shoulder widths.
+constexpr float kElbowPinnedMinSpanShoulderWidths= 0.25f;
+constexpr float kElbowPinnedFullSpanShoulderWidths= 0.5f;
+// The direction search's two other terms. An elbow inboard of its shoulder
+// with the wrist outboard of the elbow is a pose the shoulder does not turn
+// to, so the lesser of the two distances costs past an allowance, both in
+// upper arm lengths (an arm across the body has the wrist inboard of the
+// elbow and costs nothing). And the elbow's turn about the shoulder to wrist
+// line stays near the one the search chose last frame, which keeps the search
+// from trading between two elbows that share an image direction on noise.
+constexpr float kElbowInboardAllowanceUpperArms= 0.2f;
+constexpr float kElbowInboardSigmaUpperArms= 0.1f;
+constexpr float kElbowContinuitySigmaRadians= 45.f * glm::pi<float>() / 180.f;
+// The band on the elbow's turn, radians, lighter than a direction's so a
+// real swing of the elbow gets through
+constexpr float kSwivelMinCutoffHz= 1.0f;
+constexpr float kSwivelBeta= 0.5f;
 // A raw palm this far from the filtered one is held out as the lift's
 // mirror until it persists this many consecutive frames
 constexpr float kPalmJumpRadians= 60.f * glm::pi<float>() / 180.f;
@@ -470,6 +492,7 @@ void DirectRetarget::configureFilters()
 	{
 		arm.elbowPixelFilter.configure(kPixelMinCutoffHz, kPixelBeta, kDerivativeCutoffHz);
 		arm.wristPixelFilter.configure(kPixelMinCutoffHz, kPixelBeta, kDerivativeCutoffHz);
+		arm.swivelFilter.configure(kSwivelMinCutoffHz, kSwivelBeta, kDerivativeCutoffHz);
 		arm.palmXFilter.configure(kDirectionMinCutoffHz, kDirectionBeta, kDerivativeCutoffHz);
 		arm.palmZFilter.configure(kDirectionMinCutoffHz, kDirectionBeta, kDerivativeCutoffHz);
 		for (OneEuroFilter& filter : arm.fingerFilters)
@@ -908,22 +931,61 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				const glm::vec3 hintTarget= shoulder + sideConfig.elbowHintOffset;
 				glm::vec3 elbow= solveElbow(shoulder, wrist, upperArm, forearm, hintTarget);
 				const glm::vec2 elbowSpanPx= elbowPx - wristPx;
-				const bool bElbowDirection= bElbowSeen && shoulderWidthPx > 0.f &&
-					glm::length(elbowSpanPx) >= kElbowDirectionMinShoulderWidths * shoulderWidthPx;
-				const float weightTarget= bElbowDirection ? 1.f : 0.f;
+				// How far the landmark's direction is the forearm's: all the
+				// way for an elbow clear of the frame's edge, and for one the
+				// model pinned in the band along an edge, by how far the wrist
+				// stands clear of that edge past it
+				float directionTrust= 0.f;
+				if (bElbowSeen && shoulderWidthPx > 0.f &&
+					glm::length(elbowSpanPx) >= kElbowDirectionMinShoulderWidths * shoulderWidthPx)
+				{
+					directionTrust= 1.f;
+					if (bFrameKnown)
+					{
+						// Each point's distance inside the left, right, top and
+						// bottom edges
+						const float frameWidth= (float)cameraModel.width;
+						const float frameHeight= (float)cameraModel.height;
+						const float elbowInside[4]= {elbowPx.x, frameWidth - elbowPx.x, elbowPx.y, frameHeight - elbowPx.y};
+						const float wristInside[4]= {wristPx.x, frameWidth - wristPx.x, wristPx.y, frameHeight - wristPx.y};
+						int edge= 0;
+						for (int candidate= 1; candidate < 4; ++candidate)
+						{
+							if (elbowInside[candidate] < elbowInside[edge])
+								edge= candidate;
+						}
+						if (elbowInside[edge] < kEdgeBandFrameHeights * frameHeight)
+						{
+							const float spanShoulderWidths= (wristInside[edge] - elbowInside[edge]) / shoulderWidthPx;
+							directionTrust= std::clamp(
+								(spanShoulderWidths - kElbowPinnedMinSpanShoulderWidths) /
+									(kElbowPinnedFullSpanShoulderWidths - kElbowPinnedMinSpanShoulderWidths),
+								0.f, 1.f);
+						}
+					}
+				}
+				const bool bElbowDirection= directionTrust > 0.f;
 				if (!bHadChain)
 				{
-					arm.elbowDirectionWeight= weightTarget;
+					arm.elbowDirectionWeight= directionTrust;
+					arm.bSwivelAngle= false;
+					arm.bSwivelUnwrapped= false;
+					arm.swivelFilter.reset();
 				}
 				else
 				{
 					const float maxStep= dtSeconds / kPlaneBlendSeconds;
-					arm.elbowDirectionWeight+= std::clamp(weightTarget - arm.elbowDirectionWeight, -maxStep, maxStep);
+					arm.elbowDirectionWeight+= std::clamp(directionTrust - arm.elbowDirectionWeight, -maxStep, maxStep);
 				}
 				armState.elbowDirectionWeight= arm.elbowDirectionWeight;
+				// A turn the search chose stands through frames without a
+				// direction while the weight eases out, and is forgotten once
+				// it has
+				if (!bElbowDirection && arm.elbowDirectionWeight <= 0.f)
+					arm.bSwivelAngle= false;
 				const glm::vec3 span= wrist - shoulder;
 				const float spanLength= glm::length(span);
-				if (bElbowDirection && arm.elbowDirectionWeight > 0.f && spanLength > 1e-4f)
+				if (spanLength > 1e-4f)
 				{
 					// The elbow's circle: where the two bone spheres meet
 					const glm::vec3 axis= span / spanLength;
@@ -936,43 +998,49 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 						const float radius= sqrtf(radiusSquared);
 						const glm::vec3 u= glm::normalize(fromCentre); // the hint's elbow, angle zero
 						const glm::vec3 v= glm::cross(axis, u);
-						const glm::quat camFromWorld= glm::inverse(worldFromCam);
-						const glm::vec2 direction= glm::normalize(elbowSpanPx);
-						auto cost= [&](float angle) {
-							const glm::vec3 candidate= centre + radius * (cosf(angle) * u + sinf(angle) * v);
-							const glm::vec3 inCamera= camFromWorld * candidate;
-							if (inCamera.z <= 1e-3f)
-								return std::numeric_limits<float>::max();
-							const glm::vec2 px(cameraModel.fx * inCamera.x / inCamera.z + cameraModel.cx,
-											   cameraModel.fy * inCamera.y / inCamera.z + cameraModel.cy);
-							const glm::vec2 seen= px - wristPx;
-							const float seenLength= glm::length(seen);
-							const float off=
-								seenLength > 1e-3f ? acosf(std::clamp(glm::dot(seen / seenLength, direction), -1.f, 1.f))
-												   : glm::pi<float>();
-							const float ratio= off / kElbowDirectionSigmaRadians;
-							const glm::vec3 fromHint= candidate - hintTarget;
-							return ratio * ratio + glm::dot(fromHint, fromHint) / (reach * reach);
-						};
-						float bestAngle= 0.f;
-						float bestCost= cost(0.f);
-						float step= glm::two_pi<float>() / (float)kElbowDirectionSamples;
-						for (int sample= 1; sample < kElbowDirectionSamples; ++sample)
+						if (bElbowDirection)
 						{
-							// Angles in (-pi, pi], so the ease below turns the short way
-							const float angle= -glm::pi<float>() + step * (float)sample;
-							const float sampleCost= cost(angle);
-							if (sampleCost < bestCost)
+							const glm::quat camFromWorld= glm::inverse(worldFromCam);
+							const glm::vec2 direction= glm::normalize(elbowSpanPx);
+							// Away from the body's midline along the shoulder line
+							const glm::vec3 outboard= (m_torso.lineFrame * k_left) * (sideIndex == 0 ? 1.f : -1.f);
+							auto cost= [&](float angle) {
+								const glm::vec3 candidate= centre + radius * (cosf(angle) * u + sinf(angle) * v);
+								const glm::vec3 inCamera= camFromWorld * candidate;
+								if (inCamera.z <= 1e-3f)
+									return std::numeric_limits<float>::max();
+								const glm::vec2 px(cameraModel.fx * inCamera.x / inCamera.z + cameraModel.cx,
+												   cameraModel.fy * inCamera.y / inCamera.z + cameraModel.cy);
+								const glm::vec2 seen= px - wristPx;
+								const float seenLength= glm::length(seen);
+								const float off=
+									seenLength > 1e-3f ? acosf(std::clamp(glm::dot(seen / seenLength, direction), -1.f, 1.f))
+													   : glm::pi<float>();
+								const float ratio= off / kElbowDirectionSigmaRadians;
+								const glm::vec3 fromHint= candidate - hintTarget;
+								float total= ratio * ratio + glm::dot(fromHint, fromHint) / (reach * reach);
+								const float inboardExcess= std::min(-glm::dot(candidate - shoulder, outboard),
+																	glm::dot(wrist - candidate, outboard)) -
+									kElbowInboardAllowanceUpperArms * upperArm;
+								if (inboardExcess > 0.f)
+								{
+									const float inboardRatio= inboardExcess / (kElbowInboardSigmaUpperArms * upperArm);
+									total+= inboardRatio * inboardRatio;
+								}
+								if (arm.bSwivelAngle)
+								{
+									const float turnRatio= wrapAngle(angle - arm.swivelAngle) / kElbowContinuitySigmaRadians;
+									total+= turnRatio * turnRatio;
+								}
+								return total;
+							};
+							float bestAngle= 0.f;
+							float bestCost= cost(0.f);
+							float step= glm::two_pi<float>() / (float)kElbowDirectionSamples;
+							for (int sample= 1; sample < kElbowDirectionSamples; ++sample)
 							{
-								bestCost= sampleCost;
-								bestAngle= angle;
-							}
-						}
-						for (int refine= 0; refine < 4; ++refine)
-						{
-							step*= 0.5f;
-							for (const float angle : {bestAngle - step, bestAngle + step})
-							{
+								// Angles in (-pi, pi], so the ease below turns the short way
+								const float angle= -glm::pi<float>() + step * (float)sample;
 								const float sampleCost= cost(angle);
 								if (sampleCost < bestCost)
 								{
@@ -980,9 +1048,33 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 									bestAngle= angle;
 								}
 							}
+							for (int refine= 0; refine < 4; ++refine)
+							{
+								step*= 0.5f;
+								for (const float angle : {bestAngle - step, bestAngle + step})
+								{
+									const float sampleCost= cost(angle);
+									if (sampleCost < bestCost)
+									{
+										bestCost= sampleCost;
+										bestAngle= angle;
+									}
+								}
+							}
+							arm.swivelAngle= bestAngle;
+							arm.bSwivelAngle= true;
 						}
-						const float eased= bestAngle * arm.elbowDirectionWeight;
-						elbow= centre + radius * (cosf(eased) * u + sinf(eased) * v);
+						// The turn the bones take: the chosen one by the weight,
+						// unwrapped onto the last so the filter turns the short
+						// way, then filtered. An arm that never had a direction
+						// stays exactly on the hint's elbow.
+						const float eased= arm.bSwivelAngle ? arm.swivelAngle * arm.elbowDirectionWeight : 0.f;
+						arm.swivelUnwrapped=
+							arm.bSwivelUnwrapped ? arm.swivelUnwrapped + wrapAngle(eased - arm.swivelUnwrapped) : eased;
+						arm.bSwivelUnwrapped= true;
+						const float turn= arm.swivelFilter.filter(arm.swivelUnwrapped, dtSeconds);
+						if (turn != 0.f)
+							elbow= centre + radius * (cosf(turn) * u + sinf(turn) * v);
 					}
 				}
 				arm.chain.elbow= elbow;
@@ -1004,6 +1096,9 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			arm.bNearPlane= false;
 			arm.bPlaneDistance= false;
 			arm.elbowDirectionWeight= 0.f;
+			arm.bSwivelAngle= false;
+			arm.bSwivelUnwrapped= false;
+			arm.swivelFilter.reset();
 			continue;
 		}
 		armState.chain= arm.chain;

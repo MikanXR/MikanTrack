@@ -349,6 +349,15 @@ private:
 		// and how far the elbow has eased from the rig's hint onto the body
 		// model's elbow direction, 0 to 1
 		float elbowDirectionWeight= 0.f;
+		// The elbow's turn about the shoulder to wrist line away from the
+		// rig's hint, radians: the one the direction search chose last, raw,
+		// which the search's continuity term and a frame without a direction
+		// read, and the eased turn unwrapped for its filter
+		bool bSwivelAngle= false;
+		float swivelAngle= 0.f;
+		bool bSwivelUnwrapped= false;
+		float swivelUnwrapped= 0.f;
+		OneEuroFilter swivelFilter;
 		// The entry gates on the body wrist and on the hand slot's agreement
 		// with it: consecutive frames of evidence, and whether in
 		int wristGateFrames= 0;

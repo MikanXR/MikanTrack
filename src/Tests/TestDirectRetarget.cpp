@@ -1480,7 +1480,8 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bFollows, "(s) a seen elbow turns the chain's elbow onto its image direction from the wrist");
 		user.bElbowSeen[0]= user.bElbowSeen[1]= false;
-		run(user, 12);
+		// The ease, then the turn's filter settling behind it
+		run(user, 60);
 		bool bBackToHint= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			bBackToHint&= glm::length(solver.getArmChain(sideIndex).elbow - hintElbow[sideIndex]) < 1e-3f;
