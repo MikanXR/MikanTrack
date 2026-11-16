@@ -27,7 +27,7 @@ struct BodyPoseTrackerConfig
 {
 	eBodyPoseBackend backend= eBodyPoseBackend::RtmPoseBody;
 	// Models run every Nth processed frame
-	int frameDivider= 2;
+	int frameDivider= 1;
 	// Re-run the person detector every Nth MODEL frame no matter how
 	// confident the landmark model is. Without this the person box is only
 	// ever rebuilt from the previous keypoints, so a drifting or wrongly
@@ -37,9 +37,13 @@ struct BodyPoseTrackerConfig
 	// guard for the same reason. While a box is tracked the detector's box
 	// is a challenger, not a replacement: the tracked box takes the model
 	// frame, and the detector's box is scored on the next divided-out frame
-	// (the same frame with a divider of 1) and taken over only where its
-	// landmarks score higher. On a subject truncated at a desk the
-	// detector's box often scores a third of the tracked one's.
+	// and taken over only where its landmarks score higher. On a subject
+	// truncated at a desk the detector's box often scores a third of the
+	// tracked one's. With a divider of 1 no frame is divided out, so the
+	// challenge takes a model frame's one landmark run: the challenger's
+	// landmarks are that frame's observation where it wins, and the held
+	// observation is re-emitted where it loses. No frame runs the landmark
+	// model twice.
 	int detectorIntervalFrames= 20;
 	// A keypoint below this does not contribute to the tracked box
 	float keypointScoreThreshold= 0.3f;
@@ -98,9 +102,20 @@ private:
 	// The next frame's box from a model result's confident body keypoints.
 	// False when too few scored or their extent has collapsed.
 	bool makeTrackedBox(const RtmPoseResult& result, glm::vec2& outBoxMin, glm::vec2& outBoxMax) const;
+	enum class eChallengeOutcome : int
+	{
+		// The landmark model did not run: nothing is tracked, or the
+		// detector found no person
+		NotRun,
+		// The challenger scored no higher, and the tracked box stands
+		Lost,
+		// The challenger scored higher, and its keypoints' box is the
+		// tracked one. Its landmarks are in m_challengeResult.
+		Won,
+	};
 	// Scores the detector's box against the tracked one's last result and
 	// takes its keypoints' box over when it scores higher
-	void challengeTrackedBox(const cv::Mat& bgrFrame);
+	eChallengeOutcome challengeTrackedBox(const cv::Mat& bgrFrame);
 
 	bool m_bLoaded= false;
 	BodyPoseTrackerConfig m_config;
