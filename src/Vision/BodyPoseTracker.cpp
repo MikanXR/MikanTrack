@@ -206,34 +206,35 @@ bool BodyPoseTracker::makeTrackedBox(const RtmPoseResult& result, glm::vec2& out
 	return true;
 }
 
-void BodyPoseTracker::challengeTrackedBox(const cv::Mat& bgrFrame)
+BodyPoseTracker::eChallengeOutcome BodyPoseTracker::challengeTrackedBox(const cv::Mat& bgrFrame)
 {
 	m_bChallengePending= false;
 	if (!m_bBoxTracked || !m_lastObservation.valid)
-		return;
+		return eChallengeOutcome::NotRun;
 
 	glm::vec2 boxMin(0.f);
 	glm::vec2 boxMax(0.f);
 	if (!detectPersonBox(bgrFrame, boxMin, boxMax))
-		return;
+		return eChallengeOutcome::NotRun;
 	m_landmarkModel.estimate(bgrFrame, boxMin, boxMax, m_challengeResult);
 	if (!m_challengeResult.valid)
-		return;
+		return eChallengeOutcome::Lost;
 
 	// The observation's confidence, on the challenger
 	float scoreSum= 0.f;
 	for (int keypoint= 0; keypoint < COCO_KEYPOINT_COUNT; ++keypoint)
 		scoreSum+= std::clamp(m_challengeResult.scores[keypoint], 0.f, 1.f);
 	if (scoreSum / (float)COCO_KEYPOINT_COUNT <= m_lastObservation.confidence)
-		return;
+		return eChallengeOutcome::Lost;
 
 	glm::vec2 challengerMin(0.f);
 	glm::vec2 challengerMax(0.f);
-	if (makeTrackedBox(m_challengeResult, challengerMin, challengerMax))
-	{
-		m_trackedBoxMin= challengerMin;
-		m_trackedBoxMax= challengerMax;
-	}
+	if (!makeTrackedBox(m_challengeResult, challengerMin, challengerMax))
+		return eChallengeOutcome::Lost;
+
+	m_trackedBoxMin= challengerMin;
+	m_trackedBoxMax= challengerMax;
+	return eChallengeOutcome::Won;
 }
 
 // The observation's blocks are sized by the model's layout
@@ -316,6 +317,28 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 			m_bChallengePending= true;
 		}
 
+		// Every frame is a model frame, so the challenge takes this one's
+		// landmark run and no frame carries two
+		if (m_bChallengePending && m_config.frameDivider == 1)
+		{
+			const eChallengeOutcome outcome= challengeTrackedBox(bgrFrame);
+			if (outcome == eChallengeOutcome::Lost)
+			{
+				outObservation= m_lastObservation;
+				return;
+			}
+			if (outcome == eChallengeOutcome::Won)
+			{
+				outObservation.valid= true;
+				outObservation.boxSource= eBodyBoxSource::Detector;
+				outObservation.modelFrameIndex= m_modelFrameIndex;
+				fillObservation(m_challengeResult, outObservation);
+				m_modelFrameIndex++;
+				m_lastObservation= outObservation;
+				return;
+			}
+		}
+
 		glm::vec2 boxMin(0.f);
 		glm::vec2 boxMax(0.f);
 		const eBodyBoxSource boxSource= acquireBox(bgrFrame, boxMin, boxMax);
@@ -339,7 +362,4 @@ void BodyPoseTracker::process(const cv::Mat& bgrFrame, BodyPoseObservation& outO
 	}
 
 	m_lastObservation= outObservation;
-	// Every frame is a model frame, so the challenge shares this one
-	if (m_bChallengePending && m_config.frameDivider == 1 && m_bLoaded && !bgrFrame.empty())
-		challengeTrackedBox(bgrFrame);
 }

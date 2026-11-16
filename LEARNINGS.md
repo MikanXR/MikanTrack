@@ -642,7 +642,13 @@ On the one-camera project the avatar's elbows, torso and head read as choppy bes
 
 - The challenge frame, one in 20, runs the landmark model twice and peaked 0.7 ms inside the period. At the divider 2 capture's model speed it would not have fit.
 
-- In both captures about every 12th camera frame arrived 46 ms after the one before, behind frames of ordinary length. Where that comes from was not looked at.
+- In both captures about every 12th camera frame arrived 46 ms after the one before, behind frames of ordinary length. The capture callback itself fires on a 16 ms grid: eleven intervals of 32 ms and one of 48, every 400 ms, which is twelve frames at 33.3 ms. Recordings show the same pattern on the C920, the PW315 and the C960. What sets the grid was not identified. A frame's timestamp is its arrival time, so every stage that reads an interval reads 32 or 48 ms for 33.3 ms of motion.
+
+- Stamping a frame with its capture time, from Media Foundation's sample time plus the smallest recent difference between arrival and sample time, was built and removed. A probe through OpenCV's reader had read sample times 33.3 ms apart on every frame. Through the app's own reader the sample times sit on a 16 ms grid of their own: the difference from arrival read 16 ms for nine frames and 0 for three, and the mapped intervals came out at 32, 48 and 16 ms, worse than the arrivals'. Why the two readers differ was not looked at.
+
+- What evenly spaced timestamps would buy was measured offline and is small. A tri-camera take (4570 frames) was copied with each camera's times moved to a line fitted under its arrivals, and both copies were replayed. The fused palms moved 0.4 to 0.5 mm at p50 and 2 to 3 mm at p90, and their frame-to-frame second difference stayed within 3 percent, as did the elbows', shoulders' and head's. Fusion takes each camera's newest landmarks whatever their times, so a truer timestamp changes the filters' intervals and not which observations are fused.
+
+The challenge now takes the frame's one landmark run at a divider of 1. Where the detector's box wins, its landmarks are the frame's observation. Where it loses, the frame re-emits the held observation. Replayed over two one-camera takes (588 and 645 frames) the person is lost on no model frame, 19 and 11 frames are held, the detector's box is taken on 7 and 21, and the longest stage time is 20.4 and 19.6 ms against a median of 11.0. Not yet captured live.
 
 Learned: the divider was set when the model was measured at 18 to 24 ms, and nobody had measured the frame it was protecting. A cadence chosen to save time can cost the speed it was saving.
 
