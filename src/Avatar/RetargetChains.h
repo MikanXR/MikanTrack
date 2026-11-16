@@ -42,6 +42,9 @@ struct RetargetChains
 		eLossAfter after= eLossAfter::Release;
 		// The ease into rest, milliseconds; zero snaps
 		float restBlendMs= 0.f;
+		// An arm's ease out of rest onto its measurement, milliseconds; zero
+		// places it the frame it returns
+		float riseBlendMs= 0.f;
 	};
 
 	struct Arm

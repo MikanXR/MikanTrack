@@ -141,7 +141,8 @@ struct SourcePose
 		glm::vec3 forearmDirection{0.f}; // Direct
 		float twist= 0.f;                // Direct
 		// Resting: how far the ease has carried the arm into the rest pose, 1
-		// at rest
+		// at rest. A carried position arm easing out of rest: the share of
+		// the rest pose still in it.
 		float restBlend= 0.f;
 	};
 

@@ -201,20 +201,27 @@ void RetargetStage::solveTarget(const SourcePose& source, AvatarPose& outPose, A
 
 		// A resting arm, posed from its last carried values, eases into the
 		// rest pose the direct pipeline eases its arms into; the rest pose,
-		// not the goal, places it
+		// not the goal, places it. A carried arm easing out of rest is posed
+		// from its measurement and blended the same way by the share of rest
+		// still in it.
 		AvatarPose restPose;
 		bool bRestPosed= false;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			if (source.arms[sideIndex].state != SourcePose::eGroupState::Resting)
+			const SourcePose::Arm& sourceArm= source.arms[sideIndex];
+			const bool bRising= (sourceArm.state == SourcePose::eGroupState::Measured ||
+								  sourceArm.state == SourcePose::eGroupState::Held) &&
+				sourceArm.restBlend > 0.f;
+			if (sourceArm.state != SourcePose::eGroupState::Resting && !bRising)
 				continue;
 			if (!bRestPosed)
 			{
 				DirectRetarget::makeRestPose(*m_config.skeleton, m_config.direct, restPose);
 				bRestPosed= true;
 			}
-			easeArmToRest(restPose, sideIndex, source.arms[sideIndex].restBlend, outPose);
-			goals.bHasWristGoal[sideIndex]= false;
+			easeArmToRest(restPose, sideIndex, sourceArm.restBlend, outPose);
+			if (!bRising)
+				goals.bHasWristGoal[sideIndex]= false;
 		}
 	}
 
