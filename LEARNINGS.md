@@ -652,6 +652,16 @@ The challenge now takes the frame's one landmark run at a divider of 1. Where th
 
 Learned: the divider was set when the model was measured at 18 to 24 ms, and nobody had measured the frame it was protecting. A cadence chosen to save time can cost the speed it was saving.
 
+## 39. The direct shoulders shook on a speed term, and the elbows pointed inward on a landmark pinned to the frame's edge
+
+A seated one-camera take (51 s, 1533 frames) showed the shoulders jittering while the arms moved, elbows pointing at the body, and elbows popping. `--direct-trace` was built to measure it, since no tool showed the direct solve over time.
+
+- Shoulders: the body model moves each shoulder landmark about 5 px per frame at the median on a seated user, about twice that while the wrists move fast. The shoulder pixels shared the wrists' light band (2.5 Hz, beta 0.1 in pixels), where the landmark's own noise reads as speed and opens the band. At 0.3 Hz with no speed term on the pixels and the depth, the shoulder midpoint's step per frame went from 2.15 mm at the median and 6.45 mm at p95 to 0.51 and 1.38. Lowering the cutoff alone and keeping a small beta (0.3 Hz, 0.01) left 0.95 and 2.80.
+
+- Inward elbows: on 92% of arm frames the elbow landmark sat in the bottom tenth of the image, pinned there by the model for an elbow below the frame. Its image direction from the wrist holds while the wrist is well above the edge. With the hands low in the frame's corners the wrist is at the edge too and the direction runs along the edge toward the body, and the direction term (a 15 degree sigma) outweighs the rig's hint by two orders. Weighing a pinned elbow by the wrist's span across the edge took the frames with an elbow over 5 cm inboard of its shoulder from 210 to 94, all 94 on the left arm: 66 on a wrist the model invents on the chair once the hands leave the frame (plan.md), the others on a real hand in front of the chest with the elbow at the 5 cm bar or on an arm in its hold.
+
+- Pops: the elbow's turn about the shoulder to wrist line was chosen fresh each frame, and two elbows often share an image direction. 85 turns over 30 degrees in a frame, some past 150. A continuity term against the previous raw choice plus a filter on the turn left none, with the largest step in a frame 24 degrees.
+
 ## Cross-cutting lessons
 
 1. Measured quality beats reported confidence. Presence scores, model confidences and self-consistent calibration metrics all failed as quality signals. Reprojection residuals, measured jitter and reconstruction-geometry checks did not.
