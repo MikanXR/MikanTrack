@@ -923,6 +923,102 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(!solver.getSolveState().torsoValid, "(k0) shoulders under the keep bar lose the torso past its hold");
 	}
 
+	// (k00) A placed arm whose wrist is not measured. Clear of the frame's
+	// edge and at rest in the image it stands where it was, and the wrist
+	// measured again somewhere else is eased onto over the glide, not jumped
+	// to. Lowered fast toward the bottom edge, the wrist coasts on down out
+	// of view, and the arm keeps only the short hold before it rests.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		User user= makeNeutralUser();
+		int frameIndex= 0;
+		auto run= [&](int frameCount) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto setSeen= [&](bool bSeen) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.bWristSeen[sideIndex]= bSeen;
+				user.bHandTracked[sideIndex]= bSeen;
+			}
+		};
+		auto chainPx= [&](int sideIndex) { return project(camera, solver.getArmChain(sideIndex).wrist); };
+		auto userPx= [&](int sideIndex) { return project(camera, user.wrist[sideIndex]); };
+
+		// The glide
+		run(40);
+		glm::vec2 stoodPx[2]= {chainPx(0), chainPx(1)};
+		setSeen(false);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex].z+= 0.06f;
+		run(3);
+		bool bStood= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			bStood&= solver.getArmChain(sideIndex).valid && glm::length(chainPx(sideIndex) - stoodPx[sideIndex]) < 1.f &&
+				!solver.getSolveState().arms[sideIndex].bWristCoasting;
+		}
+		setSeen(true);
+		run(1);
+		bool bGlided= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float whole= glm::length(userPx(sideIndex) - stoodPx[sideIndex]);
+			const float moved= glm::length(chainPx(sideIndex) - stoodPx[sideIndex]);
+			bGlided&= whole > 15.f && moved > 0.05f * whole && moved < 0.5f * whole;
+		}
+		run(10);
+		bool bArrived= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bArrived&= glm::length(chainPx(sideIndex) - userPx(sideIndex)) < 1.f;
+		check(bStood && bGlided && bArrived,
+			  "(k00) a wrist that goes clear of the edge stands the arm, and the wrist measured again is eased onto "
+			  "over the glide");
+
+		// The coast: the wrists lowered four centimeters a frame to the band
+		// along the bottom edge, then gone
+		const float frameHeight= (float)camera.model.height;
+		// From well up, so the descent lasts long enough to give the wrist
+		// its speed
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex].z+= 0.2f;
+		run(20);
+		bool bLowered= false;
+		for (int step= 0; step < 200 && !bLowered; ++step)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex].z-= 0.04f;
+			run(1);
+			bLowered= userPx(0).y > frameHeight - 60.f && userPx(1).y > frameHeight - 60.f;
+		}
+		const glm::vec2 lastPx[2]= {chainPx(0), chainPx(1)};
+		setSeen(false);
+		run(1);
+		MIKAN_LOG_INFO("test-direct-retarget") << "  (k00) wrist gone at y " << lastPx[0].y << " of " << frameHeight << ", coasted to " << chainPx(0).y;
+		bool bCoasted= bLowered;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			bCoasted&= solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bWristCoasting &&
+				chainPx(sideIndex).y > lastPx[sideIndex].y + 3.f;
+		}
+		run(6);
+		bool bRestedSoon= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bRestedSoon&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+		check(bCoasted && bRestedSoon,
+			  "(k00) a wrist lowered fast to the bottom edge coasts on out of view when it goes, and the arm rests "
+			  "after the short hold");
+	}
+
 	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
 	// part out by guess, so its palm can come back turned right round: the
 	// palm and fingers are held while the landmarks sit at the edge, and

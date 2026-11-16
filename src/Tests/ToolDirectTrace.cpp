@@ -123,7 +123,7 @@ int runDirectTraceTool(const TestArgs& args)
 	{
 		csv << "," << side << "chain," << side << "elx," << side << "ely," << side << "elz," << side << "wrx," << side
 			<< "wry," << side << "wrz," << side << "elbowSeen," << side << "dirWeight," << side << "resting," << side
-			<< "restBlend," << side << "swivelStepDeg";
+			<< "restBlend," << side << "swivelStepDeg," << side << "coasting";
 	}
 	csv << "\n";
 
@@ -138,6 +138,8 @@ int runDirectTraceTool(const TestArgs& args)
 	int inboardFrames[2]= {0, 0};
 	int inwardFrames[2]= {0, 0};
 	int stalledFrames[2]= {0, 0};
+	int coastedFrames[2]= {0, 0};
+	int losses[2]= {0, 0};
 	DirectRetarget::ArmChain previousChain[2];
 	int swivelJumps[2]= {0, 0};
 	int solvedFrames= 0;
@@ -182,6 +184,8 @@ int runDirectTraceTool(const TestArgs& args)
 			if (chain.valid)
 			{
 				armFrames[sideIndex]++;
+				if (arm.bWristCoasting)
+					coastedFrames[sideIndex]++;
 				// A chain that stands exactly as it was: the frame did not
 				// solve the arm, and it is held
 				const DirectRetarget::ArmChain& previous= previousChain[sideIndex];
@@ -206,11 +210,14 @@ int runDirectTraceTool(const TestArgs& args)
 				}
 			}
 			previousSwivel[sideIndex]= swivel;
+			// A placed arm that is not placed on this frame: a loss
+			if (previousChain[sideIndex].valid && !chain.valid)
+				losses[sideIndex]++;
 			previousChain[sideIndex]= chain;
 			csv << "," << (chain.valid ? 1 : 0) << "," << chain.elbow.x << "," << chain.elbow.y << "," << chain.elbow.z
 				<< "," << chain.wrist.x << "," << chain.wrist.y << "," << chain.wrist.z << ","
 				<< (arm.bElbowSeen ? 1 : 0) << "," << arm.elbowDirectionWeight << "," << (arm.bResting ? 1 : 0) << ","
-				<< arm.restBlend << "," << swivelStepDegrees;
+				<< arm.restBlend << "," << swivelStepDegrees << "," << (arm.bWristCoasting ? 1 : 0);
 		}
 		csv << "\n";
 	}
@@ -222,7 +229,8 @@ int runDirectTraceTool(const TestArgs& args)
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		MIKAN_LOG_INFO(kTag) << (sideIndex == 0 ? "L" : "R") << " arm: " << armFrames[sideIndex] << " frames placed, "
-							 << stalledFrames[sideIndex] << " of them standing as the frame before, "
+							 << stalledFrames[sideIndex] << " of them standing as the frame before and "
+							 << coastedFrames[sideIndex] << " on a coasted wrist, " << losses[sideIndex] << " losses, "
 							 << inboardFrames[sideIndex] << " with the elbow over " << kInboardMeters * 100.f
 							 << " cm inboard of the shoulder (" << inwardFrames[sideIndex]
 							 << " with the wrist outboard of the elbow), " << swivelJumps[sideIndex] << " elbow turns over "

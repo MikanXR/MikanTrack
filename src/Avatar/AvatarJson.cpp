@@ -50,6 +50,7 @@ json armToJson(const DirectRetarget::SolveState::Arm& arm)
 		{"nearPlane", arm.bNearPlane},
 		{"planeDistance", arm.planeDistance},
 		{"elbowDirectionWeight", arm.elbowDirectionWeight},
+		{"wristCoasting", arm.bWristCoasting},
 		{"handMeasured", arm.bHandMeasured},
 		{"twist", arm.twist},
 		{"wristRotation", quatToJson(arm.wristRotation)},

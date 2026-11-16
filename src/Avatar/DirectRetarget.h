@@ -234,6 +234,9 @@ public:
 			// How far the elbow has eased from the rig's hint onto the body
 			// model's elbow direction, 0 to 1
 			float elbowDirectionWeight= 0.f;
+			// The chain was solved on a coasted wrist this frame, not a
+			// measured one
+			bool bWristCoasting= false;
 			bool bHandMeasured= false;
 			float twist= 0.f;
 			glm::quat wristRotation{1.f, 0.f, 0.f, 0.f};
@@ -358,6 +361,24 @@ private:
 		bool bSwivelUnwrapped= false;
 		float swivelUnwrapped= 0.f;
 		OneEuroFilter swivelFilter;
+		// The wrist's pixel as last measured with its speed in the image, the
+		// pixel the chain was last solved on (measured, glided or coasted),
+		// the coast of a wrist that is not measured, and the glide back onto
+		// one that is: the offset it started with and when (negative outside
+		// one). And whether the arm's last evidence was in the band along the
+		// frame's edge, which shortens its hold.
+		bool bMeasuredWristPx= false;
+		glm::vec2 measuredWristPx{0.f};
+		double measuredWristMs= 0.0;
+		glm::vec2 wristVelocityPx{0.f};
+		bool bSolvedWristPx= false;
+		glm::vec2 solvedWristPx{0.f};
+		bool bSolvedByCoast= false;
+		bool bCoasting= false;
+		glm::vec2 coastOriginPx{0.f};
+		glm::vec2 glideOffsetPx{0.f};
+		double glideStartMs= -1.0;
+		bool bEvidenceAtEdge= false;
 		// The entry gates on the body wrist and on the hand slot's agreement
 		// with it: consecutive frames of evidence, and whether in
 		int wristGateFrames= 0;

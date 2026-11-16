@@ -65,6 +65,20 @@ constexpr double kHandednessSwapMs= 1000.0;
 // to this, so a sighting of a few frames does not leave the arm up for half
 // a second.
 constexpr double kMaxHoldMs= 500.0;
+// A placed arm whose wrist is not measured. Where the wrist's last speed,
+// dying away over the coast time, would carry it past the frame's edge, the
+// wrist goes on along that path: a hand lowered out of view keeps going down
+// in place of standing at the edge. Anywhere else it stands where it was. An
+// arm whose last evidence was in the band along the edge has left the frame
+// or is about to, so it keeps only the short hold before the loss stage takes
+// it, where its earned hold stood it at the edge for half a second. And a
+// wrist measured again after frames that did not solve the arm, or after a
+// coast, is eased onto from where the arm stood over the glide time, where it
+// jumped.
+constexpr float kWristCoastSeconds= 0.15f;
+constexpr float kWristVelocitySeconds= 0.05f;
+constexpr double kEdgeHoldMs= 100.0;
+constexpr double kWristGlideMs= 120.0;
 // A pair of landmarks whose known separation places it outside this range
 // is not on the person
 constexpr float kMinBodyDepthMeters= 0.15f;
@@ -756,9 +770,13 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// starts the hold. An arm already placed and within its hold takes
 		// the wrist and the hand back the frame they return, since a dip of
 		// one frame is the model's score wavering on a wrist it has.
-		const bool bHadChain= arm.chain.valid &&
-			(timestampMs - arm.evidenceTimestampMs) <=
-				earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
+		// The hold in force: the one the arm earned, cut short for an arm
+		// whose last evidence was at the frame's edge
+		auto holdMs= [&]() {
+			const double earned= earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
+			return arm.bEvidenceAtEdge ? std::min(earned, std::max(kEdgeHoldMs, frameMs)) : earned;
+		};
+		const bool bHadChain= arm.chain.valid && (timestampMs - arm.evidenceTimestampMs) <= holdMs();
 		const glm::vec2 bodyWristPx= landmarkPx(wristIndex);
 		auto slotNearWrist= [&](const TrackedHand& slot) {
 			return slot.tracked && shoulderWidthPx > 0.f &&
@@ -804,7 +822,10 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		const bool bWristInEdgeBand= inEdgeBand(bodyWristPx);
 		const bool bSlotlessHand= !body.wholeBody.present || shoulderWidthPx <= 0.f || bSizedBodyHand;
 		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand && bSlotlessHand))
+		{
 			arm.evidenceTimestampMs= timestampMs;
+			arm.bEvidenceAtEdge= bWristInEdgeBand;
+		}
 		const bool bWristGate= advanceGate(bHandOnWrist, arm.wristGateFrames, arm.bWristAccepted);
 		// A placed arm does not follow a wrist the scene holds: its chain
 		// stands as it was through the hold
@@ -855,15 +876,51 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// the body model's, which keeps the arm placed through a hand dropout;
 		// either through the same light filter. The elbow pixel likewise.
 		bool bWristPixel= false;
+		bool bWristCoasted= false;
 		glm::vec2 wristPx(0.f);
 		if (bHandSeen || bWristUsable)
 		{
 			wristPx= arm.wristPixelFilter.filter(bHandSeen ? handWristPx : bodyWristPx, dtSeconds);
 			bWristPixel= true;
+			// The wrist's speed in the image, lightly smoothed, for a coast
+			if (arm.bMeasuredWristPx && dtSeconds > 0.f)
+			{
+				const glm::vec2 speed= (wristPx - arm.measuredWristPx) / dtSeconds;
+				arm.wristVelocityPx+= (speed - arm.wristVelocityPx) * (dtSeconds / (dtSeconds + kWristVelocitySeconds));
+			}
+			else
+			{
+				arm.wristVelocityPx= glm::vec2(0.f);
+			}
+			arm.measuredWristPx= wristPx;
+			arm.measuredWristMs= timestampMs;
+			arm.bMeasuredWristPx= true;
+			arm.bCoasting= false;
 		}
 		else
 		{
 			arm.wristPixelFilter.reset();
+			// The frame the wrist goes: a coast where its speed would carry
+			// it out of view, from where the arm last stood
+			if (arm.bMeasuredWristPx)
+			{
+				arm.bMeasuredWristPx= false;
+				arm.coastOriginPx= arm.solvedWristPx;
+				const glm::vec2 coastEnd= arm.coastOriginPx + arm.wristVelocityPx * kWristCoastSeconds;
+				arm.bCoasting= bHadChain && bFrameKnown && arm.bSolvedWristPx &&
+					(coastEnd.x < 0.f || coastEnd.y < 0.f || coastEnd.x > (float)cameraModel.width ||
+					 coastEnd.y > (float)cameraModel.height);
+			}
+			if (arm.bCoasting && bHadChain)
+			{
+				const float elapsed= (float)((timestampMs - arm.measuredWristMs) * 0.001);
+				wristPx= arm.coastOriginPx +
+					arm.wristVelocityPx * (kWristCoastSeconds * (1.f - expf(-elapsed / kWristCoastSeconds)));
+				bWristPixel= true;
+				bWristCoasted= true;
+				// A coast leaves the frame, whatever the band says
+				arm.bEvidenceAtEdge= true;
+			}
 		}
 		// The elbow is read as an image direction, which the edge band does
 		// not spoil, so the visibility bar alone gates it
@@ -882,6 +939,30 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			arm.sightingStartMs= timestampMs;
 		if (bTorsoFresh && bWristPixel && upperArm > 1e-3f && forearm > 1e-3f)
 		{
+			// A measured wrist after frames that did not solve the arm, or
+			// after a coast: the arm stands somewhere else, and the wrist is
+			// eased onto from there, timed from the frame before
+			if (!bWristCoasted)
+			{
+				if (bHadChain && arm.bSolvedWristPx &&
+					(arm.bSolvedByCoast || (timestampMs - arm.solvedTimestampMs) > 1.5 * frameMs))
+				{
+					arm.glideOffsetPx= arm.solvedWristPx - wristPx;
+					arm.glideStartMs= timestampMs - frameMs;
+				}
+				if (arm.glideStartMs >= 0.0)
+				{
+					const float progress= std::clamp((float)((timestampMs - arm.glideStartMs) / kWristGlideMs), 0.f, 1.f);
+					if (progress < 1.f)
+						wristPx+= arm.glideOffsetPx * (1.f - progress * progress * (3.f - 2.f * progress));
+					else
+						arm.glideStartMs= -1.0;
+				}
+			}
+			arm.solvedWristPx= wristPx;
+			arm.bSolvedWristPx= true;
+			arm.bSolvedByCoast= bWristCoasted;
+			armState.bWristCoasting= bWristCoasted;
 			const glm::vec3 shoulder= m_torso.shoulder[sideIndex];
 			const glm::vec3 wristRay= rayThrough(wristPx);
 			const float maxReach= reach * 0.999f;
@@ -1125,9 +1206,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			}
 		}
 
-		const bool bChainUsable= arm.chain.valid &&
-			(timestampMs - arm.evidenceTimestampMs) <=
-				earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
+		const bool bChainUsable= arm.chain.valid && (timestampMs - arm.evidenceTimestampMs) <= holdMs();
 		if (!bChainUsable)
 		{
 			// Nothing places the arm: the source says so, and the loss stage
@@ -1141,6 +1220,13 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 			arm.bSwivelAngle= false;
 			arm.bSwivelUnwrapped= false;
 			arm.swivelFilter.reset();
+			arm.bMeasuredWristPx= false;
+			arm.wristVelocityPx= glm::vec2(0.f);
+			arm.bCoasting= false;
+			arm.bSolvedWristPx= false;
+			arm.bSolvedByCoast= false;
+			arm.glideStartMs= -1.0;
+			arm.bEvidenceAtEdge= false;
 			continue;
 		}
 		armState.chain= arm.chain;
