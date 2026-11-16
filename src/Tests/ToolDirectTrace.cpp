@@ -22,8 +22,10 @@
 // The CSV carries per frame the shoulders, the spine's turn, and per arm the
 // chain, the elbow's direction weight and the rest blend. The log carries the
 // take's summary: the shoulder midpoint's step per frame, the frames an elbow
-// sits inboard of its shoulder, and the elbow's turns about the shoulder to
-// wrist line past kSwivelJumpDegrees between consecutive frames.
+// sits inboard of its shoulder and how many of those have the wrist outboard
+// of the elbow (an arm across the body has the elbow inboard too, with the
+// wrist further in), and the elbow's turns about the shoulder to wrist line
+// past kSwivelJumpDegrees between consecutive frames.
 namespace
 {
 constexpr const char* kTag= "direct-trace";
@@ -132,6 +134,7 @@ int runDirectTraceTool(const TestArgs& args)
 	glm::vec3 previousSwivel[2]= {glm::vec3(0.f), glm::vec3(0.f)};
 	int armFrames[2]= {0, 0};
 	int inboardFrames[2]= {0, 0};
+	int inwardFrames[2]= {0, 0};
 	int swivelJumps[2]= {0, 0};
 	int solvedFrames= 0;
 	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
@@ -178,7 +181,12 @@ int runDirectTraceTool(const TestArgs& args)
 				// Toward the body's midline: the left arm's inboard is world -Y
 				const float inboard= (chain.elbow.y - chain.shoulder.y) * (sideIndex == 0 ? -1.f : 1.f);
 				if (inboard > kInboardMeters)
+				{
 					inboardFrames[sideIndex]++;
+					const float wristOutboard= (chain.wrist.y - chain.elbow.y) * (sideIndex == 0 ? 1.f : -1.f);
+					if (wristOutboard > 0.f)
+						inwardFrames[sideIndex]++;
+				}
 				swivel= swivelDirection(chain);
 				if (glm::dot(swivel, swivel) > 0.f && glm::dot(previousSwivel[sideIndex], previousSwivel[sideIndex]) > 0.f)
 				{
@@ -205,7 +213,8 @@ int runDirectTraceTool(const TestArgs& args)
 	{
 		MIKAN_LOG_INFO(kTag) << (sideIndex == 0 ? "L" : "R") << " arm: " << armFrames[sideIndex] << " frames placed, "
 							 << inboardFrames[sideIndex] << " with the elbow over " << kInboardMeters * 100.f
-							 << " cm inboard of the shoulder, " << swivelJumps[sideIndex] << " elbow turns over "
+							 << " cm inboard of the shoulder (" << inwardFrames[sideIndex]
+							 << " with the wrist outboard of the elbow), " << swivelJumps[sideIndex] << " elbow turns over "
 							 << kSwivelJumpDegrees << " degrees in a frame";
 	}
 	MIKAN_LOG_INFO(kTag) << "Wrote " << outPath;

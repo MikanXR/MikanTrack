@@ -737,6 +737,83 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bCarried, "(k) a placed arm follows a body wrist clear of the frame's edge with no hand slot");
 
+		// The same with the body model's own hands in the frame. A slotless
+		// wrist carrying a hand of a hand's size carries the arm as before.
+		// One carrying a knot of points, what the model lays out on a wrist
+		// it invents on the scene, is not followed: the chain stands where it
+		// was through the hold, and the arm rests past it.
+		{
+			auto runWithBodyHands= [&](int firstFrame, int frameCount, float spanShoulderWidths) {
+				AvatarPose pose;
+				const float shoulderWidthPx=
+					glm::distance(project(camera, user.shoulder[0]), project(camera, user.shoulder[1]));
+				for (int repeat= 0; repeat < frameCount; ++repeat)
+				{
+					TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+					WholeBodyExtras& extras= frame.body.wholeBody;
+					extras.present= true;
+					for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+					{
+						const ePoseLandmark wristLandmark=
+							sideIndex == 0 ? ePoseLandmark::LEFT_WRIST : ePoseLandmark::RIGHT_WRIST;
+						const glm::vec3 wristPx= frame.body.imagePoints[(int)wristLandmark];
+						for (int point= 0; point < WHOLEBODY_HAND_LANDMARK_COUNT; ++point)
+						{
+							const float along= (float)point / (float)(WHOLEBODY_HAND_LANDMARK_COUNT - 1);
+							extras.hands[sideIndex][point]=
+								wristPx + glm::vec3(0.f, -spanShoulderWidths * shoulderWidthPx * along, 0.f);
+						}
+						extras.handScores[sideIndex].fill(0.4f);
+					}
+					solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+					timestampMs+= 33.0;
+				}
+			};
+			const glm::vec3 lift(0.f, 0.f, 0.05f);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex]+= lift;
+			runWithBodyHands(300, 40, 0.6f);
+			bool bSizedCarried= true;
+			glm::vec2 carriedPx[2];
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				carriedPx[sideIndex]= project(camera, chain.wrist);
+				bSizedCarried&= chain.valid && glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) < 1.f;
+			}
+			check(bSizedCarried, "(k) a slotless body wrist carrying a whole-body hand of a hand's size carries the arm");
+
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex]+= lift + lift;
+			runWithBodyHands(340, 3, 0.15f);
+			bool bStood= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				bStood&= chain.valid && glm::length(project(camera, chain.wrist) - carriedPx[sideIndex]) < 1.f &&
+					glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) > 20.f;
+			}
+			runWithBodyHands(343, 40, 0.15f);
+			bool bKnotRested= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				bKnotRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+			check(bStood && bKnotRested,
+				  "(k) a slotless body wrist carrying a knot of whole-body hand points is not followed, and the arm "
+				  "rests past its hold");
+
+			// Back to a placed arm with no slot for what follows
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.wrist[sideIndex]-= lift + lift + lift;
+				user.bHandTracked[sideIndex]= true;
+			}
+			AvatarPose replaced;
+			run(user, 390, 10, replaced);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.bHandTracked[sideIndex]= false;
+			run(user, 400, 10, replaced);
+		}
+
 		// The wrists lowered into the band along the bottom edge, still seen
 		// and still with no slot: the arm runs out its hold and rests
 		const float frameHeight= (float)camera.model.height;

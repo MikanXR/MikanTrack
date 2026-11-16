@@ -44,6 +44,11 @@ constexpr float kEdgeBandFrameHeights= 0.1f;
 // widths, is not the hand: the palm detector runs over the whole frame and
 // fires on hand-shaped things in the scene
 constexpr float kHandAgreementShoulderWidths= 0.5f;
+// The smallest whole-body hand, by the longer side of its points' box in
+// shoulder widths, that makes a body wrist with no hand slot a wrist with a
+// hand on it. On the seated takes a wrist the model invents carries a hand of
+// 0.14 to 0.24 and a real one the hand model lost 0.32 to 0.81 (p5 to p95).
+constexpr float kSlotlessHandMinShoulderWidths= 0.3f;
 // Hand slots that sit on the opposite side's body wrist for this long, with
 // none on its own, are labelled the wrong way round
 constexpr double kHandednessSwapMs= 1000.0;
@@ -764,10 +769,32 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		// clasp or a hand the hand model cannot read. In the band along the
 		// edge the wrist alone only runs out the hold.
 		const bool bWristInEdgeBand= inEdgeBand(bodyWristPx);
-		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand))
+		// Clear of the edge, a wrist with no slot has to carry a hand of the
+		// body model's own. With the hands out of the frame the model parks
+		// a wrist on the scene (a chair's edge beside the head) and scores it
+		// at the bar for seconds, and the hand it lays out there is a knot at
+		// the wrist, where a hand the hand model cannot read still has a
+		// hand's size. A backend with no hands of its own is not asked.
+		bool bSlotlessHand= true;
+		if (body.wholeBody.present && shoulderWidthPx > 0.f)
+		{
+			glm::vec2 low(body.wholeBody.hands[sideIndex][0]);
+			glm::vec2 high= low;
+			for (const glm::vec3& point : body.wholeBody.hands[sideIndex])
+			{
+				low= glm::min(low, glm::vec2(point));
+				high= glm::max(high, glm::vec2(point));
+			}
+			bSlotlessHand=
+				std::max(high.x - low.x, high.y - low.y) >= kSlotlessHandMinShoulderWidths * shoulderWidthPx;
+		}
+		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand && bSlotlessHand))
 			arm.evidenceTimestampMs= timestampMs;
 		const bool bWristGate= advanceGate(bHandOnWrist, arm.wristGateFrames, arm.bWristAccepted);
-		const bool bWristUsable= bHadChain ? bWristVisible : bWristGate;
+		// A placed arm does not follow a wrist the scene holds: its chain
+		// stands as it was through the hold
+		const bool bWristUsable=
+			bHadChain ? bWristVisible && (bHandOnWrist || bWristInEdgeBand || bSlotlessHand) : bWristGate;
 
 		// The hand slot is the hand only where the body model agrees: the
 		// palm detector runs over the whole frame and fires on hand-shaped
