@@ -68,6 +68,16 @@ constexpr float kDepthBeta= 0.02f;
 constexpr float kDirectionMinCutoffHz= 1.5f;
 constexpr float kDirectionBeta= 0.08f;
 constexpr float kDerivativeCutoffHz= 1.0f;
+// The shoulders get a band of their own, heavy and with no speed term. The
+// body model moves a seated user's shoulder landmarks by pixels every frame,
+// more while the arms move, and a speed term reads that as motion and opens
+// the band to it. A seated torso's real moves are slow leans, which half a
+// second of lag does not spoil, while the jitter lands on the spine and
+// shakes the head.
+constexpr float kShoulderPixelMinCutoffHz= 0.3f;
+constexpr float kShoulderPixelBeta= 0.f;
+constexpr float kShoulderDepthMinCutoffHz= 0.3f;
+constexpr float kShoulderDepthBeta= 0.f;
 
 // The wrist's distance along its ray is where the ray crosses one of two
 // depth planes. The near plane is in force while the palm's centre sits
@@ -450,8 +460,8 @@ void DirectRetarget::resetMeasure()
 void DirectRetarget::configureFilters()
 {
 	for (OneEuroFilterVec2& filter : m_torso.shoulderPixelFilter)
-		filter.configure(kPixelMinCutoffHz, kPixelBeta, kDerivativeCutoffHz);
-	m_torso.depthFilter.configure(kDepthMinCutoffHz, kDepthBeta, kDerivativeCutoffHz);
+		filter.configure(kShoulderPixelMinCutoffHz, kShoulderPixelBeta, kDerivativeCutoffHz);
+	m_torso.depthFilter.configure(kShoulderDepthMinCutoffHz, kShoulderDepthBeta, kDerivativeCutoffHz);
 	m_head.nosePixelFilter.configure(kPixelMinCutoffHz, kPixelBeta, kDerivativeCutoffHz);
 	for (OneEuroFilterVec2& filter : m_head.earPixelFilter)
 		filter.configure(kPixelMinCutoffHz, kPixelBeta, kDerivativeCutoffHz);

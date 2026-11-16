@@ -1293,7 +1293,8 @@ static int runDirectRetargetTest(const TestArgs&)
 			double timestampMs= 0.0;
 			captureNeutral(rig, camera, solver, timestampMs);
 			Limited out;
-			for (int repeat= 0; repeat < 10; ++repeat)
+			// Long enough for the shoulders' heavy band to settle on the shift
+			for (int repeat= 0; repeat < 150; ++repeat)
 			{
 				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 200 + repeat);
 				solver.solve(frame, camera.model, phone, timestampMs, *rig.skeleton, rig.config, out.pose);
