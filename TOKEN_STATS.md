@@ -1,7 +1,7 @@
 # AI Token Usage
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-13M_out_%2F_3.8B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~212_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~635_L-blue)
+![AI tokens](https://img.shields.io/badge/AI_tokens-19M_out_%2F_5.2B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~291_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~874_L-blue)
 (estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
@@ -32,7 +32,7 @@ Anthropic publishes no per-token energy figures, so the estimate chains public r
 **For scale:** the central estimate (~70 kWh) is about two and a half days of average US household electricity, or roughly 140 hours of the RTX 3090 dev machine at full load. The central water estimate (~200 L) is about one bathtub.
 
 <!-- TOKEN_STATS:BEGIN -->
-Last regenerated 2026-11-12 05:06 UTC by `tools/token_stats.py`.
+Last regenerated 2026-11-16 05:02 UTC by `tools/token_stats.py`.
 
 ## Per-session usage
 
@@ -81,25 +81,48 @@ Last regenerated 2026-11-12 05:06 UTC by `tools/token_stats.py`.
 | Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-fable-5-1 | 105 | 134,551 | 19,263,718 | 976,431 |
 | Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-opus-5-5 | 214 | 188,798 | 23,835,496 | 722,459 |
 | Face expression system implementation (Nov 8) | claude-opus-5-5 | 159 | 203,086 | 44,555,615 | 871,072 |
-| Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11) | claude-opus-5-5 | 74 | 58,227 | 10,725,665 | 177,743 |
+| Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11) | claude-opus-5-5 | 100 | 70,121 | 16,656,215 | 217,059 |
+| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-fable-5-1 | 137 | 249,650 | 28,156,196 | 695,350 |
+| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-fable-5-2 | 150 | 142,275 | 36,207,377 | 601,126 |
+| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-opus-5-5 | 96 | 69,569 | 8,070,544 | 455,135 |
+| Camera frame synchronization on a multi-camera rig, research (Nov 10) | claude-opus-5-5 | 8 | 17,707 | 496,790 | 48,719 |
+| Audio panel viseme meter layout (Nov 10) | claude-opus-5-5 | 21 | 5,226 | 1,283,006 | 80,255 |
+| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-fable-5-2 | 523 | 852,770 | 232,691,239 | 2,332,296 |
+| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-opus-5-5 | 2,110 | 2,090,600 | 424,049,014 | 7,563,189 |
+| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-sonnet-5-5 | 21 | 28,466 | 1,363,258 | 287,824 |
+| Whole-body landmarks proposal review (Nov 12 - Nov 13) | claude-fable-5-2 | 451 | 577,628 | 179,646,142 | 1,355,831 |
+| Dimmed low-visibility landmark overlays (Nov 12) | claude-opus-5-5 | 43 | 26,341 | 4,296,846 | 106,039 |
+| Which body model the single-camera setup runs (Nov 12) | claude-opus-5-5 | 51 | 34,953 | 6,075,021 | 175,537 |
+| Follow-on to the whole-body landmarks work (Nov 12 - Nov 13) | claude-fable-5-2 | 395 | 410,869 | 90,762,226 | 1,124,120 |
+| Camera intrinsics from a human body in view (Nov 13 - Nov 15) | claude-fable-5-2 | 745 | 876,686 | 201,007,650 | 2,462,466 |
+| Camera intrinsics from a human body in view (Nov 13 - Nov 15) | claude-opus-5-5 | 323 | 220,712 | 44,310,537 | 1,544,549 |
+| Face tracking comparison on the single-camera body model (Nov 13) | claude-opus-5-5 | 224 | 152,789 | 37,503,538 | 802,165 |
+| Getting the Kalidokit 3d sample to run (Nov 14) | claude-opus-5-5 | 20 | 5,842 | 1,298,728 | 45,172 |
+| How MotionBERT lifts body landmarks into 3D, research (Nov 14) | claude-fable-5-2 | 30 | 51,019 | 4,039,847 | 158,837 |
+| How MotionBERT lifts body landmarks into 3D, research (Nov 14) | claude-opus-5-5 | 62 | 39,244 | 7,296,186 | 374,295 |
+| Hands stuck in frame after the real hand has left (Nov 14) | claude-fable-5-2 | 101 | 85,492 | 25,669,433 | 309,815 |
+| Two profiling hot paths on the main and vision threads (Nov 15) | claude-opus-5-5 | 229 | 162,201 | 47,737,282 | 481,045 |
+| Switch controllers as arm trackers on the PC (Nov 15) | claude-opus-5-5 | 6 | 3,969 | 384,489 | 42,884 |
+| Body model on every frame: divider default, held challenge frame, camera delivery grid (Nov 15) | claude-fable-5-2 | 112 | 106,259 | 23,821,718 | 462,787 |
 
 ## Totals per model
 
 | Model | API calls | Input | Cache write | Cache read | Output | Weighted |
 |---|---|---|---|---|---|---|
 | claude-fable-5 | 2,591 | 21,074 | 12,397,951 | 942,019,064 | 3,193,585 | 25,137,668 |
-| claude-fable-5-1 | 2,787 | 79,042 | 21,091,767 | 884,559,044 | 4,528,068 | 27,507,999 |
+| claude-fable-5-1 | 2,924 | 82,954 | 21,787,117 | 912,715,240 | 4,777,718 | 28,495,392 |
+| claude-fable-5-2 | 2,507 | 5,556 | 8,807,278 | 793,845,632 | 3,102,998 | 21,182,841 |
 | claude-opus-5 | 3,302 | 45,258 | 15,571,474 | 1,312,417,756 | 3,471,033 | 33,621,308 |
-| claude-opus-5-5 | 3,557 | 7,138 | 15,782,735 | 600,449,606 | 1,453,968 | 17,410,071 |
+| claude-opus-5-5 | 6,776 | 13,692 | 27,541,035 | 1,189,182,137 | 4,295,015 | 34,966,654 |
 | claude-sonnet-5 | 445 | 13,920 | 1,324,975 | 44,892,367 | 527,219 | 1,759,094 |
-| claude-sonnet-5-5 | 113 | 226 | 700,653 | 8,395,287 | 59,015 | 402,129 |
-| **total** | 12,795 | 166,658 | 66,869,555 | 3,792,733,124 | 13,232,888 | **105,838,270** |
+| claude-sonnet-5-5 | 134 | 268 | 988,477 | 9,758,545 | 87,481 | 529,824 |
+| **total** | 18,679 | 182,722 | 88,418,307 | 5,204,830,741 | 19,455,049 | **145,692,784** |
 
 ## Energy and water estimate
 
 | Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |
 |---|---|---|---|---|
-| low | 0.5 | 53 kWh | 58 L | 159 L |
-| central | 2.0 | 212 kWh | 233 L | 635 L |
-| high | 6.0 | 635 kWh | 699 L | 1,905 L |
+| low | 0.5 | 73 kWh | 80 L | 219 L |
+| central | 2.0 | 291 kWh | 321 L | 874 L |
+| high | 6.0 | 874 kWh | 962 L | 2,622 L |
 <!-- TOKEN_STATS:END -->

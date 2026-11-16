@@ -54,6 +54,22 @@ SESSIONS = {
     "ea86ee1e-bccf-46b3-b617-6133963f2fce": "Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8)",
     "47c0a5db-65e3-42ed-b2c9-8f4d257eb842": "Face expression system implementation (Nov 8)",
     "fde5afec-cb75-45e2-a019-be4a70e2c40e": "Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11)",
+    "aa9e4459-7676-4bd1-8cd6-a4a2e789ac7b": "Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10)",
+    "5d6fcfcd-81bd-4cf5-944c-9167919c76f7": "Camera frame synchronization on a multi-camera rig, research (Nov 10)",
+    "bb8a78e6-e81c-430d-ba7c-c34bb369de5e": "Audio panel viseme meter layout (Nov 10)",
+    "dd7ee882-0c80-4c28-b631-317963728493": "How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11)",
+    "0099a0c3-0fef-4a60-ad8a-b49eabd28e09": "Whole-body landmarks proposal review (Nov 12 - Nov 13)",
+    "0e386e6a-a1a2-4e71-80c4-bd2794b656bf": "Dimmed low-visibility landmark overlays (Nov 12)",
+    "778c3b69-8589-4318-bd61-141fb40bbc7b": "Which body model the single-camera setup runs (Nov 12)",
+    "8758074f-b7db-4a8a-885f-5d49d49e1da1": "Follow-on to the whole-body landmarks work (Nov 12 - Nov 13)",
+    "3b28be91-f392-4cad-9f02-f7e096a7dc46": "Camera intrinsics from a human body in view (Nov 13 - Nov 15)",
+    "46de251d-0835-47e2-ac7a-eab22dfebe04": "Face tracking comparison on the single-camera body model (Nov 13)",
+    "9a05bee0-ed1a-4de6-825e-fc5d116b4344": "Getting the Kalidokit 3d sample to run (Nov 14)",
+    "e25777a8-ae0d-43cc-9cfd-dae72bf33b61": "How MotionBERT lifts body landmarks into 3D, research (Nov 14)",
+    "f902f5dd-b6f3-4ea1-b2fc-f45be7138cb1": "Hands stuck in frame after the real hand has left (Nov 14)",
+    "79ef0b01-ac11-4ae0-8943-970192fb1a65": "Two profiling hot paths on the main and vision threads (Nov 15)",
+    "8bad1dff-7860-4db9-8784-811ddd6ae2b3": "Switch controllers as arm trackers on the PC (Nov 15)",
+    "52b809fb-ad48-435d-821b-fa801e0d6bfb": "Body model on every frame: divider default, held challenge frame, camera delivery grid (Nov 15)",
 }
 
 # Same project folder, not MikanTrack work (MikanXR, UE plugin, ARKit, misc).
@@ -191,6 +207,9 @@ IGNORED = {
     "ed96bee5-b239-48ed-8b98-2d1d26a51565",
     "f78dab8d-1d0b-4732-b5df-c8ee9320b476",
     "fdd76251-61cd-4a42-933e-5be9e2b82d9e",
+    "00ea6f9e-01ac-4295-9524-0ee9ea425be2",
+    "18aa57d5-39ce-42f5-be9b-478e8f190f2d",
+    "77ff4636-3b8c-4a3c-8f82-8ec6bb32b24a",
 }
 
 # Compute weighting per token class, proportional to Anthropic's price ratios
