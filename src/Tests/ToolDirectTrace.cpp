@@ -25,7 +25,9 @@
 // sits inboard of its shoulder and how many of those have the wrist outboard
 // of the elbow (an arm across the body has the elbow inboard too, with the
 // wrist further in), and the elbow's turns about the shoulder to wrist line
-// past kSwivelJumpDegrees between consecutive frames.
+// past kSwivelJumpDegrees between consecutive frames. It also counts the
+// placed frames whose chain stands exactly as the frame before, an arm the
+// frame could not solve and held.
 namespace
 {
 constexpr const char* kTag= "direct-trace";
@@ -135,6 +137,8 @@ int runDirectTraceTool(const TestArgs& args)
 	int armFrames[2]= {0, 0};
 	int inboardFrames[2]= {0, 0};
 	int inwardFrames[2]= {0, 0};
+	int stalledFrames[2]= {0, 0};
+	DirectRetarget::ArmChain previousChain[2];
 	int swivelJumps[2]= {0, 0};
 	int solvedFrames= 0;
 	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
@@ -178,6 +182,11 @@ int runDirectTraceTool(const TestArgs& args)
 			if (chain.valid)
 			{
 				armFrames[sideIndex]++;
+				// A chain that stands exactly as it was: the frame did not
+				// solve the arm, and it is held
+				const DirectRetarget::ArmChain& previous= previousChain[sideIndex];
+				if (previous.valid && chain.elbow == previous.elbow && chain.wrist == previous.wrist)
+					stalledFrames[sideIndex]++;
 				// Toward the body's midline: the left arm's inboard is world -Y
 				const float inboard= (chain.elbow.y - chain.shoulder.y) * (sideIndex == 0 ? -1.f : 1.f);
 				if (inboard > kInboardMeters)
@@ -197,6 +206,7 @@ int runDirectTraceTool(const TestArgs& args)
 				}
 			}
 			previousSwivel[sideIndex]= swivel;
+			previousChain[sideIndex]= chain;
 			csv << "," << (chain.valid ? 1 : 0) << "," << chain.elbow.x << "," << chain.elbow.y << "," << chain.elbow.z
 				<< "," << chain.wrist.x << "," << chain.wrist.y << "," << chain.wrist.z << ","
 				<< (arm.bElbowSeen ? 1 : 0) << "," << arm.elbowDirectionWeight << "," << (arm.bResting ? 1 : 0) << ","
@@ -212,6 +222,7 @@ int runDirectTraceTool(const TestArgs& args)
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		MIKAN_LOG_INFO(kTag) << (sideIndex == 0 ? "L" : "R") << " arm: " << armFrames[sideIndex] << " frames placed, "
+							 << stalledFrames[sideIndex] << " of them standing as the frame before, "
 							 << inboardFrames[sideIndex] << " with the elbow over " << kInboardMeters * 100.f
 							 << " cm inboard of the shoulder (" << inwardFrames[sideIndex]
 							 << " with the wrist outboard of the elbow), " << swivelJumps[sideIndex] << " elbow turns over "

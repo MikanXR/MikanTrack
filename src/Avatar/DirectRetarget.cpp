@@ -30,6 +30,13 @@ using RaySphereHit= BodyPoseSolver::RaySphereHit;
 // start the hold. The bar itself stays where it is: the model scores a
 // plainly visible wrist at 0.5 to 0.7 on the seated takes.
 constexpr float kMinVisibility= 0.5f;
+// A landmark already in use is kept down to this lower bar. With the arms
+// across the torso the model's scores sag together and waver at the entry
+// bar, a shoulder at 0.45 to 0.5 for frames at a time, and each frame under
+// it stood the arms still until the score came back and they jumped to catch
+// up. The shoulders are kept while the torso is measured, and a placed arm's
+// wrist while it has a hand on it.
+constexpr float kKeepVisibility= 0.4f;
 constexpr int kEnterFrames= 3;
 // A landmark this close to the frame edge is treated as out of frame: the
 // model places a joint it cannot see somewhere plausible inside the image,
@@ -564,8 +571,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 
 	const BodyPoseObservation& body= camera.body;
 	const bool bFrameKnown= cameraModel.width > 0 && cameraModel.height > 0;
-	auto usable= [&](int index) {
-		if (!body.valid || !body.isProvided(index) || body.visibility[index] < kMinVisibility)
+	auto seenAt= [&](int index, float bar) {
+		if (!body.valid || !body.isProvided(index) || body.visibility[index] < bar)
 			return false;
 		if (!bFrameKnown)
 			return true;
@@ -573,6 +580,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		return point.x >= kFrameMarginPx && point.y >= kFrameMarginPx &&
 			point.x <= (float)cameraModel.width - kFrameMarginPx && point.y <= (float)cameraModel.height - kFrameMarginPx;
 	};
+	auto usable= [&](int index) { return seenAt(index, kMinVisibility); };
 	auto inEdgeBand= [&](const glm::vec2& px) {
 		const float bandPx= kEdgeBandFrameHeights * (float)cameraModel.height;
 		return bFrameKnown &&
@@ -596,7 +604,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 	// pixels filtered lightly and the depth heavily --
 	bool bTorsoFresh= false;
 	float shoulderWidthPx= 0.f;
-	if (usable(leftShoulderIndex) && usable(rightShoulderIndex))
+	const float shoulderBar= m_torso.valid ? kKeepVisibility : kMinVisibility;
+	if (seenAt(leftShoulderIndex, shoulderBar) && seenAt(rightShoulderIndex, shoulderBar))
 	{
 		const glm::vec2 leftPx= m_torso.shoulderPixelFilter[0].filter(landmarkPx(leftShoulderIndex), dtSeconds);
 		const glm::vec2 rightPx= m_torso.shoulderPixelFilter[1].filter(landmarkPx(rightShoulderIndex), dtSeconds);
@@ -750,32 +759,18 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 		const bool bHadChain= arm.chain.valid &&
 			(timestampMs - arm.evidenceTimestampMs) <=
 				earnedHoldMs(arm.sightingStartMs, arm.evidenceTimestampMs, frameMs);
-		const bool bWristVisible= usable(wristIndex);
-		// A body wrist takes an arm from rest only with a hand on it. The
-		// model places a wrist it cannot see at the frame's edge where the arm
-		// leaves and
-		// scores it over the bar for seconds at a time, and the hand model
-		// finds nothing there. Either slot counts, since a slot under the
-		// wrong label is still a hand at this wrist.
 		const glm::vec2 bodyWristPx= landmarkPx(wristIndex);
-		auto slotOnWrist= [&](const TrackedHand& slot) {
-			return slot.tracked && bWristVisible && shoulderWidthPx > 0.f &&
+		auto slotNearWrist= [&](const TrackedHand& slot) {
+			return slot.tracked && shoulderWidthPx > 0.f &&
 				glm::distance(glm::vec2(slot.imagePoints[0].x, slot.imagePoints[0].y), bodyWristPx) <=
 					kHandAgreementShoulderWidths * shoulderWidthPx;
 		};
-		const bool bHandOnWrist= slotOnWrist(camera.hands[0]) || slotOnWrist(camera.hands[1]);
-		// A placed arm keeps following a wrist with no hand on it while the
-		// wrist is clear of the frame's edge, which carries it through a
-		// clasp or a hand the hand model cannot read. In the band along the
-		// edge the wrist alone only runs out the hold.
-		const bool bWristInEdgeBand= inEdgeBand(bodyWristPx);
-		// Clear of the edge, a wrist with no slot has to carry a hand of the
-		// body model's own. With the hands out of the frame the model parks
-		// a wrist on the scene (a chair's edge beside the head) and scores it
-		// at the bar for seconds, and the hand it lays out there is a knot at
-		// the wrist, where a hand the hand model cannot read still has a
-		// hand's size. A backend with no hands of its own is not asked.
-		bool bSlotlessHand= true;
+		// The body model's own hand at this wrist has a hand's size. With the
+		// hands out of the frame the model parks a wrist on the scene (a
+		// chair's edge beside the head) and scores it at the bar for seconds,
+		// and the hand it lays out there is a knot at the wrist, where a hand
+		// the hand model cannot read still has a hand's size.
+		bool bSizedBodyHand= false;
 		if (body.wholeBody.present && shoulderWidthPx > 0.f)
 		{
 			glm::vec2 low(body.wholeBody.hands[sideIndex][0]);
@@ -785,9 +780,29 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 				low= glm::min(low, glm::vec2(point));
 				high= glm::max(high, glm::vec2(point));
 			}
-			bSlotlessHand=
+			bSizedBodyHand=
 				std::max(high.x - low.x, high.y - low.y) >= kSlotlessHandMinShoulderWidths * shoulderWidthPx;
 		}
+		// A placed arm keeps its wrist down to the keep bar, with a hand on
+		// it: the invented wrist scores inside that range too, and has none
+		const bool bWristVisible= usable(wristIndex) ||
+			(bHadChain && seenAt(wristIndex, kKeepVisibility) &&
+			 (slotNearWrist(camera.hands[0]) || slotNearWrist(camera.hands[1]) || bSizedBodyHand));
+		// A body wrist takes an arm from rest only with a hand on it. The
+		// model places a wrist it cannot see at the frame's edge where the arm
+		// leaves and scores it over the bar for seconds at a time, and the
+		// hand model finds nothing there. Either slot counts, since a slot
+		// under the wrong label is still a hand at this wrist.
+		auto slotOnWrist= [&](const TrackedHand& slot) { return bWristVisible && slotNearWrist(slot); };
+		const bool bHandOnWrist= slotOnWrist(camera.hands[0]) || slotOnWrist(camera.hands[1]);
+		// A placed arm keeps following a wrist with no hand on it while the
+		// wrist is clear of the frame's edge, which carries it through a
+		// clasp or a hand the hand model cannot read. In the band along the
+		// edge the wrist alone only runs out the hold. Clear of the edge, a
+		// wrist with no slot has to carry a hand of the body model's own. A
+		// backend with no hands of its own is not asked.
+		const bool bWristInEdgeBand= inEdgeBand(bodyWristPx);
+		const bool bSlotlessHand= !body.wholeBody.present || shoulderWidthPx <= 0.f || bSizedBodyHand;
 		if (bHandOnWrist || (bHadChain && bWristVisible && !bWristInEdgeBand && bSlotlessHand))
 			arm.evidenceTimestampMs= timestampMs;
 		const bool bWristGate= advanceGate(bHandOnWrist, arm.wristGateFrames, arm.bWristAccepted);

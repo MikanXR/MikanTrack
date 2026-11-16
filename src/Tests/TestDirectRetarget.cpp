@@ -836,6 +836,93 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bBandRested, "(k) a body wrist in the band along the frame's edge with no hand slot runs out the hold and rests the arm");
 	}
 
+	// (k0) The keep bar. A landmark under the entry bar does not start
+	// anything: shoulders at 0.45 measure no torso. Once measured, shoulders
+	// at 0.45 are kept and the arms go on being solved, past the hold a
+	// torso with no shoulders would last, and at 0.35 the torso is lost. A
+	// placed arm's wrist at 0.45 is kept with its hand slot on it and not
+	// without one.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		User user= makeNeutralUser();
+		int frameIndex= 0;
+		auto run= [&](int frameCount, float shoulderVisibility, float wristVisibility) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				if (shoulderVisibility > 0.f)
+				{
+					frame.body.visibility[(int)ePoseLandmark::LEFT_SHOULDER]= shoulderVisibility;
+					frame.body.visibility[(int)ePoseLandmark::RIGHT_SHOULDER]= shoulderVisibility;
+				}
+				if (wristVisibility > 0.f)
+				{
+					frame.body.visibility[(int)ePoseLandmark::LEFT_WRIST]= wristVisibility;
+					frame.body.visibility[(int)ePoseLandmark::RIGHT_WRIST]= wristVisibility;
+				}
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto wristsFollowed= [&]() {
+			bool bFollowed= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				bFollowed&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+			}
+			return bFollowed;
+		};
+		auto moveWrists= [&](float up) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex].z+= up;
+		};
+
+		run(10, 0.45f, 0.f);
+		const bool bNotEntered= !solver.getSolveState().torsoValid;
+		run(40, 0.f, 0.f);
+		const bool bEntered= solver.getSolveState().torsoValid && wristsFollowed();
+		moveWrists(0.05f);
+		run(40, 0.45f, 0.f);
+		const bool bShouldersKept= solver.getSolveState().torsoValid && wristsFollowed();
+		check(bNotEntered && bEntered && bShouldersKept,
+			  "(k0) shoulders under the entry bar start no torso, and a measured torso keeps them down to the keep "
+			  "bar with the arms still solved");
+
+		moveWrists(0.05f);
+		run(40, 0.f, 0.45f);
+		const bool bWristKept= wristsFollowed();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bHandTracked[sideIndex]= false;
+		run(40, 0.f, 0.f);
+		const bool bSlotlessCarried= wristsFollowed();
+		moveWrists(-0.05f);
+		run(3, 0.f, 0.45f);
+		bool bStood= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bStood&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) > 10.f;
+		}
+		run(40, 0.f, 0.45f);
+		bool bRested= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+		check(bWristKept && bSlotlessCarried && bStood && bRested,
+			  "(k0) a placed arm keeps a wrist under the entry bar with its hand slot on it, and without one the "
+			  "chain stands and the arm rests past its hold");
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bHandTracked[sideIndex]= true;
+		run(40, 0.f, 0.f);
+		run(40, 0.35f, 0.f);
+		check(!solver.getSolveState().torsoValid, "(k0) shoulders under the keep bar lose the torso past its hold");
+	}
+
 	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
 	// part out by guess, so its palm can come back turned right round: the
 	// palm and fingers are held while the landmarks sit at the edge, and
