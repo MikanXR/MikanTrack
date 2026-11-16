@@ -1322,6 +1322,50 @@ static int runRetargetStageTest(const TestArgs&)
 		}
 		check(bReturned, "(h) a hand returning mid-ease or at rest is placed by its measurement at once, and a new "
 						 "loss holds and eases from there");
+
+		// With an ease out of rest the returning arm is still its measurement
+		// in the source, with the share of the rest pose left in it falling
+		// from near 1 to nothing over the blend, the first frame back a small
+		// step from the rest pose, and the pose past the blend the one of a
+		// run that never lost the hand
+		{
+			constexpr float kRiseMs= 200.f;
+			RetargetStageConfig riseConfig= easeConfig;
+			riseConfig.positionLoss.arms[0].riseBlendMs= kRiseMs;
+			const int returnFrame= firstAtRest + 5;
+			bool bRise= firstAtRest > 0 && returnFrame + 15 < kFrames;
+			if (bRise)
+			{
+				const std::vector<RetargetResult> risen= runFrames(
+					riseConfig, [&](int index) { return index >= kLostFrom && index < returnFrame; }, kFrames);
+				const float firstShare= risen[returnFrame].source.arms[0].restBlend;
+				const float wholeTurn= largestTurn(rest, neverLost[returnFrame].pose, leftBones);
+				const float firstStep= largestTurn(risen[returnFrame - 1].pose, risen[returnFrame].pose, leftBones);
+				bRise&= risen[returnFrame - 1].source.arms[0].state == eGroupState::Resting &&
+					risen[returnFrame].source.arms[0].state == eGroupState::Measured && firstShare > 0.85f &&
+					firstShare < 1.f && firstStep < 0.2f * wholeTurn;
+				float lastShare= 1.f;
+				int firstFree= -1;
+				for (int index= returnFrame; index < returnFrame + 12; ++index)
+				{
+					const float share= risen[index].source.arms[0].restBlend;
+					bRise&= share <= lastShare;
+					lastShare= share;
+					if (firstFree < 0 && share == 0.f)
+						firstFree= index;
+				}
+				const double riseMs= firstFree > 0
+					? risen[firstFree].source.clock.stepMs - risen[returnFrame - 1].source.clock.stepMs
+					: -1.0;
+				bRise&= firstFree > returnFrame && riseMs >= kRiseMs && riseMs < kRiseMs + 2.0 * kFrameMs &&
+					samePoseBits(risen[returnFrame + 12].pose, neverLost[returnFrame + 12].pose);
+				MIKAN_LOG_INFO(kTag) << "  (h) rise from frame " << returnFrame << ": first share " << firstShare
+									 << ", first step " << glm::degrees(firstStep) << " deg of "
+									 << glm::degrees(wholeTurn) << ", free at frame " << firstFree;
+			}
+			check(bRise, "(h) a position arm with an ease out of rest returns from the rest pose onto its measurement "
+						 "over the blend");
+		}
 	}
 
 	// (i) The position head: freeze repeats the last measured head, the ease
@@ -1489,6 +1533,69 @@ static int runRetargetStageTest(const TestArgs&)
 		};
 		const LossPolicy defaults= makeDirectLossPolicy(leanConfig.direct.restBlendMs);
 		const std::vector<B> leftBones= makeArmBones(0);
+
+		// The arm's ease out of rest: lost for long enough to rest, then seen
+		// again. With no rise blend the arm is on its measurement the frame
+		// the entry gate admits it. With one, that frame's directions have
+		// turned a small part of the way from the rest placement, with no
+		// chain for a goal to read, and past the blend the pose is the one
+		// the run with no blend has.
+		{
+			constexpr int kReturnFrom= 62;
+			constexpr int kRiseFrames= 90;
+			auto runReturn= [&](float riseBlendMs) {
+				RetargetStageConfig config= leanConfig;
+				config.directLoss= defaults;
+				config.directLoss.arms[0].riseBlendMs= riseBlendMs;
+				RetargetStage stage;
+				stage.setConfig(config);
+				std::vector<RetargetResult> results(kRiseFrames);
+				for (int index= 0; index < kRiseFrames; ++index)
+				{
+					const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, kLostFrom, kReturnFrom);
+					stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, results[index]);
+				}
+				return results;
+			};
+			const std::vector<RetargetResult> snapped= runReturn(0.f);
+			const std::vector<RetargetResult> risen= runReturn(200.f);
+			int firstBack= -1;
+			for (int index= kReturnFrom; index < kRiseFrames && firstBack < 0; ++index)
+			{
+				if (snapped[index].source.arms[0].state == eGroupState::Measured)
+					firstBack= index;
+			}
+			auto turned= [](const glm::vec3& a, const glm::vec3& b) {
+				return acosf(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.f, 1.f));
+			};
+			bool bRise= firstBack >= kReturnFrom && firstBack + 12 < kRiseFrames;
+			float snapTurn= 0.f;
+			float riseTurn= 0.f;
+			if (bRise)
+			{
+				const SourcePose::Arm& resting= snapped[firstBack - 1].source.arms[0];
+				const SourcePose::Arm& snappedArm= snapped[firstBack].source.arms[0];
+				const SourcePose::Arm& risenArm= risen[firstBack].source.arms[0];
+				snapTurn= turned(resting.forearmDirection, snappedArm.forearmDirection);
+				riseTurn= turned(resting.forearmDirection, risenArm.forearmDirection);
+				bool bSamePast= true;
+				for (int index= firstBack + 8; index < firstBack + 12; ++index)
+					bSamePast&= samePoseBits(risen[index].pose, snapped[index].pose);
+				// From past the take's first frames, where the arm also comes out
+				// of rest and the blend applies
+				bool bSameBefore= true;
+				for (int index= 15; index < firstBack; ++index)
+					bSameBefore&= samePoseBits(risen[index].pose, snapped[index].pose);
+				bRise&= resting.state == eGroupState::Resting && resting.restBlend == 1.f && snappedArm.bHasElbow &&
+					risenArm.state == eGroupState::Measured && !risenArm.bHasElbow && snapTurn > glm::radians(5.f) &&
+					riseTurn > 0.f && riseTurn < 0.2f * snapTurn && bSameBefore && bSamePast && allWellFormed(risen);
+			}
+			MIKAN_LOG_INFO(kTag) << "  (j) arm back at frame " << firstBack << ": forearm turn "
+								 << glm::degrees(snapTurn) << " deg with no rise blend, " << glm::degrees(riseTurn)
+								 << " deg on the first frame of a 200 ms one";
+			check(bRise, "(j) a direct arm with an ease out of rest returns from its rest placement onto its "
+						 "measurement over the blend, and without one the frame it returns");
+		}
 
 		// The arm
 		{

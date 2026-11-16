@@ -177,6 +177,8 @@
 		"restCurlTooltip": "How far the fingers curl at rest, degrees on the base and middle joints.",
 		"restBlendSlider": "Rest blend",
 		"restBlendTooltip": "How long the chain takes to ease into its rest pose once its hold ends, milliseconds. Zero snaps.",
+		"riseBlendSlider": "Rise blend",
+		"riseBlendTooltip": "How long the arm takes to ease out of its rest pose onto the tracked pose once it is seen again, milliseconds. Zero places it the frame it returns.",
 		"fingerIndexCheckbox": "Index",
 		"fingerLittleCheckbox": "Little",
 		"fingerMiddleCheckbox": "Middle",

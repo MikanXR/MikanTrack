@@ -177,6 +177,8 @@
 		"restCurlTooltip": "休止時に指をどれだけ曲げるかです。付け根と中間の関節に適用する角度（度）です。",
 		"restBlendSlider": "休止へのブレンド",
 		"restBlendTooltip": "保持が終わってから、チェーンが休止ポーズへ移るまでの時間（ミリ秒）です。0にすると即座に切り替わります。",
+		"riseBlendSlider": "休止からのブレンド",
+		"riseBlendTooltip": "腕が再び検出されてから、休止ポーズからトラッキングされたポーズへ移るまでの時間（ミリ秒）です。0にすると検出されたフレームで即座に切り替わります。",
 		"fingerIndexCheckbox": "人差し指",
 		"fingerLittleCheckbox": "小指",
 		"fingerMiddleCheckbox": "中指",

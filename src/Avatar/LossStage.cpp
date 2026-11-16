@@ -349,8 +349,49 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 			carried.pose= *pose;
 			ioHands->bCarried[sideIndex]= true;
 		}
+		// An arm the ease had at rest, or on its way there, eases back out:
+		// timed from the frame before, so the first frame back already moves
+		const bool bDirect= ioSource.pipeline == SourcePose::ePipeline::Direct;
+		if (ease.easeStartMs >= 0.0 && policy.riseBlendMs > 0.f)
+		{
+			ease.riseStartMs= timestampMs - ioSource.clock.frameIntervalMs;
+			ease.riseFrom= ease.lastPlacement;
+			ease.riseFromRestBlend= ease.lastRestBlend;
+		}
 		ease.easeStartMs= -1.0;
-		ease.lastPlacement= placementOf(arm, hand);
+		float rise= 1.f;
+		if (ease.riseStartMs >= 0.0)
+		{
+			if (policy.riseBlendMs > 0.f)
+				rise= smoothstep((float)((timestampMs - ease.riseStartMs) / policy.riseBlendMs));
+			if (rise >= 1.f)
+				ease.riseStartMs= -1.0;
+		}
+		if (rise < 1.f && bDirect)
+		{
+			// The placement part way from the one the ease left onto the
+			// measured one. The chain goes, so a pull toward a goal reads the
+			// eased directions as it does for a resting arm.
+			const DirectRetarget::ArmPlacement placement=
+				DirectRetarget::blendPlacements(ease.riseFrom, placementOf(arm, hand), rise);
+			arm.bHasShoulder= false;
+			arm.bHasElbow= false;
+			arm.upperDirection= placement.upperDirection;
+			arm.forearmDirection= placement.forearmDirection;
+			arm.twist= placement.twist;
+			hand.wristRotation= placement.wristRotation;
+			hand.fingers= placement.fingers;
+			ease.lastPlacement= placement;
+		}
+		else
+		{
+			// A position arm carries the share of the rest pose still in it,
+			// which the target solve blends its bones by
+			if (rise < 1.f)
+				arm.restBlend= ease.riseFromRestBlend * (1.f - rise);
+			ease.lastPlacement= placementOf(arm, hand);
+		}
+		ease.lastRestBlend= arm.restBlend;
 		ease.bPlaced= true;
 		return;
 	}
@@ -405,6 +446,7 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 			arm.state= eGroupState::Resting;
 			arm.restBlend= blend;
 			hand.state= eGroupState::Resting;
+			ease.lastRestBlend= blend;
 			return;
 		}
 		// The ease into the rig's rest pose, from what the bones took last

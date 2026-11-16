@@ -737,6 +737,83 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bCarried, "(k) a placed arm follows a body wrist clear of the frame's edge with no hand slot");
 
+		// The same with the body model's own hands in the frame. A slotless
+		// wrist carrying a hand of a hand's size carries the arm as before.
+		// One carrying a knot of points, what the model lays out on a wrist
+		// it invents on the scene, is not followed: the chain stands where it
+		// was through the hold, and the arm rests past it.
+		{
+			auto runWithBodyHands= [&](int firstFrame, int frameCount, float spanShoulderWidths) {
+				AvatarPose pose;
+				const float shoulderWidthPx=
+					glm::distance(project(camera, user.shoulder[0]), project(camera, user.shoulder[1]));
+				for (int repeat= 0; repeat < frameCount; ++repeat)
+				{
+					TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, firstFrame + repeat);
+					WholeBodyExtras& extras= frame.body.wholeBody;
+					extras.present= true;
+					for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+					{
+						const ePoseLandmark wristLandmark=
+							sideIndex == 0 ? ePoseLandmark::LEFT_WRIST : ePoseLandmark::RIGHT_WRIST;
+						const glm::vec3 wristPx= frame.body.imagePoints[(int)wristLandmark];
+						for (int point= 0; point < WHOLEBODY_HAND_LANDMARK_COUNT; ++point)
+						{
+							const float along= (float)point / (float)(WHOLEBODY_HAND_LANDMARK_COUNT - 1);
+							extras.hands[sideIndex][point]=
+								wristPx + glm::vec3(0.f, -spanShoulderWidths * shoulderWidthPx * along, 0.f);
+						}
+						extras.handScores[sideIndex].fill(0.4f);
+					}
+					solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+					timestampMs+= 33.0;
+				}
+			};
+			const glm::vec3 lift(0.f, 0.f, 0.05f);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex]+= lift;
+			runWithBodyHands(300, 40, 0.6f);
+			bool bSizedCarried= true;
+			glm::vec2 carriedPx[2];
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				carriedPx[sideIndex]= project(camera, chain.wrist);
+				bSizedCarried&= chain.valid && glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) < 1.f;
+			}
+			check(bSizedCarried, "(k) a slotless body wrist carrying a whole-body hand of a hand's size carries the arm");
+
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex]+= lift + lift;
+			runWithBodyHands(340, 3, 0.15f);
+			bool bStood= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				bStood&= chain.valid && glm::length(project(camera, chain.wrist) - carriedPx[sideIndex]) < 1.f &&
+					glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) > 20.f;
+			}
+			runWithBodyHands(343, 40, 0.15f);
+			bool bKnotRested= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				bKnotRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+			check(bStood && bKnotRested,
+				  "(k) a slotless body wrist carrying a knot of whole-body hand points is not followed, and the arm "
+				  "rests past its hold");
+
+			// Back to a placed arm with no slot for what follows
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.wrist[sideIndex]-= lift + lift + lift;
+				user.bHandTracked[sideIndex]= true;
+			}
+			AvatarPose replaced;
+			run(user, 390, 10, replaced);
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.bHandTracked[sideIndex]= false;
+			run(user, 400, 10, replaced);
+		}
+
 		// The wrists lowered into the band along the bottom edge, still seen
 		// and still with no slot: the arm runs out its hold and rests
 		const float frameHeight= (float)camera.model.height;
@@ -757,6 +834,189 @@ static int runDirectRetargetTest(const TestArgs&)
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			bBandRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
 		check(bBandRested, "(k) a body wrist in the band along the frame's edge with no hand slot runs out the hold and rests the arm");
+	}
+
+	// (k0) The keep bar. A landmark under the entry bar does not start
+	// anything: shoulders at 0.45 measure no torso. Once measured, shoulders
+	// at 0.45 are kept and the arms go on being solved, past the hold a
+	// torso with no shoulders would last, and at 0.35 the torso is lost. A
+	// placed arm's wrist at 0.45 is kept with its hand slot on it and not
+	// without one.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		User user= makeNeutralUser();
+		int frameIndex= 0;
+		auto run= [&](int frameCount, float shoulderVisibility, float wristVisibility) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				if (shoulderVisibility > 0.f)
+				{
+					frame.body.visibility[(int)ePoseLandmark::LEFT_SHOULDER]= shoulderVisibility;
+					frame.body.visibility[(int)ePoseLandmark::RIGHT_SHOULDER]= shoulderVisibility;
+				}
+				if (wristVisibility > 0.f)
+				{
+					frame.body.visibility[(int)ePoseLandmark::LEFT_WRIST]= wristVisibility;
+					frame.body.visibility[(int)ePoseLandmark::RIGHT_WRIST]= wristVisibility;
+				}
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto wristsFollowed= [&]() {
+			bool bFollowed= true;
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				bFollowed&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
+			}
+			return bFollowed;
+		};
+		auto moveWrists= [&](float up) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex].z+= up;
+		};
+
+		run(10, 0.45f, 0.f);
+		const bool bNotEntered= !solver.getSolveState().torsoValid;
+		run(40, 0.f, 0.f);
+		const bool bEntered= solver.getSolveState().torsoValid && wristsFollowed();
+		moveWrists(0.05f);
+		run(40, 0.45f, 0.f);
+		const bool bShouldersKept= solver.getSolveState().torsoValid && wristsFollowed();
+		check(bNotEntered && bEntered && bShouldersKept,
+			  "(k0) shoulders under the entry bar start no torso, and a measured torso keeps them down to the keep "
+			  "bar with the arms still solved");
+
+		moveWrists(0.05f);
+		run(40, 0.f, 0.45f);
+		const bool bWristKept= wristsFollowed();
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bHandTracked[sideIndex]= false;
+		run(40, 0.f, 0.f);
+		const bool bSlotlessCarried= wristsFollowed();
+		moveWrists(-0.05f);
+		run(3, 0.f, 0.45f);
+		bool bStood= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			bStood&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) > 10.f;
+		}
+		run(40, 0.f, 0.45f);
+		bool bRested= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bRested&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+		check(bWristKept && bSlotlessCarried && bStood && bRested,
+			  "(k0) a placed arm keeps a wrist under the entry bar with its hand slot on it, and without one the "
+			  "chain stands and the arm rests past its hold");
+
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.bHandTracked[sideIndex]= true;
+		run(40, 0.f, 0.f);
+		run(40, 0.35f, 0.f);
+		check(!solver.getSolveState().torsoValid, "(k0) shoulders under the keep bar lose the torso past its hold");
+	}
+
+	// (k00) A placed arm whose wrist is not measured. Clear of the frame's
+	// edge and at rest in the image it stands where it was, and the wrist
+	// measured again somewhere else is eased onto over the glide, not jumped
+	// to. Lowered fast toward the bottom edge, the wrist coasts on down out
+	// of view, and the arm keeps only the short hold before it rests.
+	{
+		const Camera camera= makeCamera(kTiltDegrees);
+		Rig rig= makeRig(kTiltDegrees);
+		DirectStageSolver solver;
+		double timestampMs= 0.0;
+		User user= makeNeutralUser();
+		int frameIndex= 0;
+		auto run= [&](int frameCount) {
+			AvatarPose pose;
+			for (int repeat= 0; repeat < frameCount; ++repeat)
+			{
+				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex++);
+				solver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, pose);
+				timestampMs+= 33.0;
+			}
+		};
+		auto setSeen= [&](bool bSeen) {
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			{
+				user.bWristSeen[sideIndex]= bSeen;
+				user.bHandTracked[sideIndex]= bSeen;
+			}
+		};
+		auto chainPx= [&](int sideIndex) { return project(camera, solver.getArmChain(sideIndex).wrist); };
+		auto userPx= [&](int sideIndex) { return project(camera, user.wrist[sideIndex]); };
+
+		// The glide
+		run(40);
+		glm::vec2 stoodPx[2]= {chainPx(0), chainPx(1)};
+		setSeen(false);
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex].z+= 0.06f;
+		run(3);
+		bool bStood= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			bStood&= solver.getArmChain(sideIndex).valid && glm::length(chainPx(sideIndex) - stoodPx[sideIndex]) < 1.f &&
+				!solver.getSolveState().arms[sideIndex].bWristCoasting;
+		}
+		setSeen(true);
+		run(1);
+		bool bGlided= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const float whole= glm::length(userPx(sideIndex) - stoodPx[sideIndex]);
+			const float moved= glm::length(chainPx(sideIndex) - stoodPx[sideIndex]);
+			bGlided&= whole > 15.f && moved > 0.05f * whole && moved < 0.5f * whole;
+		}
+		run(10);
+		bool bArrived= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bArrived&= glm::length(chainPx(sideIndex) - userPx(sideIndex)) < 1.f;
+		check(bStood && bGlided && bArrived,
+			  "(k00) a wrist that goes clear of the edge stands the arm, and the wrist measured again is eased onto "
+			  "over the glide");
+
+		// The coast: the wrists lowered four centimeters a frame to the band
+		// along the bottom edge, then gone
+		const float frameHeight= (float)camera.model.height;
+		// From well up, so the descent lasts long enough to give the wrist
+		// its speed
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			user.wrist[sideIndex].z+= 0.2f;
+		run(20);
+		bool bLowered= false;
+		for (int step= 0; step < 200 && !bLowered; ++step)
+		{
+			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				user.wrist[sideIndex].z-= 0.04f;
+			run(1);
+			bLowered= userPx(0).y > frameHeight - 60.f && userPx(1).y > frameHeight - 60.f;
+		}
+		const glm::vec2 lastPx[2]= {chainPx(0), chainPx(1)};
+		setSeen(false);
+		run(1);
+		MIKAN_LOG_INFO("test-direct-retarget") << "  (k00) wrist gone at y " << lastPx[0].y << " of " << frameHeight << ", coasted to " << chainPx(0).y;
+		bool bCoasted= bLowered;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			bCoasted&= solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bWristCoasting &&
+				chainPx(sideIndex).y > lastPx[sideIndex].y + 3.f;
+		}
+		run(6);
+		bool bRestedSoon= true;
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+			bRestedSoon&= !solver.getArmChain(sideIndex).valid && solver.getSolveState().arms[sideIndex].bResting;
+		check(bCoasted && bRestedSoon,
+			  "(k00) a wrist lowered fast to the bottom edge coasts on out of view when it goes, and the arm rests "
+			  "after the short hold");
 	}
 
 	// (k1) A hand cut by the frame's edge. The hand model lays the unseen
@@ -1293,7 +1553,8 @@ static int runDirectRetargetTest(const TestArgs&)
 			double timestampMs= 0.0;
 			captureNeutral(rig, camera, solver, timestampMs);
 			Limited out;
-			for (int repeat= 0; repeat < 10; ++repeat)
+			// Long enough for the shoulders' heavy band to settle on the shift
+			for (int repeat= 0; repeat < 150; ++repeat)
 			{
 				const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, 200 + repeat);
 				solver.solve(frame, camera.model, phone, timestampMs, *rig.skeleton, rig.config, out.pose);
@@ -1479,7 +1740,8 @@ static int runDirectRetargetTest(const TestArgs&)
 		}
 		check(bFollows, "(s) a seen elbow turns the chain's elbow onto its image direction from the wrist");
 		user.bElbowSeen[0]= user.bElbowSeen[1]= false;
-		run(user, 12);
+		// The ease, then the turn's filter settling behind it
+		run(user, 60);
 		bool bBackToHint= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			bBackToHint&= glm::length(solver.getArmChain(sideIndex).elbow - hintElbow[sideIndex]) < 1e-3f;

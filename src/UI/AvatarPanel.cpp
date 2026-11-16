@@ -96,8 +96,9 @@ bool drawLimitControl(float& degrees, const char* labelKey, const char* tooltipK
 }
 
 // What follows a chain's hold, as stored: freeze, the ease to the rest pose
-// with its blend time, or release; true when anything changed
-bool drawLossAfter(RetargetChains::Loss& loss)
+// with its blend time, and for an arm the blend time back out of it, or
+// release; true when anything changed
+bool drawLossAfter(RetargetChains::Loss& loss, bool bArm= false)
 {
 	struct Choice
 	{
@@ -125,6 +126,12 @@ bool drawLossAfter(RetargetChains::Loss& loss)
 	{
 		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &loss.restBlendMs, 0.f, 1000.f, "%.0f ms");
 		ImGui::SetItemTooltip("%s", locText("avatarPanel.restBlendTooltip"));
+		if (bArm)
+		{
+			bChanged|=
+				ImGui::SliderFloat(locLabel("avatarPanel.riseBlendSlider"), &loss.riseBlendMs, 0.f, 1000.f, "%.0f ms");
+			ImGui::SetItemTooltip("%s", locText("avatarPanel.riseBlendTooltip"));
+		}
 	}
 	return bChanged;
 }
@@ -686,7 +693,7 @@ bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, Retarge
 		bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &loss.holdMs, 0.f, 1000.f, "%.0f ms");
 		ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
 	}
-	bChanged|= drawLossAfter(loss);
+	bChanged|= drawLossAfter(loss, true);
 	// The measured-length stream has no rest pose
 	if (!bAvatar && loss.after == eLossAfter::EaseToRest)
 		drawNote("chains.easeWithoutAvatarNote");

@@ -111,7 +111,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline loss <torso|head|leftArm|rightArm>",
 		 "pipeline loss <torso|head|leftArm|rightArm> after <release|freeze|easeToRest>",
 		 "pipeline loss <torso|head|leftArm|rightArm> hold <ms>",
-		 "pipeline loss <torso|head|leftArm|rightArm> blend <ms>"},
+		 "pipeline loss <torso|head|leftArm|rightArm> blend <ms>",
+		 "pipeline loss <leftArm|rightArm> rise <ms>"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePipelineAutomation(args, outLines, outError);
 		});
@@ -1746,12 +1747,12 @@ bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std
 	return true;
 }
 
-// A loss rule as "hold <kind> <ms> after <kind> blend <ms>"
-static std::string formatLoss(eLossHold hold, float holdMs, eLossAfter after, float restBlendMs)
+// A loss rule as "hold <kind> <ms> after <kind> blend <ms> rise <ms>"
+static std::string formatLoss(eLossHold hold, float holdMs, eLossAfter after, float restBlendMs, float riseBlendMs)
 {
-	char text[128];
-	std::snprintf(text, sizeof(text), "hold %s %.6g after %s blend %.6g", lossHoldName(hold), holdMs,
-				  lossAfterName(after), restBlendMs);
+	char text[160];
+	std::snprintf(text, sizeof(text), "hold %s %.6g after %s blend %.6g rise %.6g", lossHoldName(hold), holdMs,
+				  lossAfterName(after), restBlendMs, riseBlendMs);
 	return text;
 }
 
@@ -1776,10 +1777,10 @@ static const char* groupStateName(SourcePose::eGroupState state)
 bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 									  std::string& outError)
 {
-	// loss <chain> [after <kind> | hold <ms> | blend <ms>]
+	// loss <chain> [after <kind> | hold <ms> | blend <ms> | rise <ms>]
 	if (args.size() != 2 && args.size() != 4)
 	{
-		outError= "usage: loss <torso|head|leftArm|rightArm> [after <release|freeze|easeToRest>|hold <ms>|blend <ms>]";
+		outError= "usage: loss <torso|head|leftArm|rightArm> [after <release|freeze|easeToRest>|hold <ms>|blend <ms>|rise <ms>]";
 		return false;
 	}
 	eRetargetChain chain;
@@ -1819,7 +1820,7 @@ bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std:
 				return false;
 			}
 		}
-		else if (field == "hold" || field == "blend")
+		else if (field == "hold" || field == "blend" || field == "rise")
 		{
 			char* end= nullptr;
 			const double parsed= std::strtod(value.c_str(), &end);
@@ -1828,7 +1829,17 @@ bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std:
 				outError= "not a number of milliseconds of at least 0: " + value;
 				return false;
 			}
-			if (field == "blend")
+			if (field == "rise")
+			{
+				// Only an arm eases out of rest
+				if (sideIndex < 0)
+				{
+					outError= "rise applies to leftArm and rightArm";
+					return false;
+				}
+				loss.riseBlendMs= (float)parsed;
+			}
+			else if (field == "blend")
 			{
 				loss.restBlendMs= (float)parsed;
 			}
@@ -1849,7 +1860,7 @@ bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std:
 		// The chains' one edit path, the panel's
 		m_app->setRetargetChains(chains);
 	}
-	outLines.push_back("stored " + formatLoss(loss.hold, loss.holdMs, loss.after, loss.restBlendMs));
+	outLines.push_back("stored " + formatLoss(loss.hold, loss.holdMs, loss.after, loss.restBlendMs, loss.riseBlendMs));
 
 	// What the project's pipeline performs: the direct one with an avatar in
 	// a direct project, the position one otherwise
@@ -1869,7 +1880,7 @@ bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std:
 	if (resolved.bFollowsParent)
 		line+= "follows the arms";
 	else
-		line+= formatLoss(resolved.hold, resolved.holdMs, resolved.after, resolved.restBlendMs);
+		line+= formatLoss(resolved.hold, resolved.holdMs, resolved.after, resolved.restBlendMs, resolved.riseBlendMs);
 	outLines.push_back(line);
 
 	// The chain's group state on the frame the scene shows

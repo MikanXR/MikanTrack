@@ -130,6 +130,7 @@ json lossToJson(const RetargetChains::Loss& loss)
 		{"holdMs", loss.holdMs},
 		{"after", lossAfterName(loss.after)},
 		{"restBlendMs", loss.restBlendMs},
+		{"riseBlendMs", loss.riseBlendMs},
 	};
 }
 
@@ -148,6 +149,9 @@ RetargetChains::Loss lossFromJson(FieldReader& chain, const RetargetChains::Loss
 	loss.holdMs= reader.readFloat("holdMs", defaults.holdMs);
 	loss.after= reader.readEnum("after", k_afters, lossAfterName, defaults.after);
 	loss.restBlendMs= reader.readFloat("restBlendMs", defaults.restBlendMs);
+	// Absent in a block from before the ease out of rest, which is no ease
+	if (lossJson->contains("riseBlendMs"))
+		loss.riseBlendMs= reader.readFloat("riseBlendMs", defaults.riseBlendMs);
 	return loss;
 }
 
@@ -175,12 +179,15 @@ RetargetChains::Loss migratedGroupLoss(bool bDirect)
 	return loss;
 }
 
-// What follows the hold as stored, the rest blend with an ease to rest
+// What follows the hold as stored, the two blends with an ease to rest
 void applyStoredAfter(const RetargetChains::Loss& stored, ChainLossPolicy& ioPolicy)
 {
 	ioPolicy.after= stored.after;
 	if (stored.after == eLossAfter::EaseToRest)
+	{
 		ioPolicy.restBlendMs= stored.restBlendMs;
+		ioPolicy.riseBlendMs= stored.riseBlendMs;
+	}
 }
 
 // The position pipeline performs no hold or a timed one, and its own hold

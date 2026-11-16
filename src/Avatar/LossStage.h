@@ -73,6 +73,11 @@ struct ChainLossPolicy
 	eLossAfter after= eLossAfter::Release;
 	// The ease into rest, milliseconds; zero snaps
 	float restBlendMs= 0.f;
+	// The ease out of rest, milliseconds, for an arm whose loss eased it
+	// there: a returning arm blends from where the ease had it onto its
+	// measurement. Zero places the arm on its measurement the frame it
+	// returns.
+	float riseBlendMs= 0.f;
 };
 
 // The loss rule of every chain: plain values, set per pipeline
@@ -137,13 +142,20 @@ private:
 	};
 	// The ease into rest: what the bones took last frame and whether
 	// anything placed them in this epoch, and when the ease began (negative
-	// while the arm is carried) and the placement it started from
+	// while the arm is carried) and the placement it started from. And the
+	// ease out of it: when it began (negative outside one), the direct
+	// placement it started from, and for a position arm how far into rest
+	// the arm was, which is also what its last resting frame handed on.
 	struct EaseState
 	{
 		bool bPlaced= false;
 		DirectRetarget::ArmPlacement lastPlacement;
 		double easeStartMs= -1.0;
 		DirectRetarget::ArmPlacement easeFrom;
+		float lastRestBlend= 0.f;
+		double riseStartMs= -1.0;
+		DirectRetarget::ArmPlacement riseFrom;
+		float riseFromRestBlend= 0.f;
 	};
 	// A torso or a head: its timed hold, the last values handed on, and when
 	// its ease into rest began (negative while it is carried)
