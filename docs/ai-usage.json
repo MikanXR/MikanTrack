@@ -1,0 +1,1344 @@
+{
+  "schemaVersion": 1,
+  "sessions": {
+    "4ac3774b-763d-45c3-a0ef-f1ca5753b894": {
+      "label": "Initial build: scaffold to working tracker, fusion, parametric model",
+      "firstActivity": "2026-07-30T04:29:40.049Z",
+      "lastActivity": "2026-08-01T23:52:26.346Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 745,
+          "input": 7125,
+          "cacheWrite5m": 1224392,
+          "cacheWrite1h": 3954159,
+          "cacheRead": 245527743,
+          "output": 1109801
+        },
+        "claude-opus-5": {
+          "calls": 218,
+          "input": 436,
+          "cacheWrite5m": 378041,
+          "cacheWrite1h": 497976,
+          "cacheRead": 56255854,
+          "output": 239263
+        }
+      }
+    },
+    "2dc53dce-c715-4265-82d3-88c5ad5ae604": {
+      "label": "Triangulation overhaul, RTMPose A/B, RealSense, IMU, charuco extrinsics",
+      "firstActivity": "2026-08-02T00:08:15.351Z",
+      "lastActivity": "2026-08-10T03:08:40.117Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 441,
+          "input": 4194,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1080665,
+          "cacheRead": 207103745,
+          "output": 428792
+        },
+        "claude-opus-5": {
+          "calls": 947,
+          "input": 4113,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 5483413,
+          "cacheRead": 453133941,
+          "output": 1012882
+        }
+      }
+    },
+    "7d1bd754-bd18-405a-92cd-2316852369e8": {
+      "label": "Image quality metrics, record/replay, hitch diagnosis",
+      "firstActivity": "2026-08-10T03:10:46.248Z",
+      "lastActivity": "2026-08-11T06:44:24.613Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 227,
+          "input": 2047,
+          "cacheWrite5m": 106719,
+          "cacheWrite1h": 1770574,
+          "cacheRead": 73796202,
+          "output": 355415
+        },
+        "claude-opus-5": {
+          "calls": 199,
+          "input": 398,
+          "cacheWrite5m": 160106,
+          "cacheWrite1h": 1391712,
+          "cacheRead": 98648329,
+          "output": 245359
+        }
+      }
+    },
+    "21c00bc2-e910-4fe0-b136-3cfd02ad904b": {
+      "label": "Depth A/B, marker-scale discovery, bone calibration, seeding fixes",
+      "firstActivity": "2026-08-11T07:27:23.069Z",
+      "lastActivity": "2026-08-12T07:18:14.268Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 373,
+          "input": 1137,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1024437,
+          "cacheRead": 143251867,
+          "output": 406564
+        }
+      }
+    },
+    "aa3a90ea-54b1-4179-bc80-4cb1994f004d": {
+      "label": "LEARNINGS.md and token stats",
+      "firstActivity": "2026-08-12T07:27:18.055Z",
+      "lastActivity": "2026-08-12T07:37:48.605Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 21,
+          "input": 167,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 116150,
+          "cacheRead": 2036500,
+          "output": 42320
+        }
+      }
+    },
+    "6f113e65-3d35-483b-ad9c-1e5ecbb32974": {
+      "label": "3-camera right-hand dropout: SQPnP fix, minCameraConfidence gate",
+      "firstActivity": "2026-08-13T04:22:10.203Z",
+      "lastActivity": "2026-08-13T05:26:06.757Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 163,
+          "input": 308,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 303891,
+          "cacheRead": 31096087,
+          "output": 150814
+        }
+      }
+    },
+    "8f667e50-cf5d-4d36-8cd6-92b98572a026": {
+      "label": "Dedicated linux/macos tracking machine consideration",
+      "firstActivity": "2026-08-13T04:42:01.499Z",
+      "lastActivity": "2026-08-13T05:26:37.182Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 14,
+          "input": 27,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 70154,
+          "cacheRead": 1013749,
+          "output": 13324
+        }
+      }
+    },
+    "356d659d-3cde-4c0b-bbc1-bef43a4d2f3a": {
+      "label": "BlazePose revival: opt-in per-camera body pose, shoulders + head OSC",
+      "firstActivity": "2026-08-13T05:41:42.079Z",
+      "lastActivity": "2026-08-15T05:28:04.363Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 151,
+          "input": 299,
+          "cacheWrite5m": 37025,
+          "cacheWrite1h": 342890,
+          "cacheRead": 34416298,
+          "output": 176162
+        },
+        "claude-opus-5": {
+          "calls": 785,
+          "input": 16163,
+          "cacheWrite5m": 210621,
+          "cacheWrite1h": 3141914,
+          "cacheRead": 373642254,
+          "output": 882945
+        }
+      }
+    },
+    "e4fa6767-be6c-4bae-8461-d662357148a0": {
+      "label": "VMC OSC output mode for VMC4UE and VSeeFace comparison",
+      "firstActivity": "2026-08-16T03:17:18.233Z",
+      "lastActivity": "2026-08-16T07:12:07.621Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 181,
+          "input": 3919,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 508165,
+          "cacheRead": 47773144,
+          "output": 169468
+        }
+      }
+    },
+    "af7ea373-96e6-4a6b-ac6d-5b23d382bfa1": {
+      "label": "Hand state estimator + biomechanical priors: joint fit, limits, fitted angle prior",
+      "firstActivity": "2026-08-16T07:43:42.971Z",
+      "lastActivity": "2026-08-16T21:49:24.349Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 429,
+          "input": 856,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1549360,
+          "cacheRead": 245581671,
+          "output": 443619
+        },
+        "claude-opus-5": {
+          "calls": 95,
+          "input": 189,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 707108,
+          "cacheRead": 53053665,
+          "output": 99784
+        }
+      }
+    },
+    "1ca1a79c-cc0f-40c8-bb95-5b5db469bac6": {
+      "label": "Left elbow stuck in a non-anatomic pose: recorded-replay diagnosis",
+      "firstActivity": "2026-08-16T22:09:51.102Z",
+      "lastActivity": "2026-08-16T22:49:33.821Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 146,
+          "input": 276,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 322776,
+          "cacheRead": 33808344,
+          "output": 113124
+        }
+      }
+    },
+    "78c6231e-c773-425f-9035-3902d9a912e2": {
+      "label": "OSC forearm position, wrist rotation removal, UE plugin update",
+      "firstActivity": "2026-08-16T23:53:05.781Z",
+      "lastActivity": "2026-08-17T00:26:08.265Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 92,
+          "input": 173,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 217274,
+          "cacheRead": 16392624,
+          "output": 52147
+        }
+      }
+    },
+    "d5366ae9-e889-472c-8bf7-51ce7ec7e80b": {
+      "label": "Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack",
+      "firstActivity": "2026-08-17T05:59:47.110Z",
+      "lastActivity": "2026-08-17T07:46:31.842Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 127,
+          "input": 4475,
+          "cacheWrite5m": 472258,
+          "cacheWrite1h": 298593,
+          "cacheRead": 17666658,
+          "output": 159017
+        },
+        "claude-opus-5": {
+          "calls": 59,
+          "input": 1625,
+          "cacheWrite5m": 141311,
+          "cacheWrite1h": 331997,
+          "cacheRead": 15022036,
+          "output": 53593
+        },
+        "claude-sonnet-5": {
+          "calls": 85,
+          "input": 3223,
+          "cacheWrite5m": 386751,
+          "cacheWrite1h": 0,
+          "cacheRead": 8571544,
+          "output": 72133
+        }
+      }
+    },
+    "eeda76ac-a3bd-4ab5-8317-5e075fef93db": {
+      "label": "Project files, guided setup flow, tracking configurations",
+      "firstActivity": "2026-08-17T08:33:32.952Z",
+      "lastActivity": "2026-08-18T05:17:31.003Z",
+      "branch": "iphone",
+      "models": {
+        "claude-fable-5": {
+          "calls": 273,
+          "input": 1576,
+          "cacheWrite5m": 152479,
+          "cacheWrite1h": 918642,
+          "cacheRead": 83780411,
+          "output": 314321
+        },
+        "claude-opus-5": {
+          "calls": 113,
+          "input": 6556,
+          "cacheWrite5m": 601205,
+          "cacheWrite1h": 0,
+          "cacheRead": 9050492,
+          "output": 93677
+        },
+        "claude-sonnet-5": {
+          "calls": 360,
+          "input": 10697,
+          "cacheWrite5m": 938224,
+          "cacheWrite1h": 0,
+          "cacheRead": 36320823,
+          "output": 455086
+        }
+      }
+    },
+    "656cf457-eae9-43c7-aa79-94da1af8abdd": {
+      "label": "Single-camera removal and SystemAnimatorOnline transfer consideration",
+      "firstActivity": "2026-08-18T08:07:40.278Z",
+      "lastActivity": "2026-08-19T05:57:28.463Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 56,
+          "input": 10201,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 342360,
+          "cacheRead": 8637133,
+          "output": 77596
+        }
+      }
+    },
+    "58453e30-1564-46ea-8206-f7addea12b7f": {
+      "label": "testing.md reference doc",
+      "firstActivity": "2026-08-19T06:06:13.497Z",
+      "lastActivity": "2026-08-19T06:13:03.534Z",
+      "branch": "iphone",
+      "models": {
+        "claude-opus-5": {
+          "calls": 38,
+          "input": 72,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 111058,
+          "cacheRead": 3748073,
+          "output": 24631
+        }
+      }
+    },
+    "66eac461-122e-448c-aade-bb2a2f0fb724": {
+      "label": "Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages",
+      "firstActivity": "2026-09-30T04:22:46.167Z",
+      "lastActivity": "2026-09-30T06:24:51.452Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 106,
+          "input": 2852,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 508718,
+          "cacheRead": 36487268,
+          "output": 243969
+        }
+      }
+    },
+    "2535deb7-05ae-44fc-a2c8-9904c14291d1": {
+      "label": "VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream",
+      "firstActivity": "2026-10-01T07:15:44.803Z",
+      "lastActivity": "2026-10-02T06:05:03.579Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 127,
+          "input": 3644,
+          "cacheWrite5m": 200743,
+          "cacheWrite1h": 2045843,
+          "cacheRead": 53922752,
+          "output": 429960
+        },
+        "claude-opus-5-5": {
+          "calls": 78,
+          "input": 156,
+          "cacheWrite5m": 539930,
+          "cacheWrite1h": 0,
+          "cacheRead": 6989301,
+          "output": 37545
+        }
+      }
+    },
+    "6d75f97c-a50c-424f-b49a-5496419956a8": {
+      "label": "Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks",
+      "firstActivity": "2026-10-02T06:07:27.837Z",
+      "lastActivity": "2026-10-03T18:41:14.476Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 99,
+          "input": 198,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 892215,
+          "cacheRead": 21893883,
+          "output": 116320
+        },
+        "claude-sonnet-5-5": {
+          "calls": 5,
+          "input": 10,
+          "cacheWrite5m": 56286,
+          "cacheWrite1h": 0,
+          "cacheRead": 180003,
+          "output": 636
+        }
+      }
+    },
+    "f0d55761-fa83-4bbb-83e3-dc2ec51049f9": {
+      "label": "iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work",
+      "firstActivity": "2026-10-04T04:10:26.907Z",
+      "lastActivity": "2026-10-16T18:41:20.363Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 797,
+          "input": 22108,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 6472703,
+          "cacheRead": 402530506,
+          "output": 884628
+        },
+        "claude-opus-5-5": {
+          "calls": 2545,
+          "input": 5098,
+          "cacheWrite5m": 9647590,
+          "cacheWrite1h": 756604,
+          "cacheRead": 451658770,
+          "output": 543292
+        },
+        "claude-sonnet-5-5": {
+          "calls": 46,
+          "input": 92,
+          "cacheWrite5m": 241602,
+          "cacheWrite1h": 0,
+          "cacheRead": 4248740,
+          "output": 1042
+        }
+      }
+    },
+    "0b9cfef3-414e-4f4a-aa97-467952d58d3f": {
+      "label": "Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing",
+      "firstActivity": "2026-10-31T04:51:56.832Z",
+      "lastActivity": "2026-11-03T07:45:10.091Z",
+      "branch": "mono-camera",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 983,
+          "input": 27964,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 5849887,
+          "cacheRead": 225568659,
+          "output": 1642551
+        },
+        "claude-opus-5-5": {
+          "calls": 220,
+          "input": 440,
+          "cacheWrite5m": 1340990,
+          "cacheWrite1h": 0,
+          "cacheRead": 23571623,
+          "output": 166406
+        },
+        "claude-sonnet-5-5": {
+          "calls": 62,
+          "input": 124,
+          "cacheWrite5m": 402765,
+          "cacheWrite1h": 0,
+          "cacheRead": 3966544,
+          "output": 57337
+        }
+      }
+    },
+    "31713404-6cde-4c7b-8f27-42bbba12ab7e": {
+      "label": "Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel",
+      "firstActivity": "2026-11-06T09:50:47.540Z",
+      "lastActivity": "2026-11-07T23:45:35.272Z",
+      "branch": "viseme",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 532,
+          "input": 15710,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 4232195,
+          "cacheRead": 120114216,
+          "output": 990235
+        },
+        "claude-opus-5-5": {
+          "calls": 120,
+          "input": 240,
+          "cacheWrite5m": 544508,
+          "cacheWrite1h": 0,
+          "cacheRead": 12096777,
+          "output": 105526
+        }
+      }
+    },
+    "41304559-8643-438f-b3eb-01eff7a8c37a": {
+      "label": "Microphone mouth stage, the forked first pass",
+      "firstActivity": "2026-11-06T09:50:47.540Z",
+      "lastActivity": "2026-11-06T19:16:53.627Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 137,
+          "input": 3934,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 805247,
+          "cacheRead": 26671925,
+          "output": 202174
+        }
+      }
+    },
+    "5f25b0f0-c7f7-43a7-abdc-6f6ba32b84d3": {
+      "label": "Face expression proposal",
+      "firstActivity": "2026-11-07T09:06:57.562Z",
+      "lastActivity": "2026-11-07T21:21:31.685Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 48,
+          "input": 100,
+          "cacheWrite5m": 173854,
+          "cacheWrite1h": 115770,
+          "cacheRead": 5122476,
+          "output": 34768
+        }
+      }
+    },
+    "ea86ee1e-bccf-46b3-b617-6133963f2fce": {
+      "label": "Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern",
+      "firstActivity": "2026-11-07T23:52:05.741Z",
+      "lastActivity": "2026-11-09T07:26:59.529Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 105,
+          "input": 2830,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 976431,
+          "cacheRead": 19263718,
+          "output": 134551
+        },
+        "claude-opus-5-5": {
+          "calls": 214,
+          "input": 428,
+          "cacheWrite5m": 722459,
+          "cacheWrite1h": 0,
+          "cacheRead": 23835496,
+          "output": 188798
+        }
+      }
+    },
+    "47c0a5db-65e3-42ed-b2c9-8f4d257eb842": {
+      "label": "Face expression system implementation",
+      "firstActivity": "2026-11-08T00:09:55.889Z",
+      "lastActivity": "2026-11-09T04:55:28.065Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 159,
+          "input": 326,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 871072,
+          "cacheRead": 44555615,
+          "output": 203086
+        }
+      }
+    },
+    "aa9e4459-7676-4bd1-8cd6-a4a2e789ac7b": {
+      "label": "Expression editor UI for a VRM face expression formula",
+      "firstActivity": "2026-11-09T07:42:33.187Z",
+      "lastActivity": "2026-11-10T05:51:45.043Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-1": {
+          "calls": 137,
+          "input": 3912,
+          "cacheWrite5m": 125368,
+          "cacheWrite1h": 569982,
+          "cacheRead": 28156196,
+          "output": 249650
+        },
+        "claude-fable-5-2": {
+          "calls": 150,
+          "input": 318,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 601126,
+          "cacheRead": 36207377,
+          "output": 142275
+        },
+        "claude-opus-5-5": {
+          "calls": 96,
+          "input": 192,
+          "cacheWrite5m": 455135,
+          "cacheWrite1h": 0,
+          "cacheRead": 8070544,
+          "output": 69569
+        }
+      }
+    },
+    "dd7ee882-0c80-4c28-b631-317963728493": {
+      "label": "How the tracked pose is retargeted to the avatar skeleton",
+      "firstActivity": "2026-11-10T00:46:21.184Z",
+      "lastActivity": "2026-11-11T08:38:34.613Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 523,
+          "input": 1188,
+          "cacheWrite5m": 250946,
+          "cacheWrite1h": 2081350,
+          "cacheRead": 232691239,
+          "output": 852770
+        },
+        "claude-opus-5-5": {
+          "calls": 2110,
+          "input": 4224,
+          "cacheWrite5m": 7563189,
+          "cacheWrite1h": 0,
+          "cacheRead": 424049014,
+          "output": 2090600
+        },
+        "claude-sonnet-5-5": {
+          "calls": 21,
+          "input": 42,
+          "cacheWrite5m": 287824,
+          "cacheWrite1h": 0,
+          "cacheRead": 1363258,
+          "output": 28466
+        }
+      }
+    },
+    "bb8a78e6-e81c-430d-ba7c-c34bb369de5e": {
+      "label": "Audio panel viseme meter layout",
+      "firstActivity": "2026-11-10T00:49:00.958Z",
+      "lastActivity": "2026-11-10T05:47:16.184Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 21,
+          "input": 46,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 80255,
+          "cacheRead": 1283006,
+          "output": 5226
+        }
+      }
+    },
+    "5d6fcfcd-81bd-4cf5-944c-9167919c76f7": {
+      "label": "Camera frame synchronization on a multi-camera rig, research",
+      "firstActivity": "2026-11-10T08:28:06.982Z",
+      "lastActivity": "2026-11-10T10:04:38.394Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 8,
+          "input": 26,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 48719,
+          "cacheRead": 496790,
+          "output": 17707
+        }
+      }
+    },
+    "fde5afec-cb75-45e2-a019-be4a70e2c40e": {
+      "label": "Hand inference time spikes: single-warp landmark crop, --replay-hands",
+      "firstActivity": "2026-11-12T04:45:50.811Z",
+      "lastActivity": "2026-11-12T05:40:00.115Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 100,
+          "input": 212,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 217059,
+          "cacheRead": 16656215,
+          "output": 70121
+        }
+      }
+    },
+    "778c3b69-8589-4318-bd61-141fb40bbc7b": {
+      "label": "Which body model the single-camera setup runs",
+      "firstActivity": "2026-11-12T05:01:45.675Z",
+      "lastActivity": "2026-11-12T07:11:58.250Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 51,
+          "input": 116,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 175537,
+          "cacheRead": 6075021,
+          "output": 34953
+        }
+      }
+    },
+    "0099a0c3-0fef-4a60-ad8a-b49eabd28e09": {
+      "label": "Whole-body landmarks proposal review",
+      "firstActivity": "2026-11-12T07:15:39.001Z",
+      "lastActivity": "2026-11-13T03:27:25.195Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 451,
+          "input": 964,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1355831,
+          "cacheRead": 179646142,
+          "output": 577628
+        }
+      }
+    },
+    "0e386e6a-a1a2-4e71-80c4-bd2794b656bf": {
+      "label": "Dimmed low-visibility landmark overlays",
+      "firstActivity": "2026-11-12T22:14:02.858Z",
+      "lastActivity": "2026-11-12T22:26:29.035Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 43,
+          "input": 88,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 106039,
+          "cacheRead": 4296846,
+          "output": 26341
+        }
+      }
+    },
+    "8758074f-b7db-4a8a-885f-5d49d49e1da1": {
+      "label": "Follow-on to the whole-body landmarks work",
+      "firstActivity": "2026-11-12T23:53:16.160Z",
+      "lastActivity": "2026-11-13T11:22:15.302Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 395,
+          "input": 872,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1124120,
+          "cacheRead": 90762226,
+          "output": 410869
+        }
+      }
+    },
+    "3b28be91-f392-4cad-9f02-f7e096a7dc46": {
+      "label": "Camera intrinsics from a human body in view",
+      "firstActivity": "2026-11-13T06:50:00.833Z",
+      "lastActivity": "2026-11-15T09:21:19.347Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 745,
+          "input": 1668,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 2462466,
+          "cacheRead": 201007650,
+          "output": 876686
+        },
+        "claude-opus-5-5": {
+          "calls": 323,
+          "input": 646,
+          "cacheWrite5m": 1544549,
+          "cacheWrite1h": 0,
+          "cacheRead": 44310537,
+          "output": 220712
+        }
+      }
+    },
+    "46de251d-0835-47e2-ac7a-eab22dfebe04": {
+      "label": "Face tracking comparison on the single-camera body model",
+      "firstActivity": "2026-11-13T09:57:49.031Z",
+      "lastActivity": "2026-11-13T19:47:45.758Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 224,
+          "input": 470,
+          "cacheWrite5m": 212950,
+          "cacheWrite1h": 589215,
+          "cacheRead": 37503538,
+          "output": 152789
+        }
+      }
+    },
+    "f902f5dd-b6f3-4ea1-b2fc-f45be7138cb1": {
+      "label": "Hands stuck in frame after the real hand has left",
+      "firstActivity": "2026-11-14T08:52:06.200Z",
+      "lastActivity": "2026-11-14T10:21:23.650Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 101,
+          "input": 222,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 309815,
+          "cacheRead": 25669433,
+          "output": 85492
+        }
+      }
+    },
+    "e25777a8-ae0d-43cc-9cfd-dae72bf33b61": {
+      "label": "How MotionBERT lifts body landmarks into 3D, research",
+      "firstActivity": "2026-11-14T09:00:18.439Z",
+      "lastActivity": "2026-11-14T10:57:16.713Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 30,
+          "input": 74,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 158837,
+          "cacheRead": 4039847,
+          "output": 51019
+        },
+        "claude-opus-5-5": {
+          "calls": 62,
+          "input": 124,
+          "cacheWrite5m": 374295,
+          "cacheWrite1h": 0,
+          "cacheRead": 7296186,
+          "output": 39244
+        }
+      }
+    },
+    "b1d89df6-d497-4c2a-b247-f4270b4eb58a": {
+      "label": "Make the mounting wizard's hand-direction check less marginal",
+      "firstActivity": "2026-11-14T20:39:44.364Z",
+      "lastActivity": "2026-11-14T20:59:50.924Z",
+      "branch": "lens-truth-sweep",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 17,
+          "input": 34,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 123277,
+          "cacheRead": 1861270,
+          "output": 38023
+        }
+      }
+    },
+    "ec60037d-9b4a-4cd7-b5c0-790b8eb05bc1": {
+      "label": "btw: I was just a Pearson correlation is for determining the cor...",
+      "firstActivity": "2026-11-14T20:39:44.364Z",
+      "lastActivity": "2026-11-14T20:51:04.860Z",
+      "branch": "lens-truth-sweep",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 11,
+          "input": 22,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 102172,
+          "cacheRead": 1002356,
+          "output": 26502
+        }
+      }
+    },
+    "9a05bee0-ed1a-4de6-825e-fc5d116b4344": {
+      "label": "Getting the Kalidokit 3d sample to run",
+      "firstActivity": "2026-11-14T21:44:25.484Z",
+      "lastActivity": "2026-11-14T21:47:27.413Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 20,
+          "input": 44,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 45172,
+          "cacheRead": 1298728,
+          "output": 5842
+        }
+      }
+    },
+    "8bad1dff-7860-4db9-8784-811ddd6ae2b3": {
+      "label": "Switch controllers as arm trackers on the PC",
+      "firstActivity": "2026-11-15T07:59:03.267Z",
+      "lastActivity": "2026-11-15T07:59:46.029Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 6,
+          "input": 12,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 42884,
+          "cacheRead": 384489,
+          "output": 3969
+        }
+      }
+    },
+    "79ef0b01-ac11-4ae0-8943-970192fb1a65": {
+      "label": "Two profiling hot paths on the main and vision threads",
+      "firstActivity": "2026-11-15T08:15:03.441Z",
+      "lastActivity": "2026-11-15T22:25:39.947Z",
+      "branch": "main",
+      "models": {
+        "claude-opus-5-5": {
+          "calls": 229,
+          "input": 506,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 481045,
+          "cacheRead": 47737282,
+          "output": 162201
+        }
+      }
+    },
+    "52b809fb-ad48-435d-821b-fa801e0d6bfb": {
+      "label": "Body model on every frame: divider default, held challenge frame, camera delivery grid",
+      "firstActivity": "2026-11-15T21:27:17.805Z",
+      "lastActivity": "2026-11-16T05:06:19.651Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 127,
+          "input": 286,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 471882,
+          "cacheRead": 28753748,
+          "output": 111450
+        }
+      }
+    },
+    "4c6030be-8098-4ec9-8a2a-a1aa3cf21985": {
+      "label": "Character pose tracking quality issues",
+      "firstActivity": "2026-11-16T05:22:30.227Z",
+      "lastActivity": "2026-11-16T07:58:48.315Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 126,
+          "input": 278,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 410891,
+          "cacheRead": 38303324,
+          "output": 176012
+        }
+      }
+    }
+  },
+  "excluded": {
+    "00ba72cf-ba94-406c-a40b-8e11e2901afd": {
+      "reason": "manual"
+    },
+    "00ea6f9e-01ac-4295-9524-0ee9ea425be2": {
+      "reason": "manual"
+    },
+    "03c75ca0-c418-4da1-be52-bfc54c380ec7": {
+      "reason": "manual"
+    },
+    "04e38743-d34a-4b67-8576-5c6a31898e8f": {
+      "reason": "manual"
+    },
+    "078ee3e9-5f24-4726-8ab2-c1c075ce63cb": {
+      "reason": "manual"
+    },
+    "08d67f53-00f9-4627-b472-99b7e2dea06f": {
+      "reason": "manual"
+    },
+    "091e2641-5525-4c70-bdf0-6ec47e28f1dd": {
+      "reason": "manual"
+    },
+    "0a2b4224-a7b1-41fb-8879-f965933a1cc6": {
+      "reason": "manual"
+    },
+    "0cf8eebd-f172-4d24-a5ef-211b2c9e9ab1": {
+      "reason": "manual"
+    },
+    "118b1f2c-ffdf-4336-9e2e-ffff61dea487": {
+      "reason": "manual"
+    },
+    "11b6afd0-9b26-4146-a1ef-20a04c5a8584": {
+      "reason": "manual"
+    },
+    "12bdab20-6b4b-4dcd-b442-6c0807ccbe72": {
+      "reason": "manual"
+    },
+    "138cdf79-701a-4850-9263-de1614be976a": {
+      "reason": "manual"
+    },
+    "18aa57d5-39ce-42f5-be9b-478e8f190f2d": {
+      "reason": "manual"
+    },
+    "1f4e6ce5-5512-4a45-8138-07fcf98ca0fb": {
+      "reason": "manual"
+    },
+    "21e4ad93-8563-4b6b-bcfa-1503591ecced": {
+      "reason": "manual"
+    },
+    "250eaa25-551f-4037-bfb4-312dba9781af": {
+      "reason": "manual"
+    },
+    "27edf9b1-7c34-4dd4-9179-e604afb801c9": {
+      "reason": "manual"
+    },
+    "2c5fe4d4-b97f-445f-949d-b6764059d234": {
+      "reason": "manual"
+    },
+    "2e8d25a8-f51c-4568-868f-a9c1ba955734": {
+      "reason": "manual"
+    },
+    "306d78e6-51fc-405e-bd80-70736d05abaa": {
+      "reason": "manual"
+    },
+    "309bf19a-12a6-4ebf-9577-a697cac19639": {
+      "reason": "manual"
+    },
+    "347026e9-bc02-4aeb-90f6-add26b750de3": {
+      "reason": "manual"
+    },
+    "3514f9af-f5a4-4a70-bf06-1c513c02c87a": {
+      "reason": "manual"
+    },
+    "3b01234b-3dfa-43cd-a5bf-f2c43e241f02": {
+      "reason": "manual"
+    },
+    "3b5b23f6-496e-4fc5-9597-78831354b5f4": {
+      "reason": "manual"
+    },
+    "3b6f9234-dee5-4f52-8a6e-1f104bbe2c0f": {
+      "reason": "manual"
+    },
+    "414ad833-7b4c-4db2-bf96-206d5085618e": {
+      "reason": "manual"
+    },
+    "41780b27-1318-46e3-926c-edd037489105": {
+      "reason": "manual"
+    },
+    "41eb3a6e-fe8c-40b7-aa85-e2685032d5b7": {
+      "reason": "manual"
+    },
+    "424c9ff5-1706-4f6b-944f-8b675f80e2d2": {
+      "reason": "manual"
+    },
+    "44ec34e0-9e36-48a2-98f0-cbcc3327d148": {
+      "reason": "manual"
+    },
+    "4ab23d43-6e2a-4609-b8f3-b3bb2da893da": {
+      "reason": "manual"
+    },
+    "4b740127-3fa0-4ec1-bccf-3b3377b18758": {
+      "reason": "manual"
+    },
+    "4bc470ee-cf6d-4569-8ff4-7850792122a4": {
+      "reason": "manual"
+    },
+    "4e04013b-a13c-4598-ae3e-c32c607f6211": {
+      "reason": "manual"
+    },
+    "505d1449-10a7-4bfc-87ea-48a4a5b91f85": {
+      "reason": "manual"
+    },
+    "5075904e-eb7a-44d5-9e44-0490c48c0853": {
+      "reason": "manual"
+    },
+    "51b97c7e-4125-4dd7-b2e1-f57d5ec167a7": {
+      "reason": "manual"
+    },
+    "537f38ef-c05d-431c-84f7-2202e7260a80": {
+      "reason": "manual"
+    },
+    "5400d132-c3f4-41b6-8630-a2aa2698fc56": {
+      "reason": "manual"
+    },
+    "5529ae5e-b5ee-41f1-93c8-b5a5a1788671": {
+      "reason": "manual"
+    },
+    "55e0ce28-cde0-4747-9dc4-05380bda8bc6": {
+      "reason": "manual"
+    },
+    "584549cb-6d24-4673-bfff-f123f7cd9e2a": {
+      "reason": "manual"
+    },
+    "59aab483-31f6-4be9-b9c9-924089f69e3a": {
+      "reason": "manual"
+    },
+    "59fbe4f2-02a5-45bd-b91c-f84f69298325": {
+      "reason": "manual"
+    },
+    "5b8890e3-e9a0-4baf-934b-24d12e04516a": {
+      "reason": "manual"
+    },
+    "5b8cf83a-9bf7-402f-822d-d876e8b83cdd": {
+      "reason": "manual"
+    },
+    "5ce2fbc5-d550-4e8a-9ac8-d69efd439c2a": {
+      "reason": "manual"
+    },
+    "5e693a4d-6e17-4531-85d1-584b9d8e813b": {
+      "reason": "manual"
+    },
+    "6049a944-5a66-4a54-8723-7b0499433680": {
+      "reason": "manual"
+    },
+    "62451c91-192e-42e0-b54d-3276c1a63571": {
+      "reason": "manual"
+    },
+    "63649dab-77d4-4b26-b0c3-209405c1a532": {
+      "reason": "manual"
+    },
+    "6367e20c-6ad7-4a0d-bcdb-8eac8658b3f3": {
+      "reason": "manual"
+    },
+    "67f5c0d1-134b-49d2-a807-be87df9259ec": {
+      "reason": "manual"
+    },
+    "6d9efba5-aef0-4223-a72b-8b4e81b62cd1": {
+      "reason": "manual"
+    },
+    "72faf153-adef-474d-8a6a-70f469da514f": {
+      "reason": "manual"
+    },
+    "751957a7-65fb-456e-a6ab-b145031fcb90": {
+      "reason": "manual"
+    },
+    "75238c09-3eae-41ec-80dc-6811e260ec53": {
+      "reason": "manual"
+    },
+    "75aaf43f-4e17-479a-a584-7621552b2f0d": {
+      "reason": "manual"
+    },
+    "75bb0716-70ba-4a3e-a29e-5f10a346720c": {
+      "reason": "manual"
+    },
+    "77ff4636-3b8c-4a3c-8f82-8ec6bb32b24a": {
+      "reason": "manual"
+    },
+    "7ba18944-6f7d-4887-8d7d-b10afca77d23": {
+      "reason": "manual"
+    },
+    "83b1b57f-f8a6-48d5-9a66-adfe1251168d": {
+      "reason": "manual"
+    },
+    "861f7f29-a8ce-4866-846e-d3f21b7c748e": {
+      "reason": "manual"
+    },
+    "8859e189-cf8e-4d87-b0f0-34188008f1d0": {
+      "reason": "manual"
+    },
+    "8bb3f78f-4ec6-44d3-b48d-b754913743fe": {
+      "reason": "manual"
+    },
+    "8bc86952-6a36-45c6-8681-6756f2a07321": {
+      "reason": "manual"
+    },
+    "91a51ecc-ce78-4be7-a0cd-e1bd9d27b8f2": {
+      "reason": "manual"
+    },
+    "922d9caa-e568-4d6f-b421-917640263828": {
+      "reason": "manual"
+    },
+    "976bf0e0-d48a-49ce-b2df-bae9588e4231": {
+      "reason": "manual"
+    },
+    "97bcfcf3-fa53-46f7-bfa0-68487a102365": {
+      "reason": "manual"
+    },
+    "9ab91bd9-be00-4795-97a7-49ee32ba4baa": {
+      "reason": "manual"
+    },
+    "9ada3693-9270-4ad4-9810-463c1193955d": {
+      "reason": "manual"
+    },
+    "9f52829b-46f0-4ca3-860d-baced4853c21": {
+      "reason": "manual"
+    },
+    "a37bfeea-91c6-4df5-b919-4846c047f619": {
+      "reason": "manual"
+    },
+    "a488c736-4e98-4f3f-95d0-53d8f4681cb4": {
+      "reason": "manual"
+    },
+    "a629ebdb-8a70-4e41-9cd4-895c9e72aabe": {
+      "reason": "manual"
+    },
+    "a933b944-3b8f-467e-a7c8-e03ad41e1c3d": {
+      "reason": "manual"
+    },
+    "aa397588-4c29-4505-a29f-664c57d9e6f0": {
+      "reason": "manual"
+    },
+    "b0a87872-dc82-473e-9734-9f92ddb5ad8d": {
+      "reason": "manual"
+    },
+    "b208247e-da04-4aeb-b0b0-78e2b1c194f6": {
+      "reason": "manual"
+    },
+    "b254da4d-1c3c-4146-8029-cf7f17ed016a": {
+      "reason": "manual"
+    },
+    "b4dd71b3-d098-466b-97d6-0d85cbddd338": {
+      "reason": "manual"
+    },
+    "b7090102-77c9-4e11-8b57-bba28860738c": {
+      "reason": "manual"
+    },
+    "b96705be-a5ec-4147-b37f-32b313166b9c": {
+      "reason": "manual"
+    },
+    "bb1669f1-4176-4f99-b70e-38920391cc44": {
+      "reason": "manual"
+    },
+    "beeb19c9-0a97-4270-947c-0d1dede93906": {
+      "reason": "manual"
+    },
+    "bf04f179-092c-4db3-acfa-df16b3f2f347": {
+      "reason": "manual"
+    },
+    "bf1aab0e-ac0b-4510-a604-2f41651ed6a5": {
+      "reason": "manual"
+    },
+    "c06a7dd6-b580-4d9a-857d-28d1e2ff787c": {
+      "reason": "manual"
+    },
+    "c1989449-a7e2-4791-b733-61d5adc91920": {
+      "reason": "manual"
+    },
+    "c413cf3e-db81-4260-8997-1f8e3e600c17": {
+      "reason": "manual"
+    },
+    "c4e3a1d4-aee3-4dcc-9909-d8b7d5f1c898": {
+      "reason": "manual"
+    },
+    "c61e877b-f1a2-494a-86d4-8ed5ef8a8a7b": {
+      "reason": "manual"
+    },
+    "c79c3ed4-7eb9-420f-b10a-11a62d957b48": {
+      "reason": "manual"
+    },
+    "c80e5052-e9e5-4a15-b42d-14655f685faa": {
+      "reason": "manual"
+    },
+    "ca1eb0cb-51a9-4351-9309-15a698c674db": {
+      "reason": "manual"
+    },
+    "cab79728-6e45-4636-94a8-c3537a2fca03": {
+      "reason": "manual"
+    },
+    "cc06f08e-da03-4ce0-87d2-4e134264ac5d": {
+      "reason": "manual"
+    },
+    "ce17aac2-e74f-4808-b9e7-827c217493fd": {
+      "reason": "manual"
+    },
+    "ce64b657-5f65-4fc1-b223-d017ae1aa10e": {
+      "reason": "manual"
+    },
+    "cf9ee194-ef2d-4464-8330-c6d4c9156367": {
+      "reason": "manual"
+    },
+    "d04d4476-7628-4fc6-89f5-e6072a19da69": {
+      "reason": "manual"
+    },
+    "d083bd29-ffdd-4828-9e12-5e0f904544f4": {
+      "reason": "manual"
+    },
+    "d18154ee-9d4e-4179-944c-9b445bd03726": {
+      "reason": "manual"
+    },
+    "d4115c0b-6a16-4dda-8f1e-2413e290e2a7": {
+      "reason": "manual"
+    },
+    "d623de1e-2326-4cd8-9f53-0f541b133211": {
+      "reason": "manual"
+    },
+    "d7a80ace-a80f-4088-8aa3-5c7df146d3b8": {
+      "reason": "manual"
+    },
+    "d99d2a0a-1479-45ba-ae73-4d9732bd54dc": {
+      "reason": "manual"
+    },
+    "d9c97536-90a7-407a-a3eb-7a0ab6b1fd9f": {
+      "reason": "manual"
+    },
+    "da8b743c-63b3-4e1a-b099-4d73d5456c12": {
+      "reason": "manual"
+    },
+    "dbd310bc-1026-422c-852c-9016f3b4b980": {
+      "reason": "manual"
+    },
+    "dbe15475-f346-42a4-8018-1a226721a497": {
+      "reason": "manual"
+    },
+    "dcacb744-993a-4607-af84-efc074bf5553": {
+      "reason": "manual"
+    },
+    "dd062ec1-428a-40bd-83bb-5cada1c826a7": {
+      "reason": "manual"
+    },
+    "dd291076-1745-4d80-b7bc-afdbcf8b6c1a": {
+      "reason": "manual"
+    },
+    "df57a597-bd73-4d99-9a23-a21d699dc7b4": {
+      "reason": "manual"
+    },
+    "e069a3dd-d0a3-4d0b-b59a-e785a126adc6": {
+      "reason": "manual"
+    },
+    "e1be012c-f0ab-44ef-9c9d-bf96b6ceace9": {
+      "reason": "manual"
+    },
+    "e3dcde98-d8cc-4c80-b767-8f1867b136e7": {
+      "reason": "manual"
+    },
+    "e54cb883-409e-4494-acec-6dbfa3aa717d": {
+      "reason": "manual"
+    },
+    "e6747ccb-d248-4cc1-84fb-7255be68aa1c": {
+      "reason": "manual"
+    },
+    "e72f0682-9b15-4fc2-acd9-882c70a9964d": {
+      "reason": "manual"
+    },
+    "e7ee15d5-e225-4272-9621-894e08e2a09c": {
+      "reason": "manual"
+    },
+    "e84a4fe6-dbbb-419c-871e-eb02ff808086": {
+      "reason": "manual"
+    },
+    "ebeb96da-d1d1-4af0-ba3f-cdafedf91a5d": {
+      "reason": "manual"
+    },
+    "ed4ca0b7-60ba-415e-a0ad-1860df8cf53c": {
+      "reason": "manual"
+    },
+    "ed96bee5-b239-48ed-8b98-2d1d26a51565": {
+      "reason": "manual"
+    },
+    "f25f7a61-bab5-4222-b0ad-8f098e5d0831": {
+      "reason": "manual"
+    },
+    "f606064a-fa31-408f-9d21-74e786c6311f": {
+      "reason": "manual"
+    },
+    "f75bf7ce-d12e-477b-8ff9-913cc43efcc4": {
+      "reason": "manual"
+    },
+    "f78dab8d-1d0b-4732-b5df-c8ee9320b476": {
+      "reason": "manual"
+    },
+    "f7e0ccb0-a6d1-4f1c-8bb1-357e8ddaeba1": {
+      "reason": "manual"
+    },
+    "fbd9ab9b-543c-4af8-b3d3-1592e0425995": {
+      "reason": "manual"
+    },
+    "fc213e18-6208-4def-90ca-ef5b8bc1e2ae": {
+      "reason": "manual"
+    },
+    "fd1b0429-d2a8-4ba6-98d0-16ceb78db2ce": {
+      "reason": "manual"
+    },
+    "fdd76251-61cd-4a42-933e-5be9e2b82d9e": {
+      "reason": "manual"
+    },
+    "ffe73a3e-3f94-47fa-aea8-66ea77f86f56": {
+      "reason": "manual"
+    }
+  }
+}

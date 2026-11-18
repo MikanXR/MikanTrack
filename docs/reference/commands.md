@@ -154,8 +154,12 @@ Python, no build needed:
 
 ## Token stats
 
+The badges in `README.md` and the tables in `TOKEN_STATS.md` are rendered from `docs/ai-usage.json`, a committed ledger of per-session token counts:
+
 ```
-python tools/token_stats.py
+python tools/token_stats.py            # scan local Claude Code transcripts, update the ledger, re-render
+python tools/token_stats.py --render   # rewrite the ledger and the docs without scanning
+python tools/token_stats.py --check    # verify the rendered files match the ledger
 ```
 
-Regenerates `TOKEN_STATS.md` and the AI-usage badge line in `README.md` from local Claude Code session transcripts.
+A session started from another checkout is claimed by adding its id to the ledger's `sessions` map with a `label` before the scan. `TOKEN_STATS.md` sets out the attribution and exclusion rules.
