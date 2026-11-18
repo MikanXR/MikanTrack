@@ -1,222 +1,106 @@
-"""Regenerate TOKEN_STATS.md (and the README badges) from local Claude Code transcripts.
+#!/usr/bin/env python3
+"""Maintain the AI usage ledger and the badges rendered from it.
 
-Claude Code writes one JSONL transcript per session under the project folder in
-~/.claude/projects/. Every assistant message records exact API token usage per
-model. This script aggregates the sessions that belong to MikanTrack work,
-rewrites the generated block in TOKEN_STATS.md, and refreshes the badge line in
-README.md.
+Claude Code writes one JSONL transcript per session under ~/.claude/projects/,
+and every assistant record carries the exact token counts the API metered. Those
+transcripts are local and get pruned, so they are a collection source rather than
+a source of truth. This script folds them into `docs/ai-usage.json`, a committed
+ledger whose counters only ever grow, then renders `TOKEN_STATS.md` and the
+README badge line from that ledger alone: the token totals, their API-equivalent
+cost at list prices, and an order-of-magnitude energy and water estimate.
 
-Usage:  python tools/token_stats.py
-New sessions must be added to SESSIONS (or IGNORED) below; the script lists any
-transcript it does not recognize.
+    python tools/token_stats.py            scan transcripts, update the ledger, render
+    python tools/token_stats.py --render   rewrite the ledger and the docs, do not scan
+    python tools/token_stats.py --check    verify the rendered files match the ledger
+
+Both writing modes rewrite the ledger, so a session added to its `excluded` map
+by hand is retired by either one. --check writes nothing and reads nothing but
+committed files, which is what lets CI run it.
+
+The ledger never stores an absolute path. Sessions are attributed by the working
+directory recorded in their transcript, but only the verdict is written down, so
+the file carries no drive letter, home directory, or user name.
+
+A session started from another checkout is not attributed by that rule. It is
+claimed by hand: add its id to the ledger's `sessions` map with a `label`, take
+it out of `excluded` if a scan put it there, and run the scan.
 """
 
+import argparse
 import collections
+import difflib
 import glob
 import json
 import os
 import re
-from datetime import datetime, timezone
+import sys
 
-TRANSCRIPT_DIR = os.path.expanduser(
-    r"~\.claude\projects\D--Github-git-BrendanWalker-MikanXR"
-)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LEDGER_JSON = os.path.join(REPO_ROOT, "docs", "ai-usage.json")
 STATS_MD = os.path.join(REPO_ROOT, "TOKEN_STATS.md")
 README_MD = os.path.join(REPO_ROOT, "README.md")
 
-# Session transcript id -> short description. Only these count toward the totals.
-SESSIONS = {
-    "4ac3774b-763d-45c3-a0ef-f1ca5753b894": "Initial build: scaffold to working tracker, fusion, parametric model (Jul 30 - Aug 1)",
-    "2dc53dce-c715-4265-82d3-88c5ad5ae604": "Triangulation overhaul, RTMPose A/B, RealSense, IMU, charuco extrinsics (Aug 2 - Aug 10)",
-    "7d1bd754-bd18-405a-92cd-2316852369e8": "Image quality metrics, record/replay, hitch diagnosis (Aug 10 - Aug 11)",
-    "21c00bc2-e910-4fe0-b136-3cfd02ad904b": "Depth A/B, marker-scale discovery, bone calibration, seeding fixes (Aug 11 - Aug 12)",
-    "aa3a90ea-54b1-4179-bc80-4cb1994f004d": "LEARNINGS.md and token stats (Aug 12)",
-    "6f113e65-3d35-483b-ad9c-1e5ecbb32974": "3-camera right-hand dropout: SQPnP fix, minCameraConfidence gate (Aug 12)",
-    "8f667e50-cf5d-4d36-8cd6-92b98572a026": "Dedicated linux/macos tracking machine consideration (Aug 12)",
-    "356d659d-3cde-4c0b-bbc1-bef43a4d2f3a": "BlazePose revival: opt-in per-camera body pose, shoulders + head OSC (Aug 12)",
-    "af7ea373-96e6-4a6b-ac6d-5b23d382bfa1": "Hand state estimator + biomechanical priors: joint fit, limits, fitted angle prior (Aug 15 - Aug 16)",
-    "e4fa6767-be6c-4bae-8461-d662357148a0": "VMC OSC output mode for VMC4UE and VSeeFace comparison (Aug 16)",
-    "1ca1a79c-cc0f-40c8-bb95-5b5db469bac6": "Left elbow stuck in a non-anatomic pose: recorded-replay diagnosis (Aug 16)",
-    "78c6231e-c773-425f-9035-3902d9a912e2": "OSC forearm position, wrist rotation removal, UE plugin update (Aug 16 - Aug 17)",
-    "d5366ae9-e889-472c-8bf7-51ce7ec7e80b": "Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack (Aug 17)",
-    "eeda76ac-a3bd-4ab5-8317-5e075fef93db": "Project files, guided setup flow, tracking configurations (Aug 17 - Aug 18)",
-    "656cf457-eae9-43c7-aa79-94da1af8abdd": "Single-camera removal and SystemAnimatorOnline transfer consideration (Aug 18 - Aug 19)",
-    "58453e30-1564-46ea-8206-f7addea12b7f": "testing.md reference doc (Aug 19)",
-    "66eac461-122e-448c-aade-bb2a2f0fb724": "Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages (Sep 29)",
-    "2535deb7-05ae-44fc-a2c8-9904c14291d1": "VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream (Oct 1)",
-    "6d75f97c-a50c-424f-b49a-5496419956a8": "Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks (Oct 2 - Oct 3)",
-    "f0d55761-fa83-4bbb-83e3-dc2ec51049f9": "iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5)",
-    "0b9cfef3-414e-4f4a-aa97-467952d58d3f": "Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2)",
-    "31713404-6cde-4c7b-8f27-42bbba12ab7e": "Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7)",
-    "41304559-8643-438f-b3eb-01eff7a8c37a": "Microphone mouth stage, the forked first pass (Nov 6)",
-    "5f25b0f0-c7f7-43a7-abdc-6f6ba32b84d3": "Face expression proposal (Nov 7)",
-    "ea86ee1e-bccf-46b3-b617-6133963f2fce": "Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8)",
-    "47c0a5db-65e3-42ed-b2c9-8f4d257eb842": "Face expression system implementation (Nov 8)",
-    "fde5afec-cb75-45e2-a019-be4a70e2c40e": "Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11)",
-    "aa9e4459-7676-4bd1-8cd6-a4a2e789ac7b": "Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10)",
-    "5d6fcfcd-81bd-4cf5-944c-9167919c76f7": "Camera frame synchronization on a multi-camera rig, research (Nov 10)",
-    "bb8a78e6-e81c-430d-ba7c-c34bb369de5e": "Audio panel viseme meter layout (Nov 10)",
-    "dd7ee882-0c80-4c28-b631-317963728493": "How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11)",
-    "0099a0c3-0fef-4a60-ad8a-b49eabd28e09": "Whole-body landmarks proposal review (Nov 12 - Nov 13)",
-    "0e386e6a-a1a2-4e71-80c4-bd2794b656bf": "Dimmed low-visibility landmark overlays (Nov 12)",
-    "778c3b69-8589-4318-bd61-141fb40bbc7b": "Which body model the single-camera setup runs (Nov 12)",
-    "8758074f-b7db-4a8a-885f-5d49d49e1da1": "Follow-on to the whole-body landmarks work (Nov 12 - Nov 13)",
-    "3b28be91-f392-4cad-9f02-f7e096a7dc46": "Camera intrinsics from a human body in view (Nov 13 - Nov 15)",
-    "46de251d-0835-47e2-ac7a-eab22dfebe04": "Face tracking comparison on the single-camera body model (Nov 13)",
-    "9a05bee0-ed1a-4de6-825e-fc5d116b4344": "Getting the Kalidokit 3d sample to run (Nov 14)",
-    "e25777a8-ae0d-43cc-9cfd-dae72bf33b61": "How MotionBERT lifts body landmarks into 3D, research (Nov 14)",
-    "f902f5dd-b6f3-4ea1-b2fc-f45be7138cb1": "Hands stuck in frame after the real hand has left (Nov 14)",
-    "79ef0b01-ac11-4ae0-8943-970192fb1a65": "Two profiling hot paths on the main and vision threads (Nov 15)",
-    "8bad1dff-7860-4db9-8784-811ddd6ae2b3": "Switch controllers as arm trackers on the PC (Nov 15)",
-    "52b809fb-ad48-435d-821b-fa801e0d6bfb": "Body model on every frame: divider default, held challenge frame, camera delivery grid (Nov 15)",
+# Other Claude Code project folders whose transcripts are scanned as well. Much
+# of this project was developed in sessions started from a sibling checkout, so
+# their transcripts sit under that checkout's folder. A session found there is
+# counted only when the ledger already lists it, never by its working directory.
+EXTRA_PROJECT_FOLDERS = ("D--Github-git-BrendanWalker-MikanXR",)
+
+# Yardsticks for the "for scale" line under the estimate table: an average US
+# household's daily electricity, the dev machine at full load, and a bathtub.
+HOUSEHOLD_KWH_PER_DAY = 29.0
+DEV_MACHINE_KW = 0.5
+BATHTUB_L = 200.0
+
+SCHEMA_VERSION = 1
+UNTITLED = "(untitled session)"
+
+# Token classes the transcripts expose, in the order they are stored and shown.
+COUNTERS = ("calls", "input", "cacheWrite5m", "cacheWrite1h", "cacheRead", "output")
+
+# Compute weighting per token class, expressed in output-equivalent tokens. A
+# fixed proxy for relative serving cost, taken from Anthropic's standard price
+# ratios (input 1, 5m write 1.25, 1h write 2, cache read 0.1, output 5). It is
+# one table for every model on purpose: the deeper cache-read discounts some
+# models carry are pricing decisions, and the energy estimate must not move
+# when pricing does. Cost uses PRICES_USD_PER_MTOK instead.
+WEIGHTS = {
+    "output": 1.0,
+    "input": 1 / 5,
+    "cacheWrite1h": 2 / 5,
+    "cacheWrite5m": 1 / 4,
+    "cacheRead": 1 / 50,
 }
 
-# Same project folder, not MikanTrack work (MikanXR, UE plugin, ARKit, misc).
-IGNORED = {
-    "0a2b4224-a7b1-41fb-8879-f965933a1cc6",
-    "27edf9b1-7c34-4dd4-9179-e604afb801c9",
-    "2c5fe4d4-b97f-445f-949d-b6764059d234",
-    "347026e9-bc02-4aeb-90f6-add26b750de3",
-    "3514f9af-f5a4-4a70-bf06-1c513c02c87a",
-    "3b5b23f6-496e-4fc5-9597-78831354b5f4",
-    "4b740127-3fa0-4ec1-bccf-3b3377b18758",
-    "75aaf43f-4e17-479a-a584-7621552b2f0d",
-    "8859e189-cf8e-4d87-b0f0-34188008f1d0",
-    "b254da4d-1c3c-4146-8029-cf7f17ed016a",
-    "bb1669f1-4176-4f99-b70e-38920391cc44",
-    "bf1aab0e-ac0b-4510-a604-2f41651ed6a5",
-    "ca1eb0cb-51a9-4351-9309-15a698c674db",
-    "d4115c0b-6a16-4dda-8f1e-2413e290e2a7",
-    "df57a597-bd73-4d99-9a23-a21d699dc7b4",
-    "e1be012c-f0ab-44ef-9c9d-bf96b6ceace9",
-    "e54cb883-409e-4494-acec-6dbfa3aa717d",
-    "e84a4fe6-dbbb-419c-871e-eb02ff808086",
-    "ebeb96da-d1d1-4af0-ba3f-cdafedf91a5d",
-    "f606064a-fa31-408f-9d21-74e786c6311f",
-    "fd1b0429-d2a8-4ba6-98d0-16ceb78db2ce",
-    "03c75ca0-c418-4da1-be52-bfc54c380ec7",
-    "04e38743-d34a-4b67-8576-5c6a31898e8f",
-    "078ee3e9-5f24-4726-8ab2-c1c075ce63cb",
-    "08d67f53-00f9-4627-b472-99b7e2dea06f",
-    "091e2641-5525-4c70-bdf0-6ec47e28f1dd",
-    "0cf8eebd-f172-4d24-a5ef-211b2c9e9ab1",
-    "21e4ad93-8563-4b6b-bcfa-1503591ecced",
-    "3b01234b-3dfa-43cd-a5bf-f2c43e241f02",
-    "3b6f9234-dee5-4f52-8a6e-1f104bbe2c0f",
-    "41780b27-1318-46e3-926c-edd037489105",
-    "41eb3a6e-fe8c-40b7-aa85-e2685032d5b7",
-    "4bc470ee-cf6d-4569-8ff4-7850792122a4",
-    "505d1449-10a7-4bfc-87ea-48a4a5b91f85",
-    "51b97c7e-4125-4dd7-b2e1-f57d5ec167a7",
-    "59aab483-31f6-4be9-b9c9-924089f69e3a",
-    "5b8cf83a-9bf7-402f-822d-d876e8b83cdd",
-    "5ce2fbc5-d550-4e8a-9ac8-d69efd439c2a",
-    "5e693a4d-6e17-4531-85d1-584b9d8e813b",
-    "6049a944-5a66-4a54-8723-7b0499433680",
-    "6367e20c-6ad7-4a0d-bcdb-8eac8658b3f3",
-    "6d9efba5-aef0-4223-a72b-8b4e81b62cd1",
-    "72faf153-adef-474d-8a6a-70f469da514f",
-    "8bb3f78f-4ec6-44d3-b48d-b754913743fe",
-    "9f52829b-46f0-4ca3-860d-baced4853c21",
-    "a37bfeea-91c6-4df5-b919-4846c047f619",
-    "a488c736-4e98-4f3f-95d0-53d8f4681cb4",
-    "a933b944-3b8f-467e-a7c8-e03ad41e1c3d",
-    "b0a87872-dc82-473e-9734-9f92ddb5ad8d",
-    "b96705be-a5ec-4147-b37f-32b313166b9c",
-    "bf04f179-092c-4db3-acfa-df16b3f2f347",
-    "c06a7dd6-b580-4d9a-857d-28d1e2ff787c",
-    "c1989449-a7e2-4791-b733-61d5adc91920",
-    "c4e3a1d4-aee3-4dcc-9909-d8b7d5f1c898",
-    "c61e877b-f1a2-494a-86d4-8ed5ef8a8a7b",
-    "c80e5052-e9e5-4a15-b42d-14655f685faa",
-    "cab79728-6e45-4636-94a8-c3537a2fca03",
-    "cc06f08e-da03-4ce0-87d2-4e134264ac5d",
-    "cf9ee194-ef2d-4464-8330-c6d4c9156367",
-    "d04d4476-7628-4fc6-89f5-e6072a19da69",
-    "d083bd29-ffdd-4828-9e12-5e0f904544f4",
-    "d18154ee-9d4e-4179-944c-9b445bd03726",
-    "d99d2a0a-1479-45ba-ae73-4d9732bd54dc",
-    "e3dcde98-d8cc-4c80-b767-8f1867b136e7",
-    "e72f0682-9b15-4fc2-acd9-882c70a9964d",
-    "e7ee15d5-e225-4272-9621-894e08e2a09c",
-    "ed4ca0b7-60ba-415e-a0ad-1860df8cf53c",
-    "f25f7a61-bab5-4222-b0ad-8f098e5d0831",
-    "f75bf7ce-d12e-477b-8ff9-913cc43efcc4",
-    "f7e0ccb0-a6d1-4f1c-8bb1-357e8ddaeba1",
-    "fbd9ab9b-543c-4af8-b3d3-1592e0425995",
-    "fc213e18-6208-4def-90ca-ef5b8bc1e2ae",
-    "ffe73a3e-3f94-47fa-aea8-66ea77f86f56",
-    "00ba72cf-ba94-406c-a40b-8e11e2901afd",
-    "118b1f2c-ffdf-4336-9e2e-ffff61dea487",
-    "11b6afd0-9b26-4146-a1ef-20a04c5a8584",
-    "12bdab20-6b4b-4dcd-b442-6c0807ccbe72",
-    "138cdf79-701a-4850-9263-de1614be976a",
-    "1f4e6ce5-5512-4a45-8138-07fcf98ca0fb",
-    "250eaa25-551f-4037-bfb4-312dba9781af",
-    "2e8d25a8-f51c-4568-868f-a9c1ba955734",
-    "306d78e6-51fc-405e-bd80-70736d05abaa",
-    "309bf19a-12a6-4ebf-9577-a697cac19639",
-    "414ad833-7b4c-4db2-bf96-206d5085618e",
-    "424c9ff5-1706-4f6b-944f-8b675f80e2d2",
-    "44ec34e0-9e36-48a2-98f0-cbcc3327d148",
-    "4ab23d43-6e2a-4609-b8f3-b3bb2da893da",
-    "4e04013b-a13c-4598-ae3e-c32c607f6211",
-    "5075904e-eb7a-44d5-9e44-0490c48c0853",
-    "537f38ef-c05d-431c-84f7-2202e7260a80",
-    "5529ae5e-b5ee-41f1-93c8-b5a5a1788671",
-    "55e0ce28-cde0-4747-9dc4-05380bda8bc6",
-    "584549cb-6d24-4673-bfff-f123f7cd9e2a",
-    "59fbe4f2-02a5-45bd-b91c-f84f69298325",
-    "5b8890e3-e9a0-4baf-934b-24d12e04516a",
-    "62451c91-192e-42e0-b54d-3276c1a63571",
-    "67f5c0d1-134b-49d2-a807-be87df9259ec",
-    "751957a7-65fb-456e-a6ab-b145031fcb90",
-    "75238c09-3eae-41ec-80dc-6811e260ec53",
-    "75bb0716-70ba-4a3e-a29e-5f10a346720c",
-    "7ba18944-6f7d-4887-8d7d-b10afca77d23",
-    "83b1b57f-f8a6-48d5-9a66-adfe1251168d",
-    "861f7f29-a8ce-4866-846e-d3f21b7c748e",
-    "8bc86952-6a36-45c6-8681-6756f2a07321",
-    "91a51ecc-ce78-4be7-a0cd-e1bd9d27b8f2",
-    "922d9caa-e568-4d6f-b421-917640263828",
-    "976bf0e0-d48a-49ce-b2df-bae9588e4231",
-    "97bcfcf3-fa53-46f7-bfa0-68487a102365",
-    "9ab91bd9-be00-4795-97a7-49ee32ba4baa",
-    "9ada3693-9270-4ad4-9810-463c1193955d",
-    "a629ebdb-8a70-4e41-9cd4-895c9e72aabe",
-    "aa397588-4c29-4505-a29f-664c57d9e6f0",
-    "b208247e-da04-4aeb-b0b0-78e2b1c194f6",
-    "b4dd71b3-d098-466b-97d6-0d85cbddd338",
-    "b7090102-77c9-4e11-8b57-bba28860738c",
-    "beeb19c9-0a97-4270-947c-0d1dede93906",
-    "c413cf3e-db81-4260-8997-1f8e3e600c17",
-    "c79c3ed4-7eb9-420f-b10a-11a62d957b48",
-    "ce64b657-5f65-4fc1-b223-d017ae1aa10e",
-    "d623de1e-2326-4cd8-9f53-0f541b133211",
-    "d7a80ace-a80f-4088-8aa3-5c7df146d3b8",
-    "d9c97536-90a7-407a-a3eb-7a0ab6b1fd9f",
-    "da8b743c-63b3-4e1a-b099-4d73d5456c12",
-    "dbd310bc-1026-422c-852c-9016f3b4b980",
-    "dbe15475-f346-42a4-8018-1a226721a497",
-    "dcacb744-993a-4607-af84-efc074bf5553",
-    "dd062ec1-428a-40bd-83bb-5cada1c826a7",
-    "dd291076-1745-4d80-b7bc-afdbcf8b6c1a",
-    "e069a3dd-d0a3-4d0b-b59a-e785a126adc6",
-    "e6747ccb-d248-4cc1-84fb-7255be68aa1c",
-    "ed96bee5-b239-48ed-8b98-2d1d26a51565",
-    "f78dab8d-1d0b-4732-b5df-c8ee9320b476",
-    "fdd76251-61cd-4a42-933e-5be9e2b82d9e",
-    "00ea6f9e-01ac-4295-9524-0ee9ea425be2",
-    "18aa57d5-39ce-42f5-be9b-478e8f190f2d",
-    "77ff4636-3b8c-4a3c-8f82-8ec6bb32b24a",
-}
 
-# Compute weighting per token class, proportional to Anthropic's price ratios
-# (price is the closest public proxy for serving compute): cache reads cost 10%
-# of input, input costs 20% of output, cache writes cost 25% of input... see
-# TOKEN_STATS.md for the discussion.
-WEIGHTS = {"output": 1.0, "input": 1 / 5, "cache_write": 1 / 4, "cache_read": 1 / 50}
+def _price(base_input, output, read_ratio=0.1):
+    """One model's rates from its base input and output price, USD per MTok."""
+    return {
+        "input": base_input,
+        "cacheWrite5m": base_input * 1.25,
+        "cacheWrite1h": base_input * 2,
+        "cacheRead": base_input * read_ratio,
+        "output": output,
+    }
+
+
+# Anthropic first-party list prices in USD per million tokens, as published on
+# 2026-11-17. Fast mode and batch pricing are ignored: the cost is a way to read
+# the token counts in human terms, not an invoice. Haiku 5.5 is priced at its
+# up-to-100k-prompt rate, since the ledger holds no per-request prompt size.
+# A model missing from this table stops the render, so add it here first.
+PRICES_USD_PER_MTOK = {
+    "claude-fable-5": _price(10, 50),
+    "claude-fable-5-1": _price(10, 50, read_ratio=0.025),
+    "claude-fable-5-2": _price(8, 40, read_ratio=0.025),
+    "claude-haiku-4-5": _price(1, 5),
+    "claude-haiku-5-5": _price(0.10, 0.50),
+    "claude-opus-4-8": _price(5, 25),
+    "claude-opus-5": _price(5, 25),
+    "claude-opus-5-5": _price(4, 20, read_ratio=0.05),
+    "claude-sonnet-5": _price(2, 10),
+    "claude-sonnet-5-5": _price(2, 10, read_ratio=0.05),
+}
 
 # Energy per 1000 weighted (output-equivalent) tokens, Wh: low / central / high.
 WH_PER_1K_WEIGHTED = (0.5, 2.0, 6.0)
@@ -224,13 +108,72 @@ WH_PER_1K_WEIGHTED = (0.5, 2.0, 6.0)
 WATER_ONSITE_L_PER_KWH = 1.1
 WATER_TOTAL_L_PER_KWH = 3.0
 
+# Anything resembling a filesystem location is refused before the ledger is
+# written: a drive letter, a POSIX home, a UNC root, or any backslash at all.
+PATHLIKE_RE = re.compile(r"[A-Za-z]:[\\/]|/home/|/Users/|\\")
 
-def aggregate_session(top_id):
-    """Sum usage across a session's transcript plus its subagent transcripts."""
-    files = [os.path.join(TRANSCRIPT_DIR, top_id + ".jsonl")]
-    files += glob.glob(os.path.join(TRANSCRIPT_DIR, top_id, "**", "*.jsonl"), recursive=True)
-    messages = {}
-    for path in files:
+
+def projects_root():
+    """Directory Claude Code keeps its per-project transcripts in."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    return os.path.join(config_dir, "projects")
+
+
+def folder_key(text):
+    """Collapse a path or project folder name to a comparable key.
+
+    Claude Code names a project folder after its working directory with the
+    separators and punctuation replaced by dashes. Normalizing both sides the
+    same way matches them without having to reproduce that mangling exactly.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def candidate_project_dirs():
+    """Project folders belonging to this checkout, including its worktrees."""
+    root = projects_root()
+    if not os.path.isdir(root):
+        raise SystemExit(f"error: no Claude Code transcripts at {root}")
+    repo_key = folder_key(REPO_ROOT)
+    extra_keys = {folder_key(name) for name in EXTRA_PROJECT_FOLDERS}
+    dirs = []
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if not os.path.isdir(path):
+            continue
+        key = folder_key(name)
+        if key == repo_key or key.startswith(repo_key + "-") or key in extra_keys:
+            dirs.append(path)
+    return dirs
+
+
+def is_inside_repo(path):
+    if not path:
+        return False
+    norm = os.path.normcase(os.path.normpath(path))
+    root = os.path.normcase(os.path.normpath(REPO_ROOT))
+    return norm == root or norm.startswith(root + os.sep)
+
+
+def session_files(project_dir):
+    """Map each session id to its transcript plus its subagent transcripts."""
+    sessions = {}
+    for path in sorted(glob.glob(os.path.join(project_dir, "*.jsonl"))):
+        sid = os.path.basename(path)[:-6]
+        sessions[sid] = [path] + sorted(
+            glob.glob(os.path.join(project_dir, sid, "**", "*.jsonl"), recursive=True)
+        )
+    return sessions
+
+
+def scan_session(paths):
+    """Sum one session's usage across its own transcript and its subagents."""
+    requests = {}
+    cwds = collections.Counter()
+    branches = collections.Counter()
+    title = None
+    first = last = None
+    for path in paths:
         if not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -239,6 +182,12 @@ def aggregate_session(top_id):
                     rec = json.loads(line)
                 except ValueError:
                     continue
+                if rec.get("cwd"):
+                    cwds[rec["cwd"]] += 1
+                if rec.get("gitBranch"):
+                    branches[rec["gitBranch"]] += 1
+                if rec.get("customTitle"):
+                    title = rec["customTitle"]
                 msg = rec.get("message")
                 if not isinstance(msg, dict):
                     continue
@@ -248,32 +197,176 @@ def aggregate_session(top_id):
                 model = msg.get("model", "unknown")
                 if model == "<synthetic>":
                     continue
-                # Streaming rewrites the same message id with growing usage:
-                # keep the record with the largest output count.
-                key = (path, msg.get("id") or rec.get("uuid"))
+                stamp = rec.get("timestamp")
+                if stamp:
+                    first = stamp if first is None else min(first, stamp)
+                    last = stamp if last is None else max(last, stamp)
+                # Streaming rewrites one request's record many times with a
+                # growing output count, so keep the largest per request. A
+                # retry gets its own requestId and rightly counts again.
+                key = rec.get("requestId") or (path, msg.get("id") or rec.get("uuid"))
+                cache = usage.get("cache_creation") or {}
+                written_1h = cache.get("ephemeral_1h_input_tokens") or 0
+                written_5m = cache.get("ephemeral_5m_input_tokens") or 0
+                written_total = usage.get("cache_creation_input_tokens") or 0
+                if not written_1h and not written_5m:
+                    # Older records report only the total; treat it as 5m,
+                    # which is the default TTL and the cheaper of the two.
+                    written_5m = written_total
                 out = usage.get("output_tokens") or 0
-                prev = messages.get(key)
-                if prev is None or out >= prev[4]:
-                    messages[key] = (
-                        model,
-                        usage.get("input_tokens") or 0,
-                        usage.get("cache_creation_input_tokens") or 0,
-                        usage.get("cache_read_input_tokens") or 0,
-                        out,
-                    )
-    per_model = collections.defaultdict(lambda: collections.Counter())
-    for model, inp, cw, cr, out in messages.values():
-        c = per_model[model]
-        c["input"] += inp
-        c["cache_write"] += cw
-        c["cache_read"] += cr
-        c["output"] += out
-        c["calls"] += 1
-    return per_model
+                prev = requests.get(key)
+                if prev is not None and prev[1]["output"] >= out:
+                    continue
+                requests[key] = (
+                    model,
+                    {
+                        "calls": 1,
+                        "input": usage.get("input_tokens") or 0,
+                        "cacheWrite5m": written_5m,
+                        "cacheWrite1h": written_1h,
+                        "cacheRead": usage.get("cache_read_input_tokens") or 0,
+                        "output": out,
+                    },
+                )
+
+    models = collections.defaultdict(collections.Counter)
+    for model, counts in requests.values():
+        models[model].update(counts)
+    return {
+        "cwd": cwds.most_common(1)[0][0] if cwds else None,
+        "branch": branches.most_common(1)[0][0] if branches else None,
+        "title": title,
+        "first": first,
+        "last": last,
+        "models": {m: dict(c) for m, c in models.items()},
+    }
 
 
-def weighted(counter):
-    return sum(counter[k] * w for k, w in WEIGHTS.items())
+def load_ledger():
+    """Read the ledger, and cull any session the exclusion list claims.
+
+    The exclusion list is authoritative, so adding an id to it by hand is the
+    whole gesture needed to retire a session: the next write drops its counters.
+    Returns the ledger and the ids that were culled, so the caller can report
+    a file that still has to be rewritten.
+    """
+    if not os.path.isfile(LEDGER_JSON):
+        return {"schemaVersion": SCHEMA_VERSION, "sessions": {}, "excluded": {}}, []
+    with open(LEDGER_JSON, encoding="utf-8") as fh:
+        ledger = json.load(fh)
+    if ledger.get("schemaVersion") != SCHEMA_VERSION:
+        raise SystemExit(
+            f"error: {LEDGER_JSON} is schema {ledger.get('schemaVersion')}, "
+            f"this script writes {SCHEMA_VERSION}"
+        )
+    ledger.setdefault("sessions", {})
+    ledger.setdefault("excluded", {})
+    culled = [sid for sid in ledger["sessions"] if sid in ledger["excluded"]]
+    for sid in culled:
+        del ledger["sessions"][sid]
+    return ledger, culled
+
+
+def assert_no_paths(node, trail="ledger"):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            assert_no_paths(key, trail)
+            assert_no_paths(value, f"{trail}.{key}")
+    elif isinstance(node, list):
+        for item in node:
+            assert_no_paths(item, trail)
+    elif isinstance(node, str) and PATHLIKE_RE.search(node):
+        raise SystemExit(f"error: refusing to write a filesystem path at {trail}: {node!r}")
+
+
+ENTRY_FIELDS = ("label", "firstActivity", "lastActivity", "branch", "models")
+
+
+def write_ledger(ledger):
+    assert_no_paths(ledger)
+
+    def ordered_entry(entry):
+        out = {k: entry[k] for k in ENTRY_FIELDS if k in entry}
+        out.update({k: v for k, v in entry.items() if k not in ENTRY_FIELDS})
+        out["models"] = {
+            model: {k: counts.get(k, 0) for k in COUNTERS}
+            for model, counts in sorted(entry.get("models", {}).items())
+        }
+        return out
+
+    ordered = {
+        "schemaVersion": SCHEMA_VERSION,
+        "sessions": {
+            sid: ordered_entry(entry)
+            for sid, entry in sorted(
+                ledger["sessions"].items(),
+                key=lambda kv: (kv[1].get("firstActivity") or "", kv[0]),
+            )
+        },
+        "excluded": dict(sorted(ledger["excluded"].items())),
+    }
+    with open(LEDGER_JSON, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(ordered, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+
+def merge_scan(ledger, scanned):
+    """Fold a scan into the ledger. Counters only ever grow."""
+    added, updated, skipped = [], [], []
+    for sid, found in sorted(scanned.items()):
+        if sid in ledger["excluded"]:
+            continue
+        if sid not in ledger["sessions"] and not is_inside_repo(found["cwd"]):
+            ledger["excluded"][sid] = {"reason": "outside-repo"}
+            skipped.append((sid, found["cwd"]))
+            continue
+        if not found["models"]:
+            continue
+        entry = ledger["sessions"].get(sid)
+        if entry is None:
+            entry = {"label": UNTITLED, "models": {}}
+            ledger["sessions"][sid] = entry
+            added.append(sid)
+        # A session claimed by hand arrives as a label alone.
+        entry.setdefault("models", {})
+        before = json.dumps(entry, sort_keys=True)
+
+        # A hand-edited label wins; a title that only arrived later fills in.
+        if found["title"] and entry.get("label", UNTITLED) == UNTITLED:
+            entry["label"] = found["title"]
+        if found["first"]:
+            entry["firstActivity"] = min(
+                found["first"], entry.get("firstActivity") or found["first"]
+            )
+        if found["last"]:
+            entry["lastActivity"] = max(
+                found["last"], entry.get("lastActivity") or found["last"]
+            )
+        if found["branch"] and not entry.get("branch"):
+            entry["branch"] = found["branch"]
+        for model, counts in found["models"].items():
+            stored = entry["models"].setdefault(model, {k: 0 for k in COUNTERS})
+            for key in COUNTERS:
+                stored[key] = max(stored.get(key, 0), counts.get(key, 0))
+        entry["models"] = dict(sorted(entry["models"].items()))
+        if sid not in added and json.dumps(entry, sort_keys=True) != before:
+            updated.append(sid)
+    return added, updated, skipped
+
+
+def weighted(counts):
+    return sum(counts.get(k, 0) * w for k, w in WEIGHTS.items())
+
+
+def cost_usd(model, counts):
+    """API-equivalent cost of one model's counters at list prices."""
+    prices = PRICES_USD_PER_MTOK.get(model)
+    if prices is None:
+        raise SystemExit(
+            f"error: no list price for model {model!r}, add it to PRICES_USD_PER_MTOK "
+            f"in tools/token_stats.py"
+        )
+    return sum(counts.get(k, 0) * rate for k, rate in prices.items()) / 1e6
 
 
 def fmt(n):
@@ -287,56 +380,66 @@ def fmt_compact(n):
     return str(int(n))
 
 
-def replace_block(path, marker, content):
-    with open(path, encoding="utf-8") as fh:
-        text = fh.read()
-    begin, end = f"<!-- {marker}:BEGIN -->", f"<!-- {marker}:END -->"
-    pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.DOTALL)
-    if not pattern.search(text):
-        raise SystemExit(f"marker {marker} not found in {path}")
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(pattern.sub(begin + "\n" + content + "\n" + end, text))
+def date_range(entry):
+    first = (entry.get("firstActivity") or "")[:10]
+    last = (entry.get("lastActivity") or "")[:10]
+    if first and last and first != last:
+        return f"{first} to {last}"
+    return first or last or "unknown"
 
 
-def main():
-    known = set(SESSIONS) | IGNORED
-    for path in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.jsonl")):
-        sid = os.path.basename(path)[:-6]
-        if sid not in known:
-            print(f"UNCLASSIFIED session {sid} - add to SESSIONS or IGNORED")
+def render(ledger):
+    """Build the two generated blocks. A pure function of the ledger."""
+    sessions = sorted(
+        ledger["sessions"].items(), key=lambda kv: (kv[1].get("firstActivity") or "", kv[0])
+    )
+    totals = collections.defaultdict(collections.Counter)
+    for _, entry in sessions:
+        for model, counts in entry.get("models", {}).items():
+            totals[model].update(counts)
 
-    per_session = {sid: aggregate_session(sid) for sid in SESSIONS}
-    totals = collections.defaultdict(lambda: collections.Counter())
-    for models in per_session.values():
-        for model, c in models.items():
-            totals[model].update(c)
-
-    session_rows = ["| Session | Model | API calls | Output | Cache read | Cache write |",
-                    "|---|---|---|---|---|---|"]
-    for sid, label in SESSIONS.items():
-        for model, c in sorted(per_session[sid].items()):
-            session_rows.append(
-                f"| {label} | {model} | {fmt(c['calls'])} | {fmt(c['output'])} "
-                f"| {fmt(c['cache_read'])} | {fmt(c['cache_write'])} |"
-            )
-
-    total_rows = ["| Model | API calls | Input | Cache write | Cache read | Output | Weighted |",
-                  "|---|---|---|---|---|---|---|"]
-    grand = collections.Counter()
-    for model, c in sorted(totals.items()):
-        grand.update(c)
-        total_rows.append(
-            f"| {model} | {fmt(c['calls'])} | {fmt(c['input'])} | {fmt(c['cache_write'])} "
-            f"| {fmt(c['cache_read'])} | {fmt(c['output'])} | {fmt(weighted(c))} |"
+    session_rows = [
+        "| Session | Dates | Models | API calls | Output | Cache read |",
+        "|---|---|---|---|---|---|",
+    ]
+    for _, entry in sessions:
+        merged = collections.Counter()
+        for counts in entry.get("models", {}).values():
+            merged.update(counts)
+        models = ", ".join(sorted(entry.get("models", {})))
+        session_rows.append(
+            f"| {entry.get('label', UNTITLED)} | {date_range(entry)} | {models} "
+            f"| {fmt(merged['calls'])} | {fmt(merged['output'])} | {fmt(merged['cacheRead'])} |"
         )
+
+    total_rows = [
+        "| Model | API calls | Input | Cache write | Cache read | Output | Weighted | API-equiv. cost |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    grand = collections.Counter()
+    total_cost = 0.0
+    for model, counts in sorted(totals.items()):
+        grand.update(counts)
+        cost = cost_usd(model, counts)
+        total_cost += cost
+        writes = counts["cacheWrite5m"] + counts["cacheWrite1h"]
+        total_rows.append(
+            f"| {model} | {fmt(counts['calls'])} | {fmt(counts['input'])} | {fmt(writes)} "
+            f"| {fmt(counts['cacheRead'])} | {fmt(counts['output'])} | {fmt(weighted(counts))} "
+            f"| ${cost:,.0f} |"
+        )
+    grand_writes = grand["cacheWrite5m"] + grand["cacheWrite1h"]
     gw = weighted(grand)
     total_rows.append(
-        f"| **total** | {fmt(grand['calls'])} | {fmt(grand['input'])} | {fmt(grand['cache_write'])} "
-        f"| {fmt(grand['cache_read'])} | {fmt(grand['output'])} | **{fmt(gw)}** |"
+        f"| **total** | {fmt(grand['calls'])} | {fmt(grand['input'])} | {fmt(grand_writes)} "
+        f"| {fmt(grand['cacheRead'])} | {fmt(grand['output'])} | **{fmt(gw)}** "
+        f"| **${total_cost:,.0f}** |"
     )
 
-    est_rows = ["| Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |",
-                "|---|---|---|---|---|"]
+    est_rows = [
+        "| Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |",
+        "|---|---|---|---|---|",
+    ]
     for label, wh in zip(("low", "central", "high"), WH_PER_1K_WEIGHTED):
         kwh = gw / 1000 * wh / 1000
         est_rows.append(
@@ -344,31 +447,132 @@ def main():
             f"| {kwh * WATER_TOTAL_L_PER_KWH:,.0f} L |"
         )
 
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    through = max((e.get("lastActivity") or "" for _, e in sessions), default="")[:10]
     central_kwh = gw / 1000 * WH_PER_1K_WEIGHTED[1] / 1000
-    block = "\n".join(
-        [f"Last regenerated {stamp} by `tools/token_stats.py`.", ""]
+    central_water = central_kwh * WATER_TOTAL_L_PER_KWH
+    est_rows += [
+        "",
+        f"For scale: the central estimate ({central_kwh:,.0f} kWh) is about "
+        f"{central_kwh / HOUSEHOLD_KWH_PER_DAY:,.0f} days of average US household electricity, "
+        f"or roughly {central_kwh / DEV_MACHINE_KW:,.0f} hours of the RTX 3090 dev machine at "
+        f"full load. The central water estimate ({central_water:,.0f} L) is about "
+        f"{central_water / BATHTUB_L:,.0f} bathtubs.",
+    ]
+    stats_block = "\n".join(
+        [f"Generated by `tools/token_stats.py` from `docs/ai-usage.json`, "
+         f"covering {len(sessions)} sessions through {through or 'no recorded activity'}.", ""]
         + ["## Per-session usage", ""] + session_rows + [""]
         + ["## Totals per model", ""] + total_rows + [""]
         + ["## Energy and water estimate", ""] + est_rows
     )
-    replace_block(STATS_MD, "TOKEN_STATS", block)
 
     def badge(label, value, color):
         esc = lambda s: s.replace("-", "--").replace(" ", "_").replace("/", "%2F")
         return f"![{label}](https://img.shields.io/badge/{esc(label)}-{esc(value)}-{color})"
 
-    badges = " ".join([
-        badge("AI tokens", f"{fmt_compact(grand['output'])} out / {fmt_compact(grand['cache_read'])} read", "blueviolet"),
-        badge("est. energy", f"~{central_kwh:,.0f} kWh", "yellow"),
-        badge("est. water", f"~{central_kwh * WATER_TOTAL_L_PER_KWH:,.0f} L", "blue"),
-    ]) + "\n(estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))"
-    replace_block(README_MD, "AI_USAGE_BADGES", badges)
-    replace_block(STATS_MD, "AI_USAGE_BADGES", badges)
+    badge_block = " ".join([
+        badge("AI tokens",
+              f"{fmt_compact(grand['output'])} out / {fmt_compact(grand['cacheRead'])} read",
+              "blueviolet"),
+        badge("API-equiv. cost", f"~${fmt_compact(total_cost)}", "green"),
+    ]) + "\n(cost is the API-equivalent at list prices, see [TOKEN_STATS.md](TOKEN_STATS.md))"
 
-    print(f"total output {fmt(grand['output'])}, cache read {fmt(grand['cache_read'])}, "
-          f"weighted {fmt(gw)}, central estimate {central_kwh:,.0f} kWh")
-    print(f"updated {STATS_MD} and {README_MD}")
+    return badge_block, stats_block, grand, gw, central_kwh, total_cost
+
+
+def substitute(text, marker, content, path):
+    begin, end = f"<!-- {marker}:BEGIN -->", f"<!-- {marker}:END -->"
+    pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.DOTALL)
+    if not pattern.search(text):
+        raise SystemExit(f"error: marker {marker} not found in {path}")
+    return pattern.sub(lambda _: begin + "\n" + content + "\n" + end, text)
+
+
+def rendered_files(ledger):
+    """Map each generated file to the text it should hold for this ledger."""
+    badge_block, stats_block, _, _, _, _ = render(ledger)
+    out = {}
+    with open(STATS_MD, encoding="utf-8") as fh:
+        stats = fh.read()
+    stats = substitute(stats, "AI_USAGE_BADGES", badge_block, STATS_MD)
+    out[STATS_MD] = substitute(stats, "TOKEN_STATS", stats_block, STATS_MD)
+    with open(README_MD, encoding="utf-8") as fh:
+        out[README_MD] = substitute(fh.read(), "AI_USAGE_BADGES", badge_block, README_MD)
+    return out
+
+
+def write_rendered(ledger):
+    for path, text in rendered_files(ledger).items():
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+
+
+def check_rendered(ledger, culled):
+    stale = False
+    for path, expected in rendered_files(ledger).items():
+        with open(path, encoding="utf-8") as fh:
+            actual = fh.read()
+        if actual == expected:
+            continue
+        stale = True
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        print(f"{rel} does not match docs/ai-usage.json:")
+        sys.stdout.writelines(
+            difflib.unified_diff(
+                actual.splitlines(keepends=True),
+                expected.splitlines(keepends=True),
+                fromfile=f"{rel} (committed)",
+                tofile=f"{rel} (from ledger)",
+            )
+        )
+    if culled:
+        stale = True
+        print(f"docs/ai-usage.json still holds {len(culled)} session(s) its excluded list retires:")
+        for sid in culled:
+            print(f"  {sid}")
+    if stale:
+        raise SystemExit("error: run `python tools/token_stats.py --render` and commit the result")
+    print("docs/ai-usage.json, TOKEN_STATS.md and README.md agree")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--render", action="store_true",
+                      help="render from the ledger without scanning transcripts")
+    mode.add_argument("--check", action="store_true",
+                      help="verify the rendered files match the ledger, and exit nonzero if not")
+    args = parser.parse_args()
+
+    ledger, culled = load_ledger()
+
+    if args.check:
+        check_rendered(ledger, culled)
+        return
+
+    if not args.render:
+        scanned = {}
+        for project_dir in candidate_project_dirs():
+            for sid, paths in session_files(project_dir).items():
+                scanned[sid] = scan_session(paths)
+        if not scanned:
+            raise SystemExit(f"error: no transcripts found for this checkout under {projects_root()}")
+        added, updated, skipped = merge_scan(ledger, scanned)
+        for sid, cwd in skipped:
+            print(f"excluded {sid}: worked in {cwd}")
+        print(f"scanned {len(scanned)} sessions: {len(added)} new, {len(updated)} updated, "
+              f"{len(skipped)} newly excluded")
+
+    for sid in culled:
+        print(f"culled {sid}: listed in excluded")
+    # Both writing modes rewrite the ledger, so a hand-added exclusion is
+    # persisted by either one rather than only by a full scan.
+    write_ledger(ledger)
+    write_rendered(ledger)
+    _, _, grand, gw, central_kwh, total_cost = render(ledger)
+    print(f"total output {fmt(grand['output'])}, cache read {fmt(grand['cacheRead'])}, "
+          f"weighted {fmt(gw)}, API-equivalent cost ${total_cost:,.0f}, "
+          f"central estimate {central_kwh:,.0f} kWh")
 
 
 if __name__ == "__main__":

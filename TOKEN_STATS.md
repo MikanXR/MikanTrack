@@ -1,128 +1,144 @@
 # AI Token Usage
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-19M_out_%2F_5.2B_read-blueviolet) ![est. energy](https://img.shields.io/badge/est._energy-~291_kWh-yellow) ![est. water](https://img.shields.io/badge/est._water-~874_L-blue)
-(estimates, see [TOKEN_STATS.md](TOKEN_STATS.md))
+![AI tokens](https://img.shields.io/badge/AI_tokens-20M_out_%2F_5.3B_read-blueviolet) ![API-equiv. cost](https://img.shields.io/badge/API--equiv._cost-~$4.1k-green)
+(cost is the API-equivalent at list prices, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
-This project was developed almost entirely in Claude Code sessions (Claude Fable 5 and Claude Opus 5). This document tracks the exact API token usage of every MikanTrack development session, and derives an order-of-magnitude estimate of the electricity and water that inference consumed. See `LEARNINGS.md` for what all those tokens actually bought.
+This project was developed almost entirely in Claude Code sessions, across whichever Claude models were current at the time. This document tracks the exact API token usage of every MikanTrack development session and what those tokens would cost at list prices. It also derives an order-of-magnitude estimate of the electricity and water that inference consumed. See `LEARNINGS.md` for what all those tokens actually bought.
 
 ## How the numbers are collected
 
-Claude Code stores a JSONL transcript per session (including subagent transcripts) under `~/.claude/projects/`, and every assistant message in it records the exact billed token counts per model. `tools/token_stats.py` scans those transcripts, deduplicates streamed message records, sums the sessions listed as MikanTrack work, and rewrites the generated block below plus the badges here and in `README.md`. To update after new sessions: add the new session id to the script's `SESSIONS` table and run
+Claude Code writes one JSONL transcript per session under `~/.claude/projects/`, plus a transcript per subagent, and every assistant record carries the exact token counts the API metered. Those transcripts are local to one machine and are pruned on a retention timer, so they are a collection source rather than a source of truth.
+
+The source of truth is `docs/ai-usage.json`, a committed ledger holding per-session, per-model counters. `tools/token_stats.py` scans the transcripts, folds them into that ledger, and renders the badges above and the generated block below from the ledger alone.
 
 ```bash
 python tools/token_stats.py
 ```
 
-The token counts are exact (they are what the API metered). Everything under "Energy and water estimate" is not.
+Three properties make that safe to run at any cadence.
 
-## Estimation methodology
+- Counters only ever grow. A session is merged with `max(stored, scanned)` per class, so a pruned or partially rotated transcript cannot erase recorded history, and a resumed session grows correctly.
+
+- Attribution is recorded, not recomputed. A session counts toward MikanTrack when the working directory recorded in its transcript is this repository or one of its worktrees. Much of this project was developed in sessions started from a sibling checkout, which that rule cannot see, so the script also scans that checkout's transcript folder and counts a session from it only when the ledger already lists it. Such a session is claimed by hand: add its id to the ledger's `sessions` map with a `label`, take it out of `excluded` if a scan put it there, and run the script. Everything else lands in the `excluded` map, which is authoritative and hand-editable. Adding an id there with `"reason": "manual"` and running `python tools/token_stats.py --render` deletes its counters for good, since later scans never re-add an excluded id.
+
+- Rendering is a pure function of the ledger. Running the script twice with no new sessions produces no diff, and `python tools/token_stats.py --check` re-renders from the ledger and fails if the published files have drifted.
+
+The ledger stores no absolute paths. Session ids are opaque, and the script refuses to write any string that looks like a filesystem location, so the file carries no drive letter, home directory, or user name.
+
+The token counts are exact (they are what the API metered). The cost is those counts at list prices. Everything under "Energy and water estimate" is an estimate.
+
+## Cost estimate
+
+The cost column prices each model's counters at Anthropic's first-party list prices per token class: input, cache writes at each of the two cache lifetimes, cache reads, and output. The price table sits at the top of `tools/token_stats.py` with the date it was read, and a model missing from it stops the render, so a new model cannot go unpriced.
+
+It is an API-equivalent figure, a way to read the token counts in human terms. It is not what the work was billed, since most of it ran under a subscription. Fast mode and batch pricing are ignored, and Claude Haiku 5.5 is priced at its rate for prompts up to 100,000 tokens because the ledger holds no per-request prompt size.
+
+## Energy and water methodology
 
 Anthropic publishes no per-token energy figures, so the estimate chains public reference points with stated assumptions. Treat the result as order-of-magnitude.
 
-**Step 1: reduce four token classes to one.** The API meters four classes that cost very different amounts of compute: fresh input, cache writes, cache reads, and output. We fold them into "weighted output-equivalent tokens" using Anthropic's own price ratios as the compute proxy (input = 1/5 of output, cache write = 1/4, cache read = 1/50). Pricing is the closest public signal of relative serving cost. Note the consequence: cache reads dominate this project's weighted total even at 2% weight, because agentic coding re-reads the growing conversation context on every call. That is real work (attention over the cached context) and should not be dropped.
+**Step 1: reduce the token classes to one.** The API meters classes that cost very different amounts of compute: fresh input, cache writes at each of the two cache lifetimes, cache reads, and output. We fold them into "weighted output-equivalent tokens" using Anthropic's standard price ratios as the compute proxy, since pricing is the closest public signal of relative serving cost. The table is fixed and applies to every model. Some newer models discount cache reads further, which the cost above follows and this table deliberately does not, so the energy estimate does not move when pricing does.
 
-**Step 2: energy per weighted token.** Public anchors: Google reported the median Gemini Apps text prompt at 0.24 Wh (Aug 2025 technical report), Epoch AI estimated ~0.3 Wh for a typical GPT-4o query, and Sam Altman quoted 0.34 Wh for an average ChatGPT query. A median chat prompt is a few hundred output-equivalent tokens, which lands those figures near 1 Wh per 1000 weighted tokens. Fable/Opus-class models are larger than what serves a median consumer prompt, so we take 2 Wh per 1000 weighted tokens as the central assumption, with 0.5 and 6 as low/high bounds. These constants sit at the top of `tools/token_stats.py`; correct them as better data appears.
+| Token class | Standard price relative to base input | Weight in output-equivalent tokens |
+|---|---|---|
+| Output | 5 | 1 |
+| Input | 1 | 1/5 |
+| Cache write (1 hour) | 2 | 2/5 |
+| Cache write (5 minute) | 1.25 | 1/4 |
+| Cache read | 0.1 | 1/50 |
+
+Note the consequence: cache reads dominate this project's weighted total even at 2% weight, because agentic coding re-reads the growing conversation context on every call. That is real work (attention over the cached context) and should not be dropped.
+
+**Step 2: energy per weighted token.** Public anchors: Google reported the median Gemini Apps text prompt at 0.24 Wh (Aug 2025 technical report), Epoch AI estimated ~0.3 Wh for a typical GPT-4o query, and Sam Altman quoted 0.34 Wh for an average ChatGPT query. A Microsoft study of inference at production scale ([Oviedo et al.](https://arxiv.org/abs/2509.20241), published in Joule in 2026) puts the median query to a frontier-scale model at 0.31 Wh, with an interquartile range of 0.16 to 0.60 Wh. A median chat prompt is a few hundred output-equivalent tokens, which lands those figures near 1 Wh per 1000 weighted tokens. Fable/Opus-class models are larger than what serves a median consumer prompt, so we take 2 Wh per 1000 weighted tokens as the central assumption, with 0.5 and 6 as low/high bounds. These constants sit at the top of `tools/token_stats.py`; correct them as better data appears.
 
 **Step 3: water per kWh.** Onsite datacenter cooling: ~1.1 L/kWh (consistent with Google's reported fleet WUE and their 0.26 mL per 0.24 Wh prompt figure). Including the water footprint of electricity generation raises it to roughly 3 L/kWh on a typical US grid mix.
 
-**What the estimate excludes:** model training (amortized per query it is generally estimated to be small relative to inference at scale, but it is not zero), datacenter construction, the dev machine running Claude Code locally, and the RTX 3090 that ran the actual hand-tracking workloads this project exists for. It also cannot know Anthropic's actual serving efficiency, batching, or datacenter locations, which is why the range spans an order of magnitude.
+**Where the estimate is weakest.** Three simplifications carry most of the uncertainty.
 
-**For scale:** the central estimate (~70 kWh) is about two and a half days of average US household electricity, or roughly 140 hours of the RTX 3090 dev machine at full load. The central water estimate (~200 L) is about one bathtub.
+- Cache reads are the largest share of the weighted total, and their weight comes from a price ratio. Public measurement work has not yet established what a cached prefix costs in energy.
+
+- One energy rate covers every model. Measurement work models energy per token as a function of model size and treats input and output tokens separately, as in [Greenpixie's AI token methodology](https://arxiv.org/abs/2609.33965). That paper does not publish the per-model figures a size-aware rate would need.
+
+- Measured energy per token varies several-fold with hardware and serving configuration, none of which is known here.
+
+**What the estimate excludes:** model training (amortized per query it is generally estimated to be small relative to inference at scale, but it is not zero), datacenter construction, the dev machine running Claude Code locally, and the RTX 3090 that ran the actual hand-tracking workloads this project exists for. It also cannot know Anthropic's actual serving efficiency, batching, or datacenter locations, which is why the range spans an order of magnitude. A "for scale" line under the estimate table below is generated with the table, so it follows the totals.
 
 <!-- TOKEN_STATS:BEGIN -->
-Last regenerated 2026-11-16 05:02 UTC by `tools/token_stats.py`.
+Generated by `tools/token_stats.py` from `docs/ai-usage.json`, covering 46 sessions through 2026-11-16.
 
 ## Per-session usage
 
-| Session | Model | API calls | Output | Cache read | Cache write |
+| Session | Dates | Models | API calls | Output | Cache read |
 |---|---|---|---|---|---|
-| Initial build: scaffold to working tracker, fusion, parametric model (Jul 30 - Aug 1) | claude-fable-5 | 745 | 1,109,801 | 245,527,743 | 5,178,551 |
-| Initial build: scaffold to working tracker, fusion, parametric model (Jul 30 - Aug 1) | claude-opus-5 | 218 | 239,263 | 56,255,854 | 876,017 |
-| Triangulation overhaul, RTMPose A/B, RealSense, IMU, charuco extrinsics (Aug 2 - Aug 10) | claude-fable-5 | 441 | 428,792 | 207,103,745 | 1,080,665 |
-| Triangulation overhaul, RTMPose A/B, RealSense, IMU, charuco extrinsics (Aug 2 - Aug 10) | claude-opus-5 | 947 | 1,012,882 | 453,133,941 | 5,483,413 |
-| Image quality metrics, record/replay, hitch diagnosis (Aug 10 - Aug 11) | claude-fable-5 | 227 | 355,415 | 73,796,202 | 1,877,293 |
-| Image quality metrics, record/replay, hitch diagnosis (Aug 10 - Aug 11) | claude-opus-5 | 199 | 245,359 | 98,648,329 | 1,551,818 |
-| Depth A/B, marker-scale discovery, bone calibration, seeding fixes (Aug 11 - Aug 12) | claude-opus-5 | 373 | 406,564 | 143,251,867 | 1,024,437 |
-| LEARNINGS.md and token stats (Aug 12) | claude-fable-5 | 21 | 42,320 | 2,036,500 | 116,150 |
-| 3-camera right-hand dropout: SQPnP fix, minCameraConfidence gate (Aug 12) | claude-fable-5 | 163 | 150,814 | 31,096,087 | 303,891 |
-| Dedicated linux/macos tracking machine consideration (Aug 12) | claude-fable-5 | 14 | 13,324 | 1,013,749 | 70,154 |
-| BlazePose revival: opt-in per-camera body pose, shoulders + head OSC (Aug 12) | claude-fable-5 | 151 | 176,162 | 34,416,298 | 379,915 |
-| BlazePose revival: opt-in per-camera body pose, shoulders + head OSC (Aug 12) | claude-opus-5 | 785 | 882,945 | 373,642,254 | 3,352,535 |
-| Hand state estimator + biomechanical priors: joint fit, limits, fitted angle prior (Aug 15 - Aug 16) | claude-fable-5 | 429 | 443,619 | 245,581,671 | 1,549,360 |
-| Hand state estimator + biomechanical priors: joint fit, limits, fitted angle prior (Aug 15 - Aug 16) | claude-opus-5 | 95 | 99,784 | 53,053,665 | 707,108 |
-| VMC OSC output mode for VMC4UE and VSeeFace comparison (Aug 16) | claude-opus-5 | 181 | 169,468 | 47,773,144 | 508,165 |
-| Left elbow stuck in a non-anatomic pose: recorded-replay diagnosis (Aug 16) | claude-opus-5 | 146 | 113,124 | 33,808,344 | 322,776 |
-| OSC forearm position, wrist rotation removal, UE plugin update (Aug 16 - Aug 17) | claude-opus-5 | 92 | 52,147 | 16,392,624 | 217,274 |
-| Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack (Aug 17) | claude-fable-5 | 127 | 159,017 | 17,666,658 | 770,851 |
-| Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack (Aug 17) | claude-opus-5 | 59 | 53,593 | 15,022,036 | 473,308 |
-| Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack (Aug 17) | claude-sonnet-5 | 85 | 72,133 | 8,571,544 | 386,751 |
-| Project files, guided setup flow, tracking configurations (Aug 17 - Aug 18) | claude-fable-5 | 273 | 314,321 | 83,780,411 | 1,071,121 |
-| Project files, guided setup flow, tracking configurations (Aug 17 - Aug 18) | claude-opus-5 | 113 | 93,677 | 9,050,492 | 601,205 |
-| Project files, guided setup flow, tracking configurations (Aug 17 - Aug 18) | claude-sonnet-5 | 360 | 455,086 | 36,320,823 | 938,224 |
-| Single-camera removal and SystemAnimatorOnline transfer consideration (Aug 18 - Aug 19) | claude-opus-5 | 56 | 77,596 | 8,637,133 | 342,360 |
-| testing.md reference doc (Aug 19) | claude-opus-5 | 38 | 24,631 | 3,748,073 | 111,058 |
-| Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages (Sep 29) | claude-fable-5-1 | 106 | 243,969 | 36,487,268 | 508,718 |
-| VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream (Oct 1) | claude-fable-5-1 | 127 | 429,960 | 53,922,752 | 2,246,586 |
-| VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream (Oct 1) | claude-opus-5-5 | 78 | 37,545 | 6,989,301 | 539,930 |
-| Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks (Oct 2 - Oct 3) | claude-opus-5-5 | 99 | 116,320 | 21,893,883 | 892,215 |
-| Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks (Oct 2 - Oct 3) | claude-sonnet-5-5 | 5 | 636 | 180,003 | 56,286 |
-| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-fable-5-1 | 797 | 884,628 | 402,530,506 | 6,472,703 |
-| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-opus-5-5 | 2,545 | 543,292 | 451,658,770 | 10,404,194 |
-| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work (Oct 4 - Oct 5) | claude-sonnet-5-5 | 46 | 1,042 | 4,248,740 | 241,602 |
-| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-fable-5-1 | 983 | 1,642,551 | 225,568,659 | 5,849,887 |
-| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-opus-5-5 | 220 | 166,406 | 23,571,623 | 1,340,990 |
-| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing (Oct 30 - Nov 2) | claude-sonnet-5-5 | 62 | 57,337 | 3,966,544 | 402,765 |
-| Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7) | claude-fable-5-1 | 532 | 990,235 | 120,114,216 | 4,232,195 |
-| Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel (Nov 6 - Nov 7) | claude-opus-5-5 | 120 | 105,526 | 12,096,777 | 544,508 |
-| Microphone mouth stage, the forked first pass (Nov 6) | claude-fable-5-1 | 137 | 202,174 | 26,671,925 | 805,247 |
-| Face expression proposal (Nov 7) | claude-opus-5-5 | 48 | 34,768 | 5,122,476 | 289,624 |
-| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-fable-5-1 | 105 | 134,551 | 19,263,718 | 976,431 |
-| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern (Nov 7 - Nov 8) | claude-opus-5-5 | 214 | 188,798 | 23,835,496 | 722,459 |
-| Face expression system implementation (Nov 8) | claude-opus-5-5 | 159 | 203,086 | 44,555,615 | 871,072 |
-| Hand inference time spikes: single-warp landmark crop, --replay-hands (Nov 11) | claude-opus-5-5 | 100 | 70,121 | 16,656,215 | 217,059 |
-| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-fable-5-1 | 137 | 249,650 | 28,156,196 | 695,350 |
-| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-fable-5-2 | 150 | 142,275 | 36,207,377 | 601,126 |
-| Expression editor UI for a VRM face expression formula (Nov 9 - Nov 10) | claude-opus-5-5 | 96 | 69,569 | 8,070,544 | 455,135 |
-| Camera frame synchronization on a multi-camera rig, research (Nov 10) | claude-opus-5-5 | 8 | 17,707 | 496,790 | 48,719 |
-| Audio panel viseme meter layout (Nov 10) | claude-opus-5-5 | 21 | 5,226 | 1,283,006 | 80,255 |
-| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-fable-5-2 | 523 | 852,770 | 232,691,239 | 2,332,296 |
-| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-opus-5-5 | 2,110 | 2,090,600 | 424,049,014 | 7,563,189 |
-| How the tracked pose is retargeted to the avatar skeleton (Nov 10 - Nov 11) | claude-sonnet-5-5 | 21 | 28,466 | 1,363,258 | 287,824 |
-| Whole-body landmarks proposal review (Nov 12 - Nov 13) | claude-fable-5-2 | 451 | 577,628 | 179,646,142 | 1,355,831 |
-| Dimmed low-visibility landmark overlays (Nov 12) | claude-opus-5-5 | 43 | 26,341 | 4,296,846 | 106,039 |
-| Which body model the single-camera setup runs (Nov 12) | claude-opus-5-5 | 51 | 34,953 | 6,075,021 | 175,537 |
-| Follow-on to the whole-body landmarks work (Nov 12 - Nov 13) | claude-fable-5-2 | 395 | 410,869 | 90,762,226 | 1,124,120 |
-| Camera intrinsics from a human body in view (Nov 13 - Nov 15) | claude-fable-5-2 | 745 | 876,686 | 201,007,650 | 2,462,466 |
-| Camera intrinsics from a human body in view (Nov 13 - Nov 15) | claude-opus-5-5 | 323 | 220,712 | 44,310,537 | 1,544,549 |
-| Face tracking comparison on the single-camera body model (Nov 13) | claude-opus-5-5 | 224 | 152,789 | 37,503,538 | 802,165 |
-| Getting the Kalidokit 3d sample to run (Nov 14) | claude-opus-5-5 | 20 | 5,842 | 1,298,728 | 45,172 |
-| How MotionBERT lifts body landmarks into 3D, research (Nov 14) | claude-fable-5-2 | 30 | 51,019 | 4,039,847 | 158,837 |
-| How MotionBERT lifts body landmarks into 3D, research (Nov 14) | claude-opus-5-5 | 62 | 39,244 | 7,296,186 | 374,295 |
-| Hands stuck in frame after the real hand has left (Nov 14) | claude-fable-5-2 | 101 | 85,492 | 25,669,433 | 309,815 |
-| Two profiling hot paths on the main and vision threads (Nov 15) | claude-opus-5-5 | 229 | 162,201 | 47,737,282 | 481,045 |
-| Switch controllers as arm trackers on the PC (Nov 15) | claude-opus-5-5 | 6 | 3,969 | 384,489 | 42,884 |
-| Body model on every frame: divider default, held challenge frame, camera delivery grid (Nov 15) | claude-fable-5-2 | 112 | 106,259 | 23,821,718 | 462,787 |
+| Initial build: scaffold to working tracker, fusion, parametric model | 2026-07-30 to 2026-08-01 | claude-fable-5, claude-opus-5 | 963 | 1,349,064 | 301,783,597 |
+| Triangulation overhaul, RTMPose A/B, RealSense, IMU, charuco extrinsics | 2026-08-02 to 2026-08-10 | claude-fable-5, claude-opus-5 | 1,388 | 1,441,674 | 660,237,686 |
+| Image quality metrics, record/replay, hitch diagnosis | 2026-08-10 to 2026-08-11 | claude-fable-5, claude-opus-5 | 426 | 600,774 | 172,444,531 |
+| Depth A/B, marker-scale discovery, bone calibration, seeding fixes | 2026-08-11 to 2026-08-12 | claude-opus-5 | 373 | 406,564 | 143,251,867 |
+| LEARNINGS.md and token stats | 2026-08-12 | claude-fable-5 | 21 | 42,320 | 2,036,500 |
+| 3-camera right-hand dropout: SQPnP fix, minCameraConfidence gate | 2026-08-13 | claude-fable-5 | 163 | 150,814 | 31,096,087 |
+| Dedicated linux/macos tracking machine consideration | 2026-08-13 | claude-fable-5 | 14 | 13,324 | 1,013,749 |
+| BlazePose revival: opt-in per-camera body pose, shoulders + head OSC | 2026-08-13 to 2026-08-15 | claude-fable-5, claude-opus-5 | 936 | 1,059,107 | 408,058,552 |
+| VMC OSC output mode for VMC4UE and VSeeFace comparison | 2026-08-16 | claude-opus-5 | 181 | 169,468 | 47,773,144 |
+| Hand state estimator + biomechanical priors: joint fit, limits, fitted angle prior | 2026-08-16 | claude-fable-5, claude-opus-5 | 524 | 543,403 | 298,635,336 |
+| Left elbow stuck in a non-anatomic pose: recorded-replay diagnosis | 2026-08-16 | claude-opus-5 | 146 | 113,124 | 33,808,344 |
+| OSC forearm position, wrist rotation removal, UE plugin update | 2026-08-16 to 2026-08-17 | claude-opus-5 | 92 | 52,147 | 16,392,624 |
+| Open-sourcing docs pass: CLAUDE.md, docs/reference, rename to MikanTrack | 2026-08-17 | claude-fable-5, claude-opus-5, claude-sonnet-5 | 271 | 284,743 | 41,260,238 |
+| Project files, guided setup flow, tracking configurations | 2026-08-17 to 2026-08-18 | claude-fable-5, claude-opus-5, claude-sonnet-5 | 746 | 863,084 | 129,151,726 |
+| Single-camera removal and SystemAnimatorOnline transfer consideration | 2026-08-18 to 2026-08-19 | claude-opus-5 | 56 | 77,596 | 8,637,133 |
+| testing.md reference doc | 2026-08-19 | claude-opus-5 | 38 | 24,631 | 3,748,073 |
+| Cleanup pass: flicker tracker, ImuService split, CameraContext, capture timing, MainWindow split, loop stages | 2026-09-30 | claude-fable-5-1 | 106 | 243,969 | 36,487,268 |
+| VRM avatar loading, the scene avatar, retargeting the pose onto it, and the VMC bone stream | 2026-10-01 to 2026-10-02 | claude-fable-5-1, claude-opus-5-5 | 205 | 467,505 | 60,912,053 |
+| Avatar rig settings: bone remapping, rest trims, elbow hints, hand tweaks | 2026-10-02 to 2026-10-03 | claude-opus-5-5, claude-sonnet-5-5 | 104 | 116,956 | 22,073,886 |
+| iFacialMocap face service, VMC face blendshapes, CPU face morph, Mikan OSC schema removal, shared with link-engine work | 2026-10-04 to 2026-10-16 | claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5 | 3,388 | 1,428,962 | 858,438,016 |
+| Single-camera direct retarget: RTMW3D backend, DirectRetarget solver, guided setup, finger angles, rest easing | 2026-10-31 to 2026-11-03 | claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5 | 1,265 | 1,866,294 | 253,106,826 |
+| Microphone mouth stage: MFCC visemes, uLipSync templates, Oculus LipSync, the Audio panel | 2026-11-06 to 2026-11-07 | claude-fable-5-1, claude-opus-5-5 | 652 | 1,095,761 | 132,210,993 |
+| Microphone mouth stage, the forked first pass | 2026-11-06 | claude-fable-5-1 | 137 | 202,174 | 26,671,925 |
+| Face expression proposal | 2026-11-07 | claude-opus-5-5 | 48 | 34,768 | 5,122,476 |
+| Face expression proposal review, implementation review and fixes, Face tab adjustments, landing by concern | 2026-11-07 to 2026-11-09 | claude-fable-5-1, claude-opus-5-5 | 319 | 323,349 | 43,099,214 |
+| Face expression system implementation | 2026-11-08 to 2026-11-09 | claude-opus-5-5 | 159 | 203,086 | 44,555,615 |
+| Expression editor UI for a VRM face expression formula | 2026-11-09 to 2026-11-10 | claude-fable-5-1, claude-fable-5-2, claude-opus-5-5 | 383 | 461,494 | 72,434,117 |
+| How the tracked pose is retargeted to the avatar skeleton | 2026-11-10 to 2026-11-11 | claude-fable-5-2, claude-opus-5-5, claude-sonnet-5-5 | 2,654 | 2,971,836 | 658,103,511 |
+| Audio panel viseme meter layout | 2026-11-10 | claude-opus-5-5 | 21 | 5,226 | 1,283,006 |
+| Camera frame synchronization on a multi-camera rig, research | 2026-11-10 | claude-opus-5-5 | 8 | 17,707 | 496,790 |
+| Hand inference time spikes: single-warp landmark crop, --replay-hands | 2026-11-12 | claude-opus-5-5 | 100 | 70,121 | 16,656,215 |
+| Which body model the single-camera setup runs | 2026-11-12 | claude-opus-5-5 | 51 | 34,953 | 6,075,021 |
+| Whole-body landmarks proposal review | 2026-11-12 to 2026-11-13 | claude-fable-5-2 | 451 | 577,628 | 179,646,142 |
+| Dimmed low-visibility landmark overlays | 2026-11-12 | claude-opus-5-5 | 43 | 26,341 | 4,296,846 |
+| Follow-on to the whole-body landmarks work | 2026-11-12 to 2026-11-13 | claude-fable-5-2 | 395 | 410,869 | 90,762,226 |
+| Camera intrinsics from a human body in view | 2026-11-13 to 2026-11-15 | claude-fable-5-2, claude-opus-5-5 | 1,068 | 1,097,398 | 245,318,187 |
+| Face tracking comparison on the single-camera body model | 2026-11-13 | claude-opus-5-5 | 224 | 152,789 | 37,503,538 |
+| Hands stuck in frame after the real hand has left | 2026-11-14 | claude-fable-5-2 | 101 | 85,492 | 25,669,433 |
+| How MotionBERT lifts body landmarks into 3D, research | 2026-11-14 | claude-fable-5-2, claude-opus-5-5 | 92 | 90,263 | 11,336,033 |
+| Make the mounting wizard's hand-direction check less marginal | 2026-11-14 | claude-fable-5-2 | 17 | 38,023 | 1,861,270 |
+| btw: I was just a Pearson correlation is for determining the cor... | 2026-11-14 | claude-fable-5-2 | 11 | 26,502 | 1,002,356 |
+| Getting the Kalidokit 3d sample to run | 2026-11-14 | claude-opus-5-5 | 20 | 5,842 | 1,298,728 |
+| Switch controllers as arm trackers on the PC | 2026-11-15 | claude-opus-5-5 | 6 | 3,969 | 384,489 |
+| Two profiling hot paths on the main and vision threads | 2026-11-15 | claude-opus-5-5 | 229 | 162,201 | 47,737,282 |
+| Body model on every frame: divider default, held challenge frame, camera delivery grid | 2026-11-15 to 2026-11-16 | claude-fable-5-2 | 127 | 111,450 | 28,753,748 |
+| Character pose tracking quality issues | 2026-11-16 | claude-fable-5-2 | 126 | 176,012 | 38,303,324 |
 
 ## Totals per model
 
-| Model | API calls | Input | Cache write | Cache read | Output | Weighted |
-|---|---|---|---|---|---|---|
-| claude-fable-5 | 2,591 | 21,074 | 12,397,951 | 942,019,064 | 3,193,585 | 25,137,668 |
-| claude-fable-5-1 | 2,924 | 82,954 | 21,787,117 | 912,715,240 | 4,777,718 | 28,495,392 |
-| claude-fable-5-2 | 2,507 | 5,556 | 8,807,278 | 793,845,632 | 3,102,998 | 21,182,841 |
-| claude-opus-5 | 3,302 | 45,258 | 15,571,474 | 1,312,417,756 | 3,471,033 | 33,621,308 |
-| claude-opus-5-5 | 6,776 | 13,692 | 27,541,035 | 1,189,182,137 | 4,295,015 | 34,966,654 |
-| claude-sonnet-5 | 445 | 13,920 | 1,324,975 | 44,892,367 | 527,219 | 1,759,094 |
-| claude-sonnet-5-5 | 134 | 268 | 988,477 | 9,758,545 | 87,481 | 529,824 |
-| **total** | 18,679 | 182,722 | 88,418,307 | 5,204,830,741 | 19,455,049 | **145,692,784** |
+| Model | API calls | Input | Cache write | Cache read | Output | Weighted | API-equiv. cost |
+|---|---|---|---|---|---|---|---|
+| claude-fable-5 | 2,591 | 21,074 | 12,397,951 | 942,019,064 | 3,193,585 | 26,698,430 | $1,335 |
+| claude-fable-5-1 | 2,924 | 82,954 | 21,787,117 | 912,715,240 | 4,777,718 | 31,714,543 | $901 |
+| claude-fable-5-2 | 2,676 | 5,926 | 9,452,713 | 839,944,612 | 3,348,726 | 23,892,246 | $452 |
+| claude-opus-5 | 3,302 | 45,258 | 15,571,474 | 1,312,417,756 | 3,471,033 | 35,733,336 | $893 |
+| claude-opus-5-5 | 6,776 | 13,692 | 27,541,035 | 1,189,182,137 | 4,295,015 | 35,629,892 | $475 |
+| claude-sonnet-5 | 445 | 13,920 | 1,324,975 | 44,892,367 | 527,219 | 1,759,094 | $18 |
+| claude-sonnet-5-5 | 134 | 268 | 988,477 | 9,758,545 | 87,481 | 529,824 | $4 |
+| **total** | 18,848 | 183,092 | 89,063,742 | 5,250,929,721 | 19,700,777 | **155,957,369** | **$4,078** |
 
 ## Energy and water estimate
 
 | Scenario | Wh per 1k weighted tokens | Energy | Water (onsite cooling) | Water (incl. generation) |
 |---|---|---|---|---|
-| low | 0.5 | 73 kWh | 80 L | 219 L |
-| central | 2.0 | 291 kWh | 321 L | 874 L |
-| high | 6.0 | 874 kWh | 962 L | 2,622 L |
+| low | 0.5 | 78 kWh | 86 L | 234 L |
+| central | 2.0 | 312 kWh | 343 L | 936 L |
+| high | 6.0 | 936 kWh | 1,029 L | 2,807 L |
+
+For scale: the central estimate (312 kWh) is about 11 days of average US household electricity, or roughly 624 hours of the RTX 3090 dev machine at full load. The central water estimate (936 L) is about 5 bathtubs.
 <!-- TOKEN_STATS:END -->
