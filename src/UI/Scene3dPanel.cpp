@@ -809,6 +809,10 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 
 		// Marker axes at the world origin
 		drawTransformedAxes(*m_lineRenderer, k_displayFromWorld, 0.1f);
+
+		// Flushed depth tested ahead of the avatar, so the floor is hidden
+		// behind the character rather than drawn over it with the lines below
+		m_lineRenderer->render3d(viewProjection, false);
 	}
 
 	// One frustum per calibrated camera (cameraToWorld maps CV-convention
