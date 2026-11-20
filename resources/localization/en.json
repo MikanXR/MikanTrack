@@ -1387,6 +1387,8 @@
 		"modeTooltip": "What the view shows. Follow selection shows the cameras for the Capture and\nDirect solver stages and the 3D scene for the others. Cameras + 3D scene shows\nboth side by side, with a bar between them to drag.",
 		"wizardNote": "A camera calibration wizard is running: the view shows every camera\nuntil it closes.",
 		"povFree": "Free cam",
+		"frameHeadButton": "Frame head",
+		"frameHeadTooltip": "Aims the free camera at the head, keeping its angle and distance.\nThe F key does the same while the mouse is over the scene.",
 		"povCameraFmt": "Camera %d",
 		"povTooltip": "Where the scene is seen from. Free cam is the camera you turn by hand. A camera shows\nthe scene through its own lens, framed the way its video is, so the avatar's pose\ncompares with that camera's view of you. Direct mode places the direct camera at the\nmeasured shoulders.",
 		"povNotCalibrated": "This camera's lens is not calibrated yet.",

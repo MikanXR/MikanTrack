@@ -171,6 +171,9 @@ struct SceneViewState
 	// side, the source half, while the view's is the avatar half
 	glm::mat4 sourceViewProjection{1.f};
 	glm::ivec4 sourceViewport{0};
+	// Whether the orbit has been aimed at the head yet: the first draw with a
+	// head to aim at does it, and the orbit is the user's from then on
+	bool bFramedHead= false;
 };
 
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
@@ -282,6 +285,17 @@ public:
 	// The chain a click on the source pose picked since the last call; false
 	// when none was
 	bool consumePickedChain(eRetargetChain& outChain);
+
+	// The head an orbit is aimed at (copied): the posed avatar's, or the
+	// tracked one while no avatar is loaded. Null leaves every orbit where it
+	// is.
+	void setFocusHead(const glm::vec3* headWorld);
+	// Aims a view's orbit at that head, keeping its angles and its distance.
+	// False without a head. Every view does it once on its own, and again on
+	// the F key while its image is hovered.
+	bool frameHead(SceneViewState& view);
+	// The same for the Stage View's own view
+	bool frameHead() { return frameHead(m_mainView); }
 
 	// The view's camera choice, not persisted: -1 is the free (orbit) camera,
 	// else the configured camera the view looks through, the frame's aspect
@@ -406,4 +420,6 @@ private:
 	glm::vec3 m_dragPlaneNormal{0.f};
 	bool m_bShowPerCameraSkeletons= false;
 	float m_forearmLengthMeters= 0.25f;
+	bool m_bHasFocusHead= false;
+	glm::vec3 m_focusHeadWorld{0.f};
 };

@@ -1045,6 +1045,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			updateSourcePoseReadout(&m_latestRetarget);
 			updateSceneSourcePose(&m_latestRetarget, &m_shown.fused->head, nullptr);
 		}
+		m_scene3dPanel->setFocusHead(m_shown.fused->head.valid ? &m_shown.fused->head.positionWorld : nullptr);
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
 		updateSceneCameraMatch(nullptr, nullptr);
@@ -1135,6 +1136,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 
 	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
 	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
+	m_scene3dPanel->setFocusHead(&posedHeadWorld);
 }
 
 void MainWindow::updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,

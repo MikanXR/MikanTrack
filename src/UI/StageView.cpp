@@ -264,7 +264,13 @@ void StageView::drawHeader()
 	ImGui::SetItemTooltip("%s", locText(m_content.bWizard ? "stageView.wizardNote" : "stageView.modeTooltip"));
 
 	if (m_content.bScene)
+	{
 		drawPovCombo();
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("stageView.frameHeadButton")))
+			m_scenePanel->frameHead();
+		ImGui::SetItemTooltip("%s", locText("stageView.frameHeadTooltip"));
+	}
 
 	if (isRetargetView())
 	{

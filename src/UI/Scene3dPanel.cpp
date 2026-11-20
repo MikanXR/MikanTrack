@@ -144,9 +144,28 @@ Scene3dPanel::Scene3dPanel()
 void Scene3dPanel::setAvatar(std::shared_ptr<const AvatarModel> model, std::shared_ptr<const AvatarSkeleton> skeleton,
 							 uint32_t generation)
 {
+	// Another avatar's head is somewhere else, so the Stage View aims again
+	if (model != m_avatarModel)
+		m_mainView.bFramedHead= false;
 	m_avatarModel= std::move(model);
 	m_avatarSkeleton= std::move(skeleton);
 	m_meshView.setAvatar(m_avatarModel, generation);
+}
+
+void Scene3dPanel::setFocusHead(const glm::vec3* headWorld)
+{
+	m_bHasFocusHead= headWorld != nullptr;
+	if (m_bHasFocusHead)
+		m_focusHeadWorld= *headWorld;
+}
+
+bool Scene3dPanel::frameHead(SceneViewState& view)
+{
+	if (!m_bHasFocusHead)
+		return false;
+	view.camera->setOrbitTargetPosition(glm::vec3(k_displayFromWorld * glm::vec4(m_focusHeadWorld, 1.f)));
+	view.bFramedHead= true;
+	return true;
 }
 
 void Scene3dPanel::setAvatarFace(const FaceSources* face)
@@ -348,6 +367,8 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 	const ImVec2 panelSize= ImGui::GetContentRegionAvail();
 	const uint16_t fbWidth= (uint16_t)std::max(64.f, panelSize.x);
 	const uint16_t fbHeight= (uint16_t)std::max(64.f, panelSize.y);
+	if (!view.bFramedHead)
+		frameHead(view);
 
 	// The orbit view fills its region; the camera view letterboxes the
 	// frame's aspect inside it. Side by side, the source half is the left
@@ -395,6 +416,8 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 	const ImVec2 imageMin= ImGui::GetItemRectMin();
 	outImageMin= glm::vec2(imageMin.x, imageMin.y);
 	outImageSize= glm::vec2((float)fbWidth, (float)fbHeight);
+	if (ImGui::IsItemHovered() && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false))
+		frameHead(view);
 
 	// Each half's name at its top left, drawn over the image rather than as
 	// items, so the image stays the last item for the orbit and the picks
