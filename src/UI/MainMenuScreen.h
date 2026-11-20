@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <string>
 
+#include "NewProjectModal.h"
+
 // Fullscreen startup menu: Resume Project / New Project / Load Project / Exit.
 // Drawn every frame while the app is in the MainMenu state; reports the action
 // the user picked and MainWindow dispatches it to App. Runs the project-name
@@ -31,7 +33,6 @@ public:
 	void setStatusMessage(const std::string& message) { m_statusMessage= message; }
 
 private:
-	char m_nameBuffer[64]= {};
+	NewProjectModal m_newProjectModal;
 	std::string m_statusMessage;
-	bool m_bNameModalRequested= false;
 };

@@ -23,6 +23,39 @@ static const int k_wholeBodyDimAlpha= 70;
 // unseen, so the overlay dims exactly what the solver ignores
 static const float k_bodyVisibilityGate= 0.5f;
 
+static const struct
+{
+	eHandSlotDrawMode mode;
+	const char* name;
+} k_slotDrawModeNames[]= {
+	{eHandSlotDrawMode::OnlyAccepted, "onlyAccepted"},
+	{eHandSlotDrawMode::DimRejected, "dimRejected"},
+	{eHandSlotDrawMode::AllDetections, "allDetections"},
+};
+
+const char* HandOverlay::getSlotDrawModeName(eHandSlotDrawMode mode)
+{
+	for (const auto& entry : k_slotDrawModeNames)
+	{
+		if (entry.mode == mode)
+			return entry.name;
+	}
+	return k_slotDrawModeNames[0].name;
+}
+
+bool HandOverlay::parseSlotDrawMode(const std::string& name, eHandSlotDrawMode& outMode)
+{
+	for (const auto& entry : k_slotDrawModeNames)
+	{
+		if (name == entry.name)
+		{
+			outMode= entry.mode;
+			return true;
+		}
+	}
+	return false;
+}
+
 void HandOverlay::drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result,
 									 const ImageToScreenMapping& mapping, bool bShowDetectionBoxes,
 									 const std::array<bool, 2>* handUsed, eHandSlotDrawMode slotDrawMode)

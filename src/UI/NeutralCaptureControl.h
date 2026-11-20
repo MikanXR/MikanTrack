@@ -16,7 +16,8 @@ public:
 
 	// Arms the countdown; update() runs it down
 	void start() { m_countdownSeconds= k_countdownSeconds; }
-	// Cancels a running countdown (a request already sent still lands)
+	// Cancels a running countdown. A request already sent still lands, and
+	// is dropped when the direct camera has changed since.
 	void reset() { m_countdownSeconds= 0.f; }
 
 	// Counts down with the frame's dt, sends the request at zero, then polls

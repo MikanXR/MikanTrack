@@ -13,7 +13,9 @@
 //
 // usage: --replay-bodypose <recording.jsonl> [camera] [rtmpose|rtmw3d] [divider=<n>]
 //
-// The backend defaults to the one the recording ran; naming the other
+// The camera defaults to the first one the recorded project's mode runs body
+// pose on (a direct take's direct camera). The backend defaults to the one
+// the take's body observations name on it; naming the other
 // re-runs the same frames through it, the model A/B. divider runs the
 // models every nth frame as the live stage does, for a take that stored
 // every frame: the tracker's cadence between model and held frames is then
@@ -98,22 +100,16 @@ static int runReplayBodyPose(const TestArgs& args)
 		return 1;
 	}
 
-	// Default to whichever camera actually ran body pose in that session
+	// Default to the first camera the recorded project's mode runs body pose on
 	int cameraIndex= requestedCamera;
-	if (cameraIndex < 0)
+	for (int i= 0; cameraIndex < 0 && i < (int)replay.getRecordedConfig().cameraCount(); ++i)
 	{
-		for (int i= 0; i < (int)replay.getRecordedConfig().cameraCount(); ++i)
-		{
-			if (replay.getRecordedConfig().camera(i).bodyPose.enabled)
-			{
-				cameraIndex= i;
-				break;
-			}
-		}
+		if (getBodyPoseBackend(replay.getRecordedConfig(), i).has_value())
+			cameraIndex= i;
 	}
-	if (cameraIndex < 0)
+	if (cameraIndex < 0 || cameraIndex >= (int)replay.getRecordedConfig().cameraCount())
 	{
-		MIKAN_LOG_ERROR("replay-bodypose") << "No camera had body pose enabled; pass a camera index";
+		MIKAN_LOG_ERROR("replay-bodypose") << "No camera ran body pose; pass a camera index";
 		return 1;
 	}
 
@@ -122,9 +118,18 @@ static int runReplayBodyPose(const TestArgs& args)
 	trackerConfig.frameDivider= frameDivider;
 	trackerConfig.detectorIntervalFrames=
 		replay.getRecordedConfig().camera(cameraIndex).bodyPose.detectorIntervalFrames;
-	trackerConfig.backend= bodyPoseBackendFromString(
-		requestedBackend.empty() ? replay.getRecordedConfig().camera(cameraIndex).bodyPose.backend
-								 : requestedBackend);
+	// An explicit backend wins. Otherwise the model the take's own body
+	// observations name on the camera, the body model where they name none.
+	if (!requestedBackend.empty())
+	{
+		trackerConfig.backend= bodyPoseBackendFromString(requestedBackend);
+	}
+	else
+	{
+		const std::optional<eBodyPoseBackend> recordedBackend=
+			replay.findRecordedBodyPoseBackends()[cameraIndex];
+		trackerConfig.backend= recordedBackend.value_or(eBodyPoseBackend::RtmPoseBody);
+	}
 
 	BodyPoseTracker tracker;
 	if (!tracker.load("models", "directml", trackerConfig))

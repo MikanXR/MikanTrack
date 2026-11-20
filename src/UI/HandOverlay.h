@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <string>
 
 #include "imgui.h"
 
@@ -47,6 +48,11 @@ enum class eHandSlotDrawMode
 
 namespace HandOverlay
 {
+// The mode's name in the stored settings ("onlyAccepted", "dimRejected",
+// "allDetections"). parse is false, and leaves outMode, for any other text.
+const char* getSlotDrawModeName(eHandSlotDrawMode mode);
+bool parseSlotDrawMode(const std::string& name, eHandSlotDrawMode& outMode);
+
 // Projects the fused world-space forearm (wrist and elbow) into one camera's
 // undistorted image. A side stays invalid unless its pose is tracked with a
 // world pose and a forearm pose, and everything stays invalid when the

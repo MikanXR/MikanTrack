@@ -107,7 +107,7 @@ The commands after `edit` need the editor open and answer an error otherwise.
 
 ### Pipeline panel (pipeline)
 
-The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `output.vmc`, `face.mic`, `face.blink`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
+The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `retarget.model`, `retarget.placement`, `retarget.chains`, `output.vmc`, `face.mic`, `face.blink`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
 
 - `pipeline stages`: a first line `shape multi|direct cameras <n> shown live|replay`, then every stage of the project in pipeline order
 - `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
@@ -115,7 +115,7 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
 - `pipeline view`: what the Stage View shows, as `camera all`, `camera <index>` or `scene <top-level stage>|none`, or in the split mode the camera part then the scene part (`camera all scene none`), then `mode follow|cameras|scene|split`, then on a scene `pov free` or `pov <cameraIndex>`, then `layout overlay|sidebyside` on the Retarget view, then `wizard` while a camera calibration wizard forces the cameras
 - `pipeline view follow|cameras|scene|split`: sets the Stage View's mode and answers the same line
-- `pipeline view overlay|sidebyside`: sets the Retarget view's layout, whatever the view shows, and answers the same line. A synthetic `input click` on a source bone in the Retarget view selects its chain, which `pipeline chain` then answers
+- `pipeline view overlay|sidebyside`: sets the Retarget view's layout, whatever the view shows, and answers the same line. A synthetic `input click` on a source bone in the Retarget view selects its chain, which `pipeline chain` then answers, and with `retarget` selected it moves the selection to `retarget.chains`. `retarget.placement` exists only in a multi-camera project
 - `pipeline pin <stage>`: pins the stage as a double-click on its box does and answers its window id, `pin.<stage>`, which `gui float` and `gui viewports` use
 - `pipeline unpin <stage>|all`: closes that stage's pinned window, or all of them
 - `pipeline pinned`: one pinned stage per line, or `none`

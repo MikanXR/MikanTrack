@@ -37,6 +37,9 @@ const StageInfo k_stages[(int)S::Count]= {
 	{"HoldRest", "hold", S::DirectSolver},
 	{"SourcePose", "source", S::SourcePose},
 	{"Retarget", "retarget", S::Retarget},
+	{"VrmModel", "model", S::Retarget},
+	{"Placement", "placement", S::Retarget},
+	{"Chains", "chains", S::Retarget},
 	{"Output", "output", S::Output},
 	{"DeliveryRules", "rules", S::Output},
 	{"VmcStream", "vmc", S::Output},
@@ -218,7 +221,7 @@ StageStatus computePerCamera(const Inputs& in, const PipelineStageId& id)
 		return running(text("valHandsFmt", camera.handsTracked));
 	case S::BodyModel:
 		if (!camera.bBodyEnabled)
-			return inactive(text("valOff"), text("whyBodyDisabled"));
+			return inactive(text("valOff"), text(in.bDirect ? "whyBodyDirectCameraOnly" : "whyBodyDisabled"));
 		if (device.state != eStageState::Running)
 			return inactive(text("valNoFrames"), text("whyCameraNotRunning"));
 		if (!camera.bBodyModelLoaded)
@@ -386,13 +389,49 @@ StageStatus computeSourcePose(const Inputs& in)
 	return running(text("valArmsFmt", countMeasuredArms(in)));
 }
 
-StageStatus computeRetarget(const Inputs& in)
+StageStatus computeRetarget(const Inputs& in, S stage)
 {
+	const StageText noAvatarReason= text(in.bDirect ? "whyDirectNoAvatar" : "whyRetargetNoAvatar");
+	const StageText armsPlaced= text("valArmsPlacedFmt", (in.bArmPlaced[0] ? 1 : 0) + (in.bArmPlaced[1] ? 1 : 0));
+	const bool bMappingProblem= in.avatarMappingProblemCount > 0;
+
+	// The model is the loaded one whatever the frame shows
+	if (stage == S::VrmModel)
+	{
+		if (!in.bAvatarLoaded)
+			return notConfigured(text("valNoAvatar"), noAvatarReason);
+		if (bMappingProblem)
+			return degraded(text("valMappingProblemsFmt", in.avatarMappingProblemCount), text("whyMappingProblems"));
+		return running(text("valBonesFmt", in.avatarMappedBoneCount));
+	}
+	if (stage == S::Placement)
+	{
+		if (!in.bAvatarLoaded)
+			return inactive(text("valNoAvatar"), text("whyPlacementNoAvatar"));
+		if (isWithoutWorld(in))
+			return inactive(text("valNothingToPose"), text("whySourceNoArms"));
+		// The position retarget follows only with both shoulders measured
+		const bool bFollowing= in.bAvatarFollowShoulders && in.hands[0].bShoulder && in.hands[1].bShoulder;
+		return running(text(bFollowing ? "valFollowingShoulders" : "valFixedRoot"));
+	}
+	if (stage == S::Chains)
+	{
+		// The arms' loss rules run on the stream without an avatar
+		if (!in.bAvatarLoaded)
+			return running(text("valLossRulesOnly"));
+		if (isWithoutWorld(in))
+			return inactive(text("valNothingToPose"), text("whySourceNoArms"));
+		return running(armsPlaced);
+	}
+
 	if (!in.bAvatarLoaded)
-		return notConfigured(text("valNoAvatar"), text(in.bDirect ? "whyDirectNoAvatar" : "whyRetargetNoAvatar"));
+		return notConfigured(text("valNoAvatar"), noAvatarReason);
 	if (isWithoutWorld(in))
 		return inactive(text("valNothingToPose"), text("whySourceNoArms"));
-	return running(text("valArmsPlacedFmt", (in.bArmPlaced[0] ? 1 : 0) + (in.bArmPlaced[1] ? 1 : 0)));
+	// The model's problem shows on the top row without its lane open
+	if (bMappingProblem)
+		return degraded(armsPlaced, text("whyMappingProblems"));
+	return running(armsPlaced);
 }
 
 StageStatus computeOutput(const Inputs& in, S stage)
@@ -525,7 +564,8 @@ PipelineStageId getSideStage()
 	return makeId(S::Face);
 }
 
-std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, int cameraCount)
+std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bDirect,
+														   int cameraCount)
 {
 	std::vector<std::vector<PipelineStageId>> lanes;
 	switch (getTopLevel(stage).stage)
@@ -545,6 +585,13 @@ std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId
 	case S::Face:
 		lanes.push_back(
 			{makeId(S::Phone), makeId(S::Webcam), makeId(S::Blink), makeId(S::Microphone), makeId(S::Profile)});
+		break;
+	case S::Retarget:
+		// The direct solver places the body itself
+		if (bDirect)
+			lanes.push_back({makeId(S::VrmModel), makeId(S::Chains)});
+		else
+			lanes.push_back({makeId(S::VrmModel), makeId(S::Placement), makeId(S::Chains)});
 		break;
 	case S::Output:
 		lanes.push_back({makeId(S::DeliveryRules), makeId(S::VmcStream)});
@@ -570,7 +617,7 @@ std::vector<PipelineStageId> getAllStages(bool bDirect, int cameraCount)
 	for (const PipelineStageId& top : topLevel)
 	{
 		all.push_back(top);
-		for (const std::vector<PipelineStageId>& lane : getSubStageLanes(top, cameraCount))
+		for (const std::vector<PipelineStageId>& lane : getSubStageLanes(top, bDirect, cameraCount))
 			all.insert(all.end(), lane.begin(), lane.end());
 	}
 	return all;
@@ -690,7 +737,10 @@ StageStatus computeStatus(const PipelineStatusInputs& inputs, const PipelineStag
 	case S::SourcePose:
 		return computeSourcePose(inputs);
 	case S::Retarget:
-		return computeRetarget(inputs);
+	case S::VrmModel:
+	case S::Placement:
+	case S::Chains:
+		return computeRetarget(inputs, stage.stage);
 	case S::Output:
 	case S::DeliveryRules:
 	case S::VmcStream:

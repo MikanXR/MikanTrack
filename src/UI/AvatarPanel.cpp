@@ -28,11 +28,6 @@ using B= eHumanoidBone;
 
 const ImVec4 k_warningColor(1.f, 0.8f, 0.4f, 1.f);
 
-eHumanoidBone fingerBone(int sideIndex, int finger, int phalanx)
-{
-	return (eHumanoidBone)((int)firstHumanoidFingerBone(sideIndex) + finger * 3 + phalanx);
-}
-
 // The chain row's labels and ids, by eRetargetChain. The ids are the keys of
 // the chain blocks in the project's chain settings.
 const char* const k_chainLabelKeys[(int)eRetargetChain::Count]= {
@@ -339,12 +334,17 @@ void AvatarPanel::drawModelSummary()
 	}
 }
 
+void AvatarPanel::drawShowInScene()
+{
+	if (ImGui::Checkbox(locLabel("avatarPanel.showInSceneCheckbox"), &m_config->avatar.showInScene))
+		m_config->markDirty();
+}
+
 void AvatarPanel::drawPlacement()
 {
 	AvatarConfig& avatar= m_config->avatar;
 	bool bChanged= false;
 
-	bChanged|= ImGui::Checkbox(locLabel("avatarPanel.showInSceneCheckbox"), &avatar.showInScene);
 	bChanged|= ImGui::Checkbox(locLabel("avatarPanel.followShouldersCheckbox"), &avatar.followShoulders);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", locText("avatarPanel.followShouldersTooltip"));
@@ -365,65 +365,15 @@ void AvatarPanel::drawPlacement()
 		m_config->markDirty();
 }
 
-std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> AvatarPanel::computeDotStates() const
-{
-	const AvatarModel& model= *m_app->getAvatarModel();
-	const AvatarSkeleton& skeleton= *m_app->getAvatarSkeleton();
-
-	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states;
-	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
-	{
-		if (model.humanoidNodes[index] >= 0)
-			states[index]= eAvatarMapDotState::Mapped;
-		else if (isHumanoidBoneRequired((eHumanoidBone)index))
-			states[index]= eAvatarMapDotState::RequiredUnmapped;
-		else
-			states[index]= eAvatarMapDotState::OptionalUnmapped;
-	}
-
-	// One node on two bones
-	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
-	{
-		for (int other= index + 1; other < HUMANOID_BONE_COUNT; ++other)
-		{
-			if (model.humanoidNodes[index] >= 0 && model.humanoidNodes[index] == model.humanoidNodes[other])
-			{
-				states[index]= eAvatarMapDotState::Warning;
-				states[other]= eAvatarMapDotState::Warning;
-			}
-		}
-	}
-
-	// The index sitting on the far side of the middle finger from the thumb
-	// (the skeleton's swapped-finger warning) tags both fingers
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-	{
-		const AvatarSkeleton::HandRest& hand= skeleton.getHand((eHandSide)sideIndex);
-		if (!hand.hasFinger((int)eFinger::Thumb) || !hand.hasFinger((int)eFinger::Index))
-			continue;
-		if (hand.skeleton.baseInPalm[(int)eFinger::Thumb].y * hand.skeleton.baseInPalm[(int)eFinger::Index].y >= 0.f)
-			continue;
-		for (int finger : {(int)eFinger::Index, (int)eFinger::Middle})
-		{
-			for (int phalanx= 0; phalanx < 3; ++phalanx)
-			{
-				const int bone= (int)fingerBone(sideIndex, finger, phalanx);
-				if (states[bone] == eAvatarMapDotState::Mapped)
-					states[bone]= eAvatarMapDotState::Warning;
-			}
-		}
-	}
-	return states;
-}
-
 void AvatarPanel::drawMapping()
 {
 	if (m_app->getAvatarModel() == nullptr || m_app->getAvatarSkeleton() == nullptr)
 		return;
-	const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states= computeDotStates();
+	const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states=
+		AvatarMapFigure::computeDotStates(*m_app->getAvatarModel(), *m_app->getAvatarSkeleton());
 
 	ImGui::TextWrapped("%s", locText("avatarPanel.mappingHelpText"));
-	if (m_figure.draw(states, m_selectedBone))
+	if (m_figure.draw(states, m_selectedBone, m_app->getAvatarModel().get()))
 		m_bScrollToSelected= true;
 
 	if (ImGui::Button(locLabel("avatarPanel.resetAllMappingButton")))
@@ -462,8 +412,10 @@ void AvatarPanel::drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDot
 	// Bone: selectable, in the dot's warning color when it carries one
 	ImGui::TableSetColumnIndex(0);
 	const bool bSelected= m_selectedBone == bone;
-	if (bSelected && m_bScrollToSelected)
-		ImGui::SetScrollHereY(0.5f);
+	// A dot's click brings its row into view from below, no further than
+	// that, so the figure above stays in view as far as the window allows
+	if (bSelected && m_bScrollToSelected && !ImGui::IsRectVisible(ImVec2(1.f, ImGui::GetFrameHeight())))
+		ImGui::SetScrollHereY(1.f);
 	const eAvatarMapDotState state= states[index];
 	if (state == eAvatarMapDotState::Warning || state == eAvatarMapDotState::RequiredUnmapped)
 		ImGui::PushStyleColor(ImGuiCol_Text, state == eAvatarMapDotState::Warning ? k_warningColor

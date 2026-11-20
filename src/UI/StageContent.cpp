@@ -43,12 +43,24 @@ void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscS
 	m_calibrationAction= CalibrationPanel::DrawResult();
 	m_audioAction= AudioPanel::DrawResult();
 	m_faceEditRequest.reset();
+	m_bDirectCameraMoved= false;
 }
 
 bool StageContent::isCameraInRange(const PipelineStageId& stage) const
 {
 	return m_tracking.config != nullptr && stage.cameraIndex >= 0 &&
 		   stage.cameraIndex < (int)m_tracking.config->cameraCount();
+}
+
+bool StageContent::isCameraInShownRange(const PipelineStageId& stage) const
+{
+	return m_tracking.config != nullptr && stage.cameraIndex >= 0 &&
+		   stage.cameraIndex < (int)getShownConfig().cameraCount();
+}
+
+const AppConfig& StageContent::getShownConfig() const
+{
+	return m_tracking.shownConfig != nullptr ? *m_tracking.shownConfig : *m_tracking.config;
 }
 
 void StageContent::mergeCalibrationAction(const CalibrationPanel::DrawResult& result)
@@ -78,8 +90,11 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		return section == eStageSection::Settings && isCameraInRange(stage) &&
 			   m_devicePanel->hasCameraSettings(stage.cameraIndex);
 	case ePipelineStage::HandModels:
-	case ePipelineStage::BodyModel:
 		return section == eStageSection::Settings && isCameraInRange(stage);
+	case ePipelineStage::BodyModel:
+		// Names the shown camera's model, which a replayed take has for
+		// cameras the live project lacks
+		return section == eStageSection::Settings && isCameraInShownRange(stage);
 	case ePipelineStage::Fusion:
 		// The per-camera skeletons toggle is the only setting, and it needs
 		// a second camera
@@ -110,9 +125,19 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
 	case ePipelineStage::Retarget:
+		// The preview pose needs a model; the chains' states read the shown
+		// frame with or without one
+		return section == eStageSection::Diagnostics ||
+			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+	case ePipelineStage::VrmModel:
+		return section == eStageSection::Inputs ||
+			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+	case ePipelineStage::Placement:
+		return section == eStageSection::Settings && m_app->getAvatarModel() != nullptr;
+	case ePipelineStage::Chains:
 		// The arms' loss rules apply with or without an avatar, so the
-		// settings always show, and the chains' states read the shown frame
-		return true;
+		// settings always show
+		return section != eStageSection::Inputs;
 	case ePipelineStage::Output:
 	case ePipelineStage::DeliveryRules:
 		return section != eStageSection::Inputs;
@@ -138,7 +163,10 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			m_devicePanel->drawRescanControl();
 			m_devicePanel->drawAddCameraControl();
-			mergeCalibrationAction(m_calibrationPanel->drawExtrinsicsSection(m_bWizardActive));
+			// A direct project has no world calibration, whatever frame is
+			// shown
+			if (!isDirectProject(*m_tracking.config))
+				mergeCalibrationAction(m_calibrationPanel->drawExtrinsicsSection(m_bWizardActive));
 		}
 		else if (section == eStageSection::Settings)
 		{
@@ -155,7 +183,8 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 	case ePipelineStage::Camera:
 		// The Inspector's title names the camera, and its Camera Settings
 		// are the Video stage's
-		m_devicePanel->drawCameraSection(cameraIndex, false, false);
+		if (m_devicePanel->drawCameraSection(cameraIndex, false, false).bDirectCameraMoved)
+			m_bDirectCameraMoved= true;
 		break;
 	case ePipelineStage::Video:
 		// The tree is the section's only content, so it starts open
@@ -167,12 +196,15 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		SettingsPanels::drawHandOverlayControls(m_tracking);
 		break;
 	case ePipelineStage::BodyModel:
-		SettingsPanels::drawBodyPoseIntro();
+		SettingsPanels::drawBodyPoseIntro(m_tracking);
 		SettingsPanels::drawBodyPoseCameraControls(m_tracking, cameraIndex);
-		SettingsPanels::drawBodyOverlayControls(m_tracking);
+		SettingsPanels::drawBodyOverlayControls(m_tracking, cameraIndex);
 		break;
 	case ePipelineStage::Lift:
-		mergeCalibrationAction(m_calibrationPanel->drawCameraCalibration(cameraIndex, m_bWizardActive, false));
+		// The extrinsics status follows the shown frame, as the stage's own
+		// status does, and a direct project has none to show
+		mergeCalibrationAction(m_calibrationPanel->drawCameraCalibration(
+			cameraIndex, m_bWizardActive, false, !isDirectProject(getShownConfig()), &getShownConfig()));
 		break;
 	case ePipelineStage::Fusion:
 		if (section == eStageSection::Inputs)
@@ -219,7 +251,7 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		}
 		else if (section == eStageSection::Settings)
 		{
-			SettingsPanels::drawBodyDimensionControls(m_tracking);
+			SettingsPanels::drawBodyDimensionControls(m_tracking, SettingsPanels::BodyDimensionTooltips());
 		}
 		else
 		{
@@ -230,16 +262,26 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 	case ePipelineStage::DirectSolver:
 		if (section == eStageSection::Inputs)
 		{
+			// The calibration inputs: the camera, its tilt (set by hand,
+			// since nothing measures it) and the neutral
 			SettingsPanels::drawDirectCameraControl(m_tracking);
+			SettingsPanels::drawDirectTiltControl(m_tracking);
 			SettingsPanels::drawDirectNeutralControl(m_tracking);
 		}
 		else if (section == eStageSection::Settings)
 		{
-			SettingsPanels::drawDirectTiltControl(m_tracking);
 			SettingsPanels::drawDirectWristDepthControls(m_tracking);
-			// The proportions the arm chain and the head are solved with
+			// The proportions the arm chain and the head are solved with, and
+			// what each one does in the direct solve
 			ImGui::SeparatorText(locText("directStage.bodySection"));
-			SettingsPanels::drawBodyDimensionControls(m_tracking);
+			SettingsPanels::BodyDimensionTooltips tooltips;
+			tooltips.deriveUpperArm= "directStage.deriveUpperArmTooltip";
+			tooltips.upperArmRatio= "directStage.upperArmRatioTooltip";
+			tooltips.upperArm= "directStage.upperArmTooltip";
+			tooltips.shoulderWidth= "directStage.shoulderWidthTooltip";
+			tooltips.headWidth= "directStage.headWidthTooltip";
+			tooltips.noseForward= "directStage.noseForwardTooltip";
+			SettingsPanels::drawBodyDimensionControls(m_tracking, tooltips);
 			SettingsPanels::drawForearmLengthControl(m_tracking, "directStage.forearmLengthTooltip");
 		}
 		else
@@ -324,6 +366,12 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		}
 		break;
 	case ePipelineStage::Retarget:
+		if (section == eStageSection::Settings)
+			m_avatarPanel->drawPreviewPose();
+		else
+			SettingsPanels::drawRetargetChainReadout(m_tracking, m_app->getAvatarModel() != nullptr);
+		break;
+	case ePipelineStage::VrmModel:
 		if (section == eStageSection::Inputs)
 		{
 			m_avatarPanel->drawLoadControls();
@@ -333,9 +381,26 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 				m_avatarPanel->drawModelSummary();
 			}
 		}
-		else if (section == eStageSection::Settings)
+		else
 		{
-			drawRetargetSettings();
+			m_avatarPanel->drawPreviewPose();
+			m_avatarPanel->drawShowInScene();
+			ImGui::SeparatorText(locText("avatarPanel.tabMapping"));
+			m_avatarPanel->drawMapping();
+		}
+		break;
+	case ePipelineStage::Placement:
+		m_avatarPanel->drawPreviewPose();
+		m_avatarPanel->drawPlacement();
+		break;
+	case ePipelineStage::Chains:
+		if (section == eStageSection::Settings)
+		{
+			// The preview pose needs a model, read as it draws since a
+			// pinned VRM model window can unload it this frame
+			if (m_app->getAvatarModel() != nullptr)
+				m_avatarPanel->drawPreviewPose();
+			m_avatarPanel->drawChains();
 		}
 		else
 		{
@@ -364,26 +429,4 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 	default:
 		break;
 	}
-}
-
-void StageContent::drawRetargetSettings()
-{
-	// Placement, Mapping and the preview pose need a loaded model, read as
-	// they draw since the inputs above can unload it this frame. Placement
-	// and Mapping start closed.
-	if (m_app->getAvatarModel() != nullptr)
-	{
-		if (ImGui::TreeNode(locLabel("avatarPanel.tabPlacement")))
-		{
-			m_avatarPanel->drawPlacement();
-			ImGui::TreePop();
-		}
-		if (ImGui::TreeNode(locLabel("avatarPanel.tabMapping")))
-		{
-			m_avatarPanel->drawMapping();
-			ImGui::TreePop();
-		}
-		m_avatarPanel->drawPreviewPose();
-	}
-	m_avatarPanel->drawChains();
 }

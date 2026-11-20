@@ -7,6 +7,9 @@
 
 #include "LocText.h"
 
+#include "AvatarRetargetMath.h"
+#include "AvatarSkeleton.h"
+
 static const ImU32 k_silhouetteColor= IM_COL32(130, 130, 130, 255);
 static const ImU32 k_limbFillColor= IM_COL32(130, 130, 130, 60);
 static const ImU32 k_dotOutlineColor= IM_COL32(20, 20, 20, 255);
@@ -264,7 +267,8 @@ const std::vector<eHumanoidBone>& AvatarMapFigure::getSectionBones(eAvatarMapSec
 
 bool AvatarMapFigure::draw(
 	const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states,
-	eHumanoidBone& ioSelected)
+	eHumanoidBone& ioSelected,
+	const AvatarModel* model)
 {
 	// Section buttons
 	const char* sectionLabels[(int)eAvatarMapSection::Count]= {
@@ -316,6 +320,10 @@ bool AvatarMapFigure::draw(
 
 		// The invisible button keeps a click on the figure from dragging the parent window
 		ImGui::InvisibleButton("##canvas", size);
+		// The canvas's own hover and click: the button is the active item on
+		// the frame it is pressed, when the window reads as not hovered
+		const bool bCanvasHovered= ImGui::IsItemHovered();
+		const bool bCanvasClicked= ImGui::IsItemClicked(ImGuiMouseButton_Left);
 
 		auto toScreen= [&](const ImVec2& p) { return ImVec2(origin.x + p.x * size.x, origin.y + p.y * size.y); };
 
@@ -351,7 +359,7 @@ bool AvatarMapFigure::draw(
 		// Nearest dot under the mouse
 		const ImVec2 mouse= ImGui::GetIO().MousePos;
 		const MapDot* hoveredDot= nullptr;
-		if (ImGui::IsWindowHovered())
+		if (bCanvasHovered)
 		{
 			const float pickRadius= dotRadius + k_dotPickMargin;
 			float bestDistSq= pickRadius * pickRadius;
@@ -381,8 +389,16 @@ bool AvatarMapFigure::draw(
 
 		if (hoveredDot != nullptr)
 		{
-			ImGui::SetTooltip("%s", humanoidBoneName(hoveredDot->bone));
-			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+			// The bone, and the node that plays it when the caller gave the model
+			const int node= model != nullptr ? model->humanoidNodes[(int)hoveredDot->bone] : -1;
+			if (model == nullptr)
+				ImGui::SetTooltip("%s", humanoidBoneName(hoveredDot->bone));
+			else if (node >= 0 && node < (int)model->nodes.size())
+				ImGui::SetTooltip("%s -> %s", humanoidBoneName(hoveredDot->bone), model->nodes[node].name.c_str());
+			else
+				ImGui::SetTooltip("%s -> %s", humanoidBoneName(hoveredDot->bone),
+								  locText("avatarPanel.nodeUnmappedItem"));
+			if (bCanvasClicked)
 			{
 				ioSelected= hoveredDot->bone;
 				bClicked= true;
@@ -393,4 +409,53 @@ bool AvatarMapFigure::draw(
 	ImGui::PopStyleVar();
 
 	return bClicked;
+}
+
+std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> AvatarMapFigure::computeDotStates(const AvatarModel& model,
+																						 const AvatarSkeleton& skeleton)
+{
+	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states;
+	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+	{
+		if (model.humanoidNodes[index] >= 0)
+			states[index]= eAvatarMapDotState::Mapped;
+		else if (isHumanoidBoneRequired((eHumanoidBone)index))
+			states[index]= eAvatarMapDotState::RequiredUnmapped;
+		else
+			states[index]= eAvatarMapDotState::OptionalUnmapped;
+	}
+
+	// One node on two bones
+	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+	{
+		for (int other= index + 1; other < HUMANOID_BONE_COUNT; ++other)
+		{
+			if (model.humanoidNodes[index] >= 0 && model.humanoidNodes[index] == model.humanoidNodes[other])
+			{
+				states[index]= eAvatarMapDotState::Warning;
+				states[other]= eAvatarMapDotState::Warning;
+			}
+		}
+	}
+
+	// The index sitting on the far side of the middle finger from the thumb
+	// (the skeleton's swapped-finger warning) tags both fingers
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const AvatarSkeleton::HandRest& hand= skeleton.getHand((eHandSide)sideIndex);
+		if (!hand.hasFinger((int)eFinger::Thumb) || !hand.hasFinger((int)eFinger::Index))
+			continue;
+		if (hand.skeleton.baseInPalm[(int)eFinger::Thumb].y * hand.skeleton.baseInPalm[(int)eFinger::Index].y >= 0.f)
+			continue;
+		for (int finger : {(int)eFinger::Index, (int)eFinger::Middle})
+		{
+			for (int phalanx= 0; phalanx < 3; ++phalanx)
+			{
+				const int bone= (int)AvatarRetargetMath::fingerBone(sideIndex, finger, phalanx);
+				if (states[bone] == eAvatarMapDotState::Mapped)
+					states[bone]= eAvatarMapDotState::Warning;
+			}
+		}
+	}
+	return states;
 }

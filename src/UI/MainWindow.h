@@ -7,6 +7,7 @@
 
 #include "AudioPanel.h" // MicrophoneReadout
 #include "AvatarRetarget.h"
+#include "NewProjectModal.h"
 #include "PipelineModel.h"
 #include "DirectRetarget.h"
 #include "RetargetStage.h"
@@ -96,6 +97,8 @@ private:
 	App* m_app;
 
 	std::unique_ptr<MainMenuScreen> m_mainMenuScreen;
+	// The File menu's New Project prompt, drawn in the dock host window
+	NewProjectModal m_newProjectModal;
 	std::unique_ptr<VideoPreviewPanel> m_videoPreviewPanel;
 	std::unique_ptr<Scene3dPanel> m_scene3dPanel;
 	std::unique_ptr<DevicePanel> m_devicePanel;
@@ -160,6 +163,10 @@ private:
 		// The config the frame was produced under: the recording's snapshot
 		// in replay, the project's live
 		const AppConfig* config= nullptr;
+		// The body model each camera of that config runs, none where it runs
+		// none: the take's, decided once per load, in replay, and the live
+		// config's otherwise
+		std::vector<std::optional<eBodyPoseBackend>> bodyBackends;
 	};
 	ShownFrame m_shown;
 	// What fusion reported for the shown frame, refilled with it. The

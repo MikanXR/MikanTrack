@@ -64,7 +64,7 @@ public:
 	// is never dereferenced from the main thread
 	const char* getActiveExecutionProvider() const { return m_activeEp.load(); }
 
-	// True when the profile enables body pose and its tracker loaded its
+	// True when the camera runs body pose and its tracker loaded its
 	// models. Written by configure() on the vision thread.
 	bool isBodyModelLoaded() const { return m_bBodyModelLoaded.load(); }
 
@@ -75,9 +75,11 @@ public:
 	// -- Vision thread -----
 
 	// (Re)builds the pipeline, the 3D projection, the undistorter, and the
-	// body-pose stage from this camera's profile. Invalidates the last result
-	// so stale calibration state cannot leak through a config change.
-	void configure(const AppConfig& config);
+	// body-pose stage from this camera's profile, the body pose decided by
+	// getBodyPoseBackend with the direct camera the vision thread runs as.
+	// Invalidates the last result so stale calibration state cannot leak
+	// through a config change.
+	void configure(const AppConfig& config, int directCameraIndex);
 
 	// Resets the transient tracking state and invalidates the fusion input, so
 	// a recording starts from the same zero state replay's fresh instances do

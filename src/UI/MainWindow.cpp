@@ -90,6 +90,11 @@ MainWindow::MainWindow(App* app)
 	wizards.mounting= m_wizardHost->getMountingWizard();
 	wizards.body= m_wizardHost->getBodyCalibrationWizard();
 	m_setupFlow= std::make_unique<SetupFlow>(app, this, m_videoPreviewPanel.get(), wizards);
+
+	// The hand slot draw mode is the user's, kept across projects and launches
+	eHandSlotDrawMode slotDrawMode;
+	if (HandOverlay::parseSlotDrawMode(app->getGlobalSettings()->handSlotDrawMode, slotDrawMode))
+		m_videoPreviewPanel->setHandSlotDrawMode(slotDrawMode);
 }
 
 MainWindow::~MainWindow()= default;
@@ -223,7 +228,10 @@ void MainWindow::refreshDevicePanelState()
 void MainWindow::launchWizard(eWizardKind kind, int cameraIndex)
 {
 	// The host refuses while one of its wizards runs; the flow launches its
-	// own wizards and must not be interrupted by a manual one
+	// own wizards and must not be interrupted by a manual one. A direct
+	// project has no world calibration, whatever frame is shown.
+	if (kind == eWizardKind::Extrinsics && isDirectProject(*m_app->getConfig()))
+		return;
 	if (!m_setupFlow->isActive())
 		m_wizardHost->launch(kind, cameraIndex);
 }
@@ -337,6 +345,8 @@ void MainWindow::drawDockspaceAndMenuBar()
 		if (ImGui::BeginMenu(locLabel("mainWindow.fileMenu")))
 		{
 			const bool bWizardActive= m_wizardHost->isAnyActive() || m_setupFlow->isActive();
+			if (ImGui::MenuItem(locLabel("mainWindow.newProject"), nullptr, false, !bWizardActive))
+				m_newProjectModal.request();
 			if (ImGui::MenuItem(locLabel("mainWindow.saveProject")))
 				m_app->getConfig()->save();
 			if (ImGui::MenuItem(locLabel("mainWindow.loadProject"), nullptr, false, !bWizardActive))
@@ -379,13 +389,17 @@ void MainWindow::drawDockspaceAndMenuBar()
 			}
 
 			// One shared session: every camera calibrates against the same
-			// marker placement (separate sessions = disagreeing world frames)
-			bool bAllIntrinsics= true;
-			for (size_t i= 0; i < config->cameraCount(); ++i)
-				bAllIntrinsics&= config->camera(i).intrinsics.isCalibrated();
-			if (ImGui::MenuItem(locLabel("mainWindow.extrinsicsAllCameras"), nullptr, false,
-								!bWizardActive && bAllIntrinsics))
-				launchWizard(eWizardKind::Extrinsics);
+			// marker placement (separate sessions = disagreeing world frames).
+			// A direct project has no world calibration.
+			if (!isDirectProject(*config))
+			{
+				bool bAllIntrinsics= true;
+				for (size_t i= 0; i < config->cameraCount(); ++i)
+					bAllIntrinsics&= config->camera(i).intrinsics.isCalibrated();
+				if (ImGui::MenuItem(locLabel("mainWindow.extrinsicsAllCameras"), nullptr, false,
+									!bWizardActive && bAllIntrinsics))
+					launchWizard(eWizardKind::Extrinsics);
+			}
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu(locLabel("mainWindow.viewMenu")))
@@ -411,6 +425,11 @@ void MainWindow::drawDockspaceAndMenuBar()
 		}
 		ImGui::EndMenuBar();
 	}
+
+	// The File menu's New Project: the open project closes between frames
+	std::string newProjectName;
+	if (m_newProjectModal.draw(newProjectName))
+		m_app->requestNewProject(newProjectName);
 
 	ImGui::End();
 }
@@ -501,6 +520,17 @@ void MainWindow::update(float deltaSeconds)
 	VisionThread* visionThread= m_app->getVisionThread();
 	const int cameraCount= (int)config->cameraCount();
 
+	// A hand slot draw mode chosen last frame is stored as it changes
+	{
+		GlobalSettings* globalSettings= m_app->getGlobalSettings();
+		const char* slotDrawModeName= HandOverlay::getSlotDrawModeName(m_videoPreviewPanel->getHandSlotDrawMode());
+		if (globalSettings->handSlotDrawMode != slotDrawModeName)
+		{
+			globalSettings->handSlotDrawMode= slotDrawModeName;
+			globalSettings->save();
+		}
+	}
+
 	// Keep per-camera containers in sync with the config
 	m_latestPreviews.resize(cameraCount);
 	m_videoPreviewPanel->setCameraCount(cameraCount);
@@ -553,6 +583,8 @@ void MainWindow::update(float deltaSeconds)
 	trackingContext.fusedResult= &m_latestFused;
 	trackingContext.fusion= &m_fusionReadout;
 	trackingContext.imu= &m_imuReadout;
+	trackingContext.shownConfig= m_shown.config;
+	trackingContext.shownBodyBackends= &m_shown.bodyBackends;
 	// The tracking panel's countdowns, captures and readouts run whether or
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
@@ -670,7 +702,15 @@ void MainWindow::update(float deltaSeconds)
 	// Inspector drawn below
 	eRetargetChain pickedChain;
 	if (m_scene3dPanel->consumePickedChain(pickedChain))
-		m_avatarPanel->setSelectedChain(pickedChain);
+	{
+		// From the Retarget stage itself the pick opens the chains, whose
+		// settings it chose; a sub-stage's selection stays
+		PipelineStageId chainsStage;
+		chainsStage.stage= ePipelineStage::Chains;
+		if (m_avatarPanel->setSelectedChain(pickedChain) &&
+			m_pipelinePanel->getSelected().stage == ePipelineStage::Retarget)
+			m_pipelinePanel->setSelected(chainsStage);
+	}
 
 	// The pipeline, once the avatar is posed for the shown frame: the strip,
 	// the inspector on the strip's selection, and the frame loop's timings
@@ -708,6 +748,10 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Extrinsics);
 	if (m_stageContent->getAudioAction().bLaunchAudioWizard)
 		launchWizard(eWizardKind::AudioCalibration);
+	// A removed direct camera moved the role and cleared the neutral, so a
+	// countdown started for it must not capture through camera 1
+	if (m_stageContent->getDirectCameraMoved() && isDirectProject(*config))
+		m_trackingPanelState.directNeutral.reset();
 	// A face profile row's Edit button opens the expression editor on the
 	// row. The editor runs every frame, after the Inspector so the open lands
 	// this frame, and reads the frame the scene shows.
@@ -752,12 +796,16 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 		m_shown.fused= &m_timelinePanel->getDisplayFused();
 		m_shown.perCamera= m_timelinePanel->getPerCameraResults();
 		m_shown.config= &m_timelinePanel->getRecordedConfig();
+		m_shown.bodyBackends= m_timelinePanel->getRecordedBodyPoseBackends();
 	}
 	else
 	{
 		m_shown.fused= &m_latestFused;
 		m_shown.perCamera= livePerCamera;
 		m_shown.config= m_app->getConfig();
+		m_shown.bodyBackends.clear();
+		for (int cameraIndex= 0; cameraIndex < (int)m_shown.config->cameraCount(); ++cameraIndex)
+			m_shown.bodyBackends.push_back(getBodyPoseBackend(*m_shown.config, cameraIndex));
 	}
 	updateFusionReadout();
 	updateImuReadout();
@@ -1293,7 +1341,7 @@ void MainWindow::gatherPipelineInputs()
 	const RecordedTelemetry* recorded= bReplay ? m_timelinePanel->getDisplayTelemetry() : nullptr;
 
 	PipelineStatusInputs in;
-	in.bDirect= config->direct.enabled;
+	in.bDirect= isDirectProject(*config);
 	in.cameraCount= (int)config->cameraCount();
 	in.directCameraIndex= config->direct.cameraIndex;
 	in.bReplay= bReplay;
@@ -1305,7 +1353,8 @@ void MainWindow::gatherPipelineInputs()
 		const CameraProfile& profile= config->camera(cameraIndex);
 		camera.bIntrinsics= profile.intrinsics.present;
 		camera.bExtrinsics= profile.extrinsics.present;
-		camera.bBodyEnabled= profile.bodyPose.enabled;
+		camera.bBodyEnabled=
+			cameraIndex < (int)m_shown.bodyBackends.size() && m_shown.bodyBackends[cameraIndex].has_value();
 		if (!bReplay)
 		{
 			camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
@@ -1331,7 +1380,7 @@ void MainWindow::gatherPipelineInputs()
 			camera.bDeviceOpen= true;
 			camera.bStreaming= true;
 			camera.bHandPipelineReady= true;
-			camera.bBodyModelLoaded= profile.bodyPose.enabled;
+			camera.bBodyModelLoaded= camera.bBodyEnabled;
 		}
 		const TrackingFrameResult* result=
 			cameraIndex < (int)m_shown.perCamera.size() ? m_shown.perCamera[cameraIndex] : nullptr;
@@ -1450,6 +1499,19 @@ void MainWindow::gatherPipelineInputs()
 		in.bArmPlaced[0]= m_avatarPose.bones[(int)eHumanoidBone::LeftUpperArm].present;
 		in.bArmPlaced[1]= m_avatarPose.bones[(int)eHumanoidBone::RightUpperArm].present;
 	}
+	if (in.bAvatarLoaded && m_app->getAvatarModel() != nullptr)
+	{
+		for (const eAvatarMapDotState state :
+			 AvatarMapFigure::computeDotStates(*m_app->getAvatarModel(), *m_app->getAvatarSkeleton()))
+		{
+			if (state == eAvatarMapDotState::Mapped || state == eAvatarMapDotState::Warning)
+				++in.avatarMappedBoneCount;
+			if (state == eAvatarMapDotState::Warning || state == eAvatarMapDotState::RequiredUnmapped)
+				++in.avatarMappingProblemCount;
+		}
+	}
+	// The placement is the live project's, which a replayed frame is posed by
+	in.bAvatarFollowShoulders= m_app->getConfig()->avatar.followShoulders;
 
 	in.bOscEnabled= config->osc.enabled;
 	in.oscMinConfidence= config->osc.minConfidence;

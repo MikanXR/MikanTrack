@@ -43,7 +43,7 @@ bool CameraContext::fetchPreviewFrame(VisionPreviewFrame& outFrame)
 	return true;
 }
 
-void CameraContext::configure(const AppConfig& config)
+void CameraContext::configure(const AppConfig& config, int directCameraIndex)
 {
 	const CameraProfile& profile= config.camera(m_cameraIndex);
 
@@ -119,21 +119,18 @@ void CameraContext::configure(const AppConfig& config)
 		m_undistorter= nullptr;
 	}
 
-	// Opt-in body-pose stage. Load failure (missing models) leaves the
-	// tracker allocated but unloaded so a refresh doesn't retry-spam.
-	if (profile.bodyPose.enabled)
+	// The body-pose stage, and its model, as the project's mode decides. A
+	// camera only moves between none and one fixed model, so a model change
+	// passes through none. Load failure (missing models) leaves the tracker
+	// allocated but unloaded so a refresh doesn't retry-spam.
+	const std::optional<eBodyPoseBackend> bodyPoseBackend=
+		getBodyPoseBackend(config, m_cameraIndex, directCameraIndex);
+	if (bodyPoseBackend.has_value())
 	{
 		BodyPoseTrackerConfig trackerConfig;
-		trackerConfig.backend= bodyPoseBackendFromString(profile.bodyPose.backend);
+		trackerConfig.backend= *bodyPoseBackend;
 		trackerConfig.frameDivider= profile.bodyPose.poseFrameDivider;
 		trackerConfig.detectorIntervalFrames= profile.bodyPose.detectorIntervalFrames;
-
-		// A backend change is a different model file: the tracker reloads
-		if (m_bodyPoseTracker != nullptr && m_bodyPoseTracker->isLoaded() &&
-			m_bodyPoseTracker->getBackend() != trackerConfig.backend)
-		{
-			m_bodyPoseTracker= nullptr;
-		}
 
 		if (m_bodyPoseTracker == nullptr)
 		{

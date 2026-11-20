@@ -14,12 +14,16 @@ bool NeutralCaptureControl::update(float dtSeconds, VisionThread* visionThread, 
 		if (m_countdownSeconds <= 0.f)
 		{
 			m_countdownSeconds= 0.f;
-			visionThread->requestNeutralCapture();
+			visionThread->requestNeutralCapture(config->direct.cameraIndex);
 		}
 	}
 
 	VisionThread::NeutralCapture capture;
 	if (!visionThread->fetchNeutralCapture(capture))
+		return false;
+	// A capture requested through a camera that has since lost the direct
+	// role is not this camera's neutral
+	if (capture.cameraIndex != config->direct.cameraIndex)
 		return false;
 
 	DirectConfig& direct= config->direct;

@@ -5,6 +5,8 @@
 
 #include "AvatarTypes.h"
 
+class AvatarSkeleton;
+
 // Per-bone state the figure colors a dot by
 enum class eAvatarMapDotState
 {
@@ -33,8 +35,16 @@ class AvatarMapFigure
 public:
 	// Draws the section buttons and the current view. ioSelected is the
 	// selected bone (HUMANOID_BONE_NONE for none); a click on a dot replaces
-	// it. Returns true when a dot was clicked this frame.
-	bool draw(const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states, eHumanoidBone& ioSelected);
+	// it. Returns true when a dot was clicked this frame. With a model, a
+	// hovered dot's tooltip names the node that plays its bone.
+	bool draw(const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states, eHumanoidBone& ioSelected,
+			  const AvatarModel* model= nullptr);
+
+	// Each bone's state for a loaded model: mapped or not, with a warning on
+	// a node two bones share and on an index and middle finger mapped the
+	// other way round. The one rule the figure and the pipeline status read.
+	static std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> computeDotStates(const AvatarModel& model,
+																				const AvatarSkeleton& skeleton);
 
 	eAvatarMapSection getSection() const { return m_section; }
 	void setSection(eAvatarMapSection section) { m_section= section; }

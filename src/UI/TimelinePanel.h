@@ -46,6 +46,12 @@ public:
 	// The recording's config snapshot itself, for the body lengths a replayed
 	// frame was solved with
 	const AppConfig& getRecordedConfig() const { return m_replay.getRecordedConfig(); }
+	// The body model each camera of the loaded take ran (none where it ran
+	// none), decided once per load from its recorded observations
+	const std::vector<std::optional<eBodyPoseBackend>>& getRecordedBodyPoseBackends() const
+	{
+		return m_recordedBodyBackends;
+	}
 	// Current frame's replayed per-camera results (stale cameras carry their
 	// last fresh result, like the live preview panes). Pointers are valid for
 	// the rest of the current UI frame.
@@ -114,6 +120,7 @@ private:
 	// Counts the loads alone
 	int m_takeGeneration= 0;
 	std::vector<const RecordedTelemetry*> m_frameTelemetry;
+	std::vector<std::optional<eBodyPoseBackend>> m_recordedBodyBackends;
 	bool m_bHasTelemetry= false;
 
 	bool m_bPlaying= false;

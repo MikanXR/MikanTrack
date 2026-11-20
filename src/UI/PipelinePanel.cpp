@@ -324,7 +324,7 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	float contentBottom= lanesY + kLaneHeight;
 	float lanesRight= origin.x;
 	const std::vector<std::vector<PipelineStageId>> lanes=
-		PipelineModel::getSubStageLanes(m_selected, inputs.cameraCount);
+		PipelineModel::getSubStageLanes(m_selected, inputs.bDirect, inputs.cameraCount);
 	if (lanes.empty())
 	{
 		const std::string hint= m_selected.isValid()

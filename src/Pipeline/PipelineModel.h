@@ -33,6 +33,9 @@ enum class ePipelineStage : int
 	// The hand-off both pipelines share (data, drawn as a pill)
 	SourcePose,
 	Retarget,
+	VrmModel,
+	Placement, // the position retarget's; a direct project has none
+	Chains,
 	Output,
 	DeliveryRules,
 	VmcStream,
@@ -194,6 +197,12 @@ struct PipelineStatusInputs
 	bool bAvatarLoaded= false;
 	// The avatar pose placed this arm
 	bool bArmPlaced[2]= {false, false};
+	// The humanoid bones with a node, and those the bone map flags (a
+	// required bone unmapped, a node on two bones, swapped fingers)
+	int avatarMappedBoneCount= 0;
+	int avatarMappingProblemCount= 0;
+	// The placement setting that slides the avatar onto measured shoulders
+	bool bAvatarFollowShoulders= false;
 
 	// Output
 	bool bOscEnabled= false;
@@ -233,8 +242,10 @@ PipelineStageId getSideStage();
 
 // The lanes a stage opens into in the second row: one lane per camera for
 // Capture (the camera, then its four sub-stages), one lane for the others,
-// none for a stage without sub-stages
-std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, int cameraCount);
+// none for a stage without sub-stages. The Retarget lane has its placement
+// only in a multi-camera project.
+std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bDirect,
+														   int cameraCount);
 
 // The top-row (or side) stage a stage belongs to; itself for a top-level one
 PipelineStageId getTopLevel(const PipelineStageId& stage);
@@ -250,7 +261,8 @@ const char* getNameKey(ePipelineStage stage);
 const char* getDescriptionKey(ePipelineStage stage);
 
 // The stable text id automation and the dock layout use: "capture",
-// "capture.cam0", "capture.cam0.hands", "direct.arm", "source", "face.mic"
+// "capture.cam0", "capture.cam0.hands", "direct.arm", "source",
+// "retarget.chains", "face.mic"
 std::string toString(const PipelineStageId& stage);
 bool fromString(const std::string& text, PipelineStageId& outStage);
 
