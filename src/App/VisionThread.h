@@ -176,12 +176,15 @@ public:
 	// phone streams captures the face anchor with it (fetched separately,
 	// above). The UI fetches the capture and persists it in the direct
 	// config. False from fetch until a capture lands; a request with no
-	// solved torso is dropped.
+	// solved torso is dropped. A request names the direct camera it was made
+	// for, which the capture carries back, so the UI can drop a capture that
+	// landed after the direct camera changed.
 	struct NeutralCapture
 	{
 		DirectNeutralPose neutral;
+		int cameraIndex= -1;
 	};
-	void requestNeutralCapture() { m_bNeutralCaptureRequested= true; }
+	void requestNeutralCapture(int directCameraIndex) { m_neutralCaptureRequestCamera= directCameraIndex; }
 	bool fetchNeutralCapture(NeutralCapture& outCapture);
 
 	// Hand bone calibration: measures the user's own skeleton from the
@@ -453,6 +456,11 @@ private:
 	// Microphone mouth stage. Owned by App; this thread reads its sample.
 	AudioService* m_audioService= nullptr;
 	uint64_t m_lastMouthSequence= 0;
+	// The direct camera index this thread last applied from the config, read
+	// in place of the config's so the role moves at the refresh together
+	// with the body models. Kept across a restart, so a camera removal's
+	// restart still sees the index change. -1 before the first refresh.
+	int m_directCameraIndex= -1;
 	// The direct camera's last face ratios, for the neutral capture
 	WebcamFaceNeutralAverager m_webcamNeutralAverager;
 	// The Blink stage over the direct camera's eye openness
@@ -525,7 +533,8 @@ private:
 	RetargetResult m_retarget;
 	bool m_bDirectRetarget= false;
 	// The direct retarget's neutral capture handoff
-	std::atomic_bool m_bNeutralCaptureRequested{false};
+	// The direct camera index a pending request was made for, -1 for none
+	std::atomic_int m_neutralCaptureRequestCamera{-1};
 	std::mutex m_neutralCaptureMutex;
 	NeutralCapture m_capturedNeutral;
 	bool m_bNeutralCaptureReady= false;

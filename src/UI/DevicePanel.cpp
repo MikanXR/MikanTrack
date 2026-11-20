@@ -211,11 +211,12 @@ void DevicePanel::applyModeSelection(int cameraIndex)
 	refreshModeOptions(cameraIndex);
 }
 
-void DevicePanel::drawCameraSection(int cameraIndex, bool bWithHeader, bool bWithSettings)
+DevicePanel::DrawResult DevicePanel::drawCameraSection(int cameraIndex, bool bWithHeader, bool bWithSettings)
 {
+	DrawResult result;
 	syncCameraStateCount();
 	if (cameraIndex < 0 || cameraIndex >= (int)m_cameraStates.size())
-		return;
+		return result;
 
 	CameraUiState& state= m_cameraStates[cameraIndex];
 
@@ -332,14 +333,18 @@ void DevicePanel::drawCameraSection(int cameraIndex, bool bWithHeader, bool bWit
 			if (ImGui::Button(locLabel("devicePanel.removeCameraButton"), ImVec2(-1, 0)))
 			{
 				m_videoCapture->closeDevice(cameraIndex);
-				m_config->cameras.erase(m_config->cameras.begin() + cameraIndex);
-				m_app->applyCameraCountChange();
+				result.bDirectCameraMoved= m_app->removeCamera(cameraIndex);
+				// The cameras after it keep their devices, so their mode and
+				// settings state shifts down with them
+				if (cameraIndex < (int)m_cameraStates.size())
+					m_cameraStates.erase(m_cameraStates.begin() + cameraIndex);
 				refreshDeviceList();
 			}
 		}
 	}
 
 	ImGui::PopID();
+	return result;
 }
 
 void DevicePanel::drawRescanControl()

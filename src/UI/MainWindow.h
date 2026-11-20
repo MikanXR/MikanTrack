@@ -160,6 +160,10 @@ private:
 		// The config the frame was produced under: the recording's snapshot
 		// in replay, the project's live
 		const AppConfig* config= nullptr;
+		// The body model each camera of that config runs, none where it runs
+		// none: the take's, decided once per load, in replay, and the live
+		// config's otherwise
+		std::vector<std::optional<eBodyPoseBackend>> bodyBackends;
 	};
 	ShownFrame m_shown;
 	// What fusion reported for the shown frame, refilled with it. The

@@ -11,11 +11,13 @@
 
 #include "App.h"
 #include "AppConfig.h"
+#include "BodyPoseTracker.h" // eBodyPoseBackend
 #include "FaceService.h"
 #include "HandFusion.h"
 #include "HandPoseModel.h"
 #include "HandRoiQuality.h"
 #include "LocalizationManager.h"
+#include "Logger.h"
 #include "LocText.h"
 #include "RetargetStage.h"
 #include "Scene3dPanel.h"
@@ -454,6 +456,10 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 			panelState.holdStillLastTimestampMs= 0.0;
 			panelState.holdStillAccum[0]= TrackingPanelState::HoldStillAccum();
 			panelState.holdStillAccum[1]= TrackingPanelState::HoldStillAccum();
+			// A direct project has no world frame, so its window measures the
+			// camera-space lift. The figure is a sum of per-axis variances,
+			// which a rigid change of frame does not alter.
+			panelState.bHoldStillCameraFrame= isDirectProject(*context.config);
 		}
 	}
 	else if (panelState.holdStillSecondsLeft > 0.f)
@@ -467,15 +473,29 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
 				const HandPose& pose= fusedResult.poses[sideIndex];
-				if (!pose.tracked || !pose.hasWorldPose)
+				// One frame per window: a pose without it adds nothing
+				const bool bCameraFrame= panelState.bHoldStillCameraFrame;
+				if (!pose.tracked || !(bCameraFrame ? pose.hasCameraPose : pose.hasWorldPose))
 					continue;
+				const glm::vec3& palmPosition= bCameraFrame ? pose.palmPositionCamera : pose.palmPositionWorld;
+				const glm::quat& palmOrientation=
+					bCameraFrame ? pose.palmOrientationCamera : pose.palmOrientationWorld;
 
-				glm::mat4 palmTransform= glm::mat4_cast(pose.palmOrientationWorld);
-				palmTransform[3]= glm::vec4(pose.palmPositionWorld, 1.f);
+				// A pose repeated under a new timestamp is not a new sample: a
+				// live pose never repeats exactly
+				TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
+				if (accum.bHasLast && palmPosition == accum.lastPalmPosition &&
+					palmOrientation == accum.lastPalmOrientation)
+					continue;
+				accum.bHasLast= true;
+				accum.lastPalmPosition= palmPosition;
+				accum.lastPalmOrientation= palmOrientation;
+
+				glm::mat4 palmTransform= glm::mat4_cast(palmOrientation);
+				palmTransform[3]= glm::vec4(palmPosition, 1.f);
 				std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
 				HandPoseModel::buildFingerJoints(palmTransform, pose.skeleton, pose.fingers, joints);
 
-				TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
 				int pointIndex= 0;
 				auto addPoint= [&accum, &pointIndex](const glm::vec3& point) {
 					const glm::dvec3 p(point);
@@ -483,7 +503,7 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 					accum.sumSq[pointIndex]+= p * p;
 					++pointIndex;
 				};
-				addPoint(pose.palmPositionWorld);
+				addPoint(palmPosition);
 				for (int fingerIndex= 0; fingerIndex < FINGER_COUNT; ++fingerIndex)
 					for (int jointIndex= 0; jointIndex < 4; ++jointIndex)
 						addPoint(joints[fingerIndex][jointIndex]);
@@ -498,6 +518,7 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
 				const TrackingPanelState::HoldStillAccum& accum= panelState.holdStillAccum[sideIndex];
+				panelState.holdStillSampleCount[sideIndex]= accum.sampleCount;
 				if (accum.sampleCount < k_holdStillMinSamples)
 				{
 					panelState.holdStillDeviationMm[sideIndex]= -1.f;
@@ -516,6 +537,13 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 					(float)(deviationSum / HAND_LANDMARK_COUNT * 1000.0);
 			}
 			panelState.bHoldStillHasResult= true;
+			MIKAN_LOG_INFO("HoldStill") << "Jitter test ("
+										<< (panelState.bHoldStillCameraFrame ? "camera space" : "world space")
+										<< "): left " << panelState.holdStillDeviationMm[0] << " mm over "
+										<< panelState.holdStillSampleCount[0] << " samples, right "
+										<< panelState.holdStillDeviationMm[1] << " mm over "
+										<< panelState.holdStillSampleCount[1] << " samples (-1 mm: under "
+										<< k_holdStillMinSamples << " samples)";
 		}
 	}
 }
@@ -555,16 +583,18 @@ void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context)
 		{
 			ImGui::SameLine();
 			const float deviationMm= panelState.holdStillDeviationMm[sideIndex];
+			const char* sideLabel=
+				sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr");
+			const int sampleCount= panelState.holdStillSampleCount[sideIndex];
 			if (deviationMm < 0.f)
 			{
-				ImGui::TextDisabled(locText("trackingPanel.jitterTooFewSamplesFmt"),
-									sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"));
+				ImGui::TextDisabled(locText("trackingPanel.jitterTooFewSamplesFmt"), sideLabel, sampleCount);
 				continue;
 			}
 			const ImVec4 color= deviationMm < 2.f
 				? ImVec4(0.4f, 1.f, 0.5f, 1.f)
 				: (deviationMm < 5.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.4f, 1.f));
-			ImGui::TextColored(color, "%s: %.1f mm", sideIndex == 0 ? locText("trackingPanel.leftAbbr") : locText("trackingPanel.rightAbbr"), deviationMm);
+			ImGui::TextColored(color, locText("trackingPanel.jitterResultFmt"), sideLabel, deviationMm, sampleCount);
 		}
 	}
 }
@@ -1194,45 +1224,52 @@ void SettingsPanels::drawBlinkReadout(const TrackingSectionContext& context)
 	}
 }
 
-void SettingsPanels::drawBodyPoseIntro()
+void SettingsPanels::drawBodyPoseIntro(const TrackingSectionContext& context)
 {
-	ImGui::TextWrapped("%s", locText("trackingPanel.bodyPoseIntro"));
+	const AppConfig* shownConfig= context.shownConfig != nullptr ? context.shownConfig : context.config;
+	const bool bDirect= shownConfig != nullptr && isDirectProject(*shownConfig);
+	ImGui::TextWrapped("%s", locText(bDirect ? "trackingPanel.bodyPoseDirectIntro" : "trackingPanel.bodyPoseIntro"));
+}
+
+// The body model the shown frame's camera runs, none where it runs none or
+// the shown config does not have the camera
+static std::optional<eBodyPoseBackend> getShownBodyPoseBackend(const TrackingSectionContext& context,
+															   int cameraIndex)
+{
+	const std::vector<std::optional<eBodyPoseBackend>>* backends= context.shownBodyBackends;
+	if (backends == nullptr || cameraIndex < 0 || cameraIndex >= (int)backends->size())
+		return std::nullopt;
+	return (*backends)[cameraIndex];
 }
 
 void SettingsPanels::drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex)
 {
 	AppConfig* config= context.config;
-	if (cameraIndex < 0 || cameraIndex >= (int)config->cameraCount())
-		return;
-
-	BodyPoseCameraConfig& bodyPose= config->camera(cameraIndex).bodyPose;
+	const AppConfig* shownConfig= context.shownConfig != nullptr ? context.shownConfig : config;
 	ImGui::PushID(cameraIndex);
 
+	// The switch is a multi-camera project's choice, and edits the live
+	// config: a direct project decides body pose from its mode
 	bool bChanged= false;
-	const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-	bChanged|= ImGui::Checkbox(label.c_str(), &bodyPose.enabled);
-
-	if (bodyPose.enabled)
+	if (!isDirectProject(*config) && cameraIndex >= 0 && cameraIndex < (int)config->cameraCount())
 	{
-		const bool bWholeBody= bodyPose.backend == "rtmw3d";
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.f);
-		if (ImGui::BeginCombo(locLabel("trackingPanel.bodyBackendLabel"),
-							  locText(bWholeBody ? "trackingPanel.bodyBackendRtmw3d"
-												 : "trackingPanel.bodyBackendRtmPose")))
-		{
-			if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmPose"), !bWholeBody) && bWholeBody)
-			{
-				bodyPose.backend= "rtmpose";
-				bChanged= true;
-			}
-			if (ImGui::Selectable(locText("trackingPanel.bodyBackendRtmw3d"), bWholeBody) && !bWholeBody)
-			{
-				bodyPose.backend= "rtmw3d";
-				bChanged= true;
-			}
-			ImGui::EndCombo();
-		}
+		const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
+		bChanged|= ImGui::Checkbox(label.c_str(), &config->camera(cameraIndex).bodyPose.enabled);
+	}
+
+	// What the shown project runs on this camera, and its model
+	if (isDirectProject(*shownConfig))
+	{
+		const bool bDirectCamera= cameraIndex == shownConfig->direct.cameraIndex;
+		ImGui::TextWrapped("%s", locText(bDirectCamera ? "trackingPanel.bodyPoseDirectCamera"
+													   : "trackingPanel.bodyPoseDirectOtherCamera"));
+	}
+	const std::optional<eBodyPoseBackend> backend= getShownBodyPoseBackend(context, cameraIndex);
+	if (backend.has_value())
+	{
+		ImGui::TextDisabled("%s", locText(*backend == eBodyPoseBackend::Rtmw3dWholeBody
+											  ? "trackingPanel.bodyBackendRtmw3d"
+											  : "trackingPanel.bodyBackendRtmPose"));
 		ImGui::SetItemTooltip("%s", locText("trackingPanel.bodyBackendTooltip"));
 	}
 
@@ -1251,19 +1288,22 @@ void SettingsPanels::drawBodyCalibrationControl(const TrackingSectionContext& co
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.measureMyBodyTooltip"));
 }
 
-void SettingsPanels::drawBodyDimensionControls(const TrackingSectionContext& context)
+void SettingsPanels::drawBodyDimensionControls(const TrackingSectionContext& context,
+												const BodyDimensionTooltips& tooltips)
 {
 	AppConfig* config= context.config;
 
 	bool bChanged= false;
 	bChanged|=
 		ImGui::Checkbox(locLabel("trackingPanel.deriveUpperArmFromShoulderWidth"), &config->body.bDeriveUpperArmFromShoulderWidth);
-	ImGui::SetItemTooltip(locText("trackingPanel.deriveUpperArmTooltip"));
+	// The tooltip is its own format string (the multi-camera one carries a
+	// literal percent)
+	ImGui::SetItemTooltip(locText(tooltips.deriveUpperArm));
 	if (config->body.bDeriveUpperArmFromShoulderWidth)
 	{
 		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArmRatio"), &config->body.upperArmPerShoulderWidth, 0.80f,
 									  1.40f, locText("trackingPanel.upperArmRatioFmt"));
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmRatioTooltip"));
+		ImGui::SetItemTooltip("%s", locText(tooltips.upperArmRatio));
 		ImGui::TextDisabled(locText("trackingPanel.upperArmDerivedFmt"), config->body.shoulderWidthMeters *
 														 config->body.upperArmPerShoulderWidth * 100.f);
 	}
@@ -1271,14 +1311,14 @@ void SettingsPanels::drawBodyDimensionControls(const TrackingSectionContext& con
 	{
 		bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.upperArm"), &config->body.upperArmLengthMeters, 0.20f, 0.45f,
 									  "%.2f m");
-		ImGui::SetItemTooltip("%s", locText("trackingPanel.upperArmTooltip"));
+		ImGui::SetItemTooltip("%s", locText(tooltips.upperArm));
 	}
 	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.shoulderWidth"), &config->body.shoulderWidthMeters, 0.25f, 0.60f, "%.2f m");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.shoulderWidthTooltip"));
+	ImGui::SetItemTooltip("%s", locText(tooltips.shoulderWidth));
 	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.headWidth"), &config->body.headWidthMeters, 0.10f, 0.22f, "%.2f m");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.headWidthTooltip"));
+	ImGui::SetItemTooltip("%s", locText(tooltips.headWidth));
 	bChanged|= ImGui::SliderFloat(locLabel("trackingPanel.noseForward"), &config->body.noseForwardMeters, 0.05f, 0.18f, "%.2f m");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.noseForwardTooltip"));
+	ImGui::SetItemTooltip("%s", locText(tooltips.noseForward));
 
 	if (bChanged)
 		commitTrackingConfigChange(context);
@@ -1346,15 +1386,11 @@ void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& conte
 	DirectConfig& direct= config->direct;
 	bool bChanged= false;
 
-	// A shrinking camera list must not leave the index dangling
-	const int lastCameraIndex= std::max((int)config->cameraCount() - 1, 0);
-	if (direct.cameraIndex < 0 || direct.cameraIndex > lastCameraIndex)
-	{
-		direct.cameraIndex= std::clamp(direct.cameraIndex, 0, lastCameraIndex);
-		bChanged= true;
-	}
+	// The config keeps the index in its camera list. A project that is not
+	// direct (one replaying a direct take) has no role to move.
 	if (config->cameraCount() > 1)
 	{
+		ImGui::BeginDisabled(!isDirectProject(*config));
 		const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
 		if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
 		{
@@ -1362,7 +1398,8 @@ void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& conte
 			{
 				ImGui::PushID(cameraIndex);
 				const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-				if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex))
+				if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex) &&
+					direct.cameraIndex != cameraIndex)
 				{
 					direct.cameraIndex= cameraIndex;
 					bChanged= true;
@@ -1371,10 +1408,24 @@ void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& conte
 			}
 			ImGui::EndCombo();
 		}
+		ImGui::EndDisabled();
 	}
 
 	if (bChanged)
+	{
+		onDirectCameraMoved(context);
 		commitTrackingConfigChange(context);
+	}
+}
+
+void SettingsPanels::onDirectCameraMoved(const TrackingSectionContext& context)
+{
+	// The neutral belongs to the camera it was captured through, and a
+	// countdown started for the old camera would capture through the new
+	// one. A request already sent lands tagged with the old index and is
+	// dropped.
+	clearDirectNeutral(context.config->direct);
+	context.state->directNeutral.reset();
 }
 
 void SettingsPanels::drawDirectTiltControl(const TrackingSectionContext& context)
@@ -1417,12 +1468,7 @@ void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& cont
 		ImGui::SameLine();
 		if (ImGui::Button(locLabel("trackingPanel.directClear")))
 		{
-			direct.neutralPresent= false;
-			direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
-			direct.neutralShoulderMidpoint= glm::vec3(0.f);
-			direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
-			direct.neutralFacePresent= false;
-			direct.neutralFace= WholeBodyFaceRatios();
+			clearDirectNeutral(direct);
 			bChanged= true;
 		}
 	}
@@ -1764,7 +1810,7 @@ void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& conte
 	}
 }
 
-void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& context)
+void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& context, int cameraIndex)
 {
 	VideoPreviewPanel* previewPanel= context.previewPanel;
 
@@ -1773,15 +1819,19 @@ void SettingsPanels::drawBodyOverlayControls(const TrackingSectionContext& conte
 		previewPanel->setShowBodyPose(bShowBodyPose);
 	ImGui::SetItemTooltip("%s", locText("trackingPanel.showBodyLandmarksTooltip"));
 
-	bool bShowFace= previewPanel->getShowWholeBodyFace();
-	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyFace"), &bShowFace))
-		previewPanel->setShowWholeBodyFace(bShowFace);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyFaceTooltip"));
+	// Only the whole-body model has face and hand blocks to draw
+	if (getShownBodyPoseBackend(context, cameraIndex) == eBodyPoseBackend::Rtmw3dWholeBody)
+	{
+		bool bShowFace= previewPanel->getShowWholeBodyFace();
+		if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyFace"), &bShowFace))
+			previewPanel->setShowWholeBodyFace(bShowFace);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyFaceTooltip"));
 
-	bool bShowHands= previewPanel->getShowWholeBodyHands();
-	if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyHands"), &bShowHands))
-		previewPanel->setShowWholeBodyHands(bShowHands);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyHandsTooltip"));
+		bool bShowHands= previewPanel->getShowWholeBodyHands();
+		if (ImGui::Checkbox(locLabel("trackingPanel.showWholeBodyHands"), &bShowHands))
+			previewPanel->setShowWholeBodyHands(bShowHands);
+		ImGui::SetItemTooltip("%s", locText("trackingPanel.showWholeBodyHandsTooltip"));
+	}
 
 	bool bShowLowVisibility= previewPanel->getShowLowVisibilityLandmarks();
 	if (ImGui::Checkbox(locLabel("trackingPanel.showLowVisibilityLandmarks"), &bShowLowVisibility))

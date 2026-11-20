@@ -769,6 +769,26 @@ void App::applyCameraCountChange()
 	m_config->markDirty();
 }
 
+bool App::removeCamera(int cameraIndex)
+{
+	MIKAN_LOG_INFO("App::removeCamera") << "Removing camera " << (cameraIndex + 1);
+
+	m_visionThread->stop();
+	const size_t cameraCountBefore= m_config->cameraCount();
+	const bool bDirectCameraMoved= ::removeCamera(*m_config, cameraIndex);
+	if (m_config->cameraCount() < cameraCountBefore)
+		m_videoCapture->removeCameraSlot(cameraIndex);
+	if (bDirectCameraMoved && isDirectProject(*m_config))
+	{
+		MIKAN_LOG_INFO("App::removeCamera")
+			<< "The removed camera was the direct camera: the role moved to camera 1 and the neutral pose cleared";
+	}
+	m_videoCapture->setCameraSlotCount(m_config->cameraCount());
+	m_visionThread->start();
+	m_config->markDirty();
+	return bDirectCameraMoved;
+}
+
 void App::shutdown()
 {
 	MIKAN_LOG_INFO("App::shutdown") << "Shutting down";

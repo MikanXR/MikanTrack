@@ -24,10 +24,17 @@ public:
 	// the per-camera state from the config itself, and draws nothing for a
 	// camera index the config does not have.
 	void drawRescanControl();
+	// What a camera section's Remove button did: the direct role moved to
+	// another camera (the removed camera was the direct one), which the host
+	// answers by cancelling a neutral capture countdown
+	struct DrawResult
+	{
+		bool bDirectCameraMoved= false;
+	};
 	// bWithHeader false leaves out the "Camera N" collapsing header, for a
 	// host that names the camera; bWithSettings false leaves out the Camera
 	// Settings tree, for a host that draws it elsewhere
-	void drawCameraSection(int cameraIndex, bool bWithHeader= true, bool bWithSettings= true);
+	DrawResult drawCameraSection(int cameraIndex, bool bWithHeader= true, bool bWithSettings= true);
 	// bDefaultOpen opens the tree the first time it is drawn
 	void drawCameraSettings(int cameraIndex, bool bDefaultOpen= false);
 	// Whether drawCameraSettings has anything to draw: the camera's device is

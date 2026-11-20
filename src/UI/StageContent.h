@@ -35,9 +35,11 @@ public:
 					const OscReadout& oscReadout, const DirectReadout& direct, const SourcePoseReadout& sourcePose,
 					const FaceExprEditTarget* activeEdit, bool bWizardActive);
 	// The requests raised by every section drawn since beginFrame: the
-	// calibration wizards, the audio calibration wizard, and the face profile
-	// row an Edit button asked the expression editor to open
+	// calibration wizards, the audio calibration wizard, the face profile
+	// row an Edit button asked the expression editor to open, and a camera
+	// removal that moved the direct role
 	const CalibrationPanel::DrawResult& getCalibrationAction() const { return m_calibrationAction; }
+	bool getDirectCameraMoved() const { return m_bDirectCameraMoved; }
 	const AudioPanel::DrawResult& getAudioAction() const { return m_audioAction; }
 	const std::optional<FaceExprEditTarget>& getFaceEditRequest() const { return m_faceEditRequest; }
 
@@ -45,8 +47,12 @@ public:
 	void drawSection(const PipelineStageId& stage, eStageSection section) override;
 
 private:
-	// A per-camera stage's camera exists in the config
+	// A per-camera stage's camera exists in the live config, or in the shown
+	// frame's config
 	bool isCameraInRange(const PipelineStageId& stage) const;
+	bool isCameraInShownRange(const PipelineStageId& stage) const;
+	// The shown frame's config, the one the stage tree is drawn from
+	const AppConfig& getShownConfig() const;
 	void mergeCalibrationAction(const CalibrationPanel::DrawResult& result);
 	// The Retarget stage's settings: placement, mapping and the preview pose
 	// with a loaded model, then the chains
@@ -68,4 +74,5 @@ private:
 	CalibrationPanel::DrawResult m_calibrationAction;
 	AudioPanel::DrawResult m_audioAction;
 	std::optional<FaceExprEditTarget> m_faceEditRequest;
+	bool m_bDirectCameraMoved= false;
 };

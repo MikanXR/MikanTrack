@@ -14,6 +14,7 @@
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "BodyPoseSolver.h" // BodyDimensions
+#include "BodyPoseTracker.h" // eBodyPoseBackend
 #include "DirectRetarget.h"
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
@@ -309,7 +310,6 @@ static void cameraProfileFromJson(const json& j, CameraProfile& profile)
 
 	const json& bp= j.value("bodyPose", json::object());
 	profile.bodyPose.enabled= bp.value("enabled", false);
-	profile.bodyPose.backend= bp.value("backend", "rtmpose");
 	profile.bodyPose.poseFrameDivider= bp.value("poseFrameDivider", 1);
 	profile.bodyPose.detectorIntervalFrames= bp.value("detectorIntervalFrames", 20);
 
@@ -361,7 +361,6 @@ static json cameraProfileToJson(const CameraProfile& profile)
 		{"bodyPose",
 		 {
 			 {"enabled", profile.bodyPose.enabled},
-			 {"backend", profile.bodyPose.backend},
 			 {"poseFrameDivider", profile.bodyPose.poseFrameDivider},
 			 {"detectorIntervalFrames", profile.bodyPose.detectorIntervalFrames},
 		 }},
@@ -516,6 +515,69 @@ BodyDimensions makeBodyDimensions(const AppConfig& config)
 		dimensions.bHasElbowSeed[sideIndex]= glm::length(seed) > 1e-4f;
 	}
 	return dimensions;
+}
+
+bool isDirectProject(const AppConfig& config)
+{
+	return config.direct.enabled;
+}
+
+std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int cameraIndex)
+{
+	return getBodyPoseBackend(config, cameraIndex, config.direct.cameraIndex);
+}
+
+std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int cameraIndex, int directCameraIndex)
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount())
+		return std::nullopt;
+	// The direct solve reads the whole-body model's shoulders, ears, face
+	// and hand blocks, and nothing in a direct project reads another
+	// camera's body
+	if (isDirectProject(config))
+	{
+		if (cameraIndex == directCameraIndex)
+			return eBodyPoseBackend::Rtmw3dWholeBody;
+		return std::nullopt;
+	}
+	// No multi-camera solver reads the whole-body model's depth or its face
+	// and hand blocks, so the lighter body model runs
+	if (config.camera(cameraIndex).bodyPose.enabled)
+		return eBodyPoseBackend::RtmPoseBody;
+	return std::nullopt;
+}
+
+void clearDirectNeutral(DirectConfig& direct)
+{
+	direct.neutralPresent= false;
+	direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
+	direct.neutralShoulderMidpoint= glm::vec3(0.f);
+	direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+	direct.neutralFacePresent= false;
+	direct.neutralFace= WholeBodyFaceRatios();
+}
+
+bool removeCamera(AppConfig& config, int cameraIndex)
+{
+	if (cameraIndex <= 0 || cameraIndex >= (int)config.cameraCount())
+		return false;
+	config.cameras.erase(config.cameras.begin() + cameraIndex);
+
+	DirectConfig& direct= config.direct;
+	if (cameraIndex < direct.cameraIndex)
+	{
+		// The same physical camera keeps the role under its new index
+		--direct.cameraIndex;
+		return false;
+	}
+	if (cameraIndex == direct.cameraIndex)
+	{
+		// The neutral belongs to the camera it was captured through
+		direct.cameraIndex= 0;
+		clearDirectNeutral(direct);
+		return true;
+	}
+	return false;
 }
 
 HandFusionConfig makeHandFusionConfig(const AppConfig& config)
@@ -851,6 +913,44 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		quatFromJson(dr, "neutralHead", direct.neutralHead);
 		if (direct.neutralPresent && dr.contains("neutralFace"))
 			direct.neutralFacePresent= faceRatiosFromJson(dr["neutralFace"], direct.neutralFace);
+	}
+
+	// The direct camera index always names a camera the config has. A
+	// neutral captured through another camera does not carry over.
+	const int lastCameraIndex= (int)config.cameraCount() - 1;
+	if (config.direct.cameraIndex < 0 || config.direct.cameraIndex > lastCameraIndex)
+	{
+		const int storedIndex= config.direct.cameraIndex;
+		config.direct.cameraIndex= std::clamp(storedIndex, 0, lastCameraIndex);
+		clearDirectNeutral(config.direct);
+		MIKAN_LOG_INFO("AppConfig::load") << "Direct camera index " << storedIndex << " is outside the "
+										  << config.cameraCount() << " cameras, moved to "
+										  << config.direct.cameraIndex << " and the neutral pose cleared";
+	}
+
+	// A direct project has no world calibration: its camera is the world. Any
+	// stored extrinsics are cleared rather than set to identity, which would
+	// still mark the camera calibrated and read camera space as the world.
+	if (isDirectProject(config))
+	{
+		std::string clearedCameras;
+		for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
+		{
+			CameraProfile& profile= config.camera(cameraIndex);
+			if (profile.extrinsics.present)
+				clearedCameras+= (clearedCameras.empty() ? "" : ", ") + std::to_string(cameraIndex + 1);
+			profile.extrinsics= ExtrinsicsConfig();
+		}
+		const bool bQualityPresent= config.extrinsicsQuality.present;
+		config.extrinsicsQuality= ExtrinsicsQualityConfig();
+		if (!clearedCameras.empty() || bQualityPresent)
+		{
+			MIKAN_LOG_INFO("AppConfig::load")
+				<< "Direct project: cleared the stored extrinsics"
+				<< (clearedCameras.empty() ? std::string() : " of camera " + clearedCameras)
+				<< (bQualityPresent ? " and the extrinsics quality" : "")
+				<< ", since a direct project has no world calibration";
+		}
 	}
 
 	const json& hs= j.value("handScale", json::object());

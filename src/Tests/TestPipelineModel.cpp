@@ -248,6 +248,8 @@ const Shape k_shapes[]= {
 	{"dual, no body, no IMU", false, 2, false, -1},
 	{"single desk camera", false, 1, false, 0},
 	{"direct", true, 1, false, 0},
+	// The second camera runs no body pose: the project's mode decides
+	{"direct, two cameras", true, 2, false, 0},
 };
 } // namespace
 

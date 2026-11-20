@@ -439,7 +439,7 @@ int defaultCameraIndex(const AppConfig& config)
 {
 	for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
 	{
-		if (config.camera(cameraIndex).bodyPose.enabled)
+		if (getBodyPoseBackend(config, cameraIndex).has_value())
 			return cameraIndex;
 	}
 	return -1;

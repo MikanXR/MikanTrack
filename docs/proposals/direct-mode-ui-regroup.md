@@ -1,6 +1,6 @@
 # Proposal: regroup the Direct-mode and body-model UI
 
-Accepted 2026-11-19, after four review passes and three rounds of questions. Nothing here is built. The design reflects the answers (Decisions below) and all four reviews, and no design question is open. This document proposes clearing and hiding the extrinsics in a direct project, letting the project mode decide each camera's body pose and model, keeping the direct camera index valid, moving the camera tilt to the Direct solver's inputs, giving the Direct solver's body measurements their own tooltips, and making the hold-still test work in a direct project.
+Accepted 2026-11-19, after four review passes and three rounds of questions. Built 2026-11-19 on the `direct-mode-ui-regroup` branch, with the live checks that need a person in view owed in `docs/plan.md`. The design reflects the answers (Decisions below) and all four reviews, and no design question is open. This document proposes clearing and hiding the extrinsics in a direct project, letting the project mode decide each camera's body pose and model, keeping the direct camera index valid, moving the camera tilt to the Direct solver's inputs, giving the Direct solver's body measurements their own tooltips, and making the hold-still test work in a direct project.
 
 ## Findings
 

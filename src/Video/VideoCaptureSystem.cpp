@@ -178,6 +178,18 @@ void VideoCaptureSystem::setCameraSlotCount(size_t count)
 	}
 }
 
+void VideoCaptureSystem::removeCameraSlot(int cameraIndex)
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)m_slots.size() || m_slots.size() <= 1)
+		return;
+
+	// The slot destructor closes its device. The slots after it are their own
+	// device listeners, so moving their owning pointers keeps their streams.
+	m_slots.erase(m_slots.begin() + cameraIndex);
+	for (int slotIndex= cameraIndex; slotIndex < (int)m_slots.size(); ++slotIndex)
+		m_slots[slotIndex]->cameraIndex= slotIndex;
+}
+
 void VideoCaptureSystem::update(float deltaTime)
 {
 	// Pump hotplug notifications.

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,8 @@
 #include "TrackingTypes.h"
 #include "WebcamBlink.h"
 #include "WholeBodyFaceRatios.h"
+
+enum class eBodyPoseBackend : int;
 
 // Persisted per-project tracking settings, stored as JSON at the loaded
 // project file path (legacy location: %APPDATA%/MikanTrack/config.json)
@@ -184,16 +187,13 @@ struct AnglePriorConfig
 	std::array<std::array<float, k_angleCount * k_angleCount>, 2> precision{};
 };
 
-// Body-pose stage, opt-in per camera. The person detector only fires on
-// cameras that see the user upright, so this stays off for overhead cameras
-// and costs them nothing.
+// Body-pose stage, opt-in per camera in a multi-camera project. The person
+// detector only fires on cameras that see the user upright, so this stays off
+// for overhead cameras and costs them nothing. A direct project ignores the
+// switch: getBodyPoseBackend decides from the project's mode.
 struct BodyPoseCameraConfig
 {
 	bool enabled= false;
-	// Which landmark model runs on this camera: "rtmpose" (RTMPose-m body,
-	// 17 planar keypoints) or "rtmw3d" (RTMW3D-X whole body with a depth
-	// per keypoint). See eBodyPoseBackend.
-	std::string backend= "rtmpose";
 	// Pose models run every Nth frame on this camera
 	int poseFrameDivider= 1;
 	// Rebuild the region of interest from the image every Nth model frame,
@@ -429,6 +429,30 @@ struct FusionConfig
 // solve and a replayed one cannot drift apart
 struct BodyDimensions;
 BodyDimensions makeBodyDimensions(const class AppConfig& config);
+
+// The project's mode: a direct project poses the avatar from one camera with
+// no world calibration, a multi-camera one fuses its cameras in a world frame
+bool isDirectProject(const class AppConfig& config);
+
+// The body pose a camera runs and its model, decided by the project's mode:
+// the whole-body model on a direct project's direct camera and none on its
+// other cameras, the body model on a multi-camera project's cameras with
+// body pose enabled, and none for an index the config does not have.
+// directCameraIndex is the direct camera to decide with; the overload without
+// it reads the config's.
+std::optional<eBodyPoseBackend> getBodyPoseBackend(const class AppConfig& config, int cameraIndex);
+std::optional<eBodyPoseBackend> getBodyPoseBackend(const class AppConfig& config, int cameraIndex,
+												   int directCameraIndex);
+
+// Clears the direct neutral pose (the phone's face anchor is camera
+// independent and stays)
+void clearDirectNeutral(DirectConfig& direct);
+
+// Erases a camera, keeping the direct camera index on the same physical
+// camera: a removed camera below it decrements it, and removing the direct
+// camera itself moves the role to camera 0 and clears the neutral. True when
+// the direct role moved to another camera. Camera 0 is never removed.
+bool removeCamera(class AppConfig& config, int cameraIndex);
 
 // Same drift-proofing for the fusion config: the vision thread, the replay
 // engine and the replay self-test all build it from an AppConfig through this

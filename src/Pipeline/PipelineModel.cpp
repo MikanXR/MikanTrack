@@ -218,7 +218,7 @@ StageStatus computePerCamera(const Inputs& in, const PipelineStageId& id)
 		return running(text("valHandsFmt", camera.handsTracked));
 	case S::BodyModel:
 		if (!camera.bBodyEnabled)
-			return inactive(text("valOff"), text("whyBodyDisabled"));
+			return inactive(text("valOff"), text(in.bDirect ? "whyBodyDirectCameraOnly" : "whyBodyDisabled"));
 		if (device.state != eStageState::Running)
 			return inactive(text("valNoFrames"), text("whyCameraNotRunning"));
 		if (!camera.bBodyModelLoaded)

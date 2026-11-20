@@ -22,7 +22,11 @@ public:
 	// launches it raised. A camera section draws nothing for a camera index
 	// the config does not have, and bWithHeader false leaves out its
 	// "Camera N" collapsing header, for a host that names the camera.
-	DrawResult drawCameraCalibration(int cameraIndex, bool bWizardActive, bool bWithHeader= true);
+	// bWithExtrinsics false leaves out the extrinsics status, for a direct
+	// project, which has none. The extrinsics status reads statusConfig, the
+	// config of the frame the host shows (null: the live config).
+	DrawResult drawCameraCalibration(int cameraIndex, bool bWizardActive, bool bWithHeader, bool bWithExtrinsics,
+									 const AppConfig* statusConfig= nullptr);
 	DrawResult drawExtrinsicsSection(bool bWizardActive);
 	void drawHandScaleSection();
 

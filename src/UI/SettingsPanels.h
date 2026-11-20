@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@
 
 class AppConfig;
 class VisionThread;
+enum class eBodyPoseBackend : int;
 class VideoCaptureSystem;
 class VideoPreviewPanel;
 class Scene3dPanel;
@@ -53,16 +55,26 @@ struct TrackingPanelState
 	float holdStillCountdown= 0.f;   // seconds before sampling starts; <= 0 idle
 	float holdStillSecondsLeft= 0.f; // seconds left in the sampling window
 	double holdStillLastTimestampMs= 0.0; // dedupe: fused results arrive slower than UI frames
+	// The window's frame, chosen when it starts by the live project: camera
+	// space in a direct project, world space in a multi-camera one
+	bool bHoldStillCameraFrame= false;
 	struct HoldStillAccum
 	{
 		int sampleCount= 0;
 		std::array<glm::dvec3, HAND_LANDMARK_COUNT> sum{};
 		std::array<glm::dvec3, HAND_LANDMARK_COUNT> sumSq{};
+		// The last accepted sample's palm, so a repeated pose (a face-only
+		// republish, a re-fuse of an unchanged camera) is not counted again
+		bool bHasLast= false;
+		glm::vec3 lastPalmPosition{0.f};
+		glm::quat lastPalmOrientation{1.f, 0.f, 0.f, 0.f};
 	};
 	HoldStillAccum holdStillAccum[2];
 	bool bHoldStillHasResult= false;
 	// Mean per-landmark deviation over the window, mm; -1 = too few samples
 	float holdStillDeviationMm[2]= {-1.f, -1.f};
+	// The samples each side's result was taken over
+	int holdStillSampleCount[2]= {0, 0};
 
 	// Direct retarget neutral capture
 	NeutralCaptureControl directNeutral;
@@ -162,7 +174,11 @@ struct SourcePoseReadout
 	const std::array<RetargetArmReadout, 2>* armParameters= nullptr;
 };
 
-// What the Tracking panel's sections read and write. latestPreviews: the
+// What the Tracking panel's sections read and write. config: the live config
+// the controls edit; shownConfig: the shown frame's config, the one the stage
+// tree is drawn from (a take's in a replay); shownBodyBackends: the body model
+// each camera of the shown config runs, none where it runs none (the Body
+// model stage's model line and overlay toggles); latestPreviews: the
 // newest per-camera results (image-quality and timing readouts); fusedResult:
 // the latest live fused tracking output (hold-still jitter test); fusion: the
 // shown frame's fusion readouts (the Fusion stage's diagnostics); imu: the
@@ -174,6 +190,8 @@ struct SourcePoseReadout
 struct TrackingSectionContext
 {
 	AppConfig* config= nullptr;
+	const AppConfig* shownConfig= nullptr;
+	const std::vector<std::optional<eBodyPoseBackend>>* shownBodyBackends= nullptr;
 	VisionThread* visionThread= nullptr;
 	VideoCaptureSystem* videoCapture= nullptr;
 	VideoPreviewPanel* previewPanel= nullptr;
@@ -279,21 +297,41 @@ void drawBlinkReadout(const TrackingSectionContext& context);
 // and the proportion controls, which edit the live config. The per-camera
 // enables are drawBodyPoseCameraControls.
 void drawBodyCalibrationControl(const TrackingSectionContext& context);
-void drawBodyDimensionControls(const TrackingSectionContext& context);
+// The localization keys of the proportion controls' tooltips, which the host
+// stage chooses: the body solver and the direct solve read the same values
+// for different things
+struct BodyDimensionTooltips
+{
+	const char* deriveUpperArm= "trackingPanel.deriveUpperArmTooltip";
+	const char* upperArmRatio= "trackingPanel.upperArmRatioTooltip";
+	const char* upperArm= "trackingPanel.upperArmTooltip";
+	const char* shoulderWidth= "trackingPanel.shoulderWidthTooltip";
+	const char* headWidth= "trackingPanel.headWidthTooltip";
+	const char* noseForward= "trackingPanel.noseForwardTooltip";
+};
+void drawBodyDimensionControls(const TrackingSectionContext& context, const BodyDimensionTooltips& tooltips);
 // Each side's shoulder, elbow and forearm confidence, and the head, in the
 // shown fused result (context.fusion->fused), no header
 void drawBodySolveReadout(const TrackingSectionContext& context);
-// What body tracking is for and which cameras should run it
-void drawBodyPoseIntro();
-// One camera's body pose enable and, when enabled, its model. Draws nothing
-// for a camera index the config does not have.
+// What body tracking is for and which cameras should run it, or in a direct
+// shown project that the mode decides it
+void drawBodyPoseIntro(const TrackingSectionContext& context);
+// One camera's body pose: the enable checkbox, only in a multi-camera live
+// project with the camera, editing the live config; in a direct shown
+// project a line saying whether the direct solve runs it on this camera; and
+// the model the shown frame's camera runs, which the project's mode picks.
 void drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex);
 // The direct pieces, no headers, editing the live config. The mode itself
-// has no control: the guided setup's tracking variant sets it. Camera: keeps the direct camera index in range and draws the camera combo
-// only with more than one camera. Neutral: Capture neutral and Clear, the
-// countdown updateTrackingState runs, and the neutral's state line. Tilt: the
-// camera's downward pitch.
+// has no control: the guided setup's tracking variant sets it. Camera: the
+// camera combo, drawn only with more than one camera and disabled unless the
+// live project is direct. Neutral: Capture neutral and Clear, the countdown
+// updateTrackingState runs, and the neutral's state line. Tilt: the camera's
+// downward pitch.
 void drawDirectCameraControl(const TrackingSectionContext& context);
+// The main thread's half of a direct camera change: clears the neutral and
+// cancels a neutral countdown. The vision thread resets its own state at the
+// refresh that applies the new index.
+void onDirectCameraMoved(const TrackingSectionContext& context);
 void drawDirectNeutralControl(const TrackingSectionContext& context);
 void drawDirectTiltControl(const TrackingSectionContext& context);
 // The two depth planes the wrist sits on, each one's distance ahead of the
@@ -318,10 +356,11 @@ void drawDirectHoldRestReadout(const TrackingSectionContext& context);
 void drawHandCalibrationSection(const TrackingSectionContext& context);
 // The view toggles, no headers. Hand: the preview's skeleton overlay,
 // detection boxes and, in direct mode, every hand slot. Body: the preview's
-// body landmarks. Per-camera skeletons: the 3D scene's unfused skeletons,
-// drawn only with more than one camera.
+// body landmarks, and the whole-body face and hands only on a camera whose
+// shown model is the whole-body one. Per-camera skeletons: the 3D scene's
+// unfused skeletons, drawn only with more than one camera.
 void drawHandOverlayControls(const TrackingSectionContext& context);
-void drawBodyOverlayControls(const TrackingSectionContext& context);
+void drawBodyOverlayControls(const TrackingSectionContext& context, int cameraIndex);
 void drawPerCameraSkeletonsControl(const TrackingSectionContext& context);
 void drawInferenceSection(const TrackingSectionContext& context);
 // Draws nothing without a camera

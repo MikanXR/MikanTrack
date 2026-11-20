@@ -24,10 +24,13 @@ The detector's output box is a face box, not a person box. Only its keypoints ar
 
 `RtmPoseModel` (`src/Vision/RtmPoseModel.h`) runs the two OpenMMLab SimCC landmark models, which share everything but their sizes: the input size, the keypoint count and the presence of a depth axis are read from the model's own tensor shapes at load (the MMDeploy export leaves the keypoint dimension dynamic, so that one is read off the first run's output). Both are top-down: the caller supplies the person box, and each keypoint is predicted independently inside it with its own score. There is no full-body prior, so a joint outside the frame degrades to a low score instead of being invented. BlazePose landmarking was evaluated and removed as a poor fit: it always emits one coherent full body, so a subject truncated at a desk makes it fabricate the unseen legs, and its self-referential crop cannot recover (see [LEARNINGS.md](../../LEARNINGS.md)).
 
-The backend per camera (`eBodyPoseBackend`, `bodyPose.backend` in the camera config, the Model combo beside the camera's checkbox in the camera's Body model stage):
+The project's mode picks each camera's backend (`eBodyPoseBackend`), through `getBodyPoseBackend` in `src/App/AppConfig.h`, the one place the rule lives. The camera's Body model stage names the model rather than choosing it.
 
-- `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model and the metric rig's choice, where depth comes from the triangulated wrists
-- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint, the single-camera direct mode's choice
+- `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model. Every body camera of a multi-camera project runs it, since no multi-camera solver reads more.
+
+- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint. A direct project's direct camera runs it, since the direct solve reads its face and hand blocks. No solver reads its depth.
+
+The two models are compared on a recording with `--replay-bodypose` and its explicit backend argument ([commands.md](./commands.md)).
 
 Contract for `rtmpose_body.onnx`:
 
@@ -118,10 +121,9 @@ The per-camera stage runs inside `CameraContext::process` (`src/App/CameraContex
 
 ### Configuration
 
-The stage is opt-in per camera via `BodyPoseCameraConfig` on `CameraProfile` (`src/App/AppConfig.h`), serialized under the camera's `bodyPose` JSON object:
+Whether a camera runs the stage is the project's mode (`getBodyPoseBackend`): a direct project runs it on its direct camera alone, whatever the switches say, and a multi-camera project on the cameras whose switch is on. The per-camera settings are `BodyPoseCameraConfig` on `CameraProfile` (`src/App/AppConfig.h`), serialized under the camera's `bodyPose` JSON object:
 
-- `bodyPose.enabled` (default false)
-- `bodyPose.backend` (default `rtmpose`, or `rtmw3d`)
+- `bodyPose.enabled` (default false), the multi-camera project's switch, which a direct project ignores
 - `bodyPose.poseFrameDivider` (default 1, written into the project file, so a project saved under an earlier default keeps the value it has)
 - `bodyPose.detectorIntervalFrames` (default 20)
 

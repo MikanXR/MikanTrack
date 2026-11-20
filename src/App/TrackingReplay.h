@@ -114,6 +114,12 @@ public:
 	// The face sidecar's phone samples in timestamp order; empty for a
 	// recording without one (or whose file is gone)
 	const std::vector<RecordedFaceSample>& getFaceSamples() const { return m_faceSamples; }
+	// The body model each camera of the recorded config ran: the first valid
+	// recorded body observation names it by whether it carries depth (only
+	// the whole-body model's does), and a camera with no valid observation
+	// takes getBodyPoseBackend over the recorded config. An invalid
+	// observation records no depth, so it cannot name the model.
+	std::vector<std::optional<eBodyPoseBackend>> findRecordedBodyPoseBackends() const;
 
 	// Replays every frame from frame 0, filling the cache and the checksum
 	// comparison. Optionally captures fusion diagnostics for a frame range

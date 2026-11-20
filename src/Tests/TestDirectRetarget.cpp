@@ -6,6 +6,7 @@
 #include "AvatarRetargetMath.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
+#include "BodyPoseTracker.h" // eBodyPoseBackend
 #include "DirectRetarget.h"
 #include "DirectStageSolver.h"
 #include "HandSideMatch.h"
@@ -1798,6 +1799,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	// (i) The config section round-trips through the project JSON
 	{
 		AppConfig config;
+		config.cameras.resize(3);
 		config.direct.enabled= true;
 		config.direct.cameraIndex= 2;
 		config.direct.cameraTiltDegrees= 12.5f;
@@ -1858,6 +1860,128 @@ static int runDirectRetargetTest(const TestArgs&)
 							  loaded.body.shoulderWidthMeters * loaded.body.upperArmPerShoulderWidth, 1e-5f) &&
 				  nearlyEqual(solverConfig.userForearmLengthMeters, loaded.body.forearmLengthMeters, 1e-5f),
 			  "(i) makeDirectRetargetConfig carries the section, the body lengths and the rig onto the solver");
+
+		// The direct camera index always names a camera the config has: a
+		// stored index outside the list clamps into it, and the neutral
+		// captured through another camera goes with it
+		AppConfig shrunk= config;
+		shrunk.cameras.resize(1);
+		AppConfig oneCamera;
+		const bool bClampLoaded= oneCamera.loadFromJsonString(shrunk.toJsonString());
+		check(bClampLoaded && oneCamera.direct.enabled && oneCamera.direct.cameraIndex == 0 &&
+				  !oneCamera.direct.neutralPresent && !oneCamera.direct.neutralFacePresent,
+			  "(i) a direct index outside the camera list clamps to the last camera and clears the neutral");
+		AppConfig notDirect= config;
+		notDirect.cameras.resize(2);
+		notDirect.direct.enabled= false;
+		notDirect.direct.cameraIndex= 5;
+		AppConfig notDirectLoaded;
+		check(notDirectLoaded.loadFromJsonString(notDirect.toJsonString()) &&
+				  notDirectLoaded.direct.cameraIndex == 1 && !notDirectLoaded.direct.neutralPresent,
+			  "(i) a project that is not direct clamps its direct index too");
+	}
+
+	// (t) A direct project has no world calibration: the load clears every
+	// camera's extrinsics and the extrinsics quality, field by field to the
+	// defaults, and a multi-camera project keeps them
+	{
+		AppConfig config;
+		config.cameras.resize(3);
+		for (int cameraIndex= 0; cameraIndex < 2; ++cameraIndex)
+		{
+			ExtrinsicsConfig& extrinsics= config.camera(cameraIndex).extrinsics;
+			extrinsics.present= true;
+			extrinsics.markerFromCamera= glm::dmat4(2.0);
+			extrinsics.markerFromCamera[3]= glm::dvec4(0.1, 0.2, 0.9, 1.0);
+			extrinsics.patternReprojectionErrorPx= 0.7;
+			extrinsics.patternCornerCount= 40;
+			extrinsics.markerId= 7;
+			extrinsics.markerLengthMM= 150.0;
+		}
+		config.extrinsicsQuality.present= true;
+		config.extrinsicsQuality.pairCount= 1;
+		config.extrinsicsQuality.worstPairReprojectionRmsPx= 1.5;
+		config.direct.cameraIndex= 1;
+
+		AppConfig multiCamera;
+		check(multiCamera.loadFromJsonString(config.toJsonString()) && multiCamera.camera(0).extrinsics.present &&
+				  multiCamera.camera(1).extrinsics.present && multiCamera.camera(1).extrinsics.markerId == 7 &&
+				  multiCamera.extrinsicsQuality.present,
+			  "(t) a multi-camera project keeps its extrinsics on load");
+
+		config.direct.enabled= true;
+		AppConfig direct;
+		const bool bLoaded= direct.loadFromJsonString(config.toJsonString());
+		const ExtrinsicsConfig defaults;
+		bool bCleared= bLoaded;
+		for (int cameraIndex= 0; cameraIndex < (int)direct.cameraCount(); ++cameraIndex)
+		{
+			const ExtrinsicsConfig& extrinsics= direct.camera(cameraIndex).extrinsics;
+			bCleared&= !extrinsics.present && extrinsics.markerFromCamera == glm::dmat4(1.0) &&
+				extrinsics.patternReprojectionErrorPx == defaults.patternReprojectionErrorPx &&
+				extrinsics.patternCornerCount == defaults.patternCornerCount &&
+				extrinsics.markerId == defaults.markerId && extrinsics.markerLengthMM == defaults.markerLengthMM;
+		}
+		check(bCleared, "(t) a direct project loads with every camera's extrinsics at their defaults");
+		check(bLoaded && !direct.extrinsicsQuality.present && direct.extrinsicsQuality.pairCount == 0 &&
+				  direct.extrinsicsQuality.worstPairReprojectionRmsPx == 0.0,
+			  "(t) a direct project loads with the extrinsics quality reset");
+	}
+
+	// (u) Removing a camera keeps the direct role on the same physical
+	// camera, or moves it to camera 0 when the direct camera goes
+	{
+		AppConfig config;
+		config.cameras.resize(3);
+		config.direct.enabled= true;
+		config.direct.cameraIndex= 2;
+		config.direct.neutralPresent= true;
+		const bool bBelowMoved= removeCamera(config, 1);
+		check(!bBelowMoved && config.cameraCount() == 2 && config.direct.cameraIndex == 1 &&
+				  config.direct.neutralPresent,
+			  "(u) removing a camera below the direct one decrements the index and keeps the neutral");
+		const bool bDirectMoved= removeCamera(config, 1);
+		check(bDirectMoved && config.cameraCount() == 1 && config.direct.cameraIndex == 0 &&
+				  !config.direct.neutralPresent,
+			  "(u) removing the direct camera moves the role to camera 0 and clears the neutral");
+		check(!removeCamera(config, 0) && config.cameraCount() == 1, "(u) camera 0 is never removed");
+
+		AppConfig notDirect;
+		notDirect.cameras.resize(3);
+		notDirect.direct.cameraIndex= 2;
+		removeCamera(notDirect, 2);
+		check(notDirect.cameraCount() == 2 && notDirect.direct.cameraIndex >= 0 &&
+				  notDirect.direct.cameraIndex < (int)notDirect.cameraCount(),
+			  "(u) a project that is not direct keeps its direct index in range");
+	}
+
+	// (v) The project's mode picks each camera's body pose and model
+	{
+		AppConfig config;
+		config.cameras.resize(3);
+		config.camera(0).bodyPose.enabled= true;
+		config.camera(1).bodyPose.enabled= false;
+		config.camera(2).bodyPose.enabled= true;
+		check(getBodyPoseBackend(config, 0) == eBodyPoseBackend::RtmPoseBody &&
+				  !getBodyPoseBackend(config, 1).has_value() &&
+				  getBodyPoseBackend(config, 2) == eBodyPoseBackend::RtmPoseBody,
+			  "(v) a multi-camera project runs the body model on the cameras with body pose on, none on the others");
+		check(!getBodyPoseBackend(config, 3).has_value() && !getBodyPoseBackend(config, -1).has_value(),
+			  "(v) an index outside the camera list runs none");
+		config.direct.enabled= true;
+		config.direct.cameraIndex= 1;
+		check(getBodyPoseBackend(config, 1) == eBodyPoseBackend::Rtmw3dWholeBody,
+			  "(v) a direct project's direct camera runs the whole-body model, whatever its switch says");
+		check(!getBodyPoseBackend(config, 0).has_value() && !getBodyPoseBackend(config, 2).has_value(),
+			  "(v) a direct project's other cameras run none, whatever their switches say");
+		check(getBodyPoseBackend(config, 2, 2) == eBodyPoseBackend::Rtmw3dWholeBody &&
+				  !getBodyPoseBackend(config, 1, 2).has_value(),
+			  "(v) the direct camera can be given apart from the config's, as the vision thread applies it");
+		const nlohmann::json saved= nlohmann::json::parse(config.toJsonString());
+		bool bNoBackendKey= saved.contains("cameras") && saved["cameras"].size() == 3;
+		for (const nlohmann::json& camera : saved["cameras"])
+			bNoBackendKey&= camera.contains("bodyPose") && !camera["bodyPose"].contains("backend");
+		check(bNoBackendKey, "(v) a saved camera carries no body model key");
 	}
 
 	MIKAN_LOG_INFO("test-direct-retarget") << (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
@@ -1865,5 +1989,5 @@ static int runDirectRetargetTest(const TestArgs&)
 }
 
 MIKAN_REGISTER_TEST("--test-direct-retarget",
-					"Direct retarget: camera world, neutral capture, the depth planes, the palm hold, hold and the ease into rest, determinism",
+					"Direct retarget: camera world, neutral capture, the depth planes, the palm hold, hold and the ease into rest, determinism, the project mode rules",
 					eTestCategory::SelfTest, runDirectRetargetTest);

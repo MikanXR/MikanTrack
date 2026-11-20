@@ -223,7 +223,10 @@ void MainWindow::refreshDevicePanelState()
 void MainWindow::launchWizard(eWizardKind kind, int cameraIndex)
 {
 	// The host refuses while one of its wizards runs; the flow launches its
-	// own wizards and must not be interrupted by a manual one
+	// own wizards and must not be interrupted by a manual one. A direct
+	// project has no world calibration, whatever frame is shown.
+	if (kind == eWizardKind::Extrinsics && isDirectProject(*m_app->getConfig()))
+		return;
 	if (!m_setupFlow->isActive())
 		m_wizardHost->launch(kind, cameraIndex);
 }
@@ -379,13 +382,17 @@ void MainWindow::drawDockspaceAndMenuBar()
 			}
 
 			// One shared session: every camera calibrates against the same
-			// marker placement (separate sessions = disagreeing world frames)
-			bool bAllIntrinsics= true;
-			for (size_t i= 0; i < config->cameraCount(); ++i)
-				bAllIntrinsics&= config->camera(i).intrinsics.isCalibrated();
-			if (ImGui::MenuItem(locLabel("mainWindow.extrinsicsAllCameras"), nullptr, false,
-								!bWizardActive && bAllIntrinsics))
-				launchWizard(eWizardKind::Extrinsics);
+			// marker placement (separate sessions = disagreeing world frames).
+			// A direct project has no world calibration.
+			if (!isDirectProject(*config))
+			{
+				bool bAllIntrinsics= true;
+				for (size_t i= 0; i < config->cameraCount(); ++i)
+					bAllIntrinsics&= config->camera(i).intrinsics.isCalibrated();
+				if (ImGui::MenuItem(locLabel("mainWindow.extrinsicsAllCameras"), nullptr, false,
+									!bWizardActive && bAllIntrinsics))
+					launchWizard(eWizardKind::Extrinsics);
+			}
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu(locLabel("mainWindow.viewMenu")))
@@ -553,6 +560,8 @@ void MainWindow::update(float deltaSeconds)
 	trackingContext.fusedResult= &m_latestFused;
 	trackingContext.fusion= &m_fusionReadout;
 	trackingContext.imu= &m_imuReadout;
+	trackingContext.shownConfig= m_shown.config;
+	trackingContext.shownBodyBackends= &m_shown.bodyBackends;
 	// The tracking panel's countdowns, captures and readouts run whether or
 	// not any of its sections is drawn this frame
 	SettingsPanels::updateTrackingState(trackingContext, deltaSeconds);
@@ -708,6 +717,10 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Extrinsics);
 	if (m_stageContent->getAudioAction().bLaunchAudioWizard)
 		launchWizard(eWizardKind::AudioCalibration);
+	// A removed direct camera moved the role and cleared the neutral, so a
+	// countdown started for it must not capture through camera 1
+	if (m_stageContent->getDirectCameraMoved() && isDirectProject(*config))
+		m_trackingPanelState.directNeutral.reset();
 	// A face profile row's Edit button opens the expression editor on the
 	// row. The editor runs every frame, after the Inspector so the open lands
 	// this frame, and reads the frame the scene shows.
@@ -752,12 +765,16 @@ void MainWindow::updateShownFrame(const std::vector<const TrackingFrameResult*>&
 		m_shown.fused= &m_timelinePanel->getDisplayFused();
 		m_shown.perCamera= m_timelinePanel->getPerCameraResults();
 		m_shown.config= &m_timelinePanel->getRecordedConfig();
+		m_shown.bodyBackends= m_timelinePanel->getRecordedBodyPoseBackends();
 	}
 	else
 	{
 		m_shown.fused= &m_latestFused;
 		m_shown.perCamera= livePerCamera;
 		m_shown.config= m_app->getConfig();
+		m_shown.bodyBackends.clear();
+		for (int cameraIndex= 0; cameraIndex < (int)m_shown.config->cameraCount(); ++cameraIndex)
+			m_shown.bodyBackends.push_back(getBodyPoseBackend(*m_shown.config, cameraIndex));
 	}
 	updateFusionReadout();
 	updateImuReadout();
@@ -1293,7 +1310,7 @@ void MainWindow::gatherPipelineInputs()
 	const RecordedTelemetry* recorded= bReplay ? m_timelinePanel->getDisplayTelemetry() : nullptr;
 
 	PipelineStatusInputs in;
-	in.bDirect= config->direct.enabled;
+	in.bDirect= isDirectProject(*config);
 	in.cameraCount= (int)config->cameraCount();
 	in.directCameraIndex= config->direct.cameraIndex;
 	in.bReplay= bReplay;
@@ -1305,7 +1322,8 @@ void MainWindow::gatherPipelineInputs()
 		const CameraProfile& profile= config->camera(cameraIndex);
 		camera.bIntrinsics= profile.intrinsics.present;
 		camera.bExtrinsics= profile.extrinsics.present;
-		camera.bBodyEnabled= profile.bodyPose.enabled;
+		camera.bBodyEnabled=
+			cameraIndex < (int)m_shown.bodyBackends.size() && m_shown.bodyBackends[cameraIndex].has_value();
 		if (!bReplay)
 		{
 			camera.bDeviceOpen= videoCapture->getIsDeviceOpen(cameraIndex);
@@ -1331,7 +1349,7 @@ void MainWindow::gatherPipelineInputs()
 			camera.bDeviceOpen= true;
 			camera.bStreaming= true;
 			camera.bHandPipelineReady= true;
-			camera.bBodyModelLoaded= profile.bodyPose.enabled;
+			camera.bBodyModelLoaded= camera.bBodyEnabled;
 		}
 		const TrackingFrameResult* result=
 			cameraIndex < (int)m_shown.perCamera.size() ? m_shown.perCamera[cameraIndex] : nullptr;

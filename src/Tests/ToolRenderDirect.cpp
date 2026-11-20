@@ -106,7 +106,7 @@ int runRenderDirectTool(const TestArgs& args)
 	int cameraIndex= requestedCamera;
 	for (int index= 0; cameraIndex < 0 && index < (int)config.cameraCount(); ++index)
 	{
-		if (config.camera(index).bodyPose.enabled)
+		if (getBodyPoseBackend(config, index).has_value())
 			cameraIndex= index;
 	}
 	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount() || !config.camera(cameraIndex).intrinsics.present)

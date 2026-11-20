@@ -14,7 +14,8 @@ CalibrationPanel::CalibrationPanel(AppConfig* config)
 }
 
 CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraIndex, bool bWizardActive,
-																	  bool bWithHeader)
+																	  bool bWithHeader, bool bWithExtrinsics,
+																	  const AppConfig* statusConfig)
 {
 	DrawResult result;
 	if (cameraIndex < 0 || cameraIndex >= (int)m_config->cameraCount())
@@ -67,15 +68,22 @@ CalibrationPanel::DrawResult CalibrationPanel::drawCameraCalibration(int cameraI
 		}
 		ImGui::EndDisabled();
 
-		ImGui::SeparatorText(locText("calibrationPanel.extrinsicsHeader"));
-		if (profile.extrinsics.present)
+		if (bWithExtrinsics)
 		{
-			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
-			ImGui::Text(locText("calibrationPanel.cameraHeightFmt"), profile.extrinsics.markerFromCamera[3].z);
-		}
-		else
-		{
-			ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
+			const AppConfig& extrinsicsConfig= statusConfig != nullptr ? *statusConfig : *m_config;
+			const bool bShownCamera= cameraIndex < (int)extrinsicsConfig.cameraCount();
+			const ExtrinsicsConfig* extrinsics=
+				bShownCamera ? &extrinsicsConfig.camera(cameraIndex).extrinsics : nullptr;
+			ImGui::SeparatorText(locText("calibrationPanel.extrinsicsHeader"));
+			if (extrinsics != nullptr && extrinsics->present)
+			{
+				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "%s", locText("calibrationPanel.calibratedStatus"));
+				ImGui::Text(locText("calibrationPanel.cameraHeightFmt"), extrinsics->markerFromCamera[3].z);
+			}
+			else
+			{
+				ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("calibrationPanel.notCalibratedStatus"));
+			}
 		}
 	}
 

@@ -51,6 +51,10 @@ public:
 	// (pause the inference thread first).
 	void setCameraSlotCount(size_t count);
 	size_t getCameraSlotCount() const { return m_slots.size(); }
+	// Erases one camera's slot (closing its device) and renumbers the slots
+	// after it, which keep their open devices and streams. The last slot is
+	// never removed. Pause the inference thread first.
+	void removeCameraSlot(int cameraIndex);
 
 	// Device list (enumeration is global, not per-slot)
 	void refreshDeviceList();

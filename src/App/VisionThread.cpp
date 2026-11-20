@@ -592,7 +592,7 @@ void VisionThread::performDiagnosticDump(const TrackingFrameResult& latestOutput
 		avatar.pose= &m_retarget.pose;
 		avatar.solveState= &m_retarget.directState;
 		avatar.modelPath= m_avatarIdentity.path;
-		avatar.cameraIndex= m_config->direct.cameraIndex;
+		avatar.cameraIndex= m_directCameraIndex;
 	}
 
 	std::vector<DiagCameraSnapshot> snapshots;
@@ -708,10 +708,29 @@ void VisionThread::refreshConfigOnThread()
 	if (m_config->handSkeleton.present[0] && m_config->handSkeleton.present[1])
 		m_autoScaleFactor= 1.f;
 
+	// The direct camera this thread runs as, applied here so the role and
+	// the body models switch together. Nothing held, filtered or averaged
+	// from the old camera's view carries over to the new one.
+	if (m_config->direct.cameraIndex != m_directCameraIndex)
+	{
+		if (m_directCameraIndex >= 0 && isDirectProject(*m_config))
+		{
+			MIKAN_MT_LOG_INFO("VisionThread") << "Direct camera " << (m_directCameraIndex + 1) << " -> "
+											  << (m_config->direct.cameraIndex + 1)
+											  << ": the retarget stage, the face averager and the blink filter reset";
+			m_retargetStage.reset();
+			m_bDirectRetarget= false;
+			m_webcamNeutralAverager.clear();
+			const DirectConfig& direct= m_config->direct;
+			m_blinkFilter.reset(direct.neutralFacePresent ? &direct.neutralFace : nullptr);
+		}
+		m_directCameraIndex= m_config->direct.cameraIndex;
+	}
+
 	for (std::unique_ptr<CameraContext>& context : m_cameras)
 	{
 		if (context->getCameraIndex() < (int)m_config->cameraCount())
-			context->configure(*m_config);
+			context->configure(*m_config, m_directCameraIndex);
 	}
 
 	// Config hand scale is the baseline the stereo correction applies to;
@@ -1031,7 +1050,7 @@ void VisionThread::runCaptureStage(IterationState& iteration)
 	// The direct camera has no fused world result to seed its hand slots
 	// from, so it takes them from its own body observation, and its solver
 	// takes a hand by its side, so the same observation names the sides
-	const int directCamera= isDirectModeActive() ? m_config->direct.cameraIndex : -1;
+	const int directCamera= isDirectModeActive() ? m_directCameraIndex : -1;
 
 	float inferenceMsSum= 0.f;
 	for (int cameraIndex= 0; cameraIndex < (int)m_cameras.size(); ++cameraIndex)
@@ -1104,7 +1123,7 @@ void VisionThread::runFusionStage(IterationState& iteration)
 
 bool VisionThread::isDirectModeActive() const
 {
-	const int cameraIndex= m_config->direct.cameraIndex;
+	const int cameraIndex= m_directCameraIndex;
 	return m_config->direct.enabled && cameraIndex >= 0 && cameraIndex < (int)m_cameras.size();
 }
 
@@ -1116,7 +1135,7 @@ void VisionThread::runDirectStage(IterationState& iteration)
 	for (const std::unique_ptr<CameraContext>& context : m_cameras)
 		iteration.fusionCandidates.push_back(&context->getLastResult());
 	iteration.bDirect= true;
-	iteration.outputResult= m_cameras[m_config->direct.cameraIndex]->getLastResult().result;
+	iteration.outputResult= m_cameras[m_directCameraIndex]->getLastResult().result;
 	m_lastFusedForHints= TrackingFrameResult(); // camera-space - can't project
 	m_dominantCamera[0]= -1;
 	m_dominantCamera[1]= -1;
@@ -1135,7 +1154,7 @@ void VisionThread::runDirectStage(IterationState& iteration)
 bool VisionThread::solveDirectRetarget(const IterationState& iteration)
 {
 	MIKAN_PROFILE_SCOPE("Direct retarget");
-	const CameraFrameResult& camera= m_cameras[m_config->direct.cameraIndex]->getLastResult();
+	const CameraFrameResult& camera= m_cameras[m_directCameraIndex]->getLastResult();
 	if (m_avatar.skeleton == nullptr || !camera.valid || !camera.hasIntrinsics)
 		return false;
 
@@ -1386,7 +1405,7 @@ void VisionThread::applyWebcamToOutput(TrackingFrameResult& output, double nowMs
 	if (!isDirectModeActive())
 		return;
 	const DirectConfig& direct= m_config->direct;
-	const CameraFrameResult& camera= m_cameras[direct.cameraIndex]->getLastResult();
+	const CameraFrameResult& camera= m_cameras[m_directCameraIndex]->getLastResult();
 	const bool bFresh= camera.valid && nowMs - camera.timestampMs <= k_webcamFaceFreshMs;
 	fillWebcamFaceSource(camera.result.body, bFresh, direct.neutralFacePresent ? &direct.neutralFace : nullptr,
 						 output.face.webcam);
@@ -1569,9 +1588,13 @@ void VisionThread::runCalibrationCaptures()
 	// Neutral capture for the direct retarget: the solver's filtered
 	// measurements, and the phone head's anchor while it streams, so looking
 	// at the screen reads as the identity head on both sources
-	if (m_bNeutralCaptureRequested.exchange(false))
+	// A request made for a camera this thread has not applied as the direct
+	// one yet (or no longer has) would capture another camera's view
+	const int neutralRequestCamera= m_neutralCaptureRequestCamera.exchange(-1);
+	if (neutralRequestCamera >= 0 && neutralRequestCamera == m_directCameraIndex)
 	{
 		NeutralCapture capture;
+		capture.cameraIndex= neutralRequestCamera;
 		if (m_retargetStage.captureNeutral(capture.neutral))
 		{
 			// The face's rest, when the camera saw it over the last frames

@@ -162,6 +162,7 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 		std::string error;
 		// The load replaces the frames these point into
 		m_frameTelemetry.clear();
+		m_recordedBodyBackends.clear();
 		m_bHasTelemetry= false;
 		++m_takeGeneration;
 		if (m_replay.load(m_recordingFiles[m_selectedRecording], error))
@@ -176,6 +177,7 @@ void TimelinePanel::drawLoadSection(const AppConfig* config, VisionThread* visio
 			// diagnostics, a few hundred bytes a frame
 			m_replay.setCaptureDiagnostics(true);
 			m_replay.runAll();
+			m_recordedBodyBackends= m_replay.findRecordedBodyPoseBackends();
 			m_bLoaded= true;
 			++m_timelineGeneration;
 			m_bWhatIfSeeded= false;
@@ -479,6 +481,7 @@ void TimelinePanel::buildRecordedResult(const RecordedFrame& recorded,
 {
 	outResult= TrackingFrameResult();
 	outResult.timestampMs= recorded.nowTimestampMs;
+	const bool bDirectTake= isDirectProject(m_replay.getRecordedConfig());
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const RecordedPoseOutput& recordedPose= recorded.outPoses[sideIndex];
@@ -495,9 +498,15 @@ void TimelinePanel::buildRecordedResult(const RecordedFrame& recorded,
 		pose.hasCameraPose= recordedPose.hasCameraPose;
 		pose.palmPositionCamera= recordedPose.palmPositionCamera;
 		pose.palmOrientationCamera= recordedPose.palmOrientationCamera;
-		pose.hasWorldPose= recordedPose.hasWorldPose;
-		pose.palmPositionWorld= recordedPose.palmPositionWorld;
-		pose.palmOrientationWorld= recordedPose.palmOrientationWorld;
+		// A direct take has no world calibration: the recorded world pose of
+		// a take made while stored extrinsics still applied is dropped, as the
+		// replayed view's config parse drops them
+		if (!bDirectTake)
+		{
+			pose.hasWorldPose= recordedPose.hasWorldPose;
+			pose.palmPositionWorld= recordedPose.palmPositionWorld;
+			pose.palmOrientationWorld= recordedPose.palmOrientationWorld;
+		}
 		pose.fingers= recordedPose.fingers;
 		pose.skeleton= recordedPose.skeleton;
 

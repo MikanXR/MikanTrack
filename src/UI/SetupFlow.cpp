@@ -530,9 +530,10 @@ void SetupFlow::applyCameraSelection()
 	}
 
 	// The camera that sees the user upright runs the body-pose stage: the
-	// tri-camera front, or the one camera of either single variant. The
-	// direct variant drives the avatar from that camera with the whole-body
-	// model, whose depth the solver reads. Dual variants leave body pose off
+	// tri-camera front, or the one camera of the single desk variant. The
+	// direct variant drives the avatar from its one camera, and the project's
+	// mode runs the whole-body model there, whose shoulders, ears, face and
+	// hand blocks the direct solve reads. Dual variants leave body pose off
 	// everywhere.
 	switch (m_trackingSetup)
 	{
@@ -543,8 +544,6 @@ void SetupFlow::applyCameraSelection()
 			config->camera(0).bodyPose.enabled= true;
 			break;
 		case eTrackingSetup::SingleFront:
-			config->camera(0).bodyPose.enabled= true;
-			config->camera(0).bodyPose.backend= "rtmw3d";
 			config->direct.enabled= true;
 			config->direct.cameraIndex= 0;
 			break;

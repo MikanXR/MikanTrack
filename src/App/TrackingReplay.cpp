@@ -6,12 +6,43 @@
 
 #include "nlohmann/json.hpp"
 
+#include "BodyPoseTracker.h" // eBodyPoseBackend
 #include "HandSideMatch.h"
 #include "Logger.h"
 #include "PathUtils.h"
 #include "SpaceTransforms.h"
 
 using json= nlohmann::json;
+
+std::vector<std::optional<eBodyPoseBackend>> TrackingReplay::findRecordedBodyPoseBackends() const
+{
+	const int cameraCount= (int)m_recordedConfig.cameraCount();
+	std::vector<std::optional<eBodyPoseBackend>> backends(cameraCount);
+	std::vector<bool> bObserved(cameraCount, false);
+	int observedCount= 0;
+	for (const RecordedFrame& frame : m_recordedFrames)
+	{
+		for (const RecordedCameraInput& camera : frame.freshCameras)
+		{
+			const int cameraIndex= camera.cameraIndex;
+			if (cameraIndex < 0 || cameraIndex >= cameraCount || bObserved[cameraIndex] || !camera.bHaveBodyPose ||
+				!camera.body.valid)
+				continue;
+			backends[cameraIndex]=
+				camera.body.hasDepth ? eBodyPoseBackend::Rtmw3dWholeBody : eBodyPoseBackend::RtmPoseBody;
+			bObserved[cameraIndex]= true;
+			++observedCount;
+		}
+		if (observedCount == cameraCount)
+			break;
+	}
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		if (!bObserved[cameraIndex])
+			backends[cameraIndex]= getBodyPoseBackend(m_recordedConfig, cameraIndex);
+	}
+	return backends;
+}
 
 bool TrackingReplay::load(const std::string& path, std::string& outError)
 {
