@@ -373,7 +373,7 @@ void AvatarPanel::drawMapping()
 		AvatarMapFigure::computeDotStates(*m_app->getAvatarModel(), *m_app->getAvatarSkeleton());
 
 	ImGui::TextWrapped("%s", locText("avatarPanel.mappingHelpText"));
-	if (m_figure.draw(states, m_selectedBone))
+	if (m_figure.draw(states, m_selectedBone, m_app->getAvatarModel().get()))
 		m_bScrollToSelected= true;
 
 	if (ImGui::Button(locLabel("avatarPanel.resetAllMappingButton")))
@@ -412,8 +412,10 @@ void AvatarPanel::drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDot
 	// Bone: selectable, in the dot's warning color when it carries one
 	ImGui::TableSetColumnIndex(0);
 	const bool bSelected= m_selectedBone == bone;
-	if (bSelected && m_bScrollToSelected)
-		ImGui::SetScrollHereY(0.5f);
+	// A dot's click brings its row into view from below, no further than
+	// that, so the figure above stays in view as far as the window allows
+	if (bSelected && m_bScrollToSelected && !ImGui::IsRectVisible(ImVec2(1.f, ImGui::GetFrameHeight())))
+		ImGui::SetScrollHereY(1.f);
 	const eAvatarMapDotState state= states[index];
 	if (state == eAvatarMapDotState::Warning || state == eAvatarMapDotState::RequiredUnmapped)
 		ImGui::PushStyleColor(ImGuiCol_Text, state == eAvatarMapDotState::Warning ? k_warningColor

@@ -267,7 +267,8 @@ const std::vector<eHumanoidBone>& AvatarMapFigure::getSectionBones(eAvatarMapSec
 
 bool AvatarMapFigure::draw(
 	const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states,
-	eHumanoidBone& ioSelected)
+	eHumanoidBone& ioSelected,
+	const AvatarModel* model)
 {
 	// Section buttons
 	const char* sectionLabels[(int)eAvatarMapSection::Count]= {
@@ -319,6 +320,10 @@ bool AvatarMapFigure::draw(
 
 		// The invisible button keeps a click on the figure from dragging the parent window
 		ImGui::InvisibleButton("##canvas", size);
+		// The canvas's own hover and click: the button is the active item on
+		// the frame it is pressed, when the window reads as not hovered
+		const bool bCanvasHovered= ImGui::IsItemHovered();
+		const bool bCanvasClicked= ImGui::IsItemClicked(ImGuiMouseButton_Left);
 
 		auto toScreen= [&](const ImVec2& p) { return ImVec2(origin.x + p.x * size.x, origin.y + p.y * size.y); };
 
@@ -354,7 +359,7 @@ bool AvatarMapFigure::draw(
 		// Nearest dot under the mouse
 		const ImVec2 mouse= ImGui::GetIO().MousePos;
 		const MapDot* hoveredDot= nullptr;
-		if (ImGui::IsWindowHovered())
+		if (bCanvasHovered)
 		{
 			const float pickRadius= dotRadius + k_dotPickMargin;
 			float bestDistSq= pickRadius * pickRadius;
@@ -384,8 +389,16 @@ bool AvatarMapFigure::draw(
 
 		if (hoveredDot != nullptr)
 		{
-			ImGui::SetTooltip("%s", humanoidBoneName(hoveredDot->bone));
-			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+			// The bone, and the node that plays it when the caller gave the model
+			const int node= model != nullptr ? model->humanoidNodes[(int)hoveredDot->bone] : -1;
+			if (model == nullptr)
+				ImGui::SetTooltip("%s", humanoidBoneName(hoveredDot->bone));
+			else if (node >= 0 && node < (int)model->nodes.size())
+				ImGui::SetTooltip("%s -> %s", humanoidBoneName(hoveredDot->bone), model->nodes[node].name.c_str());
+			else
+				ImGui::SetTooltip("%s -> %s", humanoidBoneName(hoveredDot->bone),
+								  locText("avatarPanel.nodeUnmappedItem"));
+			if (bCanvasClicked)
 			{
 				ioSelected= hoveredDot->bone;
 				bClicked= true;
