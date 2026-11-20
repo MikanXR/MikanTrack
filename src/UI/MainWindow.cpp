@@ -679,7 +679,15 @@ void MainWindow::update(float deltaSeconds)
 	// Inspector drawn below
 	eRetargetChain pickedChain;
 	if (m_scene3dPanel->consumePickedChain(pickedChain))
-		m_avatarPanel->setSelectedChain(pickedChain);
+	{
+		// From the Retarget stage itself the pick opens the chains, whose
+		// settings it chose; a sub-stage's selection stays
+		PipelineStageId chainsStage;
+		chainsStage.stage= ePipelineStage::Chains;
+		if (m_avatarPanel->setSelectedChain(pickedChain) &&
+			m_pipelinePanel->getSelected().stage == ePipelineStage::Retarget)
+			m_pipelinePanel->setSelected(chainsStage);
+	}
 
 	// The pipeline, once the avatar is posed for the shown frame: the strip,
 	// the inspector on the strip's selection, and the frame loop's timings
@@ -1468,6 +1476,19 @@ void MainWindow::gatherPipelineInputs()
 		in.bArmPlaced[0]= m_avatarPose.bones[(int)eHumanoidBone::LeftUpperArm].present;
 		in.bArmPlaced[1]= m_avatarPose.bones[(int)eHumanoidBone::RightUpperArm].present;
 	}
+	if (in.bAvatarLoaded && m_app->getAvatarModel() != nullptr)
+	{
+		for (const eAvatarMapDotState state :
+			 AvatarMapFigure::computeDotStates(*m_app->getAvatarModel(), *m_app->getAvatarSkeleton()))
+		{
+			if (state == eAvatarMapDotState::Mapped || state == eAvatarMapDotState::Warning)
+				++in.avatarMappedBoneCount;
+			if (state == eAvatarMapDotState::Warning || state == eAvatarMapDotState::RequiredUnmapped)
+				++in.avatarMappingProblemCount;
+		}
+	}
+	// The placement is the live project's, which a replayed frame is posed by
+	in.bAvatarFollowShoulders= m_app->getConfig()->avatar.followShoulders;
 
 	in.bOscEnabled= config->osc.enabled;
 	in.oscMinConfidence= config->osc.minConfidence;

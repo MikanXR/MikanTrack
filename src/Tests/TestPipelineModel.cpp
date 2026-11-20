@@ -84,6 +84,8 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 	in.bDirectTorso= bDirect;
 	in.directShoulderDepthMeters= 0.62f;
 	in.bAvatarLoaded= true;
+	in.avatarMappedBoneCount= 52;
+	in.bAvatarFollowShoulders= true;
 	in.bOscEnabled= true;
 	in.bOscRunning= true;
 	in.oscSendRateHz= 60.f;
@@ -211,6 +213,8 @@ std::vector<Fault> makeFaults()
 		{"swapped hand labels", [](Inputs& in) { in.bDirectHandednessSwapped= true; }},
 		{"nominal lens", [](Inputs& in) { in.bDirectIntrinsicsNominal= true; }},
 		{"no avatar", [](Inputs& in) { in.bAvatarLoaded= false; }},
+		{"bone map problem", [](Inputs& in) { in.avatarMappingProblemCount= 2; }},
+		{"follow shoulders off", [](Inputs& in) { in.bAvatarFollowShoulders= false; }},
 		{"osc disabled", [](Inputs& in) { in.bOscEnabled= false; }},
 		{"osc socket closed", [](Inputs& in) { in.bOscRunning= false; }},
 		{"face and mouth off", [](Inputs& in) { in.bFaceEnabled= in.bAudioEnabled= false; }},
@@ -280,21 +284,30 @@ static int runPipelineModelTest(const TestArgs&)
 			  "(a) direct top row puts one solver where fusion, IMU and body solver were");
 		check(PipelineModel::getSideStage() == id(S::Face), "(a) face is the side stage");
 
-		const auto captureLanes= PipelineModel::getSubStageLanes(id(S::Capture), 3);
+		const auto captureLanes= PipelineModel::getSubStageLanes(id(S::Capture), false, 3);
 		check(captureLanes.size() == 3 && captureLanes[2].size() == 5 && captureLanes[2][0] == id(S::Camera, 2) &&
 				  captureLanes[2][4] == id(S::Lift, 2),
 			  "(a) capture opens one lane per camera");
-		check(PipelineModel::getSubStageLanes(id(S::HandModels, 1), 3).size() == 3,
+		check(PipelineModel::getSubStageLanes(id(S::HandModels, 1), false, 3).size() == 3,
 			  "(a) a sub-stage opens its top-level stage's lanes");
-		check(PipelineModel::getSubStageLanes(id(S::DirectSolver), 1).front().size() == 5 &&
-				  PipelineModel::getSubStageLanes(id(S::Face), 1).front().size() == 5 &&
-				  PipelineModel::getSubStageLanes(id(S::Output), 1).front().size() == 2 &&
-				  PipelineModel::getSubStageLanes(id(S::Fusion), 3).empty(),
+		check(PipelineModel::getSubStageLanes(id(S::DirectSolver), true, 1).front().size() == 5 &&
+				  PipelineModel::getSubStageLanes(id(S::Face), false, 1).front().size() == 5 &&
+				  PipelineModel::getSubStageLanes(id(S::Output), false, 1).front().size() == 2 &&
+				  PipelineModel::getSubStageLanes(id(S::Fusion), false, 3).empty(),
 			  "(a) lanes of the direct solver, face, output, and none for fusion");
-		check(PipelineModel::getAllStages(false, 3).size() == 30 && PipelineModel::getAllStages(true, 1).size() == 23,
-			  "(a) stage counts: 30 for three cameras, 23 for direct");
+		const auto multiRetarget= PipelineModel::getSubStageLanes(id(S::Retarget), false, 3);
+		const auto directRetarget= PipelineModel::getSubStageLanes(id(S::Chains), true, 1);
+		check(multiRetarget.size() == 1 && multiRetarget[0].size() == 3 && multiRetarget[0][0] == id(S::VrmModel) &&
+				  multiRetarget[0][1] == id(S::Placement) && multiRetarget[0][2] == id(S::Chains),
+			  "(a) the multi-camera retarget lane: the model, the placement, the chains");
+		check(directRetarget.size() == 1 && directRetarget[0].size() == 2 && directRetarget[0][0] == id(S::VrmModel) &&
+				  directRetarget[0][1] == id(S::Chains),
+			  "(a) the direct retarget lane has no placement");
+		check(PipelineModel::getAllStages(false, 3).size() == 33 && PipelineModel::getAllStages(true, 1).size() == 25,
+			  "(a) stage counts: 33 for three cameras, 25 for direct");
 		check(PipelineModel::getTopLevel(id(S::Lift, 1)) == id(S::Capture) &&
 				  PipelineModel::getTopLevel(id(S::Palm)) == id(S::DirectSolver) &&
+				  PipelineModel::getTopLevel(id(S::Placement)) == id(S::Retarget) &&
 				  PipelineModel::getTopLevel(id(S::Fusion)) == id(S::Fusion),
 			  "(a) top-level stage of a sub-stage");
 	}
@@ -315,7 +328,9 @@ static int runPipelineModelTest(const TestArgs&)
 		}
 		check(bRoundTrip, "(b) every stage id survives toString and fromString");
 		check(seen.count("capture.cam2.hands") == 1 && seen.count("direct.arm") == 1 && seen.count("source") == 1 &&
-				  seen.count("face.mic") == 1 && seen.count("body") == 1 && seen.count("capture.cam0.body") == 1,
+				  seen.count("face.mic") == 1 && seen.count("body") == 1 && seen.count("capture.cam0.body") == 1 &&
+				  seen.count("retarget.model") == 1 && seen.count("retarget.placement") == 1 &&
+				  seen.count("retarget.chains") == 1,
 			  "(b) the ids read as documented");
 		PipelineStageId parsed;
 		check(!PipelineModel::fromString("", parsed) && !PipelineModel::fromString("nope", parsed) &&
@@ -428,6 +443,69 @@ static int runPipelineModelTest(const TestArgs&)
 		check(stateOf(nominal, id(S::DirectSolver)) == eStageState::Running &&
 				  reasonOf(nominal, id(S::DirectSolver)) == "pipeline.whyDirectNominalIntrinsics",
 			  "(f) direct on a nominal lens: the solver runs and notes the lens");
+	}
+
+	// (f1) The retarget lane: each box's own state, and the model's problem
+	// on the top row
+	{
+		const Inputs tri= makeHealthy(false, 3, true, 2);
+		const StageStatus model= PipelineModel::computeStatus(tri, id(S::VrmModel));
+		check(model.state == eStageState::Running && model.value.key == "pipeline.valBonesFmt" &&
+				  model.value.args[0] == 52.0,
+			  "(f1) a clean model runs and counts its mapped bones");
+		check(valueOf(tri, id(S::Placement)) == "pipeline.valFollowingShoulders" &&
+				  valueOf(tri, id(S::Chains)) == "pipeline.valArmsPlacedFmt" &&
+				  valueOf(tri, id(S::Chains)) == valueOf(tri, id(S::Retarget)),
+			  "(f1) both shoulders measured: the placement follows them, the chains count the placed arms");
+
+		Inputs oneShoulder= tri;
+		oneShoulder.hands[1].bShoulder= false;
+		Inputs followOff= tri;
+		followOff.bAvatarFollowShoulders= false;
+		check(valueOf(oneShoulder, id(S::Placement)) == "pipeline.valFixedRoot" &&
+				  valueOf(followOff, id(S::Placement)) == "pipeline.valFixedRoot" &&
+				  stateOf(followOff, id(S::Placement)) == eStageState::Running,
+			  "(f1) one shoulder, or follow off: the placement stands at the fixed root");
+
+		Inputs problem= tri;
+		problem.avatarMappingProblemCount= 2;
+		const StageStatus problemModel= PipelineModel::computeStatus(problem, id(S::VrmModel));
+		const StageStatus problemTop= PipelineModel::computeStatus(problem, id(S::Retarget));
+		check(problemModel.state == eStageState::Degraded && problemModel.value.key == "pipeline.valMappingProblemsFmt" &&
+				  problemModel.value.args[0] == 2.0 && problemModel.reason.key == "pipeline.whyMappingProblems",
+			  "(f1) a bone map problem: the model degraded with the count");
+		check(problemTop.state == eStageState::Degraded && problemTop.value.key == "pipeline.valArmsPlacedFmt" &&
+				  problemTop.reason.key == "pipeline.whyMappingProblems" &&
+				  stateOf(problem, id(S::Chains)) == eStageState::Running &&
+				  stateOf(problem, id(S::Placement)) == eStageState::Running,
+			  "(f1) a bone map problem: retarget degraded with its arm count, the placement and chains running");
+
+		Inputs noAvatar= tri;
+		noAvatar.bAvatarLoaded= false;
+		noAvatar.avatarMappedBoneCount= 0;
+		check(stateOf(noAvatar, id(S::VrmModel)) == eStageState::NotConfigured &&
+				  reasonOf(noAvatar, id(S::VrmModel)) == "pipeline.whyRetargetNoAvatar" &&
+				  stateOf(noAvatar, id(S::Placement)) == eStageState::Inactive &&
+				  reasonOf(noAvatar, id(S::Placement)) == "pipeline.whyPlacementNoAvatar" &&
+				  stateOf(noAvatar, id(S::Chains)) == eStageState::Running &&
+				  valueOf(noAvatar, id(S::Chains)) == "pipeline.valLossRulesOnly",
+			  "(f1) no avatar: the model not configured, the placement inactive, the chains run their loss rules");
+
+		Inputs noWorld= tri;
+		for (Inputs::Camera& camera : noWorld.cameras)
+			camera.bExtrinsics= false;
+		noWorld.path= Inputs::ePath::Passthrough;
+		noWorld.avatarMappingProblemCount= 2;
+		check(stateOf(noWorld, id(S::VrmModel)) == eStageState::Degraded &&
+				  stateOf(noWorld, id(S::Placement)) == eStageState::Inactive &&
+				  stateOf(noWorld, id(S::Chains)) == eStageState::Inactive &&
+				  stateOf(noWorld, id(S::Retarget)) == eStageState::Inactive,
+			  "(f1) nothing to pose: the placement, chains and retarget inactive, the model still reports its map");
+
+		Inputs direct= makeHealthy(true, 1, false, 0);
+		direct.bAvatarLoaded= false;
+		check(reasonOf(direct, id(S::VrmModel)) == "pipeline.whyDirectNoAvatar",
+			  "(f1) direct with no avatar: the model gives the direct reason");
 	}
 
 	// (f2) A replayed frame from a take with no stage state: the stages that

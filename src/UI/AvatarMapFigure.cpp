@@ -7,6 +7,9 @@
 
 #include "LocText.h"
 
+#include "AvatarRetargetMath.h"
+#include "AvatarSkeleton.h"
+
 static const ImU32 k_silhouetteColor= IM_COL32(130, 130, 130, 255);
 static const ImU32 k_limbFillColor= IM_COL32(130, 130, 130, 60);
 static const ImU32 k_dotOutlineColor= IM_COL32(20, 20, 20, 255);
@@ -393,4 +396,53 @@ bool AvatarMapFigure::draw(
 	ImGui::PopStyleVar();
 
 	return bClicked;
+}
+
+std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> AvatarMapFigure::computeDotStates(const AvatarModel& model,
+																						 const AvatarSkeleton& skeleton)
+{
+	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> states;
+	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+	{
+		if (model.humanoidNodes[index] >= 0)
+			states[index]= eAvatarMapDotState::Mapped;
+		else if (isHumanoidBoneRequired((eHumanoidBone)index))
+			states[index]= eAvatarMapDotState::RequiredUnmapped;
+		else
+			states[index]= eAvatarMapDotState::OptionalUnmapped;
+	}
+
+	// One node on two bones
+	for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
+	{
+		for (int other= index + 1; other < HUMANOID_BONE_COUNT; ++other)
+		{
+			if (model.humanoidNodes[index] >= 0 && model.humanoidNodes[index] == model.humanoidNodes[other])
+			{
+				states[index]= eAvatarMapDotState::Warning;
+				states[other]= eAvatarMapDotState::Warning;
+			}
+		}
+	}
+
+	// The index sitting on the far side of the middle finger from the thumb
+	// (the skeleton's swapped-finger warning) tags both fingers
+	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	{
+		const AvatarSkeleton::HandRest& hand= skeleton.getHand((eHandSide)sideIndex);
+		if (!hand.hasFinger((int)eFinger::Thumb) || !hand.hasFinger((int)eFinger::Index))
+			continue;
+		if (hand.skeleton.baseInPalm[(int)eFinger::Thumb].y * hand.skeleton.baseInPalm[(int)eFinger::Index].y >= 0.f)
+			continue;
+		for (int finger : {(int)eFinger::Index, (int)eFinger::Middle})
+		{
+			for (int phalanx= 0; phalanx < 3; ++phalanx)
+			{
+				const int bone= (int)AvatarRetargetMath::fingerBone(sideIndex, finger, phalanx);
+				if (states[bone] == eAvatarMapDotState::Mapped)
+					states[bone]= eAvatarMapDotState::Warning;
+			}
+		}
+	}
+	return states;
 }

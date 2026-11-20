@@ -125,9 +125,19 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
 	case ePipelineStage::Retarget:
+		// The preview pose needs a model; the chains' states read the shown
+		// frame with or without one
+		return section == eStageSection::Diagnostics ||
+			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+	case ePipelineStage::VrmModel:
+		return section == eStageSection::Inputs ||
+			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+	case ePipelineStage::Placement:
+		return section == eStageSection::Settings && m_app->getAvatarModel() != nullptr;
+	case ePipelineStage::Chains:
 		// The arms' loss rules apply with or without an avatar, so the
-		// settings always show, and the chains' states read the shown frame
-		return true;
+		// settings always show
+		return section != eStageSection::Inputs;
 	case ePipelineStage::Output:
 	case ePipelineStage::DeliveryRules:
 		return section != eStageSection::Inputs;
@@ -356,6 +366,12 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		}
 		break;
 	case ePipelineStage::Retarget:
+		if (section == eStageSection::Settings)
+			m_avatarPanel->drawPreviewPose();
+		else
+			SettingsPanels::drawRetargetChainReadout(m_tracking, m_app->getAvatarModel() != nullptr);
+		break;
+	case ePipelineStage::VrmModel:
 		if (section == eStageSection::Inputs)
 		{
 			m_avatarPanel->drawLoadControls();
@@ -365,9 +381,26 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 				m_avatarPanel->drawModelSummary();
 			}
 		}
-		else if (section == eStageSection::Settings)
+		else
 		{
-			drawRetargetSettings();
+			m_avatarPanel->drawPreviewPose();
+			m_avatarPanel->drawShowInScene();
+			ImGui::SeparatorText(locText("avatarPanel.tabMapping"));
+			m_avatarPanel->drawMapping();
+		}
+		break;
+	case ePipelineStage::Placement:
+		m_avatarPanel->drawPreviewPose();
+		m_avatarPanel->drawPlacement();
+		break;
+	case ePipelineStage::Chains:
+		if (section == eStageSection::Settings)
+		{
+			// The preview pose needs a model, read as it draws since a
+			// pinned VRM model window can unload it this frame
+			if (m_app->getAvatarModel() != nullptr)
+				m_avatarPanel->drawPreviewPose();
+			m_avatarPanel->drawChains();
 		}
 		else
 		{
@@ -396,26 +429,4 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 	default:
 		break;
 	}
-}
-
-void StageContent::drawRetargetSettings()
-{
-	// Placement, Mapping and the preview pose need a loaded model, read as
-	// they draw since the inputs above can unload it this frame. Placement
-	// and Mapping start closed.
-	if (m_app->getAvatarModel() != nullptr)
-	{
-		if (ImGui::TreeNode(locLabel("avatarPanel.tabPlacement")))
-		{
-			m_avatarPanel->drawPlacement();
-			ImGui::TreePop();
-		}
-		if (ImGui::TreeNode(locLabel("avatarPanel.tabMapping")))
-		{
-			m_avatarPanel->drawMapping();
-			ImGui::TreePop();
-		}
-		m_avatarPanel->drawPreviewPose();
-	}
-	m_avatarPanel->drawChains();
 }

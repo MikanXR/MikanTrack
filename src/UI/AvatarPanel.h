@@ -55,6 +55,9 @@ public:
 	// drawModelSummary and drawMapping draw nothing without one.
 	void drawLoadControls();
 	void drawModelSummary();
+	// The scene's avatar toggle, which both pipelines read
+	void drawShowInScene();
+	// Follow shoulders and the fixed root, the position retarget's alone
 	void drawPlacement();
 	// The view buttons, the figure, the reset, the filter and the bone table
 	void drawMapping();
@@ -98,7 +101,6 @@ public:
 
 private:
 	void drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT>& states);
-	std::array<eAvatarMapDotState, HUMANOID_BONE_COUNT> computeDotStates() const;
 
 	// A model and its skeleton are loaded
 	bool hasAvatar() const;

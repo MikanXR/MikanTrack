@@ -54,9 +54,6 @@ private:
 	// The shown frame's config, the one the stage tree is drawn from
 	const AppConfig& getShownConfig() const;
 	void mergeCalibrationAction(const CalibrationPanel::DrawResult& result);
-	// The Retarget stage's settings: placement, mapping and the preview pose
-	// with a loaded model, then the chains
-	void drawRetargetSettings();
 
 	App* m_app;
 	DevicePanel* m_devicePanel;

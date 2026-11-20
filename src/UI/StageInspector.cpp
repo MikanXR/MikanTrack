@@ -165,7 +165,7 @@ PipelineStageId StageInspector::drawStageBody(const PipelineStatusInputs& inputs
 	std::vector<PipelineStageId> subStages;
 	if (topLevel == stage)
 	{
-		for (const std::vector<PipelineStageId>& lane : PipelineModel::getSubStageLanes(stage, inputs.cameraCount))
+		for (const std::vector<PipelineStageId>& lane : PipelineModel::getSubStageLanes(stage, inputs.bDirect, inputs.cameraCount))
 			subStages.insert(subStages.end(), lane.begin(), lane.end());
 	}
 	bool bSubStageSection= false;
