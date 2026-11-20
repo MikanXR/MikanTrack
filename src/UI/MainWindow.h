@@ -212,6 +212,11 @@ private:
 	void gatherPipelineInputs();
 	bool handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 								  std::string& outError);
+	// scene camera: the Stage View's orbit camera, its angles, radius and
+	// target in world space; with a verb, sets them, frames the head or
+	// turns to a named side
+	bool handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							   std::string& outError);
 	// performance source: the Performance panel's source, the samples its
 	// chart holds and the marked sample's total; with a source, sets it
 	bool handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,

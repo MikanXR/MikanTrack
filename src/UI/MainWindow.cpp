@@ -43,6 +43,7 @@
 #include "Profiler.h"
 #include "ProjectManager.h"
 #include "RetargetChains.h"
+#include "OrbitCamera.h"
 #include "Scene3dPanel.h"
 #include "SourcePoseInputs.h"
 #include "SettingsPanels.h"
@@ -122,10 +123,95 @@ void MainWindow::registerAutomation(AutomationServer* server)
 			return handlePipelineAutomation(args, outLines, outError);
 		});
 	server->registerCommandNamespace(
+		"scene",
+		{"scene camera", "scene camera set <yawDegrees> <pitchDegrees> <radius>", "scene camera target <x> <y> <z>",
+		 "scene camera frame", "scene camera view front|back|left|right|top|bottom"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handleSceneAutomation(args, outLines, outError);
+		});
+	server->registerCommandNamespace(
 		"performance", {"performance source", "performance source live|recording"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePerformanceAutomation(args, outLines, outError);
 		});
+}
+
+bool MainWindow::handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									   std::string& outError)
+{
+	if (args.empty() || args[0] != "camera")
+	{
+		outError= args.empty() ? "missing subject" : "unknown subject: " + args[0];
+		return false;
+	}
+	// The Stage View's orbit camera. Its target is answered and taken in
+	// world space, the scene's own being the display's.
+	OrbitCamera& camera= m_scene3dPanel->getOrbitCamera();
+	auto parseNumbers= [&](size_t first, size_t count, float* outValues) {
+		if (args.size() != first + count)
+			return false;
+		for (size_t index= 0; index < count; ++index)
+		{
+			char* end= nullptr;
+			outValues[index]= strtof(args[first + index].c_str(), &end);
+			if (end == args[first + index].c_str() || *end != '\0')
+				return false;
+		}
+		return true;
+	};
+	const std::string verb= args.size() >= 2 ? args[1] : std::string();
+	if (verb == "set")
+	{
+		float values[3];
+		if (!parseNumbers(2, 3, values))
+		{
+			outError= "expected <yawDegrees> <pitchDegrees> <radius>";
+			return false;
+		}
+		camera.setOrbitLocation(values[0], values[1], values[2]);
+	}
+	else if (verb == "target")
+	{
+		float values[3];
+		if (!parseNumbers(2, 3, values))
+		{
+			outError= "expected <x> <y> <z>";
+			return false;
+		}
+		camera.setOrbitTargetPosition(
+			glm::vec3(displayFromWorld() * glm::vec4(values[0], values[1], values[2], 1.f)));
+	}
+	else if (verb == "frame")
+	{
+		if (!m_scene3dPanel->frameHead())
+		{
+			outError= "no head to frame";
+			return false;
+		}
+	}
+	else if (verb == "view")
+	{
+		float yawDegrees= 0.f;
+		float pitchDegrees= 0.f;
+		if (args.size() != 3 || !getSceneViewFaceAngles(args[2], yawDegrees, pitchDegrees))
+		{
+			outError= "expected front, back, left, right, top or bottom";
+			return false;
+		}
+		camera.setOrbitLocation(yawDegrees, pitchDegrees, camera.getOrbitRadius());
+	}
+	else if (!verb.empty())
+	{
+		outError= "unknown verb: " + verb;
+		return false;
+	}
+	const glm::vec3 targetWorld=
+		glm::vec3(glm::inverse(displayFromWorld()) * glm::vec4(camera.getOrbitTargetPosition(), 1.f));
+	char line[160];
+	snprintf(line, sizeof(line), "yaw %.2f pitch %.2f radius %.3f target %.3f %.3f %.3f", camera.getOrbitYawDegrees(),
+			 camera.getOrbitPitchDegrees(), camera.getOrbitRadius(), targetWorld.x, targetWorld.y, targetWorld.z);
+	outLines.push_back(line);
+	return true;
 }
 
 bool MainWindow::handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,

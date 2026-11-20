@@ -100,6 +100,18 @@ Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the 
 
 The commands after `edit` need the editor open and answer an error otherwise.
 
+### Scene camera (scene)
+
+The Stage View's orbit camera, the one the free point of view looks through. Every form answers one line, `yaw <degrees> pitch <degrees> radius <meters> target <x> <y> <z>`, the target in world space. A negative pitch looks down from above.
+
+- `scene camera`: the orbit as it is
+- `scene camera set <yawDegrees> <pitchDegrees> <radius>`: sets the angles and the distance, the pitch clamped to 89 degrees either way
+- `scene camera target <x> <y> <z>`: sets the point the orbit turns about, world space
+- `scene camera frame`: aims the orbit at the head as the Frame head button does, with an error when the frame has no head
+- `scene camera view front|back|left|right|top|bottom`: turns the orbit to look from that side of the avatar, the sides being the avatar's own, keeping the target and the distance
+
+The view cube in the scene's corner is driven by `input`: a `press`, `move` and `release` across frames on it turns the orbit, and a `click` on a face turns it to that face over about 40 frames, so a drive sleeps a second or two before reading `scene camera` back.
+
 ### Performance panel (performance)
 
 - `performance source`: `live` or `recording`, the number of samples charted and the newest or playhead sample's total (`recording samples 600 total 8.22`)

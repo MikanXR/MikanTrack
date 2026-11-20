@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "glm/ext/matrix_float4x4.hpp"
@@ -174,7 +175,16 @@ struct SceneViewState
 	// Whether the orbit has been aimed at the head yet: the first draw with a
 	// head to aim at does it, and the orbit is the user's from then on
 	bool bFramedHead= false;
+	// The view cube on the last draw: under the mouse, or holding a press
+	// that began on it, so the orbit, the picks and the gizmos stand down
+	bool bCubeHasMouse= false;
+	bool bCubePressed= false;
 };
+
+// The orbit angles that look at the target from a named side of the avatar,
+// which faces display +X: front, back, left, right, top or bottom, the sides
+// being the avatar's own. False for any other name.
+bool getSceneViewFaceAngles(const std::string& face, float& outYawDegrees, float& outPitchDegrees);
 
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
 // calibrated camera, the FUSED hand/arm skeletons (full brightness), each
@@ -296,6 +306,8 @@ public:
 	bool frameHead(SceneViewState& view);
 	// The same for the Stage View's own view
 	bool frameHead() { return frameHead(m_mainView); }
+	// The Stage View's orbit camera
+	OrbitCamera& getOrbitCamera() { return *m_mainView.camera; }
 
 	// The view's camera choice, not persisted: -1 is the free (orbit) camera,
 	// else the configured camera the view looks through, the frame's aspect
@@ -357,6 +369,11 @@ private:
 	// drag turns it (unless bLeftDragOrbits is off, when a gizmo holds the
 	// mouse), the middle drag pans, the wheel zooms
 	static void updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits);
+	// The view cube at the top right of the view's viewport, over the image
+	// item just drawn: a drag on it turns the view's orbit about its target
+	// and a click on a face, an edge or a corner turns it to look from there.
+	// Fills the view's cube state.
+	static void drawViewCube(SceneViewState& view, const glm::vec2& imageMin, const glm::vec2& imageSize);
 	void drawGizmos(const SceneGizmos& gizmos);
 	void drawDirectSolve();
 	// Picks and drags the gizmos with the mouse over the scene image; returns

@@ -4,6 +4,7 @@
 
 #include "AvatarOverlay.h"
 #include "DirectRetarget.h"
+#include "OrbitCamera.h"
 #include "PipelineModel.h"
 #include "Scene3dPanel.h"
 #include "SourceSkeleton.h"
@@ -379,6 +380,47 @@ static int runSceneViewTest(const TestArgs& args)
 		check(bRefused && bChosen && bHeld && bFellBack && bStayedFree && bRemoved && bOtherNotMatched && bMatched,
 			  "(o) the camera choice refuses an unavailable camera, falls back to the free camera, and matches only "
 			  "its own camera");
+	}
+
+	// The orbit takes its angles back from a view matrix turned about its
+	// target, keeping the target and the radius, and a named side looks at
+	// the target from that side of an avatar facing display +X
+	{
+		OrbitCamera source;
+		source.setOrbitTargetPosition(glm::vec3(0.2f, 1.4f, -0.1f));
+		OrbitCamera orbit;
+		orbit.setOrbitTargetPosition(source.getOrbitTargetPosition());
+		orbit.setOrbitLocation(10.f, -20.f, 2.5f);
+		float maxAngleMiss= 0.f;
+		const float angles[][2]= {{30.f, -40.f}, {-135.f, 25.f}, {170.f, -80.f}, {0.f, 0.f}, {90.f, 60.f}};
+		for (const auto& yawPitch : angles)
+		{
+			source.setOrbitLocation(yawPitch[0], yawPitch[1], 0.7f);
+			orbit.setOrbitAnglesFromViewMatrix(source.getViewMatrix());
+			// The source wraps its yaw the way the orbit does
+			maxAngleMiss= std::max(maxAngleMiss, std::fabs(orbit.getOrbitYawDegrees() - source.getOrbitYawDegrees()));
+			maxAngleMiss=
+				std::max(maxAngleMiss, std::fabs(orbit.getOrbitPitchDegrees() - source.getOrbitPitchDegrees()));
+		}
+		const bool bKept= std::fabs(orbit.getOrbitRadius() - 2.5f) < 1e-5f &&
+			glm::length(orbit.getOrbitTargetPosition() - source.getOrbitTargetPosition()) < 1e-6f;
+		check(maxAngleMiss < 0.01f && bKept, "(p) the orbit takes its angles from a view matrix and keeps its target and radius");
+
+		float yawDegrees= 0.f;
+		float pitchDegrees= 0.f;
+		OrbitCamera faced;
+		const bool bFront= getSceneViewFaceAngles("front", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bFrontSide= glm::length(faced.getCameraPosition() - glm::vec3(2.f, 0.f, 0.f)) < 1e-4f;
+		const bool bLeft= getSceneViewFaceAngles("left", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bLeftSide= glm::length(faced.getCameraPosition() - glm::vec3(0.f, 0.f, -2.f)) < 1e-4f;
+		const bool bTop= getSceneViewFaceAngles("top", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bTopSide= faced.getCameraPosition().y > 1.99f;
+		const bool bUnknown= !getSceneViewFaceAngles("sideways", yawDegrees, pitchDegrees);
+		check(bFront && bFrontSide && bLeft && bLeftSide && bTop && bTopSide && bUnknown,
+			  "(q) a named side looks from that side of the avatar");
 	}
 
 	MIKAN_LOG_INFO("test-scene-view") << (result == 0 ? "ALL PASS" : "FAILURES");

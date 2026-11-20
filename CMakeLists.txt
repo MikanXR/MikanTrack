@@ -112,6 +112,11 @@ set(IMPLOT_SOURCES
     ${IMPLOT_DIR}/implot_items.cpp
 )
 
+# ImGuizmo (the scene's view cube and transform gizmo over Dear ImGui),
+# compiled directly into the exe. Only the gizmo source is built.
+set(IMGUIZMO_DIR ${THIRDPARTY_DIR}/ImGuizmo/src)
+set(IMGUIZMO_SOURCES ${IMGUIZMO_DIR}/ImGuizmo.cpp ${IMGUIZMO_DIR}/ImGuizmo.h)
+
 # tinyfiledialogs (native file dialogs), compiled directly into the exe
 set(TINYFD_DIR ${THIRDPARTY_DIR}/tinyfiledialogs)
 set(TINYFD_SOURCES ${TINYFD_DIR}/tinyfiledialogs.c ${TINYFD_DIR}/tinyfiledialogs.h)
@@ -164,6 +169,7 @@ add_executable(MikanTrack WIN32
     ${TESTS_SRC}
     ${IMGUI_SOURCES}
     ${IMPLOT_SOURCES}
+    ${IMGUIZMO_SOURCES}
     ${TINYFD_SOURCES}
     ${TRACY_SOURCES}
 )
@@ -175,6 +181,7 @@ source_group(TREE ${ROOT_DIR}/src PREFIX "src" FILES
     ${OSC_SRC} ${FACE_SRC} ${FACEEXPR_SRC} ${AUDIO_SRC} ${AVATAR_SRC} ${RENDER_SRC} ${PIPELINE_SRC} ${UI_SRC} ${TESTS_SRC} ${ROOT_DIR}/src/main.cpp)
 source_group("thirdparty\\imgui" FILES ${IMGUI_SOURCES})
 source_group("thirdparty\\implot" FILES ${IMPLOT_SOURCES})
+source_group("thirdparty\\ImGuizmo" FILES ${IMGUIZMO_SOURCES})
 source_group("thirdparty\\tinyfiledialogs" FILES ${TINYFD_SOURCES})
 source_group("thirdparty\\tracy" FILES ${TRACY_SOURCES})
 
@@ -212,6 +219,7 @@ target_include_directories(MikanTrack PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMPLOT_DIR}
+    ${IMGUIZMO_DIR}
     ${TINYFD_DIR}
 )
 

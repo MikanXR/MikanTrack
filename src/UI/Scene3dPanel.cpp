@@ -3,11 +3,14 @@
 #include "GL/glew.h"
 
 #include "imgui.h"
+#include "ImGuizmo.h"
 
 #include "LocText.h"
 
+#include "glm/ext/matrix_clip_space.hpp"
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/gtc/constants.hpp"
+#include "glm/gtc/type_ptr.hpp"
 
 #include "AppConfig.h"
 #include "AvatarSkeleton.h"
@@ -125,6 +128,37 @@ static const glm::vec3 k_cameraColors[4]= {
 	glm::vec3(1.f, 0.5f, 0.9f),  // magenta
 	glm::vec3(0.6f, 1.f, 0.5f),  // green
 };
+
+// The view cube: its side in font heights, its inset from the viewport's
+// corner in pixels, and the backing drawn behind it
+static constexpr float kViewCubeEms= 5.5f;
+static constexpr float kViewCubeInset= 6.f;
+static const ImU32 k_viewCubeBackground= IM_COL32(0, 0, 0, 48);
+
+bool getSceneViewFaceAngles(const std::string& face, float& outYawDegrees, float& outPitchDegrees)
+{
+	// The orbit's yaw turns the camera from display +Z toward +X, and the
+	// avatar's left is world +Y, display -Z
+	static const struct
+	{
+		const char* name;
+		float yawDegrees;
+		float pitchDegrees;
+	} k_faces[]= {
+		{"front", 90.f, 0.f}, {"back", -90.f, 0.f}, {"left", 180.f, 0.f},
+		{"right", 0.f, 0.f},  {"top", 90.f, -89.f}, {"bottom", 90.f, 89.f},
+	};
+	for (const auto& entry : k_faces)
+	{
+		if (face == entry.name)
+		{
+			outYawDegrees= entry.yawDegrees;
+			outPitchDegrees= entry.pitchDegrees;
+			return true;
+		}
+	}
+	return false;
+}
 
 SceneViewState::SceneViewState()
 	: frameBuffer(std::make_unique<GlFrameBuffer>())
@@ -304,17 +338,18 @@ void Scene3dPanel::drawBody(const TrackingFrameResult& fusedResult, const std::v
 	// The gizmos and the orbit belong to the orbit view: the camera view is
 	// a fixed viewpoint
 	bool bGizmoOwnsMouse= false;
-	if (bCameraView || !layers.bGizmos)
+	const bool bCubeHasMouse= m_mainView.bCubeHasMouse;
+	if (bCameraView || !layers.bGizmos || bCubeHasMouse)
 		m_draggedElbowHint= -1;
 	else
 		bGizmoOwnsMouse= updateGizmoDrag(gizmos, imageMin, imageSize);
 	// After the gizmos, so a press a gizmo took is not a click
-	if (options.bPickSourceChains && layers.bSourcePose)
+	if (options.bPickSourceChains && layers.bSourcePose && !bCubeHasMouse)
 		updateSourcePick(imageMin, imageSize);
 	else
 		m_bPickPressArmed= false;
 	if (!bCameraView)
-		updateOrbit(*m_mainView.camera, !bGizmoOwnsMouse);
+		updateOrbit(*m_mainView.camera, !bGizmoOwnsMouse && !bCubeHasMouse);
 }
 
 void Scene3dPanel::drawViewBody(SceneViewState& view, const TrackingFrameResult& fusedResult,
@@ -328,7 +363,7 @@ void Scene3dPanel::drawViewBody(SceneViewState& view, const TrackingFrameResult&
 	glm::vec2 imageMin, imageSize;
 	if (drawViewImage(view, false, false, viewLayers, fusedResult, cameras, perCameraResults, noGizmos, imageMin,
 					  imageSize))
-		updateOrbit(*view.camera, true);
+		updateOrbit(*view.camera, !view.bCubeHasMouse);
 }
 
 void Scene3dPanel::frameRegion(SceneViewState& view, bool bCameraView, const glm::ivec4& region,
@@ -418,6 +453,12 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 	outImageSize= glm::vec2((float)fbWidth, (float)fbHeight);
 	if (ImGui::IsItemHovered() && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false))
 		frameHead(view);
+	// The cube turns the orbit camera, which the camera view does not show
+	// through. It adds no item, so the image stays the last one.
+	if (bCameraView)
+		view.bCubeHasMouse= view.bCubePressed= false;
+	else
+		drawViewCube(view, outImageMin, outImageSize);
 
 	// Each half's name at its top left, drawn over the image rather than as
 	// items, so the image stays the last item for the orbit and the picks
@@ -432,6 +473,46 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 						  locText("scene3dPanel.avatarHalfLabel"));
 	}
 	return true;
+}
+
+void Scene3dPanel::drawViewCube(SceneViewState& view, const glm::vec2& imageMin, const glm::vec2& imageSize)
+{
+	// The viewport inside the image, which shows the framebuffer flipped
+	const glm::ivec4& viewport= view.viewport;
+	const ImVec2 rectMin(imageMin.x + (float)viewport.x, imageMin.y + imageSize.y - (float)(viewport.y + viewport.w));
+	const ImVec2 rectSize((float)viewport.z, (float)viewport.w);
+	const float cubeSize= ImGui::GetFontSize() * kViewCubeEms;
+	const ImVec2 cubePos(rectMin.x + rectSize.x - cubeSize - kViewCubeInset, rectMin.y + kViewCubeInset);
+
+	// ImGuizmo reads the projection for its handedness alone, and keeps one
+	// cube's drag and turn per id, so every view has its own
+	const glm::mat4 handedness= glm::perspective(glm::radians(45.f), 1.f, 0.1f, 10.f);
+	glm::mat4 identity(1.f);
+	OrbitCamera& camera= *view.camera;
+	glm::mat4 viewMatrix= camera.getViewMatrix();
+	ImGuizmo::PushID((const void*)&view);
+	ImGuizmo::SetDrawlist();
+	ImGuizmo::SetRect(rectMin.x, rectMin.y, rectSize.x, rectSize.y);
+	ImGuizmo::ViewManipulate(glm::value_ptr(viewMatrix), glm::value_ptr(handedness), ImGuizmo::TRANSLATE,
+							 ImGuizmo::WORLD, glm::value_ptr(identity), camera.getOrbitRadius(), cubePos,
+							 ImVec2(cubeSize, cubeSize), k_viewCubeBackground);
+	ImGuizmo::PopID();
+
+	// The cube pivots about the point the orbit radius ahead of the camera,
+	// which is the orbit's target, so only the angles come back
+	if (viewMatrix != camera.getViewMatrix())
+		camera.setOrbitAnglesFromViewMatrix(viewMatrix);
+
+	// ImGuizmo's own hovered and using flags are shared by every cube drawn
+	// this frame, so each view reads its own rect and press
+	const ImVec2 mouse= ImGui::GetIO().MousePos;
+	const bool bOverCube= ImGui::IsItemHovered() && mouse.x >= cubePos.x && mouse.x < cubePos.x + cubeSize &&
+		mouse.y >= cubePos.y && mouse.y < cubePos.y + cubeSize;
+	if (bOverCube && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		view.bCubePressed= true;
+	else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		view.bCubePressed= false;
+	view.bCubeHasMouse= bOverCube || view.bCubePressed;
 }
 
 void Scene3dPanel::updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits)

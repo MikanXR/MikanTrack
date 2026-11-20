@@ -21,3 +21,6 @@
 	path = thirdparty/tracy
 	url = https://github.com/wolfpld/tracy.git
 	ignore = untracked
+[submodule "thirdparty/ImGuizmo"]
+	path = thirdparty/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo
