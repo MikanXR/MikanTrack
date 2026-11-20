@@ -293,6 +293,10 @@ public:
 	// are carried into the avatar's world by the direct solve's transform,
 	// so they draw only while a direct solve is set.
 	void setSourcePose(const RetargetResult* result, const glm::vec3* headAnchorWorld);
+	// The face the direct camera's body model tracked on the shown frame
+	// (copied), drawn with the source pose's head through the capture's
+	// camera; null, or an observation without the face block, draws none
+	void setSourceFace(const BodyPoseObservation* body);
 	// The chain highlighted on the source pose
 	void setSelectedChain(eRetargetChain chain) { m_selectedChain= chain; }
 	// The source skeleton the layer draws and the picking hits
@@ -417,6 +421,8 @@ private:
 	AvatarRetargetGoals m_sourceGoals;
 	bool m_bHasHeadAnchor= false;
 	glm::vec3 m_headAnchorWorld{0.f};
+	bool m_bHasSourceFace= false;
+	SourceSkeletonInputs::Face m_sourceFace;
 	SourceSkeleton m_sourceSkeleton;
 	bool m_bSourceSkeletonDirty= true;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;

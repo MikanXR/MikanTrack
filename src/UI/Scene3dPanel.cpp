@@ -243,18 +243,56 @@ void Scene3dPanel::setSourcePose(const RetargetResult* result, const glm::vec3* 
 	m_bSourceSkeletonDirty= true;
 }
 
+void Scene3dPanel::setSourceFace(const BodyPoseObservation* body)
+{
+	m_bHasSourceFace= body != nullptr && body->valid && body->wholeBody.present;
+	if (m_bHasSourceFace)
+	{
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+		{
+			m_sourceFace.pixels[index]= glm::vec2(body->wholeBody.face[index]);
+			m_sourceFace.scores[index]= body->wholeBody.faceScores[index];
+		}
+	}
+	m_bSourceSkeletonDirty= true;
+}
+
 const SourceSkeleton& Scene3dPanel::getSourceSkeleton()
 {
 	if (m_bSourceSkeletonDirty)
 	{
 		m_bSourceSkeletonDirty= false;
 		SourceSkeletonInputs inputs;
+		std::array<SourceSkeletonInputs::DirectHand, 2> directHands;
 		if (m_bHasSourcePose)
 		{
 			inputs.source= &m_sourcePose;
 			inputs.hands= &m_sourceHands;
 			inputs.directToWorld= m_bHasDirectSolve ? &m_solveToWorld : nullptr;
 			inputs.headAnchorWorld= m_bHasHeadAnchor ? &m_headAnchorWorld : nullptr;
+			if (m_bHasDirectSolve && m_avatarSkeleton != nullptr)
+			{
+				// The palm the solve measured, laid out along the avatar's
+				// hand, whose units the direct source is in
+				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+				{
+					const DirectRetarget::SolveState::Arm& arm= m_directSolve.arms[sideIndex];
+					const AvatarSkeleton::HandRest& handRest=
+						m_avatarSkeleton->getHand(sideIndex == 0 ? eHandSide::Left : eHandSide::Right);
+					directHands[sideIndex].bValid= arm.bHandMeasured && handRest.valid;
+					directHands[sideIndex].palmOrientation= arm.filteredPalm;
+					directHands[sideIndex].skeleton= handRest.skeleton;
+				}
+				inputs.directHands= &directHands;
+			}
+			// The face is the direct camera's, which the capture looks through
+			if (m_bHasSourceFace && m_bHasDirectSolve && m_captureMatch.valid)
+			{
+				m_sourceFace.fx= m_captureMatch.camera.fx;
+				m_sourceFace.fy= m_captureMatch.camera.fy;
+				m_sourceFace.cameraToWorld= m_captureMatch.cameraToWorld;
+				inputs.face= &m_sourceFace;
+			}
 		}
 		buildSourceSkeleton(inputs, m_sourceSkeleton);
 	}

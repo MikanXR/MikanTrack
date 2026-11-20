@@ -1242,14 +1242,26 @@ void MainWindow::updateSceneSourcePose(const RetargetResult* result, const Track
 	m_scene3dPanel->setSelectedChain(m_avatarPanel->getSelectedChain());
 	if (result == nullptr || result->source.pipeline == SourcePose::ePipeline::None)
 	{
+		m_scene3dPanel->setSourceFace(nullptr);
 		m_scene3dPanel->setSourcePose(nullptr, nullptr);
 		return;
 	}
 	const glm::vec3* headAnchor= nullptr;
+	const BodyPoseObservation* faceBody= nullptr;
 	if (result->source.pipeline == SourcePose::ePipeline::Position)
+	{
 		headAnchor= measuredHead != nullptr && measuredHead->valid ? &measuredHead->positionWorld : nullptr;
+	}
 	else
+	{
 		headAnchor= posedHeadWorld;
+		// The direct camera's body model tracks the face the source's head
+		// was read from
+		const int cameraIndex= m_shown.config->direct.cameraIndex;
+		if (cameraIndex >= 0 && cameraIndex < (int)m_shown.perCamera.size() && m_shown.perCamera[cameraIndex] != nullptr)
+			faceBody= &m_shown.perCamera[cameraIndex]->body;
+	}
+	m_scene3dPanel->setSourceFace(faceBody);
 	m_scene3dPanel->setSourcePose(result, headAnchor);
 }
 

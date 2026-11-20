@@ -231,7 +231,7 @@ static int runSceneViewTest(const TestArgs& args)
 
 	// The direct pipeline: the chain is carried by the solve's transform, a
 	// resting arm carries no positions and draws nothing, the head is a
-	// marker alone, and without the transform nothing draws
+	// marker with its facing and up, and without the transform nothing draws
 	{
 		SourcePose direct= position;
 		direct.pipeline= SourcePose::ePipeline::Direct;
@@ -257,7 +257,103 @@ static int runSceneViewTest(const TestArgs& args)
 		const int restingPieces= countSegments(skeleton, eRetargetChain::RightArm, false) +
 			countSegments(skeleton, eRetargetChain::RightArm, true) + countMarkers(skeleton, eRetargetChain::RightArm);
 		const bool bHead= countMarkers(skeleton, eRetargetChain::Head) == 1 &&
-			countSegments(skeleton, eRetargetChain::Head, false) == 0;
+			countSegments(skeleton, eRetargetChain::Head, false) == 2;
+
+		// A direct hand hangs on the drawn chain's wrist, four bones a finger,
+		// and a resting arm's hand draws nothing whatever was measured
+		std::array<SourceSkeletonInputs::DirectHand, 2> directHands;
+		for (SourceSkeletonInputs::DirectHand& directHand : directHands)
+		{
+			directHand.bValid= true;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				directHand.skeleton.baseInPalm[finger]= glm::vec3(0.04f, 0.02f * (float)(finger - 2), 0.f);
+				directHand.skeleton.phalanxLengths[finger]= {0.04f, 0.025f, 0.02f};
+				directHand.skeleton.neutralDirInPalm[finger]= glm::vec3(1.f, 0.f, 0.f);
+			}
+		}
+		direct.hands[0].state= SourcePose::eGroupState::Measured;
+		direct.hands[1].state= SourcePose::eGroupState::Measured;
+		inputs.directHands= &directHands;
+		SourceSkeleton withHands;
+		buildSourceSkeleton(inputs, withHands);
+		bool bOnWrist= false;
+		float maxReach= 0.f;
+		const glm::vec3 wristWorld= direct.arms[0].wristPosition + offset;
+		for (const SourceSkeleton::Segment& segment : withHands.segments)
+		{
+			if (segment.chain != eRetargetChain::LeftHand)
+				continue;
+			bOnWrist|= glm::length(segment.start - wristWorld) < 1e-5f;
+			maxReach= std::max(maxReach, glm::length(segment.end - wristWorld));
+		}
+		// A finger at zero runs straight on along its own metacarpal, so the
+		// outermost reaches furthest: its metacarpal, 8 cm ahead and 4 cm to
+		// the side of the wrist, then its three bones
+		const float outerReach= std::sqrt(0.08f * 0.08f + 0.04f * 0.04f) + 0.04f + 0.025f + 0.02f;
+		const bool bHands= countSegments(withHands, eRetargetChain::LeftHand, false) == 4 * FINGER_COUNT && bOnWrist &&
+			std::fabs(maxReach - outerReach) < 1e-4f &&
+			countSegments(withHands, eRetargetChain::RightHand, false) +
+					countSegments(withHands, eRetargetChain::RightHand, true) ==
+				0;
+		directHands[0].bValid= false;
+		SourceSkeleton unmeasured;
+		buildSourceSkeleton(inputs, unmeasured);
+		const bool bUnmeasured= countSegments(unmeasured, eRetargetChain::LeftHand, false) == 0;
+		check(bHands && bUnmeasured,
+			  "(k2) a direct hand draws on its chain's wrist from the measured palm, and not for a resting arm or a "
+			  "hand never measured");
+
+		// The tracked face lies on the plane through the anchor that faces the
+		// camera: the landmarks' center on the anchor, a pixel offset at the
+		// anchor's depth, and a landmark under the score gate left out
+		SourceSkeletonInputs::Face face;
+		face.fx= 600.f;
+		face.fy= 600.f;
+		// A camera 2 m in front of the anchor looking back along world -X, its
+		// image's right along world +Y and its down along world -Z
+		face.cameraToWorld= glm::mat4(glm::vec4(0.f, 1.f, 0.f, 0.f), glm::vec4(0.f, 0.f, -1.f, 0.f),
+									  glm::vec4(-1.f, 0.f, 0.f, 0.f), glm::vec4(headAnchor + glm::vec3(2.f, 0.f, 0.f), 1.f));
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+		{
+			face.pixels[index]= glm::vec2(320.f, 240.f);
+			face.scores[index]= 1.f;
+		}
+		// The jaw line's first two points 30 px either side of the center
+		face.pixels[0]= glm::vec2(290.f, 240.f);
+		face.pixels[1]= glm::vec2(350.f, 240.f);
+		glm::vec3 placedCenter, placedRight;
+		const bool bPlaced= placeSourceFacePoint(face, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(320.f, 240.f),
+												 placedCenter) &&
+			placeSourceFacePoint(face, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(350.f, 270.f), placedRight);
+		// 30 px at 600 px focal length and 2 m is 10 cm: right is world +Y, down world -Z
+		const bool bPlane= bPlaced && glm::length(placedCenter - headAnchor) < 1e-5f &&
+			glm::length(placedRight - (headAnchor + glm::vec3(0.f, 0.1f, -0.1f))) < 1e-5f;
+		glm::vec3 behind;
+		SourceSkeletonInputs::Face faceBehind= face;
+		faceBehind.cameraToWorld[3]= glm::vec4(headAnchor - glm::vec3(2.f, 0.f, 0.f), 1.f);
+		const bool bBehind=
+			!placeSourceFacePoint(faceBehind, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(320.f, 240.f), behind);
+
+		inputs.directHands= nullptr;
+		inputs.face= &face;
+		SourceSkeleton withFace;
+		buildSourceSkeleton(inputs, withFace);
+		// Every contour segment: 63 open runs' steps and closed runs' steps
+		int contourSegments= 0;
+		for (const WholeBodyFaceContour& contour : WHOLEBODY_FACE_CONTOURS)
+			contourSegments+= contour.last - contour.first + (contour.bClosed ? 1 : 0);
+		const int headSegments= countSegments(withFace, eRetargetChain::Head, false);
+		face.scores[1]= 0.2f;
+		SourceSkeleton gated;
+		buildSourceSkeleton(inputs, gated);
+		// The gated landmark takes the jaw line's first two segments with it
+		const bool bFace= headSegments == 2 + contourSegments &&
+			countSegments(gated, eRetargetChain::Head, false) == headSegments - 2;
+		inputs.face= nullptr;
+		check(bPlane && bBehind && bFace,
+			  "(k3) the tracked face is laid on the camera-facing plane through the head's anchor, gated by score");
+
 		inputs.directToWorld= nullptr;
 		SourceSkeleton unplaced;
 		buildSourceSkeleton(inputs, unplaced);
