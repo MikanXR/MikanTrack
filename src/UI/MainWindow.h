@@ -278,6 +278,16 @@ private:
 														   const std::shared_ptr<const AvatarSkeleton>& skeleton);
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
+	// The rig and the chains as a gizmo drag found them, which Escape puts back
+	std::vector<SceneGizmoHandle> m_gizmoHandles;
+	bool m_bGizmoDragStartValid= false;
+	AvatarRigSettings m_gizmoDragStartRig;
+	RetargetChains m_gizmoDragStartChains;
+	// scene gizmo: the setting the scene's gizmo is attached to, its stored
+	// value and the selected chain's handles; with a verb, attaches it or
+	// sets the value
+	bool handleSceneGizmoAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									std::string& outError);
 
 	// Panel visibility, the View menu's toggles and the close box of a panel's
 	// window. Not persisted: every panel is shown again on the next launch.

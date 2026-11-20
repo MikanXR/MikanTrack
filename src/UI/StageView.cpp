@@ -58,7 +58,9 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 	layers.bDirectSolve= layers.bAvatar && (layers.bFusedSkeleton || layers.bSourcePose);
 	if (!bShowAvatar)
 		layers.bAvatar= false;
-	layers.bGizmos= layers.bAvatar;
+	// The chain settings' handles belong to the Retarget stage, whose chains
+	// they edit
+	layers.bGizmos= layers.bAvatar && topLevel.stage == ePipelineStage::Retarget;
 	layers.bIkGoals= layers.bIkGoals && layers.bAvatar;
 	if (bShowPerCameraSkeletons && layers.bFusedSkeleton)
 		layers.bPerCameraSkeletons= true;

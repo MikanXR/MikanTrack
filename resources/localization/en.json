@@ -224,7 +224,7 @@
 		"sectionLeftHand": "Left Hand",
 		"sectionRightHand": "Right Hand",
 		"shoulderWidthFmt": "Shoulder width: avatar %.0f cm, you %.0f cm",
-		"showGizmoCheckbox": "Show gizmo in 3D scene",
+		"gizmoToggleTooltip": "Edit this value with the gizmo in the 3D scene. A click on its marker there does the same.",
 		"showInSceneCheckbox": "Show in 3D scene",
 		"splayGainSlider": "Splay gain",
 		"tabMapping": "Mapping",

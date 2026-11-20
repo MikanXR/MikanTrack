@@ -224,7 +224,7 @@
 		"sectionLeftHand": "左手",
 		"sectionRightHand": "右手",
 		"shoulderWidthFmt": "肩幅: アバター %.0f cm、あなた %.0f cm",
-		"showGizmoCheckbox": "3Dシーンにギズモを表示",
+		"gizmoToggleTooltip": "この値を3Dシーンのギズモで編集します。シーン上のマーカーをクリックしても同じです。",
 		"showInSceneCheckbox": "3Dシーンに表示",
 		"splayGainSlider": "開きの倍率",
 		"tabMapping": "マッピング",

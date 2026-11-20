@@ -161,6 +161,7 @@ void AvatarPanel::update()
 		m_previewPose= ePreviewPose::Live;
 		if (!isArmChain(m_selectedChain))
 			m_selectedChain= eRetargetChain::LeftArm;
+		m_gizmoTarget= SceneGizmoTarget();
 	}
 }
 
@@ -168,8 +169,29 @@ bool AvatarPanel::setSelectedChain(eRetargetChain chain)
 {
 	if (chain == eRetargetChain::Count || (!hasAvatar() && !isArmChain(chain)))
 		return false;
+	if (chain != m_selectedChain)
+		m_gizmoTarget= SceneGizmoTarget();
 	m_selectedChain= chain;
 	return true;
+}
+
+void AvatarPanel::setGizmoTarget(const SceneGizmoTarget& target)
+{
+	m_gizmoTarget= target.isValid() && target.chain == m_selectedChain ? target : SceneGizmoTarget();
+}
+
+void AvatarPanel::drawGizmoToggle(eSceneGizmoValue value)
+{
+	const SceneGizmoTarget target{m_selectedChain, value};
+	const bool bAttached= m_gizmoTarget == target;
+	ImGui::PushID((int)value);
+	if (ImGui::RadioButton("##gizmo", bAttached))
+		m_gizmoTarget= bAttached ? SceneGizmoTarget() : target;
+	ImGui::PopID();
+	ImGui::SetItemTooltip("%s", locText("avatarPanel.gizmoToggleTooltip"));
+	// The row keeps its right edge
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
 }
 
 void AvatarPanel::setShownResult(const RetargetResult* result)
@@ -600,6 +622,7 @@ void AvatarPanel::drawHeadChain()
 {
 	const bool bDirect= isDirectPipeline();
 	AvatarRigSettings rig= m_app->getAvatarRig();
+	drawGizmoToggle(eSceneGizmoValue::Trim);
 	bool bChanged= drawTrimControl(rig, B::Head, "chains.headTrim", false);
 	// Only the direct placement limits the head
 	if (bDirect)
@@ -714,12 +737,14 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 			sideIndex == 0 ? "leftReachScale" : "rightReachScale", locText("chains.reachScaleField"), arm.reachScale, 0.f,
 			1.f, "%.2f", locText(bDirect ? "chains.reachScaleDirectTooltip" : "chains.reachScaleTooltip"),
 			SourcePoseInputs::table(), toLiveValue(m_shownArmParameters[sideIndex].reachScale));
+		drawGizmoToggle(eSceneGizmoValue::GoalOffset);
 		bChainChanged|= ImGui::DragFloat3(locLabel("chains.goalOffsetDrag"), &arm.goalOffset.x, 0.005f, -1.f, 1.f,
 										  "%.3f m");
 		ImGui::SetItemTooltip("%s", locText("chains.goalOffsetTooltip"));
 	}
 
 	drawSubHeading("chains.elbowHeading");
+	drawGizmoToggle(eSceneGizmoValue::ElbowHint);
 	bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.elbowHintDrag"), &side.elbowHintOffset.x, 0.005f, -1.f, 1.f,
 									"%.3f m");
 	ImGui::SetItemTooltip("%s", locText("avatarPanel.elbowHintTooltip"));
@@ -729,9 +754,9 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 										   locText("avatarPanel.elbowWeightField"), arm.elbowWeight, 0.f, 1.f, "%.2f",
 										   locText("avatarPanel.elbowWeightTooltip"), SourcePoseInputs::table(),
 										   toLiveValue(m_shownArmParameters[sideIndex].elbowWeight));
-	ImGui::Checkbox(locLabel("avatarPanel.showGizmoCheckbox"), &m_bShowElbowGizmo[sideIndex]);
 
 	drawSubHeading("chains.forearmHeading");
+	drawGizmoToggle(eSceneGizmoValue::Trim);
 	bRigChanged|= drawTrimControl(rig, lowerArmBone, "chains.rollTrim", true);
 
 	drawSubHeading("chains.lossHeading");
@@ -741,9 +766,11 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	// pipeline with an avatar
 	if (arm.loss.after == eLossAfter::EaseToRest && ImGui::TreeNode(locLabel("avatarPanel.restPoseLabel")))
 	{
+		drawGizmoToggle(eSceneGizmoValue::RestElbow);
 		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restElbowDrag"), &side.restElbowOffset.x, 0.005f, -1.f,
 										1.f, "%.3f m");
 		ImGui::SetItemTooltip("%s", locText("avatarPanel.restElbowTooltip"));
+		drawGizmoToggle(eSceneGizmoValue::RestWrist);
 		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restWristDrag"), &side.restWristOffset.x, 0.005f, -1.f,
 										1.f, "%.3f m");
 		ImGui::SetItemTooltip("%s", locText("avatarPanel.restWristTooltip"));
@@ -814,6 +841,7 @@ void AvatarPanel::drawHandChain(int sideIndex)
 	AvatarRigSettings::Side& side= rig.sides[sideIndex];
 	bool bChanged= false;
 
+	drawGizmoToggle(eSceneGizmoValue::Trim);
 	bChanged|= drawTrimControl(rig, sideIndex == 0 ? B::LeftHand : B::RightHand, "chains.handTrim", false);
 	// Only the direct placement limits the wrist
 	if (isDirectPipeline())
