@@ -74,6 +74,10 @@ public:
 	// replaces an earlier one.
 	void requestLoadProject(const std::filesystem::path& projectFile);
 	void requestCloseProject();
+	// Saves and closes the project, then creates and loads a new one as the
+	// startup menu's New Project does. A name that fails leaves the startup
+	// menu showing.
+	void requestNewProject(const std::string& projectName);
 	void requestDiscardNewProject();
 
 	// Applies a config camera-count change: restarts the vision thread (its
@@ -260,12 +264,14 @@ private:
 		None,
 		Load,
 		Close,
+		New,
 		Discard,
 	};
 	// Services the pending project action at the top of tick()
 	void applyPendingProjectAction();
 	ePendingProjectAction m_pendingProjectAction= ePendingProjectAction::None;
 	std::filesystem::path m_pendingLoadProjectFile;
+	std::string m_pendingNewProjectName;
 	// The last-project pointer as it was before activateNewProject overwrote
 	// it, so a discarded new project can hand Resume back to its predecessor
 	std::filesystem::path m_lastProjectPathBeforeNew;

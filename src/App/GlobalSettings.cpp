@@ -38,6 +38,7 @@ bool GlobalSettings::load()
 
 		lastProjectPath= PathUtils::utf8ToPath(j.value("lastProjectPath", std::string()));
 		appLanguage= j.value("appLanguage", std::string());
+		handSlotDrawMode= j.value("handSlotDrawMode", std::string());
 	}
 	catch (const std::exception& e)
 	{
@@ -62,6 +63,7 @@ bool GlobalSettings::save() const
 		{"appSettingsVersion", k_appSettingsVersion},
 		{"lastProjectPath", PathUtils::pathToUtf8(lastProjectPath)},
 		{"appLanguage", appLanguage},
+		{"handSlotDrawMode", handSlotDrawMode},
 	};
 	file << j.dump(2);
 	return true;

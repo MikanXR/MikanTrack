@@ -729,6 +729,12 @@ void App::requestCloseProject()
 	m_pendingProjectAction= ePendingProjectAction::Close;
 }
 
+void App::requestNewProject(const std::string& projectName)
+{
+	m_pendingProjectAction= ePendingProjectAction::New;
+	m_pendingNewProjectName= projectName;
+}
+
 void App::requestDiscardNewProject()
 {
 	m_pendingProjectAction= ePendingProjectAction::Discard;
@@ -747,6 +753,16 @@ void App::applyPendingProjectAction()
 			break;
 		case ePendingProjectAction::Close:
 			returnToMainMenu();
+			break;
+		case ePendingProjectAction::New:
+			// The open project is saved and torn down first, as closing it does
+			returnToMainMenu();
+			if (!activateNewProject(m_pendingNewProjectName))
+			{
+				MIKAN_LOG_ERROR("App::applyPendingProjectAction")
+					<< "Failed to create project " << m_pendingNewProjectName;
+			}
+			m_pendingNewProjectName.clear();
 			break;
 		case ePendingProjectAction::Discard:
 			discardNewProjectAndReturnToMenu();

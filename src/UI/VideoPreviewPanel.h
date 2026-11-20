@@ -117,7 +117,7 @@ private:
 
 	bool m_bShowOverlay= true;
 	bool m_bShowDetectionBoxes= false;
-	eHandSlotDrawMode m_handSlotDrawMode= eHandSlotDrawMode::DimRejected;
+	eHandSlotDrawMode m_handSlotDrawMode= eHandSlotDrawMode::OnlyAccepted;
 	int m_handUseCamera= -1;
 	std::array<bool, 2> m_handUsed{false, false};
 	// Raw body landmarks on body-pose cameras (the solver's source data)

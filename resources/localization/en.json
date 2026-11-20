@@ -48,6 +48,7 @@
 		"loadProjectDialogFilterDescription": "MikanTrack project (project.json)",
 		"loadProjectDialogTitle": "Load Project",
 		"logPanel": "Log Panel",
+		"newProject": "New Project...",
 		"quit": "Quit",
 		"saveProject": "Save Project",
 		"unloadAvatar": "Unload Avatar",

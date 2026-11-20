@@ -42,10 +42,7 @@ MainMenuScreen::Action MainMenuScreen::draw(bool bHasLastProject, const std::str
 	}
 
 	if (ImGui::Button(locLabel("mainMenu.newProjectButton"), buttonSize))
-	{
-		m_nameBuffer[0]= '\0';
-		m_bNameModalRequested= true;
-	}
+		m_newProjectModal.request();
 
 	if (ImGui::Button(locLabel("mainMenu.loadProjectButton"), buttonSize))
 	{
@@ -79,51 +76,8 @@ MainMenuScreen::Action MainMenuScreen::draw(bool bHasLastProject, const std::str
 		ImGui::PopTextWrapPos();
 	}
 
-	// New Project name modal
-	if (m_bNameModalRequested)
-	{
-		ImGui::OpenPopup(locWindowTitle("windows.modalNewProject"));
-		m_bNameModalRequested= false;
-	}
-	ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-	if (ImGui::BeginPopupModal(locWindowTitle("windows.modalNewProject"), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-	{
-		ImGui::TextUnformatted(locText("mainMenu.projectNameLabel"));
-		if (ImGui::IsWindowAppearing())
-			ImGui::SetKeyboardFocusHere();
-		ImGui::SetNextItemWidth(280.f);
-		const bool bEnterPressed= ImGui::InputText("##projectName", m_nameBuffer, sizeof(m_nameBuffer),
-												   ImGuiInputTextFlags_EnterReturnsTrue);
-
-		const std::string name(m_nameBuffer);
-		std::string nameError;
-		bool bValid= ProjectManager::isValidProjectName(name, nameError);
-		if (bValid && std::filesystem::exists(ProjectManager::getProjectsRootDirectory() / name))
-		{
-			bValid= false;
-			nameError= locText("errors.projectNameExists");
-		}
-		if (!name.empty() && !bValid)
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", nameError.c_str());
-
-		ImGui::BeginDisabled(!bValid);
-		const bool bCreatePressed= ImGui::Button(locLabel("common.create"), ImVec2(120, 0));
-		ImGui::EndDisabled();
-		ImGui::SameLine();
-		const bool bCancelPressed= ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0));
-
-		if ((bCreatePressed || bEnterPressed) && bValid)
-		{
-			action.type= Action::Type::NewProject;
-			action.projectName= name;
-			ImGui::CloseCurrentPopup();
-		}
-		else if (bCancelPressed)
-		{
-			ImGui::CloseCurrentPopup();
-		}
-		ImGui::EndPopup();
-	}
+	if (m_newProjectModal.draw(action.projectName))
+		action.type= Action::Type::NewProject;
 
 	ImGui::End();
 	return action;

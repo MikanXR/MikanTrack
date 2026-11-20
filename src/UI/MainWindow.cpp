@@ -90,6 +90,11 @@ MainWindow::MainWindow(App* app)
 	wizards.mounting= m_wizardHost->getMountingWizard();
 	wizards.body= m_wizardHost->getBodyCalibrationWizard();
 	m_setupFlow= std::make_unique<SetupFlow>(app, this, m_videoPreviewPanel.get(), wizards);
+
+	// The hand slot draw mode is the user's, kept across projects and launches
+	eHandSlotDrawMode slotDrawMode;
+	if (HandOverlay::parseSlotDrawMode(app->getGlobalSettings()->handSlotDrawMode, slotDrawMode))
+		m_videoPreviewPanel->setHandSlotDrawMode(slotDrawMode);
 }
 
 MainWindow::~MainWindow()= default;
@@ -340,6 +345,8 @@ void MainWindow::drawDockspaceAndMenuBar()
 		if (ImGui::BeginMenu(locLabel("mainWindow.fileMenu")))
 		{
 			const bool bWizardActive= m_wizardHost->isAnyActive() || m_setupFlow->isActive();
+			if (ImGui::MenuItem(locLabel("mainWindow.newProject"), nullptr, false, !bWizardActive))
+				m_newProjectModal.request();
 			if (ImGui::MenuItem(locLabel("mainWindow.saveProject")))
 				m_app->getConfig()->save();
 			if (ImGui::MenuItem(locLabel("mainWindow.loadProject"), nullptr, false, !bWizardActive))
@@ -418,6 +425,11 @@ void MainWindow::drawDockspaceAndMenuBar()
 		}
 		ImGui::EndMenuBar();
 	}
+
+	// The File menu's New Project: the open project closes between frames
+	std::string newProjectName;
+	if (m_newProjectModal.draw(newProjectName))
+		m_app->requestNewProject(newProjectName);
 
 	ImGui::End();
 }
@@ -507,6 +519,17 @@ void MainWindow::update(float deltaSeconds)
 	AppConfig* config= m_app->getConfig();
 	VisionThread* visionThread= m_app->getVisionThread();
 	const int cameraCount= (int)config->cameraCount();
+
+	// A hand slot draw mode chosen last frame is stored as it changes
+	{
+		GlobalSettings* globalSettings= m_app->getGlobalSettings();
+		const char* slotDrawModeName= HandOverlay::getSlotDrawModeName(m_videoPreviewPanel->getHandSlotDrawMode());
+		if (globalSettings->handSlotDrawMode != slotDrawModeName)
+		{
+			globalSettings->handSlotDrawMode= slotDrawModeName;
+			globalSettings->save();
+		}
+	}
 
 	// Keep per-camera containers in sync with the config
 	m_latestPreviews.resize(cameraCount);

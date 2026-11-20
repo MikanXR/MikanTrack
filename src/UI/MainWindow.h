@@ -7,6 +7,7 @@
 
 #include "AudioPanel.h" // MicrophoneReadout
 #include "AvatarRetarget.h"
+#include "NewProjectModal.h"
 #include "PipelineModel.h"
 #include "DirectRetarget.h"
 #include "RetargetStage.h"
@@ -96,6 +97,8 @@ private:
 	App* m_app;
 
 	std::unique_ptr<MainMenuScreen> m_mainMenuScreen;
+	// The File menu's New Project prompt, drawn in the dock host window
+	NewProjectModal m_newProjectModal;
 	std::unique_ptr<VideoPreviewPanel> m_videoPreviewPanel;
 	std::unique_ptr<Scene3dPanel> m_scene3dPanel;
 	std::unique_ptr<DevicePanel> m_devicePanel;
