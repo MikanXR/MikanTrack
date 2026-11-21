@@ -60,8 +60,8 @@ struct Unit
 	bool bFailed= false;
 	// The lets it names, with where it names them
 	std::vector<std::pair<int, FaceExprSpan>> letReferences;
-	std::set<int> directInputs;
-	std::set<int> directLets;
+	std::set<int> frontCameraInputs;
+	std::set<int> frontCameraLets;
 	int stateOrdinal= 0;
 	int resultRegister= -1;
 };
@@ -188,7 +188,7 @@ private:
 				if (slot < 0)
 					fail(unit, node.span, eFaceExprErrorCode::UnknownInput, {node.text}, "unknown input '" + node.text + "'");
 				else
-					unit.directInputs.insert(slot);
+					unit.frontCameraInputs.insert(slot);
 			}
 			else
 			{
@@ -197,7 +197,7 @@ private:
 					fail(unit, node.span, eFaceExprErrorCode::UnknownName, {node.text}, "unknown name '" + node.text + "'");
 				else
 				{
-					unit.directLets.insert(found->second);
+					unit.frontCameraLets.insert(found->second);
 					unit.letReferences.emplace_back(found->second, node.span);
 				}
 			}
@@ -430,11 +430,11 @@ private:
 	void finishExpression(const Unit& unit, FaceExprProgram::Expression& outExpression)
 	{
 		outExpression.resultRegister= unit.resultRegister;
-		outExpression.directInputs.assign(unit.directInputs.begin(), unit.directInputs.end());
-		outExpression.directLets.assign(unit.directLets.begin(), unit.directLets.end());
-		std::set<int> inputs= unit.directInputs;
-		std::set<int> lets= unit.directLets;
-		for (int letIndex : unit.directLets)
+		outExpression.frontCameraInputs.assign(unit.frontCameraInputs.begin(), unit.frontCameraInputs.end());
+		outExpression.frontCameraLets.assign(unit.frontCameraLets.begin(), unit.frontCameraLets.end());
+		std::set<int> inputs= unit.frontCameraInputs;
+		std::set<int> lets= unit.frontCameraLets;
+		for (int letIndex : unit.frontCameraLets)
 		{
 			const FaceExprProgram::Expression& let= m_program.lets[(size_t)letIndex];
 			inputs.insert(let.inputs.begin(), let.inputs.end());

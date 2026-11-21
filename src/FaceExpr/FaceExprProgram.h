@@ -62,11 +62,11 @@ struct FaceExprProgram
 		// the expression is just that)
 		int resultRegister= -1;
 		// The input slots it reads itself, and through its lets, sorted
-		std::vector<int> directInputs;
+		std::vector<int> frontCameraInputs;
 		std::vector<int> inputs;
 		// The lets it names itself, and through other lets, by profile index,
 		// sorted
-		std::vector<int> directLets;
+		std::vector<int> frontCameraLets;
 		std::vector<int> lets;
 	};
 

@@ -15,7 +15,7 @@
 #include "AvatarRig.h"
 #include "BodyPoseSolver.h" // BodyDimensions
 #include "BodyPoseTracker.h" // eBodyPoseBackend
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "HandFusion.h" // HandFusionConfig
 #include "HandPoseModel.h"
 #include "Logger.h"
@@ -24,7 +24,7 @@
 
 using json= nlohmann::json;
 
-static constexpr int k_configVersion= 2;
+static constexpr int k_configVersion= 3;
 static constexpr float k_autoSaveCooldownSeconds= 3.f;
 
 // -- json helpers ----
@@ -386,7 +386,7 @@ RetargetChains resolveRetargetChains(const RetargetChains* block, const AppConfi
 {
 	if (block != nullptr)
 		return *block;
-	return migrateRetargetChains(config.direct.enabled, config.osc.holdOnDropoutMs, config.osc.vmcFreezeOnLoss,
+	return migrateRetargetChains(config.frontCamera.enabled, config.osc.holdOnDropoutMs, config.osc.vmcFreezeOnLoss,
 								 rig.restBlendMs, {rig.sides[0].elbowHintConfidence, rig.sides[1].elbowHintConfidence});
 }
 
@@ -428,40 +428,40 @@ static float limitDegreesToRadians(float degrees)
 	return degrees * glm::pi<float>() / 180.f;
 }
 
-DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
+FrontCameraRetargetConfig makeFrontCameraRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig)
 {
-	return makeDirectRetargetConfig(config, rig, resolveRetargetChains(config, rig));
+	return makeFrontCameraRetargetConfig(config, rig, resolveRetargetChains(config, rig));
 }
 
-DirectRetargetConfig makeDirectRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig,
+FrontCameraRetargetConfig makeFrontCameraRetargetConfig(const AppConfig& config, const AvatarRigSettings& rig,
 											  const RetargetChains& chains)
 {
-	DirectRetargetConfig direct;
-	direct.cameraTiltRadians= glm::radians(config.direct.cameraTiltDegrees);
-	direct.nearPlaneReachFraction= config.direct.nearPlaneReachFraction;
-	direct.farPlaneReachFraction= config.direct.farPlaneReachFraction;
-	direct.neutral.present= config.direct.neutralPresent;
-	direct.neutral.torso= config.direct.neutralTorso;
-	direct.neutral.shoulderMidpoint= config.direct.neutralShoulderMidpoint;
-	direct.neutral.head= config.direct.neutralHead;
-	direct.neutral.facePresent= config.direct.neutralFacePresent;
-	direct.neutral.face= config.direct.neutralFace;
+	FrontCameraRetargetConfig frontCamera;
+	frontCamera.cameraTiltRadians= glm::radians(config.frontCamera.cameraTiltDegrees);
+	frontCamera.nearPlaneReachFraction= config.frontCamera.nearPlaneReachFraction;
+	frontCamera.farPlaneReachFraction= config.frontCamera.farPlaneReachFraction;
+	frontCamera.neutral.present= config.frontCamera.neutralPresent;
+	frontCamera.neutral.torso= config.frontCamera.neutralTorso;
+	frontCamera.neutral.shoulderMidpoint= config.frontCamera.neutralShoulderMidpoint;
+	frontCamera.neutral.head= config.frontCamera.neutralHead;
+	frontCamera.neutral.facePresent= config.frontCamera.neutralFacePresent;
+	frontCamera.neutral.face= config.frontCamera.neutralFace;
 	const BodyDimensions dimensions= makeBodyDimensions(config);
-	direct.userShoulderWidthMeters= dimensions.shoulderWidthMeters;
-	direct.headWidthMeters= dimensions.headWidthMeters;
-	direct.noseForwardMeters= dimensions.noseForwardMeters;
-	direct.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
-	direct.userForearmLengthMeters= dimensions.forearmLengthMeters;
+	frontCamera.userShoulderWidthMeters= dimensions.shoulderWidthMeters;
+	frontCamera.headWidthMeters= dimensions.headWidthMeters;
+	frontCamera.noseForwardMeters= dimensions.noseForwardMeters;
+	frontCamera.userUpperArmLengthMeters= dimensions.upperArmLengthMeters;
+	frontCamera.userForearmLengthMeters= dimensions.forearmLengthMeters;
 	// The rig adjustments are the position retarget's, one mapping
 	const AvatarRetargetConfig retarget= makeAvatarRetargetConfig(config, rig);
-	direct.headTrimRadians= retarget.headTrimRadians;
-	direct.restBlendMs= chains.arms[0].loss.restBlendMs;
-	direct.sides= retarget.sides;
-	direct.headLimitRadians= limitDegreesToRadians(rig.headLimitDegrees);
-	direct.spineLimitRadians= limitDegreesToRadians(rig.spineLimitDegrees);
+	frontCamera.headTrimRadians= retarget.headTrimRadians;
+	frontCamera.restBlendMs= chains.arms[0].loss.restBlendMs;
+	frontCamera.sides= retarget.sides;
+	frontCamera.headLimitRadians= limitDegreesToRadians(rig.headLimitDegrees);
+	frontCamera.spineLimitRadians= limitDegreesToRadians(rig.spineLimitDegrees);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-		direct.wristLimitRadians[sideIndex]= limitDegreesToRadians(rig.sides[sideIndex].wristLimitDegrees);
-	return direct;
+		frontCamera.wristLimitRadians[sideIndex]= limitDegreesToRadians(rig.sides[sideIndex].wristLimitDegrees);
+	return frontCamera;
 }
 
 RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const AvatarRigSettings& rig,
@@ -478,13 +478,13 @@ RetargetStageConfig makeRetargetStageConfig(const AppConfig& config, const Avata
 	stage.skeleton= std::move(skeleton);
 	stage.position= makeAvatarRetargetConfig(config, rig);
 	stage.user= makeBodyDimensions(config);
-	stage.direct= makeDirectRetargetConfig(config, rig, chains);
+	stage.frontCamera= makeFrontCameraRetargetConfig(config, rig, chains);
 	// Without an avatar the position pipeline streams the measured-length
 	// skeleton, which has no rest pose to ease into
 	const bool bAvatar= stage.skeleton != nullptr;
 	stage.positionLoss=
 		makeChainLossPolicy(chains, SourcePose::ePipeline::Position, config.osc.minConfidence, bAvatar);
-	stage.directLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::Direct, config.osc.minConfidence, bAvatar);
+	stage.frontCameraLoss= makeChainLossPolicy(chains, SourcePose::ePipeline::FrontCamera, config.osc.minConfidence, bAvatar);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const RetargetChains::Arm& arm= chains.arms[sideIndex];
@@ -517,26 +517,26 @@ BodyDimensions makeBodyDimensions(const AppConfig& config)
 	return dimensions;
 }
 
-bool isDirectProject(const AppConfig& config)
+bool isFrontCameraProject(const AppConfig& config)
 {
-	return config.direct.enabled;
+	return config.frontCamera.enabled;
 }
 
 std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int cameraIndex)
 {
-	return getBodyPoseBackend(config, cameraIndex, config.direct.cameraIndex);
+	return getBodyPoseBackend(config, cameraIndex, config.frontCamera.cameraIndex);
 }
 
-std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int cameraIndex, int directCameraIndex)
+std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int cameraIndex, int frontCameraIndex)
 {
 	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount())
 		return std::nullopt;
-	// The direct solve reads the whole-body model's shoulders, ears, face
-	// and hand blocks, and nothing in a direct project reads another
+	// The front-camera solve reads the whole-body model's shoulders, ears, face
+	// and hand blocks, and nothing in a front-camera project reads another
 	// camera's body
-	if (isDirectProject(config))
+	if (isFrontCameraProject(config))
 	{
-		if (cameraIndex == directCameraIndex)
+		if (cameraIndex == frontCameraIndex)
 			return eBodyPoseBackend::Rtmw3dWholeBody;
 		return std::nullopt;
 	}
@@ -547,14 +547,14 @@ std::optional<eBodyPoseBackend> getBodyPoseBackend(const AppConfig& config, int 
 	return std::nullopt;
 }
 
-void clearDirectNeutral(DirectConfig& direct)
+void clearFrontCameraNeutral(FrontCameraConfig& frontCamera)
 {
-	direct.neutralPresent= false;
-	direct.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
-	direct.neutralShoulderMidpoint= glm::vec3(0.f);
-	direct.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
-	direct.neutralFacePresent= false;
-	direct.neutralFace= WholeBodyFaceRatios();
+	frontCamera.neutralPresent= false;
+	frontCamera.neutralTorso= glm::quat(1.f, 0.f, 0.f, 0.f);
+	frontCamera.neutralShoulderMidpoint= glm::vec3(0.f);
+	frontCamera.neutralHead= glm::quat(1.f, 0.f, 0.f, 0.f);
+	frontCamera.neutralFacePresent= false;
+	frontCamera.neutralFace= WholeBodyFaceRatios();
 }
 
 bool removeCamera(AppConfig& config, int cameraIndex)
@@ -563,18 +563,18 @@ bool removeCamera(AppConfig& config, int cameraIndex)
 		return false;
 	config.cameras.erase(config.cameras.begin() + cameraIndex);
 
-	DirectConfig& direct= config.direct;
-	if (cameraIndex < direct.cameraIndex)
+	FrontCameraConfig& frontCamera= config.frontCamera;
+	if (cameraIndex < frontCamera.cameraIndex)
 	{
 		// The same physical camera keeps the role under its new index
-		--direct.cameraIndex;
+		--frontCamera.cameraIndex;
 		return false;
 	}
-	if (cameraIndex == direct.cameraIndex)
+	if (cameraIndex == frontCamera.cameraIndex)
 	{
 		// The neutral belongs to the camera it was captured through
-		direct.cameraIndex= 0;
-		clearDirectNeutral(direct);
+		frontCamera.cameraIndex= 0;
+		clearFrontCameraNeutral(frontCamera);
 		return true;
 	}
 	return false;
@@ -899,40 +899,41 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	config.avatar.rootYawDegrees= av.value("rootYawDegrees", 0.f);
 	config.avatar.customPoseId= av.value("customPose", "");
 
-	const json& dr= j.value("direct", json::object());
-	config.direct= DirectConfig();
-	config.direct.enabled= dr.value("enabled", false);
-	config.direct.cameraIndex= dr.value("cameraIndex", 0);
-	config.direct.cameraTiltDegrees= dr.value("cameraTiltDegrees", config.direct.cameraTiltDegrees);
-	config.direct.nearPlaneReachFraction= dr.value("nearPlaneReachFraction", config.direct.nearPlaneReachFraction);
-	config.direct.farPlaneReachFraction= dr.value("farPlaneReachFraction", config.direct.farPlaneReachFraction);
+	// Version 2 and older named the section for the retarget, "direct"
+	const json dr= j.contains("frontCamera") ? j.at("frontCamera") : j.value("direct", json::object());
+	config.frontCamera= FrontCameraConfig();
+	config.frontCamera.enabled= dr.value("enabled", false);
+	config.frontCamera.cameraIndex= dr.value("cameraIndex", 0);
+	config.frontCamera.cameraTiltDegrees= dr.value("cameraTiltDegrees", config.frontCamera.cameraTiltDegrees);
+	config.frontCamera.nearPlaneReachFraction= dr.value("nearPlaneReachFraction", config.frontCamera.nearPlaneReachFraction);
+	config.frontCamera.farPlaneReachFraction= dr.value("farPlaneReachFraction", config.frontCamera.farPlaneReachFraction);
 	if (dr.value("neutralPresent", false))
 	{
-		DirectConfig& direct= config.direct;
-		direct.neutralPresent= quatFromJson(dr, "neutralTorso", direct.neutralTorso) &&
-			vec3FromJson(dr, "neutralShoulderMidpoint", direct.neutralShoulderMidpoint);
-		quatFromJson(dr, "neutralHead", direct.neutralHead);
-		if (direct.neutralPresent && dr.contains("neutralFace"))
-			direct.neutralFacePresent= faceRatiosFromJson(dr["neutralFace"], direct.neutralFace);
+		FrontCameraConfig& frontCamera= config.frontCamera;
+		frontCamera.neutralPresent= quatFromJson(dr, "neutralTorso", frontCamera.neutralTorso) &&
+			vec3FromJson(dr, "neutralShoulderMidpoint", frontCamera.neutralShoulderMidpoint);
+		quatFromJson(dr, "neutralHead", frontCamera.neutralHead);
+		if (frontCamera.neutralPresent && dr.contains("neutralFace"))
+			frontCamera.neutralFacePresent= faceRatiosFromJson(dr["neutralFace"], frontCamera.neutralFace);
 	}
 
-	// The direct camera index always names a camera the config has. A
+	// The front camera index always names a camera the config has. A
 	// neutral captured through another camera does not carry over.
 	const int lastCameraIndex= (int)config.cameraCount() - 1;
-	if (config.direct.cameraIndex < 0 || config.direct.cameraIndex > lastCameraIndex)
+	if (config.frontCamera.cameraIndex < 0 || config.frontCamera.cameraIndex > lastCameraIndex)
 	{
-		const int storedIndex= config.direct.cameraIndex;
-		config.direct.cameraIndex= std::clamp(storedIndex, 0, lastCameraIndex);
-		clearDirectNeutral(config.direct);
-		MIKAN_LOG_INFO("AppConfig::load") << "Direct camera index " << storedIndex << " is outside the "
+		const int storedIndex= config.frontCamera.cameraIndex;
+		config.frontCamera.cameraIndex= std::clamp(storedIndex, 0, lastCameraIndex);
+		clearFrontCameraNeutral(config.frontCamera);
+		MIKAN_LOG_INFO("AppConfig::load") << "Front camera index " << storedIndex << " is outside the "
 										  << config.cameraCount() << " cameras, moved to "
-										  << config.direct.cameraIndex << " and the neutral pose cleared";
+										  << config.frontCamera.cameraIndex << " and the neutral pose cleared";
 	}
 
-	// A direct project has no world calibration: its camera is the world. Any
+	// A front-camera project has no world calibration: its camera is the world. Any
 	// stored extrinsics are cleared rather than set to identity, which would
 	// still mark the camera calibrated and read camera space as the world.
-	if (isDirectProject(config))
+	if (isFrontCameraProject(config))
 	{
 		std::string clearedCameras;
 		for (int cameraIndex= 0; cameraIndex < (int)config.cameraCount(); ++cameraIndex)
@@ -947,10 +948,10 @@ static void applyConfigJson(AppConfig& config, const json& j)
 		if (!clearedCameras.empty() || bQualityPresent)
 		{
 			MIKAN_LOG_INFO("AppConfig::load")
-				<< "Direct project: cleared the stored extrinsics"
+				<< "Front-camera project: cleared the stored extrinsics"
 				<< (clearedCameras.empty() ? std::string() : " of camera " + clearedCameras)
 				<< (bQualityPresent ? " and the extrinsics quality" : "")
-				<< ", since a direct project has no world calibration";
+				<< ", since a front-camera project has no world calibration";
 		}
 	}
 
@@ -992,7 +993,7 @@ static void applyConfigJson(AppConfig& config, const json& j)
 	if (rt.is_object() && rt.contains("chains"))
 	{
 		config.retargetChains= std::make_shared<const RetargetChains>(
-			retargetChainsFromJson(rt["chains"], makeDefaultRetargetChains(config.direct.enabled)));
+			retargetChainsFromJson(rt["chains"], makeDefaultRetargetChains(config.frontCamera.enabled)));
 	}
 }
 
@@ -1128,23 +1129,23 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 	};
 
 	{
-		json directJson= {
-			{"enabled", direct.enabled},
-			{"cameraIndex", direct.cameraIndex},
-			{"cameraTiltDegrees", direct.cameraTiltDegrees},
-			{"nearPlaneReachFraction", direct.nearPlaneReachFraction},
-			{"farPlaneReachFraction", direct.farPlaneReachFraction},
-			{"neutralPresent", direct.neutralPresent},
+		json frontCameraJson= {
+			{"enabled", frontCamera.enabled},
+			{"cameraIndex", frontCamera.cameraIndex},
+			{"cameraTiltDegrees", frontCamera.cameraTiltDegrees},
+			{"nearPlaneReachFraction", frontCamera.nearPlaneReachFraction},
+			{"farPlaneReachFraction", frontCamera.farPlaneReachFraction},
+			{"neutralPresent", frontCamera.neutralPresent},
 		};
-		if (direct.neutralPresent)
+		if (frontCamera.neutralPresent)
 		{
-			directJson["neutralTorso"]= quatToJson(direct.neutralTorso);
-			directJson["neutralShoulderMidpoint"]= vec3ToJson(direct.neutralShoulderMidpoint);
-			directJson["neutralHead"]= quatToJson(direct.neutralHead);
-			if (direct.neutralFacePresent)
-				directJson["neutralFace"]= faceRatiosToJson(direct.neutralFace);
+			frontCameraJson["neutralTorso"]= quatToJson(frontCamera.neutralTorso);
+			frontCameraJson["neutralShoulderMidpoint"]= vec3ToJson(frontCamera.neutralShoulderMidpoint);
+			frontCameraJson["neutralHead"]= quatToJson(frontCamera.neutralHead);
+			if (frontCamera.neutralFacePresent)
+				frontCameraJson["neutralFace"]= faceRatiosToJson(frontCamera.neutralFace);
 		}
-		j["direct"]= directJson;
+		j["frontCamera"]= frontCameraJson;
 	}
 
 	j["handScale"]= {

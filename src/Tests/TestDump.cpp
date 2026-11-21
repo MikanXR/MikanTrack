@@ -1,7 +1,7 @@
 #include "TestCommon.h"
 
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "SyntheticAvatar.h"
 #include "TrackingReplay.h"
 
@@ -132,7 +132,7 @@ static int runDumpTest(const TestArgs& args)
 		}
 	}
 
-	// Outside direct mode the avatar block is null and no avatar file is written
+	// Outside front-camera mode the avatar block is null and no avatar file is written
 	if (bOk)
 	{
 		std::ifstream jsonFile(dumpDir / "dump.json");
@@ -140,7 +140,7 @@ static int runDumpTest(const TestArgs& args)
 			(std::istreambuf_iterator<char>(jsonFile)), std::istreambuf_iterator<char>());
 		if (content.find("\"avatar\": null") == std::string::npos)
 		{
-			MIKAN_LOG_ERROR("test-dump") << "dump.json without a direct pose should carry \"avatar\": null";
+			MIKAN_LOG_ERROR("test-dump") << "dump.json without a front-camera pose should carry \"avatar\": null";
 			bOk= false;
 		}
 		if (std::filesystem::exists(dumpDir / "cam0_avatar.png") || std::filesystem::exists(dumpDir / "dump.jsonl"))
@@ -150,14 +150,14 @@ static int runDumpTest(const TestArgs& args)
 		}
 	}
 
-	// A direct-mode dump: the posed avatar over its camera, its render and
+	// A front-camera dump: the posed avatar over its camera, its render and
 	// the compare image, the solve state, and the frame as a one-frame
 	// recording that replay loads
 	if (bOk)
 	{
-		const std::filesystem::path directDir=
-			std::filesystem::temp_directory_path() / "mikanmediapipe_test_dump_direct";
-		std::filesystem::remove_all(directDir);
+		const std::filesystem::path frontCameraDir=
+			std::filesystem::temp_directory_path() / "mikanmediapipe_test_dump_frontCamera";
+		std::filesystem::remove_all(frontCameraDir);
 
 		const AvatarModel model= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
 		const AvatarSkeleton skeleton(model);
@@ -166,7 +166,7 @@ static int runDumpTest(const TestArgs& args)
 		avatarPose.timestampMs= 1000.0;
 		for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
 			avatarPose.bones[index].present= skeleton.getBone((eHumanoidBone)index).present;
-		DirectRetarget::SolveState state;
+		FrontCameraRetarget::SolveState state;
 		state.camera.fx= 100.f;
 		state.camera.fy= 100.f;
 		state.camera.cx= 64.f;
@@ -179,7 +179,7 @@ static int runDumpTest(const TestArgs& args)
 		state.shoulderMidpoint= glm::vec3(1.2f, 0.f, 0.f);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+			FrontCameraRetarget::SolveState::Arm& arm= state.arms[sideIndex];
 			arm.chain.valid= true;
 			arm.chain.shoulder= state.shoulder[sideIndex];
 			arm.chain.elbow= arm.chain.shoulder - glm::vec3(0.f, 0.f, 0.25f);
@@ -209,23 +209,23 @@ static int runDumpTest(const TestArgs& args)
 		input.hands[0].imagePoints= hand.imagePoints;
 		recordFrame.freshCameras.push_back(input);
 
-		AppConfig directConfig;
-		directConfig.direct.enabled= true;
-		directConfig.direct.cameraIndex= 0;
-		bool bDirectOk= dump.write(directDir.string(), {snapshot}, frame, directConfig.toJsonString(), rawImu,
-								   lastCapture, &recordFrame, &avatar);
+		AppConfig frontCameraConfig;
+		frontCameraConfig.frontCamera.enabled= true;
+		frontCameraConfig.frontCamera.cameraIndex= 0;
+		bool bFrontCameraOk= dump.write(frontCameraDir.string(), {snapshot}, frame, frontCameraConfig.toJsonString(),
+										rawImu, lastCapture, &recordFrame, &avatar);
 		for (const char* name : {"dump.json", "cam0_raw.png", "cam0_annotated.png", "cam0_avatar.png",
 								 "cam0_compare.png", "dump.jsonl"})
 		{
-			if (!std::filesystem::exists(directDir / name))
+			if (!std::filesystem::exists(frontCameraDir / name))
 			{
-				MIKAN_LOG_ERROR("test-dump") << "direct dump missing " << name;
-				bDirectOk= false;
+				MIKAN_LOG_ERROR("test-dump") << "front-camera dump missing " << name;
+				bFrontCameraOk= false;
 			}
 		}
-		if (bDirectOk)
+		if (bFrontCameraOk)
 		{
-			std::ifstream jsonFile(directDir / "dump.json");
+			std::ifstream jsonFile(frontCameraDir / "dump.json");
 			const std::string content(
 				(std::istreambuf_iterator<char>(jsonFile)), std::istreambuf_iterator<char>());
 			for (const char* needle : {"\"avatar\"", "\"solveState\"", "\"cameraToWorld\"", "\"LeftUpperArm\"",
@@ -233,38 +233,38 @@ static int runDumpTest(const TestArgs& args)
 			{
 				if (content.find(needle) == std::string::npos)
 				{
-					MIKAN_LOG_ERROR("test-dump") << "direct dump.json missing " << needle;
-					bDirectOk= false;
+					MIKAN_LOG_ERROR("test-dump") << "front-camera dump.json missing " << needle;
+					bFrontCameraOk= false;
 				}
 			}
 			// The compare image is the frame beside the render
-			const cv::Mat compare= cv::imread((directDir / "cam0_compare.png").string());
+			const cv::Mat compare= cv::imread((frontCameraDir / "cam0_compare.png").string());
 			if (compare.cols != 256 || compare.rows != 128)
 			{
 				MIKAN_LOG_ERROR("test-dump") << "cam0_compare.png is " << compare.cols << "x" << compare.rows
 											 << ", expected 256x128";
-				bDirectOk= false;
+				bFrontCameraOk= false;
 			}
-			// The one-frame recording replays as a direct-mode take
+			// The one-frame recording replays as a front-camera take
 			TrackingReplay replay;
 			std::string error;
-			if (!replay.load((directDir / "dump.jsonl").string(), error))
+			if (!replay.load((frontCameraDir / "dump.jsonl").string(), error))
 			{
 				MIKAN_LOG_ERROR("test-dump") << "dump.jsonl failed to load: " << error;
-				bDirectOk= false;
+				bFrontCameraOk= false;
 			}
-			else if (replay.getFrameCount() != 1 || !replay.getRecordedConfig().direct.enabled ||
+			else if (replay.getFrameCount() != 1 || !replay.getRecordedConfig().frontCamera.enabled ||
 					 replay.getFrame(0).recorded->freshCameras.size() != 1 ||
 					 replay.getFrame(0).recorded->freshCameras[0].frameIndex != 42)
 			{
 				MIKAN_LOG_ERROR("test-dump") << "dump.jsonl did not round-trip the frame";
-				bDirectOk= false;
+				bFrontCameraOk= false;
 			}
 		}
-		MIKAN_LOG_INFO("test-dump") << "direct dump dir: " << directDir.string() << " ok=" << bDirectOk;
-		if (bDirectOk)
-			std::filesystem::remove_all(directDir);
-		bOk&= bDirectOk;
+		MIKAN_LOG_INFO("test-dump") << "front-camera dump dir: " << frontCameraDir.string() << " ok=" << bFrontCameraOk;
+		if (bFrontCameraOk)
+			std::filesystem::remove_all(frontCameraDir);
+		bOk&= bFrontCameraOk;
 	}
 
 	MIKAN_LOG_INFO("test-dump") << "dump dir: " << dumpDir.string() << " ok=" << bOk;

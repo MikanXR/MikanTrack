@@ -6,8 +6,8 @@
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyHandHints.h"
-#include "DirectRetarget.h"
-#include "DirectStageSolver.h"
+#include "FrontCameraRetarget.h"
+#include "FrontCameraStageSolver.h"
 #include "FaceHead.h"
 #include "FaceRecorder.h"
 #include "FaceTypes.h"
@@ -27,7 +27,7 @@
 //   --gate-wholebody <recording.jsonl> [cameraIndex] [rest=<s>-<s>] [shapes=<s>-<s>] [gazedown=<s>-<s>]
 //                    [labels] [frames.csv]
 //
-// cameraIndex defaults to the direct camera, else the recording's body-pose
+// cameraIndex defaults to the front camera, else the recording's body-pose
 // camera. The raw frames beside the recording are required (raw frame
 // recording is opt-in). rest names the seconds of the take, from its first
 // frame, where the face is held still (default 0-3).
@@ -66,11 +66,11 @@
 //             palm, the question a search hint asks
 //   overlap   the whole-body hand's box against the hand slot's own
 //   side      which side each hand slot is, by the hand's shape against the
-//             two whole-body hands and by the direct solver's wrist test,
+//             two whole-body hands and by the front-camera solver's wrist test,
 //             each against the fused side
 // Hand labels, on any camera, from the recorded whole-body blocks when the
 // take carries them and from the model re-run at the live divider otherwise:
-//   the hand slots the direct solver's wrist rule turns away on the other
+//   the hand slots the front-camera solver's wrist rule turns away on the other
 //   arm's wrist, split by what the hands were doing (from the two body
 //   wrists) and by what the slot was (from its distance to the whole-body
 //   hands), with the classifier's own opinion on the real hands among them,
@@ -101,13 +101,13 @@ constexpr int kMinOneEyeFrames= 8;
 constexpr double kFastBlinkMs= 150.0;
 // How far outside a phone blink the camera's may start or end and still be it
 constexpr double kBlinkMatchSlackMs= 100.0;
-// The direct solver's wrist agreement distance
+// The front-camera solver's wrist agreement distance
 constexpr float kHandAgreementShoulderWidths= 0.5f;
 // The shape match's side needs the better hand this much closer than the other
 constexpr float kShapeMarginRatio= 0.8f;
 // The fused hands count as close together within this many shoulder widths
 constexpr float kHandsCloseShoulderWidths= 1.0f;
-// The direct solver's rule for a landmark it will use: visible at least this
+// The front-camera solver's rule for a landmark it will use: visible at least this
 // much and this far inside the frame
 constexpr float kSolverMinVisibility= 0.5f;
 constexpr float kSolverFrameMarginPx= 16.f;
@@ -731,10 +731,10 @@ EyeSeries eyeSeriesFromRatios(const std::vector<ModelSample>& samples)
 // The Blink stage over a pass's model frames in order, under the take's
 // neutral and the default settings, as one minus each eye's output so the
 // blink scoring reads it as it reads an openness. Sides are the person's own.
-EyeSeries eyeSeriesFromBlinkStage(const std::vector<ModelSample>& samples, const DirectConfig& direct)
+EyeSeries eyeSeriesFromBlinkStage(const std::vector<ModelSample>& samples, const FrontCameraConfig& frontCamera)
 {
 	WebcamBlinkFilter filter;
-	filter.reset(direct.neutralFacePresent ? &direct.neutralFace : nullptr);
+	filter.reset(frontCamera.neutralFacePresent ? &frontCamera.neutralFace : nullptr);
 	const BlinkConfig config;
 	EyeSeries series;
 	for (size_t index= 0; index < samples.size(); ++index)
@@ -1320,7 +1320,7 @@ void reportHands(const char* tag, const TrackingReplay& replay, const std::vecto
 				slotOverlapHalf+= overlap >= 0.5f ? 1 : 0;
 			}
 
-			// By shape, the rule the direct solver's label report reads
+			// By shape, the rule the front-camera solver's label report reads
 			const int shapeSide= matchHandSideByShape(slot.imagePoints, extras).side;
 
 			// By the wrist: the slot's wrist within the agreement distance of
@@ -1384,7 +1384,7 @@ void reportHands(const char* tag, const TrackingReplay& replay, const std::vecto
 
 // -- The hand labels against the body model ---------------------------------
 
-// One stored frame of the camera as the direct solver reads it: the body
+// One stored frame of the camera as the front-camera solver reads it: the body
 // observation the stage held on it and the hand slots as published
 struct LabelFrame
 {
@@ -1951,7 +1951,7 @@ struct HeadSample
 	double timestampMs= 0.0;
 	bool bPhone= false;
 	glm::quat phone{1.f, 0.f, 0.f, 0.f};
-	// The methods: the six-point face fit, the direct solver's ear and nose
+	// The methods: the six-point face fit, the front-camera solver's ear and nose
 	// head while it reads one, and the rigid fit of the face's own lifted
 	// points at each depth gain
 	static constexpr int kMethodCount= 5;
@@ -2083,7 +2083,7 @@ void reportHeadMethod(const char* tag, const char* name, const std::vector<HeadS
 // -- The hand pipeline with body hints --------------------------------------
 
 // One run of the hand pipeline over the camera's stored frames, as the
-// direct camera runs it: no cross-camera hints, and with body hints the
+// front camera runs it: no cross-camera hints, and with body hints the
 // previous frame's observation seeding the slots under the live retry
 // throttle
 struct HintRunStats
@@ -2481,8 +2481,8 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	const AppConfig& config= replay.getRecordedConfig();
 
 	int cameraIndex= requestedCamera;
-	if (cameraIndex < 0 && config.direct.enabled)
-		cameraIndex= config.direct.cameraIndex;
+	if (cameraIndex < 0 && config.frontCamera.enabled)
+		cameraIndex= config.frontCamera.cameraIndex;
 	for (int index= 0; cameraIndex < 0 && index < (int)config.cameraCount(); ++index)
 	{
 		if (getBodyPoseBackend(config, index).has_value())
@@ -2490,7 +2490,7 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	}
 	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount())
 	{
-		MIKAN_LOG_ERROR(tag) << "No direct or body-pose camera to default to; pass a cameraIndex";
+		MIKAN_LOG_ERROR(tag) << "No front or body-pose camera to default to; pass a cameraIndex";
 		return 1;
 	}
 	const CameraProfile& profile= config.camera(cameraIndex);
@@ -2688,8 +2688,8 @@ static int runGateWholeBodyTool(const TestArgs& args)
 		// The Blink stage over the same points, each pass in order from its
 		// first frame
 		MIKAN_LOG_INFO(tag) << " the Blink stage over the whole-body points, one minus its output:";
-		const EyeSeries stageEveryFrame= eyeSeriesFromBlinkStage(shapesEveryFrame, config.direct);
-		const EyeSeries stageDivided= eyeSeriesFromBlinkStage(shapesDivided, config.direct);
+		const EyeSeries stageEveryFrame= eyeSeriesFromBlinkStage(shapesEveryFrame, config.frontCamera);
+		const EyeSeries stageDivided= eyeSeriesFromBlinkStage(shapesDivided, config.frontCamera);
 		reportBlinkSignal(tag, {{"every frame", &stageEveryFrame}, {"at the divider", &stageDivided}}, faceSamples);
 		const double gazeStartMs= gazeDown.startSeconds < 0.0 ? 0.0 : takeStartMs + gazeDown.startSeconds * 1000.0;
 		const double gazeEndMs= gazeDown.startSeconds < 0.0 ? -1.0 : takeStartMs + gazeDown.endSeconds * 1000.0;
@@ -2755,13 +2755,13 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	}
 	else
 	{
-		// The direct solver's own head on the same observations, under the
-		// recording's direct config on the shared synthetic rig
+		// The front-camera solver's own head on the same observations, under the
+		// recording's front-camera config on the shared synthetic rig
 		const AvatarModel avatarModel= SyntheticAvatar::makeModel(eVrmVersion::Vrm1, false);
 		const AvatarSkeleton skeleton(avatarModel);
-		const DirectRetargetConfig directConfig= makeDirectRetargetConfig(config, AvatarRigSettings());
-		DirectStageSolver direct;
-		DirectCameraModel cameraModel;
+		const FrontCameraRetargetConfig frontCameraConfig= makeFrontCameraRetargetConfig(config, AvatarRigSettings());
+		FrontCameraStageSolver frontCamera;
+		FrontCameraModel cameraModel;
 		cameraModel.fx= geometry.fx;
 		cameraModel.fy= geometry.fy;
 		cameraModel.cx= geometry.cx;
@@ -2825,9 +2825,9 @@ static int runGateWholeBodyTool(const TestArgs& args)
 			cameraModel.width= sample.frameWidth;
 			cameraModel.height= sample.frameHeight;
 			AvatarPose pose;
-			direct.solve(cameraInput, cameraModel, TrackingFrameResult::HeadPose(), sample.timestampMs, skeleton,
-						 directConfig, pose);
-			const DirectRetarget::SolveState& state= direct.getSolveState();
+			frontCamera.solve(cameraInput, cameraModel, TrackingFrameResult::HeadPose(), sample.timestampMs, skeleton,
+						 frontCameraConfig, pose);
+			const FrontCameraRetarget::SolveState& state= frontCamera.getSolveState();
 			// Measured or within its hold, as the live head reads
 			head.bMethod[1]= state.headMeasured;
 			head.method[1]= state.headFrame;
@@ -2897,7 +2897,7 @@ static int runGateWholeBodyTool(const TestArgs& args)
 	}
 	reportLabels();
 
-	// -- The hand pipeline as the direct camera runs it, without and with
+	// -- The hand pipeline as the front camera runs it, without and with
 	// the body model's hints ------------------------------------------------
 	{
 		const bool bHaveTruth= profile.intrinsics.present && profile.extrinsics.present;

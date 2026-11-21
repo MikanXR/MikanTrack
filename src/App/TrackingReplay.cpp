@@ -355,9 +355,10 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 			if (bWhatIf && !whatIfParams->isCameraEnabled(mirror.cameraIndex))
 				continue;
 			candidates.push_back(&mirror);
-			// The first camera, or the direct camera of a direct-mode recording
+			// The first camera, or the front camera of a front-camera recording
 			if (passthrough == nullptr ||
-				(m_recordedConfig.direct.enabled && mirror.cameraIndex == m_recordedConfig.direct.cameraIndex))
+				(m_recordedConfig.frontCamera.enabled &&
+				 mirror.cameraIndex == m_recordedConfig.frontCamera.cameraIndex))
 				passthrough= &mirror;
 			if (bWhatIf && !whatIfParams->cameraEnabled.empty() && recorded.bFused &&
 				mirror.valid && mirror.hasExtrinsics)
@@ -372,7 +373,7 @@ void TrackingReplay::runPass(const WhatIfParams* whatIfParams)
 		else
 		{
 			// No-world passthrough: the passthrough camera's result (camera 0,
-			// or the direct camera), reconstructed from the REPLAYED mirror so
+			// or the front camera), reconstructed from the REPLAYED mirror so
 			// the checksum still verifies this frame
 			fused= passthrough == nullptr ? TrackingFrameResult() : passthrough->result;
 		}

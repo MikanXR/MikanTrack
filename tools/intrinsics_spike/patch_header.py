@@ -4,7 +4,8 @@
       [--tilt-delta DEG] [--raw-frames DIR]
 
 --fx-scale multiplies the camera's focal lengths. --tilt-delta adds to
-direct.cameraTiltDegrees. --raw-frames names a folder of raw-equivalent frames
+frontCamera.cameraTiltDegrees (direct.cameraTiltDegrees in a take from before
+the section was renamed). --raw-frames names a folder of raw-equivalent frames
 (redistort_frames.py): the copy then reads those frames, its header carries no
 distortion and the distorted pinhole, and the recorded hand pixels are moved
 into the raw image, which is what a camera with no undistortion would record.
@@ -81,8 +82,9 @@ def main():
     intrinsics["vfov"] = hfov_degrees(distorted[1, 1], intrinsics["height"])
 
     if args.tilt_delta != 0.0:
-        direct = config.setdefault("direct", {})
-        direct["cameraTiltDegrees"] = float(direct.get("cameraTiltDegrees", 0.0)) + args.tilt_delta
+        # A take from before the rename names the section "direct", which the app still reads
+        section = config["direct"] if "direct" in config and "frontCamera" not in config else config.setdefault("frontCamera", {})
+        section["cameraTiltDegrees"] = float(section.get("cameraTiltDegrees", 0.0)) + args.tilt_delta
 
     lines[0] = json.dumps(header, separators=(",", ":")) + "\n"
     with open(args.out, "w", encoding="utf-8", newline="\n") as out:

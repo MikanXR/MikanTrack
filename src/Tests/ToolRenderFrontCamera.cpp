@@ -4,7 +4,7 @@
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseTracker.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "FrameRecorder.h"
 #include "HeadlessGlContext.h"
 #include "PathUtils.h"
@@ -15,33 +15,33 @@
 #include "TrackingReplay.h"
 #include "VrmLoader.h"
 
-// Renders the avatar a one-camera direct project would show for every frame
+// Renders the avatar a one-camera front-camera project would show for every frame
 // of a take with raw frames: the whole-body model run over the camera's raw
 // frames, the recorded hands, the retarget stage as the app builds it for a
-// direct project on that camera, and the avatar drawn from the camera at the
+// front-camera project on that camera, and the avatar drawn from the camera at the
 // frame's size. One image per raw frame, named by the camera's frame index,
 // so the sequence lines up with the raw frames for a side-by-side video.
 //
-//   --render-direct <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>]
+//   --render-front-camera <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>]
 //       [forearm=<meters>] [view=front] [near=<fraction>] [far=<fraction>]
 //
-// The take need not be a direct-mode recording: the camera given (the first
-// with body pose by default) becomes the direct camera. vrm names the avatar
+// The take need not be a front-camera recording: the camera given (the first
+// with body pose by default) becomes the front camera. vrm names the avatar
 // in place of the recorded one. tilt and forearm stand in for the recorded
-// direct tilt and forearm length. view=front draws the avatar from a camera
+// front-camera tilt and forearm length. view=front draws the avatar from a camera
 // in front of it that rides with its hips, in place of the tracking camera,
 // so the arms stay in the picture when the user's hands leave the frame.
 // near and far stand in for the depth planes' fractions of the reach.
 namespace
 {
-constexpr const char* kTag= "render-direct";
+constexpr const char* kTag= "render-front-camera";
 // The front view: a 35 degree lens this far ahead of the hips and this far
 // above them, the upper body with room for the arms
 constexpr float kFrontViewFovDegrees= 35.f;
 constexpr float kFrontViewDistance= 1.4f;
 constexpr float kFrontViewAboveHips= 0.35f;
 
-int runRenderDirectTool(const TestArgs& args)
+int runRenderFrontCameraTool(const TestArgs& args)
 {
 	std::string recordingPath;
 	std::string outDirArg;
@@ -88,8 +88,9 @@ int runRenderDirectTool(const TestArgs& args)
 	}
 	if (recordingPath.empty() || outDirArg.empty())
 	{
-		MIKAN_LOG_ERROR(kTag) << "Usage: --render-direct <recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] "
-								 "[tilt=<degrees>] [forearm=<meters>] [view=front] [near=<fraction>] [far=<fraction>]";
+		MIKAN_LOG_ERROR(kTag) << "Usage: --render-front-camera <recording.jsonl> <outDir> [cameraIndex] "
+								 "[vrm=<file.vrm>] [tilt=<degrees>] [forearm=<meters>] [view=front] [near=<fraction>] "
+								 "[far=<fraction>]";
 		return 1;
 	}
 	const std::filesystem::path outDir= PathUtils::utf8ToPath(outDirArg);
@@ -101,7 +102,7 @@ int runRenderDirectTool(const TestArgs& args)
 		MIKAN_LOG_ERROR(kTag) << recordingPath << ": load failed: " << error;
 		return 1;
 	}
-	// The recorded project as a direct project on the camera
+	// The recorded project as a front-camera project on the camera
 	AppConfig config= replay.getRecordedConfig();
 	int cameraIndex= requestedCamera;
 	for (int index= 0; cameraIndex < 0 && index < (int)config.cameraCount(); ++index)
@@ -114,16 +115,16 @@ int runRenderDirectTool(const TestArgs& args)
 		MIKAN_LOG_ERROR(kTag) << recordingPath << ": no camera with intrinsics to render from; pass a cameraIndex";
 		return 1;
 	}
-	config.direct.enabled= true;
-	config.direct.cameraIndex= cameraIndex;
+	config.frontCamera.enabled= true;
+	config.frontCamera.cameraIndex= cameraIndex;
 	if (bTilt)
-		config.direct.cameraTiltDegrees= tiltDegrees;
+		config.frontCamera.cameraTiltDegrees= tiltDegrees;
 	if (forearmMeters > 0.f)
 		config.body.forearmLengthMeters= forearmMeters;
 	if (nearFraction >= 0.f)
-		config.direct.nearPlaneReachFraction= nearFraction;
+		config.frontCamera.nearPlaneReachFraction= nearFraction;
 	if (farFraction >= 0.f)
-		config.direct.farPlaneReachFraction= farFraction;
+		config.frontCamera.farPlaneReachFraction= farFraction;
 	if (!vrmArg.empty())
 		config.avatar.modelPath= vrmArg;
 	if (config.avatar.modelPath.empty())
@@ -156,7 +157,7 @@ int runRenderDirectTool(const TestArgs& args)
 		MIKAN_LOG_WARNING(kTag) << warning;
 
 	const MikanMatrix3d& cameraMatrix= config.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
-	DirectCameraModel cameraModel;
+	FrontCameraModel cameraModel;
 	cameraModel.fx= (float)cameraMatrix.x0;
 	cameraModel.fy= (float)cameraMatrix.y1;
 	cameraModel.cx= (float)cameraMatrix.z0;
@@ -166,7 +167,7 @@ int runRenderDirectTool(const TestArgs& args)
 	RetargetStage stage;
 	stage.setConfig(makeRetargetStageConfig(config, rig, chains, skeleton));
 
-	// The whole-body model on every raw frame, as the live direct camera
+	// The whole-body model on every raw frame, as the live front camera
 	// runs it at a divider of 1
 	BodyPoseTrackerConfig trackerConfig;
 	trackerConfig.backend= eBodyPoseBackend::Rtmw3dWholeBody;
@@ -229,17 +230,17 @@ int runRenderDirectTool(const TestArgs& args)
 				cameraInput.body= observation;
 				cameraModel.width= cameraInput.frameWidth > 0 ? cameraInput.frameWidth : image.cols;
 				cameraModel.height= cameraInput.frameHeight > 0 ? cameraInput.frameHeight : image.rows;
-				stage.solveDirect(cameraInput, cameraModel, noPhoneHead, cameraInput.timestampMs, result);
+				stage.solveFrontCamera(cameraInput, cameraModel, noPhoneHead, cameraInput.timestampMs, result);
 
 				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 				{
-					if (!result.directState.arms[sideIndex].bNearPlane)
+					if (!result.frontCameraState.arms[sideIndex].bNearPlane)
 						continue;
 					if (nearFrames[sideIndex]++ == 0)
 						firstNearFrame[sideIndex]= framesRendered;
 				}
 				const glm::mat4 cameraToWorld=
-					DirectRetarget::makeCameraToWorld(*skeleton, result.pose, result.directState);
+					FrontCameraRetarget::makeCameraToWorld(*skeleton, result.pose, result.frontCameraState);
 				scene.setAvatarPose(&result.pose);
 				SceneCameraMatch match;
 				match.valid= true;
@@ -293,7 +294,8 @@ int runRenderDirectTool(const TestArgs& args)
 }
 } // namespace
 
-MIKAN_REGISTER_TEST("--render-direct",
-					"Render the avatar a direct project would show for every raw frame of a take, from the camera "
+MIKAN_REGISTER_TEST("--render-front-camera",
+					"Render the avatar a front-camera project would show for every raw frame of a take, "
+					"from the camera "
 					"(<recording.jsonl> <outDir> [cameraIndex] [vrm=<file.vrm>] [tilt=<degrees>] [forearm=<meters>] [view=front] [near=<fraction>] [far=<fraction>])",
-					eTestCategory::Tool, runRenderDirectTool);
+					eTestCategory::Tool, runRenderFrontCameraTool);

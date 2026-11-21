@@ -11,7 +11,7 @@
 // drives the retarget stage (the gate, hold, freeze and position retarget the
 // frozen stream ran itself) from the replayed fused output, bit for bit where
 // every frame is sent and within the decimated tolerance on the sent frames
-// alone. A direct-mode recording is not compared: the direct retarget has no
+// alone. A front-camera recording is not compared: the front-camera retarget has no
 // frozen copy. The run uses the shared synthetic rig with default rig
 // settings, so the comparison pins no avatar file and no sidecar: it asks
 // whether the two code paths agree, not what the avatar did.
@@ -293,9 +293,10 @@ static int runRetargetGoldenTool(const TestArgs& args)
 	}
 	replay.runAll();
 	const AppConfig& config= replay.getRecordedConfig();
-	if (config.direct.enabled)
+	if (config.frontCamera.enabled)
 	{
-		MIKAN_LOG_ERROR(kTag) << recordingPath << ": direct mode, not compared: the direct retarget has no frozen copy";
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": front-camera mode, not compared: the front-camera retarget has no "
+								 "frozen copy";
 		return 1;
 	}
 

@@ -81,7 +81,7 @@ public:
 	void setShowWholeBodyHands(bool bShow) { m_bShowWholeBodyHands= bShow; }
 	bool getShowLowVisibilityLandmarks() const { return m_bShowLowVisibilityLandmarks; }
 	void setShowLowVisibilityLandmarks(bool bShow) { m_bShowLowVisibilityLandmarks= bShow; }
-	// The direct solver's verdict on one camera's hand slots this frame
+	// The front-camera solver's verdict on one camera's hand slots this frame
 	// (whether each was the hand), -1 for no camera: a rejected slot draws as
 	// the hand slot draw mode says
 	void setHandUse(int cameraIndex, const std::array<bool, 2>& handUsed)

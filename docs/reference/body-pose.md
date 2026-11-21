@@ -28,7 +28,7 @@ The project's mode picks each camera's backend (`eBodyPoseBackend`), through `ge
 
 - `rtmpose`: RTMPose-m body7 (the `rtmpose-m_simcc-body7` MMDeploy end2end export), 17 planar keypoints, the lighter model. Every body camera of a multi-camera project runs it, since no multi-camera solver reads more.
 
-- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint. A direct project's direct camera runs it, since the direct solve reads its face and hand blocks. No solver reads its depth.
+- `rtmw3d`: RTMW3D-X cocktail14 384x288 (the torch export published on Hugging Face, since OpenMMLab ships no SDK bundle for it), 133 COCO-WholeBody keypoints each with a depth relative to the hip midpoint. A front-camera project's front camera runs it, since the front-camera solve reads its face and hand blocks. No solver reads its depth.
 
 The two models are compared on a recording with `--replay-bodypose` and its explicit backend argument ([commands.md](./commands.md)).
 
@@ -81,7 +81,7 @@ On a model frame, `acquireBox` prefers the tracked box: the confident-keypoint e
 
 ## The world solver
 
-`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own 3D is deliberately not consumed: the body backend produces none, and no solver reads the whole-body backend's per-keypoint depth. The single-camera direct mode (`DirectRetarget`, see [avatar.md](./avatar.md)) places the wrist on depth planes. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
+`BodyPoseSolver` (`src/Tracking/BodyPoseSolver.h`) runs after fusion and fills the fused result's forearm (elbow), shoulder, and head outputs. Everything is solved from 2D rays plus known lengths. The pose model's own 3D is deliberately not consumed: the body backend produces none, and no solver reads the whole-body backend's per-keypoint depth. The front-camera mode (`FrontCameraRetarget`, see [avatar.md](./avatar.md)) places the wrist on depth planes. The fused wrists are the metric anchor, the best-measured points in the system. The solver is deterministic: no wall clock and no config reads, state advances on the observation's `modelFrameIndex` and the fused timestamp, so a replayed recording produces bit-identical output.
 
 Only a new `modelFrameIndex` triggers a re-solve (`solveFromObservation`). Re-solving a repeated observation against a moved wrist would slide the estimate along a stale ray, so repeated observations hold: the forearm direction is held and the elbow rides the fresh wrist through it, while shoulders and head hold their world positions (they hang off the torso, not the wrist). A model gap longer than `kMaxHoldMs` (500 ms) resets the solver. Estimated depths outside `kMinBodyDepthMeters` (0.15) to `kMaxBodyDepthMeters` (2.0) are rejected: any solve that divides a known separation by an apparent one blows up when the model collapses that pair, and the window keeps a wild value out of the estimates that hang off it.
 
@@ -121,9 +121,9 @@ The per-camera stage runs inside `CameraContext::process` (`src/App/CameraContex
 
 ### Configuration
 
-Whether a camera runs the stage is the project's mode (`getBodyPoseBackend`): a direct project runs it on its direct camera alone, whatever the switches say, and a multi-camera project on the cameras whose switch is on. The per-camera settings are `BodyPoseCameraConfig` on `CameraProfile` (`src/App/AppConfig.h`), serialized under the camera's `bodyPose` JSON object:
+Whether a camera runs the stage is the project's mode (`getBodyPoseBackend`): a front-camera project runs it on its front camera alone, whatever the switches say, and a multi-camera project on the cameras whose switch is on. The per-camera settings are `BodyPoseCameraConfig` on `CameraProfile` (`src/App/AppConfig.h`), serialized under the camera's `bodyPose` JSON object:
 
-- `bodyPose.enabled` (default false), the multi-camera project's switch, which a direct project ignores
+- `bodyPose.enabled` (default false), the multi-camera project's switch, which a front-camera project ignores
 - `bodyPose.poseFrameDivider` (default 1, written into the project file, so a project saved under an earlier default keeps the value it has)
 - `bodyPose.detectorIntervalFrames` (default 20)
 

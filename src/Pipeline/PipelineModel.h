@@ -24,7 +24,7 @@ enum class ePipelineStage : int
 	Imu,
 	BodySolver,
 	// The single-camera solver that stands in for the three above
-	DirectSolver,
+	FrontCameraSolver,
 	Filters,
 	Torso,
 	ArmChain,
@@ -34,7 +34,7 @@ enum class ePipelineStage : int
 	SourcePose,
 	Retarget,
 	VrmModel,
-	Placement, // the position retarget's; a direct project has none
+	Placement, // the position retarget's; a front-camera project has none
 	Chains,
 	Output,
 	DeliveryRules,
@@ -102,9 +102,9 @@ struct PipelineStatusInputs
 	static constexpr int k_maxCameras= 8;
 
 	// The project's shape
-	bool bDirect= false;
+	bool bFrontCameraMode= false;
 	int cameraCount= 0;
-	int directCameraIndex= 0;
+	int frontCameraIndex= 0;
 	// The shown frame is a recording's
 	bool bReplay= false;
 	// The shown frame carries its stage state: always live, and in a replay
@@ -141,7 +141,7 @@ struct PipelineStatusInputs
 		FaceOnly,
 		Fused,
 		Passthrough,
-		Direct,
+		FrontCamera,
 	};
 	ePath path= ePath::Unknown;
 
@@ -171,16 +171,16 @@ struct PipelineStatusInputs
 	};
 	Imu imu[2];
 
-	// The direct solver's last solve
-	bool bDirectIntrinsics= false;
-	// The direct camera's lens is a pinhole from a typed field of view
-	bool bDirectIntrinsicsNominal= false;
-	bool bDirectNeutral= false;
-	bool bDirectTorso= false;
-	bool bDirectHeadMeasured= false;
-	float directShoulderDepthMeters= 0.f;
-	float directLeanDegrees= 0.f;
-	struct DirectArm
+	// The front-camera solver's last solve
+	bool bFrontCameraIntrinsics= false;
+	// The front camera's lens is a pinhole from a typed field of view
+	bool bFrontCameraIntrinsicsNominal= false;
+	bool bFrontCameraNeutral= false;
+	bool bFrontCameraTorso= false;
+	bool bFrontCameraHeadMeasured= false;
+	float frontCameraShoulderDepthMeters= 0.f;
+	float frontCameraLeanDegrees= 0.f;
+	struct FrontCameraArm
 	{
 		bool bChain= false;
 		bool bHandSeen= false;
@@ -189,9 +189,9 @@ struct PipelineStatusInputs
 		bool bResting= false;
 		float restBlend= 0.f;
 	};
-	DirectArm directArms[2];
+	FrontCameraArm frontCameraArms[2];
 	// The hand slots sit on the opposite side's body wrists
-	bool bDirectHandednessSwapped= false;
+	bool bFrontCameraHandednessSwapped= false;
 
 	// Retarget
 	bool bAvatarLoaded= false;
@@ -217,7 +217,7 @@ struct PipelineStatusInputs
 	bool bFaceStreaming= false;
 	bool bFaceTracked= false;
 	float faceDatagramsPerSecond= 0.f;
-	// The direct camera's face block as the webcam face source
+	// The front camera's face block as the webcam face source
 	bool bWebcamPresent= false;
 	bool bWebcamTracked= false;
 	bool bWebcamNeutral= false;
@@ -237,21 +237,21 @@ namespace PipelineModel
 {
 // The top row, left to right, for a project's shape. Face joins at Output
 // and is not in the row (see getSideStage).
-std::vector<PipelineStageId> getTopRow(bool bDirect);
+std::vector<PipelineStageId> getTopRow(bool bFrontCameraMode);
 PipelineStageId getSideStage();
 
 // The lanes a stage opens into in the second row: one lane per camera for
 // Capture (the camera, then its four sub-stages), one lane for the others,
 // none for a stage without sub-stages. The Retarget lane has its placement
 // only in a multi-camera project.
-std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bDirect,
+std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bFrontCameraMode,
 														   int cameraCount);
 
 // The top-row (or side) stage a stage belongs to; itself for a top-level one
 PipelineStageId getTopLevel(const PipelineStageId& stage);
 
 // Every stage of a project, top row first, each followed by its sub-stages
-std::vector<PipelineStageId> getAllStages(bool bDirect, int cameraCount);
+std::vector<PipelineStageId> getAllStages(bool bFrontCameraMode, int cameraCount);
 
 // Whether the lanes join their boxes with arrows (a flow) or not (a set)
 bool isLaneFlow(ePipelineStage topLevel);
@@ -261,7 +261,7 @@ const char* getNameKey(ePipelineStage stage);
 const char* getDescriptionKey(ePipelineStage stage);
 
 // The stable text id automation and the dock layout use: "capture",
-// "capture.cam0", "capture.cam0.hands", "direct.arm", "source",
+// "capture.cam0", "capture.cam0.hands", "front.arm", "source",
 // "retarget.chains", "face.mic"
 std::string toString(const PipelineStageId& stage);
 bool fromString(const std::string& text, PipelineStageId& outStage);

@@ -111,7 +111,7 @@ void OscStreamer::setConfig(const OscStreamerConfig& config)
 	}
 }
 
-void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* directPose)
+void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -131,7 +131,7 @@ void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* 
 
 	const ClockTimePoint now= std::chrono::steady_clock::now();
 
-	encodeFrameLocked(frame, directPose, now, m_scratchPackets);
+	encodeFrameLocked(frame, frontCameraPose, now, m_scratchPackets);
 
 	// One frame can be several datagrams. The stats count FRAMES, so the rate
 	// readout does not depend on how the frame was split.
@@ -148,19 +148,19 @@ void OscStreamer::sendFrame(const TrackingFrameResult& frame, const AvatarPose* 
 }
 
 void OscStreamer::encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets,
-							  const AvatarPose* directPose)
+							  const AvatarPose* frontCameraPose)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	encodeFrameLocked(frame, directPose, std::chrono::steady_clock::now(), outPackets);
+	encodeFrameLocked(frame, frontCameraPose, std::chrono::steady_clock::now(), outPackets);
 }
 
-void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* directPose,
+void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose,
 									const ClockTimePoint& now, std::vector<std::vector<uint8_t>>& outPackets)
 {
 	m_bundle.clear();
 	m_bundle.setTimeTag(k_oscTimeTagImmediate);
 
-	appendVmcMessages(frame, directPose, now);
+	appendVmcMessages(frame, frontCameraPose, now);
 
 	// Pack the frame's messages into as few complete bundles as fit. Splitting
 	// here rather than letting IP fragment the datagram matters because a
@@ -207,24 +207,24 @@ void OscStreamer::encodeFrameLocked(const TrackingFrameResult& frame, const Avat
 	outPackets.resize(packetCount);
 }
 
-void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* directPose,
+void OscStreamer::appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose,
 									const ClockTimePoint& now)
 {
-	// A valid direct pose replaces the whole stereo resolve below: the direct
+	// A valid front-camera pose replaces the whole stereo resolve below: the front-camera
 	// solver has already gated, held and rested its own output, and none of the
 	// hand state here has seen this frame
-	const bool bDirect= directPose != nullptr && directPose->valid;
+	const bool bFrontCameraMode= frontCameraPose != nullptr && frontCameraPose->valid;
 	bool bTracking= false;
 
-	if (bDirect)
+	if (bFrontCameraMode)
 	{
 		if (m_config.avatarSkeleton != nullptr)
-			VmcRetarget::buildPoseFromAvatar(*directPose, *m_config.avatarSkeleton, m_vmcPose);
+			VmcRetarget::buildPoseFromAvatar(*frontCameraPose, *m_config.avatarSkeleton, m_vmcPose);
 		else
 			m_vmcPose.clear();
 
-		bTracking= directPose->bones[(int)eHumanoidBone::LeftUpperArm].present ||
-				   directPose->bones[(int)eHumanoidBone::RightUpperArm].present;
+		bTracking= frontCameraPose->bones[(int)eHumanoidBone::LeftUpperArm].present ||
+				   frontCameraPose->bones[(int)eHumanoidBone::RightUpperArm].present;
 	}
 	else
 	{

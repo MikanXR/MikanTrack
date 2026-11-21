@@ -168,14 +168,14 @@ const json* findChain(const json& j, const char* key, std::vector<std::string>& 
 	return nullptr;
 }
 
-RetargetChains::Loss migratedGroupLoss(bool bDirect)
+RetargetChains::Loss migratedGroupLoss(bool bFrontCameraMode)
 {
-	// The direct pipeline holds its torso and head for its own hold, then
+	// The front-camera pipeline holds its torso and head for its own hold, then
 	// rests them; the position pipeline releases its head at once and carries
 	// its torso with the arms
 	RetargetChains::Loss loss;
-	loss.hold= bDirect ? eLossHold::Pipeline : eLossHold::None;
-	loss.after= bDirect ? eLossAfter::EaseToRest : eLossAfter::Release;
+	loss.hold= bFrontCameraMode ? eLossHold::Pipeline : eLossHold::None;
+	loss.after= bFrontCameraMode ? eLossAfter::EaseToRest : eLossAfter::Release;
 	return loss;
 }
 
@@ -308,43 +308,44 @@ RetargetChains::Arm mirrorArm(const RetargetChains::Arm& arm)
 	return mirrored;
 }
 
-RetargetChains migrateRetargetChains(bool bDirect, float holdOnDropoutMs, bool bFreezeOnLoss, float restBlendMs,
-									 const std::array<float, 2>& elbowHintConfidence)
+RetargetChains migrateRetargetChains(bool bFrontCameraMode, float holdOnDropoutMs, bool bFreezeOnLoss,
+									 float restBlendMs, const std::array<float, 2>& elbowHintConfidence)
 {
 	RetargetChains chains;
-	chains.torso.loss= migratedGroupLoss(bDirect);
-	chains.head.loss= migratedGroupLoss(bDirect);
+	chains.torso.loss= migratedGroupLoss(bFrontCameraMode);
+	chains.head.loss= migratedGroupLoss(bFrontCameraMode);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		RetargetChains::Arm& arm= chains.arms[sideIndex];
-		arm.mapping= bDirect ? eArmMapping::BoneAngles : eArmMapping::BoneAnglesThenIk;
-		arm.ikWeight= ExprParameter{bDirect ? 0.f : 1.f};
+		arm.mapping= bFrontCameraMode ? eArmMapping::BoneAngles : eArmMapping::BoneAnglesThenIk;
+		arm.ikWeight= ExprParameter{bFrontCameraMode ? 0.f : 1.f};
 		arm.reachScale= ExprParameter{1.f};
 		arm.goalOffset= glm::vec3(0.f);
 		arm.elbowWeight= makeDefaultElbowWeight(sideIndex, elbowHintConfidence[sideIndex]);
-		arm.loss.hold= bDirect ? eLossHold::Pipeline : eLossHold::Timed;
+		arm.loss.hold= bFrontCameraMode ? eLossHold::Pipeline : eLossHold::Timed;
 		arm.loss.holdMs= holdOnDropoutMs;
-		arm.loss.after= bDirect ? eLossAfter::EaseToRest : (bFreezeOnLoss ? eLossAfter::Freeze : eLossAfter::Release);
+		arm.loss.after=
+			bFrontCameraMode ? eLossAfter::EaseToRest : (bFreezeOnLoss ? eLossAfter::Freeze : eLossAfter::Release);
 		arm.loss.restBlendMs= restBlendMs;
 	}
 	return chains;
 }
 
-RetargetChains makeDefaultRetargetChains(bool bDirect)
+RetargetChains makeDefaultRetargetChains(bool bFrontCameraMode)
 {
-	return migrateRetargetChains(bDirect, 250.f, true, 300.f,
+	return migrateRetargetChains(bFrontCameraMode, 250.f, true, 300.f,
 								 {k_defaultElbowHintConfidence, k_defaultElbowHintConfidence});
 }
 
 LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence,
 							   bool bAvatar)
 {
-	if (pipeline == SourcePose::ePipeline::Direct)
+	if (pipeline == SourcePose::ePipeline::FrontCamera)
 	{
 		// Every chain keeps the solver's hold, which also keeps its chain and
 		// filters alive for the next measurement; what follows it is the
 		// chain's
-		LossPolicy policy= makeDirectLossPolicy(0.f);
+		LossPolicy policy= makeFrontCameraLossPolicy(0.f);
 		applyStoredAfter(chains.torso.loss, policy.torso);
 		applyStoredAfter(chains.head.loss, policy.head);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)

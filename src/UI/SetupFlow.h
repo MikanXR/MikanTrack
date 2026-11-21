@@ -23,7 +23,7 @@ enum class eIntrinsicsPattern;
 // calibration wizards in dependency order (cameras, intrinsics per camera,
 // extrinsics, hands, then IMU mounting or body measurement by variant). The
 // two single-camera variants load their VRM avatar first. The single-front
-// variant is the direct retarget: one webcam facing the user, intrinsics
+// variant is the front-camera retarget: one webcam facing the user, intrinsics
 // for undistortion, the left and right hand check, then the neutral
 // capture, with no marker and no calibration wizards. The single-desk
 // variant runs one camera that sees
@@ -45,7 +45,7 @@ public:
 		DualOverhead,
 		DualOverheadJoyCons,
 		TriCameraFront,
-		SingleFront, // the direct retarget: a webcam facing the user
+		SingleFront, // the front-camera retarget: a webcam facing the user
 		SingleDesk,  // one camera that sees the desk marker
 	};
 

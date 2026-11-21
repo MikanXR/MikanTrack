@@ -1,4 +1,4 @@
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 
 #include <algorithm>
 #include <cmath>
@@ -291,7 +291,7 @@ bool handFromPalm(const glm::vec3& forearmDirection, const glm::vec3& restPalmNo
 // subtracted from every later frame, within wristLimitRadians) and the
 // fingers
 void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
-			  const DirectRetarget::ArmPlacement& placement, const AvatarRetargetConfig::Side& sideConfig,
+			  const FrontCameraRetarget::ArmPlacement& placement, const AvatarRetargetConfig::Side& sideConfig,
 			  float wristLimitRadians, AvatarPose& outPose)
 {
 	const eHandSide side= (eHandSide)sideIndex;
@@ -329,7 +329,7 @@ void placeArm(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& sp
 void pullPlacementTowardGoal(const SourcePose& source, const AvatarSkeleton& skeleton, int sideIndex,
 							 const glm::quat& spineDelta, const glm::vec3& avatarShoulder,
 							 const AvatarRetargetArm& armSettings, const AvatarRetargetConfig::Side& sideConfig,
-							 DirectRetarget::ArmPlacement& ioPlacement, AvatarRetargetGoals* outGoals)
+							 FrontCameraRetarget::ArmPlacement& ioPlacement, AvatarRetargetGoals* outGoals)
 {
 	const eHandSide side= (eHandSide)sideIndex;
 	const SourcePose::Arm& sourceArm= source.arms[sideIndex];
@@ -413,7 +413,7 @@ glm::vec3 solveElbow(const glm::vec3& shoulder, const glm::vec3& wrist, float up
 }
 } // namespace
 
-glm::quat DirectRetarget::worldFromCamera(float tiltRadians)
+glm::quat FrontCameraRetarget::worldFromCamera(float tiltRadians)
 {
 	// Columns: the world images of camera +X, +Y and +Z for a level camera.
 	// A camera pitched down by the tilt sees the world rolled up about its
@@ -423,7 +423,7 @@ glm::quat DirectRetarget::worldFromCamera(float tiltRadians)
 	return glm::angleAxis(-tiltRadians, glm::vec3(0.f, 1.f, 0.f)) * glm::quat_cast(k_levelWorldFromCamera);
 }
 
-void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
+void FrontCameraRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::PalmarSideMemory& ioMemory,
 										std::array<FingerAngles, FINGER_COUNT>& outAngles)
 {
 	HandPoseModel::computeMetacarpalFingerAngles(hand.modelPoints, hand.side, outAngles, &ioMemory, hand.bSideDecided);
@@ -437,7 +437,7 @@ void DirectRetarget::measureMonoFingers(const TrackedHand& hand, HandPoseModel::
 	}
 }
 
-DirectRetarget::ArmPlacement DirectRetarget::makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex,
+FrontCameraRetarget::ArmPlacement FrontCameraRetarget::makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex,
 															   const glm::quat& spineDelta,
 															   const AvatarRetargetConfig::Side& sideConfig)
 {
@@ -464,7 +464,7 @@ DirectRetarget::ArmPlacement DirectRetarget::makeRestPlacement(const AvatarSkele
 	return rest;
 }
 
-DirectRetarget::ArmPlacement DirectRetarget::makePosedPlacement(const AvatarSkeleton& skeleton, int sideIndex,
+FrontCameraRetarget::ArmPlacement FrontCameraRetarget::makePosedPlacement(const AvatarSkeleton& skeleton, int sideIndex,
 																const glm::quat& spineDelta, const glm::vec3& shoulder,
 																const glm::vec3& wristTarget, const glm::vec3* elbow,
 																const glm::vec3& elbowHint, const glm::quat& palm,
@@ -492,7 +492,8 @@ DirectRetarget::ArmPlacement DirectRetarget::makePosedPlacement(const AvatarSkel
 	return placement;
 }
 
-DirectRetarget::ArmPlacement DirectRetarget::blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t)
+FrontCameraRetarget::ArmPlacement FrontCameraRetarget::blendPlacements(const ArmPlacement& from, const ArmPlacement& to,
+																	  float t)
 {
 	ArmPlacement out;
 	out.upperDirection= mixDirection(from.upperDirection, to.upperDirection, t);
@@ -510,13 +511,13 @@ DirectRetarget::ArmPlacement DirectRetarget::blendPlacements(const ArmPlacement&
 	return out;
 }
 
-void DirectRetarget::reset()
+void FrontCameraRetarget::reset()
 {
 	resetMeasure();
 	m_resetEpoch++;
 }
 
-void DirectRetarget::resetMeasure()
+void FrontCameraRetarget::resetMeasure()
 {
 	m_state= SolveState();
 	m_bHasTime= false;
@@ -533,7 +534,7 @@ void DirectRetarget::resetMeasure()
 	m_bFiltersConfigured= false;
 }
 
-void DirectRetarget::configureFilters()
+void FrontCameraRetarget::configureFilters()
 {
 	for (OneEuroFilterVec2& filter : m_torso.shoulderPixelFilter)
 		filter.configure(kShoulderPixelMinCutoffHz, kShoulderPixelBeta, kDerivativeCutoffHz);
@@ -555,9 +556,10 @@ void DirectRetarget::configureFilters()
 	m_bFiltersConfigured= true;
 }
 
-void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+void FrontCameraRetarget::measure(const TrackingFrameResult& camera, const FrontCameraModel& cameraModel,
 							 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
-							 const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, SourcePose& outSource)
+							 const AvatarSkeleton& skeleton, const FrontCameraRetargetConfig& config,
+							 SourcePose& outSource)
 {
 	using eGroupState= SourcePose::eGroupState;
 
@@ -580,7 +582,7 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 	m_lastTimestampMs= timestampMs;
 
 	outSource= SourcePose();
-	outSource.pipeline= SourcePose::ePipeline::Direct;
+	outSource.pipeline= SourcePose::ePipeline::FrontCamera;
 	// Any backward step restarts above, so the step clock is the frame's
 	outSource.clock.timestampMs= timestampMs;
 	outSource.clock.stepMs= timestampMs;
@@ -1448,8 +1450,8 @@ void DirectRetarget::measure(const TrackingFrameResult& camera, const DirectCame
 	m_state.sideCorrections[1]= m_sideCorrections[1];
 }
 
-void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
-						   const DirectRetargetConfig& config, AvatarPose& outPose)
+void FrontCameraRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const FrontCameraRetargetConfig& config, AvatarPose& outPose)
 {
 	std::array<AvatarRetargetArm, 2> boneAngles;
 	for (AvatarRetargetArm& arm : boneAngles)
@@ -1457,8 +1459,8 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 	place(source, skeleton, config, boneAngles, outPose);
 }
 
-void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
-						   const DirectRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
+void FrontCameraRetarget::place(const SourcePose& source, const AvatarSkeleton& skeleton,
+						   const FrontCameraRetargetConfig& config, const std::array<AvatarRetargetArm, 2>& arms,
 						   AvatarPose& outPose, AvatarRetargetGoals* outGoals)
 {
 	using eGroupState= SourcePose::eGroupState;
@@ -1540,7 +1542,7 @@ void DirectRetarget::place(const SourcePose& source, const AvatarSkeleton& skele
 	}
 }
 
-void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+void FrontCameraRetarget::makeRestPose(const AvatarSkeleton& skeleton, const FrontCameraRetargetConfig& config,
 								  AvatarPose& outPose)
 {
 	outPose.clear();
@@ -1553,7 +1555,7 @@ void DirectRetarget::makeRestPose(const AvatarSkeleton& skeleton, const DirectRe
 				 config.wristLimitRadians[sideIndex], outPose);
 }
 
-glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,
+glm::mat4 FrontCameraRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, const AvatarPose& pose,
 											const SolveState& state)
 {
 	const glm::mat4 rotation= glm::mat4_cast(worldFromCamera(state.tiltRadians));
@@ -1566,9 +1568,9 @@ glm::mat4 DirectRetarget::makeCameraToWorld(const AvatarSkeleton& skeleton, cons
 	return glm::translate(glm::mat4(1.f), posedMidpoint - state.shoulderMidpoint) * rotation;
 }
 
-bool DirectRetarget::captureNeutral(DirectNeutralPose& outNeutral) const
+bool FrontCameraRetarget::captureNeutral(FrontCameraNeutralPose& outNeutral) const
 {
-	outNeutral= DirectNeutralPose();
+	outNeutral= FrontCameraNeutralPose();
 	if (!m_torso.valid)
 		return false;
 

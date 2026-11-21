@@ -8,7 +8,7 @@
 static const ImU32 k_leftHandColor= IM_COL32(80, 160, 255, 255);   // blue
 static const ImU32 k_rightHandColor= IM_COL32(255, 96, 96, 255);   // red
 static const ImU32 k_jointColor= IM_COL32(255, 255, 255, 220);
-// A slot the direct solver rejected: the same colors at this alpha
+// A slot the front-camera solver rejected: the same colors at this alpha
 static const int k_unusedHandAlpha= 70;
 static const ImU32 k_palmDetectColor= IM_COL32(255, 220, 60, 180); // yellow
 static const ImU32 k_bodyColor= IM_COL32(200, 120, 255, 230);      // purple

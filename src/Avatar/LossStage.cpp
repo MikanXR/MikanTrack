@@ -51,10 +51,10 @@ void easeToIdentity(const SourcePose::Head& from, float blend, SourcePose::Head&
 	outHead.orientation= glm::slerp(from.orientation, k_identity, blend);
 }
 
-// What places a direct arm's bones, read off the source's arm and hand
-DirectRetarget::ArmPlacement placementOf(const SourcePose::Arm& arm, const SourcePose::Hand& hand)
+// What places a front-camera arm's bones, read off the source's arm and hand
+FrontCameraRetarget::ArmPlacement placementOf(const SourcePose::Arm& arm, const SourcePose::Hand& hand)
 {
-	DirectRetarget::ArmPlacement placement;
+	FrontCameraRetarget::ArmPlacement placement;
 	placement.upperDirection= arm.upperDirection;
 	placement.forearmDirection= arm.forearmDirection;
 	placement.twist= arm.twist;
@@ -95,7 +95,7 @@ LossPolicy makePositionLossPolicy(float minConfidence, float holdOnDropoutMs, bo
 	return policy;
 }
 
-LossPolicy makeDirectLossPolicy(float restBlendMs)
+LossPolicy makeFrontCameraLossPolicy(float restBlendMs)
 {
 	LossPolicy policy;
 	policy.torso.hold= eLossHold::Pipeline;
@@ -116,7 +116,7 @@ LossPolicy makeDirectLossPolicy(float restBlendMs)
 void LossStage::reset()
 {
 	m_position= PipelineMemory();
-	m_direct= PipelineMemory();
+	m_frontCamera= PipelineMemory();
 }
 
 template <typename Group>
@@ -212,7 +212,7 @@ void LossStage::apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
 		return;
 
 	// The memory belongs to one epoch of its pipeline's clock
-	PipelineMemory& memory= ioSource.pipeline == SourcePose::ePipeline::Direct ? m_direct : m_position;
+	PipelineMemory& memory= ioSource.pipeline == SourcePose::ePipeline::FrontCamera ? m_frontCamera : m_position;
 	if (!memory.bStarted || memory.epoch != ioSource.clock.resetEpoch)
 	{
 		memory= PipelineMemory();
@@ -351,7 +351,7 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 		}
 		// An arm the ease had at rest, or on its way there, eases back out:
 		// timed from the frame before, so the first frame back already moves
-		const bool bDirect= ioSource.pipeline == SourcePose::ePipeline::Direct;
+		const bool bFrontCameraMode= ioSource.pipeline == SourcePose::ePipeline::FrontCamera;
 		if (ease.easeStartMs >= 0.0 && policy.riseBlendMs > 0.f)
 		{
 			ease.riseStartMs= timestampMs - ioSource.clock.frameIntervalMs;
@@ -367,13 +367,13 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 			if (rise >= 1.f)
 				ease.riseStartMs= -1.0;
 		}
-		if (rise < 1.f && bDirect)
+		if (rise < 1.f && bFrontCameraMode)
 		{
 			// The placement part way from the one the ease left onto the
 			// measured one. The chain goes, so a pull toward a goal reads the
 			// eased directions as it does for a resting arm.
-			const DirectRetarget::ArmPlacement placement=
-				DirectRetarget::blendPlacements(ease.riseFrom, placementOf(arm, hand), rise);
+			const FrontCameraRetarget::ArmPlacement placement=
+				FrontCameraRetarget::blendPlacements(ease.riseFrom, placementOf(arm, hand), rise);
 			arm.bHasShoulder= false;
 			arm.bHasElbow= false;
 			arm.upperDirection= placement.upperDirection;
@@ -429,7 +429,7 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 				return;
 			break;
 		}
-		if (ioSource.pipeline != SourcePose::ePipeline::Direct)
+		if (ioSource.pipeline != SourcePose::ePipeline::FrontCamera)
 		{
 			// The last values handed on, which the target solve poses as it
 			// did on the frame before and blends into the rig's rest pose by
@@ -458,13 +458,13 @@ void LossStage::resolveSide(const ChainLossPolicy& policy, int sideIndex, const 
 			ease.easeStartMs= timestampMs - ioSource.clock.frameIntervalMs;
 			ease.easeFrom= ease.lastPlacement;
 		}
-		const DirectRetarget::ArmPlacement rest=
-			DirectRetarget::makeRestPlacement(*skeleton, sideIndex, ioSource.torso.spineDelta, rigSide);
+		const FrontCameraRetarget::ArmPlacement rest=
+			FrontCameraRetarget::makeRestPlacement(*skeleton, sideIndex, ioSource.torso.spineDelta, rigSide);
 		float blend= 1.f;
 		if (ease.bPlaced && policy.restBlendMs > 0.f)
 			blend= smoothstep((float)((timestampMs - ease.easeStartMs) / policy.restBlendMs));
-		const DirectRetarget::ArmPlacement placement=
-			blend < 1.f ? DirectRetarget::blendPlacements(ease.easeFrom, rest, blend) : rest;
+		const FrontCameraRetarget::ArmPlacement placement=
+			blend < 1.f ? FrontCameraRetarget::blendPlacements(ease.easeFrom, rest, blend) : rest;
 		ease.lastPlacement= placement;
 		ease.bPlaced= true;
 

@@ -4,7 +4,7 @@
 
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "LossStage.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
@@ -68,10 +68,10 @@ AvatarRigSettings makeLegacyRig()
 }
 
 // A project whose legacy stream settings differ from the defaults
-AppConfig makeLegacyConfig(bool bDirect)
+AppConfig makeLegacyConfig(bool bFrontCameraMode)
 {
 	AppConfig config;
-	config.direct.enabled= bDirect;
+	config.frontCamera.enabled= bFrontCameraMode;
 	config.osc.minConfidence= 0.2f;
 	config.osc.holdOnDropoutMs= 400.f;
 	config.osc.vmcFreezeOnLoss= false;
@@ -215,26 +215,26 @@ static int runRetargetChainsTest(const TestArgs&)
 				  chains.torso.loss.hold == eLossHold::None && chains.torso.loss.after == eLossAfter::Release,
 			  "(c) multi-camera: the head and the torso take the position policy's");
 		const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
-		// The direct pipeline keeps its own hold and performs what the block
+		// The front-camera pipeline keeps its own hold and performs what the block
 		// stores after it, the release
-		LossPolicy expectedDirect= makeDirectLossPolicy(0.f);
-		expectedDirect.torso.after= eLossAfter::Release;
-		expectedDirect.head.after= eLossAfter::Release;
-		for (ChainLossPolicy& arm : expectedDirect.arms)
+		LossPolicy expectedFrontCamera= makeFrontCameraLossPolicy(0.f);
+		expectedFrontCamera.torso.after= eLossAfter::Release;
+		expectedFrontCamera.head.after= eLossAfter::Release;
+		for (ChainLossPolicy& arm : expectedFrontCamera.arms)
 			arm.after= eLossAfter::Release;
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 400.f, false)) &&
-				  samePolicy(stage.directLoss, expectedDirect),
-			  "(c) multi-camera: the position loss rules are the ones the legacy settings built, and the direct "
+				  samePolicy(stage.frontCameraLoss, expectedFrontCamera),
+			  "(c) multi-camera: the position loss rules are the ones the legacy settings built, and the front-camera "
 			  "pipeline's own hold is followed by the stored release");
 		check(sameParameter(stage.arms[0].elbowWeight, makeDefaultElbowWeight(0, 0.3f)) &&
 				  sameParameter(stage.arms[1].elbowWeight, makeDefaultElbowWeight(1, 0.7f)) &&
 				  stage.arms[0].elbowWeight.expression == "clamp(source.leftLowerArm.confidence / 0.3, 0, 1)" &&
 				  stage.arms[1].elbowWeight.expression == "clamp(source.rightLowerArm.confidence / 0.7, 0, 1)" &&
-				  stage.direct.restBlendMs == 500.f,
+				  stage.frontCamera.restBlendMs == 500.f,
 			  "(c) multi-camera: each arm's elbow weight function reaches the stage");
 	}
 
-	// (d) The migration of a direct project without chains, from the same
+	// (d) The migration of a front-camera project without chains, from the same
 	// legacy values: the pipeline's hold and the ease to rest, the hold
 	// length kept for a change of shape
 	{
@@ -252,19 +252,19 @@ static int runRetargetChainsTest(const TestArgs&)
 				arm.loss.hold == eLossHold::Pipeline && arm.loss.holdMs == 400.f &&
 				arm.loss.after == eLossAfter::EaseToRest && arm.loss.restBlendMs == 500.f;
 		}
-		check(bArms, "(d) direct: the arms take bone angles at IK weight 0, the pipeline's hold, the ease to rest over "
+		check(bArms, "(d) front-camera: the arms take bone angles at IK weight 0, the pipeline's hold, the ease to rest over "
 					 "the sidecar's blend, and the elbow weight function of each side's elbow hint confidence");
 		check(chains.head.loss.hold == eLossHold::Pipeline && chains.head.loss.after == eLossAfter::EaseToRest &&
 				  chains.torso.loss.hold == eLossHold::Pipeline && chains.torso.loss.after == eLossAfter::EaseToRest,
-			  "(d) direct: the head and the torso take the direct policy's");
+			  "(d) front-camera: the head and the torso take the front-camera policy's");
 		const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
-		check(samePolicy(stage.directLoss, makeDirectLossPolicy(500.f)),
-			  "(d) direct: the direct pipeline's loss rules are the ones the legacy settings built");
-		// The position pipeline, which a direct project runs on a frame the
-		// direct solve cannot, takes the stored hold length and its default
+		check(samePolicy(stage.frontCameraLoss, makeFrontCameraLossPolicy(500.f)),
+			  "(d) front-camera: the front-camera pipeline's loss rules are the ones the legacy settings built");
+		// The position pipeline, which a front-camera project runs on a frame the
+		// front-camera solve cannot, takes the stored hold length and its default
 		// freeze in place of the ease to rest
 		check(samePolicy(stage.positionLoss, makePositionLossPolicy(0.2f, 400.f, true)),
-			  "(d) direct: the position fallback holds 400 ms then freezes, the ease to rest taking its default");
+			  "(d) front-camera: the position fallback holds 400 ms then freezes, the ease to rest taking its default");
 	}
 
 	// (e) A block takes the place of the legacy keys: it decides over them
@@ -337,6 +337,17 @@ static int runRetargetChainsTest(const TestArgs&)
 				  samePolicy(makeRetargetStageConfig(olderTake, rig, nullptr).positionLoss,
 							 makePositionLossPolicy(0.2f, 400.f, false)),
 			  "(e) an older take's config without a block runs on the migration of its own legacy settings");
+		// The section's older name, and the name a save writes
+		AppConfig olderName, newerName;
+		const bool bOlderLoads= olderName.loadFromJsonString(R"({"direct": {"enabled": true, "cameraTiltDegrees": 7}})");
+		const bool bNewerLoads= newerName.loadFromJsonString(
+			R"({"frontCamera": {"enabled": true, "cameraTiltDegrees": 9}, "direct": {"cameraTiltDegrees": 7}})");
+		const nlohmann::json resaved= nlohmann::json::parse(olderName.toJsonString(nullptr));
+		check(bOlderLoads && olderName.frontCamera.enabled && olderName.frontCamera.cameraTiltDegrees == 7.f &&
+				  bNewerLoads && newerName.frontCamera.cameraTiltDegrees == 9.f && resaved.contains("frontCamera") &&
+				  !resaved.contains("direct") && resaved.value("configVersion", 0) == 3,
+			  "(e) a project file's direct section loads as the front camera's, the new name wins, and a save "
+			  "writes the new name at version 3");
 	}
 
 	// (f) The stage config each pipeline derives from a block written under
@@ -345,7 +356,7 @@ static int runRetargetChainsTest(const TestArgs&)
 	{
 		const AvatarRigSettings rig= makeLegacyRig();
 		{
-			// A direct project's block, under a multi-camera project
+			// A front-camera project's block, under a multi-camera project
 			AppConfig config= makeLegacyConfig(false);
 			RetargetChains block= migrateRetargetChains(true, 400.f, false, 500.f, {0.3f, 0.7f});
 			block.arms[1].loss.holdMs= 180.f;
@@ -354,12 +365,12 @@ static int runRetargetChainsTest(const TestArgs&)
 			LossPolicy expected= makePositionLossPolicy(0.2f, 400.f, true);
 			expected.arms[1].holdMs= 180.f;
 			check(samePolicy(stage.positionLoss, expected),
-				  "(f) a direct block under the position pipeline: the arms' own hold becomes a timed one of the "
+				  "(f) a front-camera block under the position pipeline: the arms' own hold becomes a timed one of the "
 				  "stored length and the ease to rest a freeze, and the head is released at once");
 			check(sameChains(*config.retargetChains, block), "(f) the stored block is left as it was");
 		}
 		{
-			// A multi-camera project's block, under a direct project, with
+			// A multi-camera project's block, under a front-camera project, with
 			// a rest blend that differs per arm
 			AppConfig config= makeLegacyConfig(true);
 			RetargetChains block= migrateRetargetChains(false, 400.f, false, 500.f, {0.3f, 0.7f});
@@ -367,13 +378,13 @@ static int runRetargetChainsTest(const TestArgs&)
 			block.head.loss= {eLossHold::Timed, 200.f, eLossAfter::Freeze, 0.f};
 			config.retargetChains= std::make_shared<const RetargetChains>(block);
 			const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
-			LossPolicy expected= makeDirectLossPolicy(0.f);
+			LossPolicy expected= makeFrontCameraLossPolicy(0.f);
 			expected.torso.after= eLossAfter::Release;
 			expected.head.after= eLossAfter::Freeze;
 			for (ChainLossPolicy& arm : expected.arms)
 				arm.after= eLossAfter::Release;
-			check(samePolicy(stage.directLoss, expected),
-				  "(f) a multi-camera block under the direct pipeline: its own hold on every chain, then what each "
+			check(samePolicy(stage.frontCameraLoss, expected),
+				  "(f) a multi-camera block under the front-camera pipeline: its own hold on every chain, then what each "
 				  "chain stores, the timed hold not performed");
 			LossPolicy expectedPosition= makePositionLossPolicy(0.2f, 400.f, false);
 			expectedPosition.head.hold= eLossHold::Timed;
@@ -385,7 +396,7 @@ static int runRetargetChainsTest(const TestArgs&)
 					  stage.arms[1].mapping == eArmMapping::BoneAnglesThenIk &&
 					  sameParameter(stage.arms[0].ikWeight, ExprParameter{1.f}) &&
 					  sameParameter(stage.arms[1].ikWeight, ExprParameter{1.f}),
-				  "(f) a multi-camera block under the direct pipeline: the arms run IK at weight 1 as stored");
+				  "(f) a multi-camera block under the front-camera pipeline: the arms run IK at weight 1 as stored");
 		}
 		{
 			// The mapping and the IK weight reach the stage as stored under
@@ -397,9 +408,9 @@ static int runRetargetChainsTest(const TestArgs&)
 			block.arms[1].mapping= eArmMapping::BoneAnglesThenIk;
 			block.arms[1].ikWeight= ExprParameter{0.6f, "source.rightLowerArm.confidence", true};
 			bool bReached= true;
-			for (const bool bDirect : {false, true})
+			for (const bool bFrontCameraMode : {false, true})
 			{
-				AppConfig config= makeLegacyConfig(bDirect);
+				AppConfig config= makeLegacyConfig(bFrontCameraMode);
 				config.retargetChains= std::make_shared<const RetargetChains>(block);
 				const RetargetStageConfig stage= makeRetargetStageConfig(config, rig, nullptr);
 				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
@@ -414,17 +425,17 @@ static int runRetargetChainsTest(const TestArgs&)
 				  "angles run at weight 0 whatever the weight stores");
 			// The defaults each shape's stage runs on: IK at 1, and bone angles
 			bool bDefaults= true;
-			for (const bool bDirect : {false, true})
+			for (const bool bFrontCameraMode : {false, true})
 			{
-				const RetargetStageConfig stage= makeRetargetStageConfig(makeLegacyConfig(bDirect), rig, nullptr);
+				const RetargetStageConfig stage= makeRetargetStageConfig(makeLegacyConfig(bFrontCameraMode), rig, nullptr);
 				for (const RetargetArmSettings& arm : stage.arms)
 				{
-					bDefaults&= arm.mapping == (bDirect ? eArmMapping::BoneAngles : eArmMapping::BoneAnglesThenIk) &&
-						sameParameter(arm.ikWeight, ExprParameter{bDirect ? 0.f : 1.f});
+					bDefaults&= arm.mapping == (bFrontCameraMode ? eArmMapping::BoneAngles : eArmMapping::BoneAnglesThenIk) &&
+						sameParameter(arm.ikWeight, ExprParameter{bFrontCameraMode ? 0.f : 1.f});
 				}
 			}
 			check(bDefaults, "(f) a project without a block runs its shape's mapping: IK at 1 multi-camera, bone angles "
-							 "direct");
+							 "front-camera");
 		}
 	}
 
@@ -446,7 +457,7 @@ static int runRetargetChainsTest(const TestArgs&)
 			const RetargetChains chains= resolveRetargetChains(config, loaded);
 			makeRetargetStageConfig(config, loaded, chains, nullptr);
 			makeAvatarRetargetConfig(config, loaded);
-			makeDirectRetargetConfig(config, loaded);
+			makeFrontCameraRetargetConfig(config, loaded);
 			return avatarRigToJson(loaded);
 		};
 		AppConfig withBlock= makeLegacyConfig(false);
@@ -581,7 +592,7 @@ static int runRetargetChainsTest(const TestArgs&)
 	// each kind as stored, the rest blend going with the ease alone, but for
 	// the position pipeline without an avatar, which has no rest pose: there
 	// an ease to rest takes the default, a freeze for an arm and a release
-	// for the head. The direct pipeline keeps its own hold whatever is
+	// for the head. The front-camera pipeline keeps its own hold whatever is
 	// stored; the position pipeline turns a stored pipeline hold into a timed
 	// one of the stored length, the head's only when the length holds
 	// anything.
@@ -619,21 +630,21 @@ static int runRetargetChainsTest(const TestArgs&)
 				}
 				position.head.after= bEaseHere ? after : eLossAfter::Release;
 				position.head.restBlendMs= bEaseHere ? blend : 0.f;
-				// The direct pipeline, the same with an avatar or without
-				LossPolicy direct= makeDirectLossPolicy(0.f);
-				for (ChainLossPolicy* policy : {&direct.torso, &direct.head, &direct.arms[0], &direct.arms[1]})
+				// The front-camera pipeline, the same with an avatar or without
+				LossPolicy frontCamera= makeFrontCameraLossPolicy(0.f);
+				for (ChainLossPolicy* policy : {&frontCamera.torso, &frontCamera.head, &frontCamera.arms[0], &frontCamera.arms[1]})
 				{
 					policy->after= after;
 					policy->restBlendMs= blend;
 				}
-				const bool bSame= samePolicy(stage.positionLoss, position) && samePolicy(stage.directLoss, direct);
+				const bool bSame= samePolicy(stage.positionLoss, position) && samePolicy(stage.frontCameraLoss, frontCamera);
 				MIKAN_LOG_INFO("test-retarget-chains")
 					<< "  (i) stored " << lossAfterName(after) << (bAvatar ? " with" : " without")
 					<< " an avatar: position arm " << lossAfterName(stage.positionLoss.arms[0].after) << ", head "
-					<< lossAfterName(stage.positionLoss.head.after) << "; direct arm "
-					<< lossAfterName(stage.directLoss.arms[0].after) << ", head "
-					<< lossAfterName(stage.directLoss.head.after) << ", torso "
-					<< lossAfterName(stage.directLoss.torso.after) << (bSame ? "" : " (unexpected)");
+					<< lossAfterName(stage.positionLoss.head.after) << "; front-camera arm "
+					<< lossAfterName(stage.frontCameraLoss.arms[0].after) << ", head "
+					<< lossAfterName(stage.frontCameraLoss.head.after) << ", torso "
+					<< lossAfterName(stage.frontCameraLoss.torso.after) << (bSame ? "" : " (unexpected)");
 				bResolved&= bSame;
 			}
 		}
@@ -641,22 +652,22 @@ static int runRetargetChainsTest(const TestArgs&)
 						 "avatar taking the position default");
 
 		// The holds: a pipeline hold under the position pipeline, and a timed
-		// one under the direct pipeline
+		// one under the front-camera pipeline
 		RetargetChains holds= makeDefaultRetargetChains(true);
 		holds.head.loss.holdMs= 300.f;
 		holds.arms[0].loss.hold= eLossHold::Timed;
 		holds.arms[0].loss.holdMs= 90.f;
 		const LossPolicy position= makeChainLossPolicy(holds, SourcePose::ePipeline::Position, 0.f, true);
-		const LossPolicy direct= makeChainLossPolicy(holds, SourcePose::ePipeline::Direct, 0.f, true);
+		const LossPolicy frontCamera= makeChainLossPolicy(holds, SourcePose::ePipeline::FrontCamera, 0.f, true);
 		RetargetChains noHeadHold= holds;
 		noHeadHold.head.loss.holdMs= 0.f;
 		check(position.head.hold == eLossHold::Timed && position.head.holdMs == 300.f &&
 				  makeChainLossPolicy(noHeadHold, SourcePose::ePipeline::Position, 0.f, true).head.hold ==
 					  eLossHold::None &&
 				  position.arms[1].hold == eLossHold::Timed && position.arms[1].holdMs == 250.f &&
-				  direct.arms[0].hold == eLossHold::Pipeline && direct.head.hold == eLossHold::Pipeline &&
-				  direct.arms[0].after == eLossAfter::EaseToRest && direct.arms[0].restBlendMs == 300.f,
-			  "(i) the position pipeline times a stored pipeline hold (the head's only with a length), and the direct "
+				  frontCamera.arms[0].hold == eLossHold::Pipeline && frontCamera.head.hold == eLossHold::Pipeline &&
+				  frontCamera.arms[0].after == eLossAfter::EaseToRest && frontCamera.arms[0].restBlendMs == 300.f,
+			  "(i) the position pipeline times a stored pipeline hold (the head's only with a length), and the front-camera "
 			  "pipeline keeps its own hold over a stored timed one");
 	}
 

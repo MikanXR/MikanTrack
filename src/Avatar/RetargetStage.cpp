@@ -13,7 +13,7 @@ using B= eHumanoidBone;
 
 // A resting position arm's bones part way from the ones its last carried
 // values posed into the rig's rest pose, by the arm's rest blend. The rest
-// pose is the direct pipeline's, posed with the root at the identity, so it
+// pose is the front-camera pipeline's, posed with the root at the identity, so it
 // is carried into the solve's world by the root's rotation. Each bone turns
 // along its own arc, and a bone the rest pose leaves out (the clavicle)
 // turns to the identity and is left out at rest. At a blend of 1 the bones
@@ -126,13 +126,13 @@ void ArmParameterEvaluator::evaluate(const SourcePose& source, std::array<Avatar
 
 void RetargetStage::setConfig(const RetargetStageConfig& config)
 {
-	// A new skeleton means new lengths: the direct solver starts over on
+	// A new skeleton means new lengths: the front-camera solver starts over on
 	// them, and the root follow snaps to the new rest shoulders. The source
 	// clocks of the position pipeline carry on, so its holds and freezes do.
 	if (config.skeleton != m_config.skeleton)
 	{
 		m_position.resetRootFollow();
-		m_direct.reset();
+		m_frontCamera.reset();
 	}
 	m_config= config;
 	// A changed text recompiles; an unchanged one keeps its state
@@ -142,7 +142,7 @@ void RetargetStage::setConfig(const RetargetStageConfig& config)
 void RetargetStage::reset()
 {
 	m_position.reset();
-	m_direct.reset();
+	m_frontCamera.reset();
 	m_loss.reset();
 	m_armParameters.reset();
 }
@@ -155,11 +155,11 @@ void RetargetStage::solvePosition(const TrackingFrameResult& frame, RetargetResu
 	m_loss.apply(m_config.positionLoss, m_config.skeleton.get(), m_config.position.sides, outResult.source,
 				 &outResult.hands);
 	solveTarget(outResult.source, outResult.pose, &outResult.goals, &outResult.armParameters);
-	outResult.bDirectState= false;
-	outResult.directState= DirectRetarget::SolveState();
+	outResult.bFrontCameraState= false;
+	outResult.frontCameraState= FrontCameraRetarget::SolveState();
 }
 
-bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+bool RetargetStage::solveFrontCamera(const TrackingFrameResult& camera, const FrontCameraModel& cameraModel,
 								const TrackingFrameResult::HeadPose& phoneHead, double timestampMs,
 								RetargetResult& outResult)
 {
@@ -168,12 +168,13 @@ bool RetargetStage::solveDirect(const TrackingFrameResult& camera, const DirectC
 		return false;
 	const AvatarSkeleton& skeleton= *m_config.skeleton;
 
-	m_direct.measure(camera, cameraModel, phoneHead, timestampMs, skeleton, m_config.direct, outResult.source);
-	m_loss.apply(m_config.directLoss, &skeleton, m_config.direct.sides, outResult.source, nullptr);
+	m_frontCamera.measure(camera, cameraModel, phoneHead, timestampMs, skeleton, m_config.frontCamera,
+						  outResult.source);
+	m_loss.apply(m_config.frontCameraLoss, &skeleton, m_config.frontCamera.sides, outResult.source, nullptr);
 	solveTarget(outResult.source, outResult.pose, &outResult.goals, &outResult.armParameters);
-	outResult.bDirectState= true;
-	outResult.directState= m_direct.getSolveState();
-	writeDirectRestReadout(outResult.source, outResult.directState);
+	outResult.bFrontCameraState= true;
+	outResult.frontCameraState= m_frontCamera.getSolveState();
+	writeFrontCameraRestReadout(outResult.source, outResult.frontCameraState);
 	return true;
 }
 
@@ -191,16 +192,16 @@ void RetargetStage::solveTarget(const SourcePose& source, AvatarPose& outPose, A
 	std::array<RetargetArmReadout, 2> readout;
 	m_armParameters.evaluate(source, arms, readout);
 	AvatarRetargetGoals goals;
-	if (source.pipeline == SourcePose::ePipeline::Direct)
+	if (source.pipeline == SourcePose::ePipeline::FrontCamera)
 	{
-		m_direct.place(source, *m_config.skeleton, m_config.direct, arms, outPose, &goals);
+		m_frontCamera.place(source, *m_config.skeleton, m_config.frontCamera, arms, outPose, &goals);
 	}
 	else
 	{
 		m_position.solve(source, *m_config.skeleton, m_config.position, arms, outPose, &goals);
 
 		// A resting arm, posed from its last carried values, eases into the
-		// rest pose the direct pipeline eases its arms into; the rest pose,
+		// rest pose the front-camera pipeline eases its arms into; the rest pose,
 		// not the goal, places it. A carried arm easing out of rest is posed
 		// from its measurement and blended the same way by the share of rest
 		// still in it.
@@ -216,7 +217,7 @@ void RetargetStage::solveTarget(const SourcePose& source, AvatarPose& outPose, A
 				continue;
 			if (!bRestPosed)
 			{
-				DirectRetarget::makeRestPose(*m_config.skeleton, m_config.direct, restPose);
+				FrontCameraRetarget::makeRestPose(*m_config.skeleton, m_config.frontCamera, restPose);
 				bRestPosed= true;
 			}
 			easeArmToRest(restPose, sideIndex, sourceArm.restBlend, outPose);
@@ -242,11 +243,11 @@ void RetargetStage::resolveTarget(RetargetResult& ioResult)
 		return;
 	solveTarget(ioResult.source, ioResult.pose, &ioResult.goals, &ioResult.armParameters);
 	// The placement writes the head's delta into the solve state
-	if (ioResult.bDirectState)
-		ioResult.directState.headDelta= m_direct.getSolveState().headDelta;
+	if (ioResult.bFrontCameraState)
+		ioResult.frontCameraState.headDelta= m_frontCamera.getSolveState().headDelta;
 }
 
-void RetargetStage::writeDirectRestReadout(const SourcePose& source, DirectRetarget::SolveState& ioState)
+void RetargetStage::writeFrontCameraRestReadout(const SourcePose& source, FrontCameraRetarget::SolveState& ioState)
 {
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{

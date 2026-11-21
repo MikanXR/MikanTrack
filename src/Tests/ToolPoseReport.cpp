@@ -10,7 +10,7 @@
 #include "AvatarSkeleton.h"
 #include "BodyPoseTypes.h"
 #include "DiagnosticDump.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "FrameRecorder.h"
 #include "HeadlessGlContext.h"
 #include "PathUtils.h"
@@ -21,7 +21,7 @@
 #include "TrackingReplay.h"
 #include "VrmLoader.h"
 
-// Re-solves one recorded frame of a direct-mode take or dump through the
+// Re-solves one recorded frame of a front-camera take or dump through the
 // retarget stage, under the take's own chain settings as the app solved it,
 // and reports how the posed avatar sits on the camera's landmarks: the loop
 // after a solver change or a chain edit, with no recapture.
@@ -58,7 +58,7 @@ struct JointMatch
 // The posed bone's miss from its landmark, logged and collected
 void reportJoint(const JointMatch& match, const std::array<AvatarPosedBone, HUMANOID_BONE_COUNT>& posed,
 				 const AvatarSkeleton& skeleton, const AvatarPose& pose, const glm::mat4& cameraToWorld,
-				 const DirectCameraModel& camera, nlohmann::json& outJoints)
+				 const FrontCameraModel& camera, nlohmann::json& outJoints)
 {
 	if (!skeleton.getBone(match.bone).present || !pose.bones[(int)match.bone].present)
 		return;
@@ -103,16 +103,16 @@ int runPoseReportTool(const TestArgs& args)
 		return 1;
 	}
 	const AppConfig& config= replay.getRecordedConfig();
-	if (!config.direct.enabled)
+	if (!config.frontCamera.enabled)
 	{
-		MIKAN_LOG_ERROR(kTag) << recordingPath << ": not a direct-mode recording";
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": not a front-camera recording";
 		return 1;
 	}
-	const int cameraIndex= config.direct.cameraIndex;
+	const int cameraIndex= config.frontCamera.cameraIndex;
 	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount() ||
 		!config.camera(cameraIndex).intrinsics.present)
 	{
-		MIKAN_LOG_ERROR(kTag) << recordingPath << ": the direct camera " << cameraIndex << " has no intrinsics";
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": the front camera " << cameraIndex << " has no intrinsics";
 		return 1;
 	}
 	if (replay.getFrameCount() == 0)
@@ -156,7 +156,7 @@ int runPoseReportTool(const TestArgs& args)
 
 	// The recording's undistorted pinhole at the frame's size
 	const MikanMatrix3d& cameraMatrix= config.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
-	DirectCameraModel cameraModel;
+	FrontCameraModel cameraModel;
 	cameraModel.fx= (float)cameraMatrix.x0;
 	cameraModel.fy= (float)cameraMatrix.y1;
 	cameraModel.cx= (float)cameraMatrix.z0;
@@ -177,12 +177,12 @@ int runPoseReportTool(const TestArgs& args)
 	const TrackingFrameResult::HeadPose noPhoneHead;
 	for (int iteration= 0; iteration < kIterations; ++iteration)
 	{
-		stage.solveDirect(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs + intervalMs * iteration,
+		stage.solveFrontCamera(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs + intervalMs * iteration,
 						  result);
 	}
 	const AvatarPose& pose= result.pose;
-	const DirectRetarget::SolveState& state= result.directState;
-	const glm::mat4 cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, pose, state);
+	const FrontCameraRetarget::SolveState& state= result.frontCameraState;
+	const glm::mat4 cameraToWorld= FrontCameraRetarget::makeCameraToWorld(*skeleton, pose, state);
 	if (state.bHandednessSwapped)
 		MIKAN_LOG_WARNING(kTag) << "the hand slots sit on the body's opposite wrists: left and right are swapped "
 								   "(tracking.flipHandedness)";
@@ -271,7 +271,7 @@ int runPoseReportTool(const TestArgs& args)
 
 		// The arm's angles and the wrist's distance, what the depth choice
 		// came to
-		const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+		const FrontCameraRetarget::SolveState::Arm& arm= state.arms[sideIndex];
 		nlohmann::json armJson= {{"side", sideName}, {"chainValid", arm.chain.valid}};
 		// What the chain asked for and what the arm was solved at
 		const RetargetArmReadout& armReadout= result.armParameters[sideIndex];
@@ -332,7 +332,7 @@ int runPoseReportTool(const TestArgs& args)
 		{"intervalMs", intervalMs},
 		{"modelPath", config.avatar.modelPath},
 		{"pose", AvatarJson::avatarPoseToJson(*skeleton, pose)},
-		{"solveState", AvatarJson::directSolveStateToJson(state)},
+		{"solveState", AvatarJson::frontCameraSolveStateToJson(state)},
 		{"reprojection", joints},
 		{"arms", arms},
 	};
@@ -384,7 +384,7 @@ int runPoseReportTool(const TestArgs& args)
 			Scene3dPanel scene;
 			scene.setAvatar(loaded.model, skeleton, 1);
 			scene.setAvatarPose(&pose);
-			scene.setDirectSolve(&state, glm::translate(glm::mat4(1.f), glm::vec3(cameraToWorld[3])));
+			scene.setFrontCameraSolve(&state, glm::translate(glm::mat4(1.f), glm::vec3(cameraToWorld[3])));
 			SceneCameraMatch match;
 			match.valid= true;
 			match.camera= cameraModel;
@@ -406,6 +406,6 @@ int runPoseReportTool(const TestArgs& args)
 } // namespace
 
 MIKAN_REGISTER_TEST("--pose-report",
-					"Re-solve one frame of a direct-mode recording or dump and report the posed avatar against "
+					"Re-solve one frame of a front-camera recording or dump and report the posed avatar against "
 					"the landmarks (<recording.jsonl> [frameIndex] [outDir])",
 					eTestCategory::Tool, runPoseReportTool);

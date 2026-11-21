@@ -16,7 +16,7 @@
 
 class AvatarSkeleton;
 
-// The single-camera direct retarget: one camera's hand landmarks and
+// The single-camera front-camera retarget: one camera's hand landmarks and
 // whole-body observation become avatar bone rotations with no world
 // calibration. The camera is the world, the avatar's own bone lengths are
 // the scale, and every joint sits on the ray through its landmark, so the
@@ -30,7 +30,7 @@ class AvatarSkeleton;
 // timestamps, so a replayed recording poses identically.
 
 // The undistorted pinhole the landmarks live in
-struct DirectCameraModel
+struct FrontCameraModel
 {
 	float fx= 0.f;
 	float fy= 0.f;
@@ -44,7 +44,7 @@ struct DirectCameraModel
 // square, hands resting), the zero every relative rotation is measured from.
 // Stored in the camera-fixed world (the conversion at zero tilt), so editing
 // the tilt afterwards moves the references with the measurements.
-struct DirectNeutralPose
+struct FrontCameraNeutralPose
 {
 	bool present= false;
 	// The shoulder line's frame (no lean: the lean is measured against this
@@ -63,11 +63,11 @@ struct DirectNeutralPose
 	WholeBodyFaceRatios face;
 };
 
-struct DirectRetargetConfig
+struct FrontCameraRetargetConfig
 {
 	// The camera's downward pitch, radians, positive looking down
 	float cameraTiltRadians= 0.f;
-	DirectNeutralPose neutral;
+	FrontCameraNeutralPose neutral;
 	// The user's head geometry and the shoulder width it was measured
 	// against; the solver scales the head onto the avatar by the ratio of the
 	// avatar's shoulder width to this one, so every length is in the avatar's
@@ -100,9 +100,9 @@ struct DirectRetargetConfig
 	// the rest pose is where a lost arm goes)
 	std::array<AvatarRetargetConfig::Side, 2> sides{};
 	// How long an arm takes to ease into its rest pose, milliseconds; zero
-	// snaps. The left arm chain's, carried with the direct pipeline's settings
+	// snaps. The left arm chain's, carried with the front-camera pipeline's settings
 	// for a caller that builds the loss stage's arm policy from this config
-	// alone (makeDirectLossPolicy): the solver does not read it, and the
+	// alone (makeFrontCameraLossPolicy): the solver does not read it, and the
 	// retarget stage takes each arm's from its chain.
 	float restBlendMs= 300.f;
 	// The lifted palm's mirror along the view ray is taken on how much better
@@ -133,10 +133,10 @@ struct DirectRetargetConfig
 	std::array<float, 2> wristLimitRadians{80.f * glm::pi<float>() / 180.f, 80.f * glm::pi<float>() / 180.f};
 };
 
-class DirectRetarget
+class FrontCameraRetarget
 {
 public:
-	// The one camera-to-world conversion of the direct mode: OpenCV camera
+	// The one camera-to-world conversion of the front-camera mode: OpenCV camera
 	// axes (+X right, +Y down, +Z forward) to the app world (+X forward, +Y
 	// left, +Z up) for a user FACING the camera, so the user faces world +X
 	// like the avatar's rest and their left lands on +Y, then the camera's
@@ -166,11 +166,11 @@ public:
 	// past the hold restarts the solver and advances the epoch. Owns the
 	// holds: a torso, a head or an arm within its hold reads as held, with
 	// its last values.
-	void measure(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+	void measure(const TrackingFrameResult& camera, const FrontCameraModel& cameraModel,
 				 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, const AvatarSkeleton& skeleton,
-				 const DirectRetargetConfig& config, SourcePose& outSource);
+				 const FrontCameraRetargetConfig& config, SourcePose& outSource);
 
-	// The placement half: a direct source pose into the avatar's bones. The
+	// The placement half: a front-camera source pose into the avatar's bones. The
 	// head and the wrist take their joint limits and the rig's trims here.
 	// Every arm the source carries is placed from its placement, a resting
 	// one (the loss stage's ease into the rig's rest pose) like a measured
@@ -179,7 +179,7 @@ public:
 	// bones out and a lost head the head bone, each then at the avatar's
 	// rest. Writes the solve state's head delta. Holds no state across frames.
 	// Every arm by its bone angles alone.
-	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const FrontCameraRetargetConfig& config,
 			   AvatarPose& outPose);
 
 	// The same with each arm's IK weight, reach scale and goal offset (by
@@ -195,13 +195,13 @@ public:
 	// wrist and the fingers ride on the posed forearm as the bone angles
 	// place them. outGoals, when given, receives each arm's goal (above
 	// weight 0) and the weight it was solved at.
-	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const DirectRetargetConfig& config,
+	void place(const SourcePose& source, const AvatarSkeleton& skeleton, const FrontCameraRetargetConfig& config,
 			   const std::array<AvatarRetargetArm, 2>& arms, AvatarPose& outPose,
 			   AvatarRetargetGoals* outGoals= nullptr);
 
 	// The current filtered measurements as a neutral pose. False when no
 	// torso has been solved yet.
-	bool captureNeutral(DirectNeutralPose& outNeutral) const;
+	bool captureNeutral(FrontCameraNeutralPose& outNeutral) const;
 
 	// The solved arm chain of the last frame, world space, for overlays and
 	// tools
@@ -259,7 +259,7 @@ public:
 			bool bResting= false;
 			float restBlend= 0.f;
 		};
-		DirectCameraModel camera;
+		FrontCameraModel camera;
 		float tiltRadians= 0.f;
 		bool torsoValid= false;
 		glm::vec3 shoulder[2]{};
@@ -333,7 +333,8 @@ public:
 	// Both arms at the rig's rest pose with the spine straight, the rest of
 	// the pose absent: what a lost arm has eased into, for the preview and
 	// the tests
-	static void makeRestPose(const AvatarSkeleton& skeleton, const DirectRetargetConfig& config, AvatarPose& outPose);
+	static void makeRestPose(const AvatarSkeleton& skeleton, const FrontCameraRetargetConfig& config,
+							 AvatarPose& outPose);
 
 	// The hand model's bend on a straight finger facing the camera, radians
 	// (proximal, intermediate, distal): 10, 25 and 16 degrees for the four

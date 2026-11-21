@@ -12,7 +12,7 @@ using B= eHumanoidBone;
 
 void drawBoneSegment(cv::Mat& image, const std::array<AvatarPosedBone, HUMANOID_BONE_COUNT>& posed,
 					 const AvatarSkeleton& skeleton, const AvatarPose& pose, B from, B to,
-					 const glm::mat4& cameraToWorld, const DirectCameraModel& camera)
+					 const glm::mat4& cameraToWorld, const FrontCameraModel& camera)
 {
 	if (!skeleton.getBone(from).present || !skeleton.getBone(to).present || !pose.bones[(int)from].present ||
 		!pose.bones[(int)to].present)
@@ -30,7 +30,7 @@ void drawBoneSegment(cv::Mat& image, const std::array<AvatarPosedBone, HUMANOID_
 
 namespace AvatarOverlay
 {
-bool projectToPixel(const glm::vec3& world, const glm::mat4& cameraToWorld, const DirectCameraModel& camera,
+bool projectToPixel(const glm::vec3& world, const glm::mat4& cameraToWorld, const FrontCameraModel& camera,
 					glm::vec2& outPixel)
 {
 	const glm::vec3 inCamera= glm::vec3(glm::inverse(cameraToWorld) * glm::vec4(world, 1.f));
@@ -41,7 +41,7 @@ bool projectToPixel(const glm::vec3& world, const glm::mat4& cameraToWorld, cons
 }
 
 void drawPosedSkeleton(cv::Mat& image, const AvatarSkeleton& skeleton, const AvatarPose& pose,
-					   const glm::mat4& cameraToWorld, const DirectCameraModel& camera)
+					   const glm::mat4& cameraToWorld, const FrontCameraModel& camera)
 {
 	if (!pose.valid)
 		return;

@@ -76,10 +76,10 @@ public:
 
 	// (Re)builds the pipeline, the 3D projection, the undistorter, and the
 	// body-pose stage from this camera's profile, the body pose decided by
-	// getBodyPoseBackend with the direct camera the vision thread runs as.
+	// getBodyPoseBackend with the front camera the vision thread runs as.
 	// Invalidates the last result so stale calibration state cannot leak
 	// through a config change.
-	void configure(const AppConfig& config, int directCameraIndex);
+	void configure(const AppConfig& config, int frontCameraIndex);
 
 	// Resets the transient tracking state and invalidates the fusion input, so
 	// a recording starts from the same zero state replay's fresh instances do
@@ -117,11 +117,11 @@ public:
 	const HandSeedStats* getSeedStats() const;
 
 	// Seeds this camera's hand slots from its own whole-body observation.
-	// For the direct camera, which has no fused world result to be seeded
+	// For the front camera, which has no fused world result to be seeded
 	// from. Vision thread only.
 	void setBodyHandHints(bool bEnabled) { m_bBodyHandHints= bEnabled; }
 	// Puts each hand under the side this camera's whole-body observation
-	// names for it, ahead of the recording tap and the lift. For the direct
+	// names for it, ahead of the recording tap and the lift. For the front
 	// camera, whose solver takes a hand by its side. Vision thread only.
 	void setHandSideCorrection(bool bEnabled) { m_bHandSideCorrection= bEnabled; }
 

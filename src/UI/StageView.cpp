@@ -55,7 +55,7 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 	}
 	// The solver's chains sit beside the avatar they posed, except where the
 	// avatar stands alone
-	layers.bDirectSolve= layers.bAvatar && (layers.bFusedSkeleton || layers.bSourcePose);
+	layers.bFrontCameraSolve= layers.bAvatar && (layers.bFusedSkeleton || layers.bSourcePose);
 	if (!bShowAvatar)
 		layers.bAvatar= false;
 	// The chain settings' handles belong to the Retarget stage, whose chains
@@ -73,11 +73,12 @@ StageView::StageView(VideoPreviewPanel* previewPanel, Scene3dPanel* scenePanel)
 {
 }
 
-void StageView::update(const PipelineStageId& selected, bool bDirect, int directCameraIndex, bool bCameraWizardActive)
+void StageView::update(const PipelineStageId& selected, bool bFrontCameraMode, int frontCameraIndex,
+					   bool bCameraWizardActive)
 {
 	m_selected= selected;
-	m_bDirect= bDirect;
-	m_directCameraIndex= directCameraIndex;
+	m_bFrontCameraMode= bFrontCameraMode;
+	m_frontCameraIndex= frontCameraIndex;
 	m_bCameraWizardActive= bCameraWizardActive;
 	decide();
 }
@@ -88,23 +89,23 @@ void StageView::setMode(eStageViewMode mode)
 	decide();
 }
 
-StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDirect, int directCameraIndex,
+StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bFrontCameraMode, int frontCameraIndex,
 										int cameraCount)
 {
 	const PipelineStageId topLevel= stage.isValid() ? PipelineModel::getTopLevel(stage) : PipelineStageId();
 
-	// The capture and the direct solver are about the frames themselves:
-	// the camera a lane's stage belongs to, or the direct solver's camera
+	// The capture and the front-camera solver are about the frames themselves:
+	// the camera a lane's stage belongs to, or the front-camera solver's camera
 	StageViewContent content;
 	if (topLevel.stage == ePipelineStage::Capture)
 	{
 		content.bCameras= true;
 		content.cameraIndex= stage.cameraIndex;
 	}
-	else if (topLevel.stage == ePipelineStage::DirectSolver)
+	else if (topLevel.stage == ePipelineStage::FrontCameraSolver)
 	{
 		content.bCameras= true;
-		content.cameraIndex= bDirect ? directCameraIndex : -1;
+		content.cameraIndex= bFrontCameraMode ? frontCameraIndex : -1;
 	}
 	else
 	{
@@ -143,7 +144,8 @@ StageViewContent resolveStageViewContent(eStageViewMode mode, const StageViewCon
 void StageView::decide()
 {
 	const StageViewContent follow=
-		decideStageViewContent(m_selected, m_bDirect, m_directCameraIndex, (int)m_previewPanel->getCameraCount());
+		decideStageViewContent(m_selected, m_bFrontCameraMode, m_frontCameraIndex,
+							   (int)m_previewPanel->getCameraCount());
 	m_content= resolveStageViewContent(m_mode, follow, m_bCameraWizardActive);
 }
 
@@ -333,8 +335,8 @@ const char* StageView::getPovUnavailableKey(eScenePovAvailability availability)
 			return "stageView.povNotCalibrated";
 		case eScenePovAvailability::NoExtrinsics:
 			return "stageView.povNoExtrinsics";
-		case eScenePovAvailability::NotDirectCamera:
-			return "stageView.povNotDirectCamera";
+		case eScenePovAvailability::NotFrontCamera:
+			return "stageView.povNotFrontCamera";
 		default:
 			return "stageView.povNotCalibrated";
 	}
@@ -438,8 +440,8 @@ const char* StageView::getPovAvailabilityName(eScenePovAvailability availability
 			return "notCalibrated";
 		case eScenePovAvailability::NoExtrinsics:
 			return "noExtrinsics";
-		case eScenePovAvailability::NotDirectCamera:
-			return "notDirectCamera";
+		case eScenePovAvailability::NotFrontCamera:
+			return "notFrontCamera";
 		default:
 			return "missing";
 	}

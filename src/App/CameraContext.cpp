@@ -43,7 +43,7 @@ bool CameraContext::fetchPreviewFrame(VisionPreviewFrame& outFrame)
 	return true;
 }
 
-void CameraContext::configure(const AppConfig& config, int directCameraIndex)
+void CameraContext::configure(const AppConfig& config, int frontCameraIndex)
 {
 	const CameraProfile& profile= config.camera(m_cameraIndex);
 
@@ -124,7 +124,7 @@ void CameraContext::configure(const AppConfig& config, int directCameraIndex)
 	// passes through none. Load failure (missing models) leaves the tracker
 	// allocated but unloaded so a refresh doesn't retry-spam.
 	const std::optional<eBodyPoseBackend> bodyPoseBackend=
-		getBodyPoseBackend(config, m_cameraIndex, directCameraIndex);
+		getBodyPoseBackend(config, m_cameraIndex, frontCameraIndex);
 	if (bodyPoseBackend.has_value())
 	{
 		BodyPoseTrackerConfig trackerConfig;
@@ -382,7 +382,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 		// queue, so hints handed over on an iteration where this camera had no
 		// frame were overwritten unseen. Measured before this moved: 4425
 		// offered against 1659 that ever reached a decision.
-		// The two sources never meet: the direct camera has no fused world
+		// The two sources never meet: the front camera has no fused world
 		// result, so its hints come from its own body observation
 		{
 			MIKAN_PROFILE_SCOPE("Hand pipeline");
@@ -430,7 +430,7 @@ bool CameraContext::process(VideoCaptureSystem* videoCapture, const TrackingFram
 			MIKAN_PROFILE_SCOPE("ROI quality");
 			// The hand model's left and right are a view-dependent guess made
 			// sticky. The body model labels a hand by the arm it ends, so on the
-			// direct camera its hands name each slot's side, here, where the
+			// front camera its hands name each slot's side, here, where the
 			// recording and the lift both see the hand under its true side.
 			if (m_bHandSideCorrection)
 				applyHandSideCorrection(result);

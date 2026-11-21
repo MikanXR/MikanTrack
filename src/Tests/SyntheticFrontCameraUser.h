@@ -3,17 +3,17 @@
 #include "glm/gtc/quaternion.hpp"
 
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "HandPoseModel.h"
 #include "SyntheticAvatar.h"
 #include "TrackingTypes.h"
 
 // A synthetic pinhole pitched down at a synthetic user built from the
-// synthetic avatar's own lengths, and the per-camera frame the direct
-// retarget reads from them. Shared by the direct retarget's self test and
+// synthetic avatar's own lengths, and the per-camera frame the front-camera
+// retarget reads from them. Shared by the front-camera retarget's self test and
 // the retarget golden test, so both drive the solver with the same input.
 
-namespace SyntheticDirectUser
+namespace SyntheticFrontCameraUser
 {
 using namespace SyntheticAvatar;
 
@@ -27,7 +27,7 @@ constexpr float kTorsoLength= 0.4f;
 
 struct Camera
 {
-	DirectCameraModel model;
+	FrontCameraModel model;
 	glm::quat worldFromCamera{1.f, 0.f, 0.f, 0.f};
 	glm::quat cameraFromWorld{1.f, 0.f, 0.f, 0.f};
 };
@@ -41,7 +41,7 @@ inline Camera makeCamera(float tiltDegrees)
 	camera.model.cy= 240.f;
 	camera.model.width= 640;
 	camera.model.height= 480;
-	camera.worldFromCamera= DirectRetarget::worldFromCamera(glm::radians(tiltDegrees));
+	camera.worldFromCamera= FrontCameraRetarget::worldFromCamera(glm::radians(tiltDegrees));
 	camera.cameraFromWorld= glm::inverse(camera.worldFromCamera);
 	return camera;
 }
@@ -76,7 +76,7 @@ inline glm::quat mirrorPalmAlongRay(const glm::quat& palm, const glm::vec3& rayD
 	return makePalm(x - 2.f * glm::dot(x, ray) * ray, -(z - 2.f * glm::dot(z, ray) * ray));
 }
 
-// The user in the direct world (the camera at the origin, the user facing
+// The user in the front-camera world (the camera at the origin, the user facing
 // +X from 0.8 m away, the camera a quarter meter above the shoulders),
 // built from the avatar's lengths
 struct User
@@ -202,7 +202,8 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 		for (int finger= 0; finger < FINGER_COUNT; ++finger)
 		{
 			const float* bias=
-				finger == (int)eFinger::Thumb ? DirectRetarget::kThumbOpenBias : DirectRetarget::kFingerOpenBias;
+				finger == (int)eFinger::Thumb ? FrontCameraRetarget::kThumbOpenBias
+											  : FrontCameraRetarget::kFingerOpenBias;
 			biased[finger].proximal+= bias[0];
 			biased[finger].intermediate+= bias[1];
 			biased[finger].distal+= bias[2];
@@ -216,4 +217,4 @@ inline TrackingFrameResult makeFrame(const Camera& camera, const User& user, con
 	}
 	return frame;
 }
-} // namespace SyntheticDirectUser
+} // namespace SyntheticFrontCameraUser

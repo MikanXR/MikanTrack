@@ -24,12 +24,12 @@ public:
 	// the per-camera state from the config itself, and draws nothing for a
 	// camera index the config does not have.
 	void drawRescanControl();
-	// What a camera section's Remove button did: the direct role moved to
-	// another camera (the removed camera was the direct one), which the host
+	// What a camera section's Remove button did: the front-camera role moved to
+	// another camera (the removed camera was the front camera), which the host
 	// answers by cancelling a neutral capture countdown
 	struct DrawResult
 	{
-		bool bDirectCameraMoved= false;
+		bool bFrontCameraMoved= false;
 	};
 	// bWithHeader false leaves out the "Camera N" collapsing header, for a
 	// host that names the camera; bWithSettings false leaves out the Camera

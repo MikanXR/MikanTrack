@@ -460,10 +460,10 @@ static void updateHoldStill(const TrackingSectionContext& context, float deltaSe
 			panelState.holdStillLastTimestampMs= 0.0;
 			panelState.holdStillAccum[0]= TrackingPanelState::HoldStillAccum();
 			panelState.holdStillAccum[1]= TrackingPanelState::HoldStillAccum();
-			// A direct project has no world frame, so its window measures the
+			// A front-camera project has no world frame, so its window measures the
 			// camera-space lift. The figure is a sum of per-axis variances,
 			// which a rigid change of frame does not alter.
-			panelState.bHoldStillCameraFrame= isDirectProject(*context.config);
+			panelState.bHoldStillCameraFrame= isFrontCameraProject(*context.config);
 		}
 	}
 	else if (panelState.holdStillSecondsLeft > 0.f)
@@ -652,8 +652,8 @@ void SettingsPanels::updateTrackingState(const TrackingSectionContext& context, 
 
 	// A countdown left running while the mode is switched off would fire a
 	// capture nobody is waiting for
-	NeutralCaptureControl& neutral= context.state->directNeutral;
-	if (!config->direct.enabled)
+	NeutralCaptureControl& neutral= context.state->frontCameraNeutral;
+	if (!config->frontCamera.enabled)
 		neutral.reset();
 	bChanged|= neutral.update(deltaSeconds, visionThread, config);
 
@@ -1628,8 +1628,10 @@ void SettingsPanels::drawBlinkReadout(const TrackingSectionContext& context)
 void SettingsPanels::drawBodyPoseIntro(const TrackingSectionContext& context)
 {
 	const AppConfig* shownConfig= context.shownConfig != nullptr ? context.shownConfig : context.config;
-	const bool bDirect= shownConfig != nullptr && isDirectProject(*shownConfig);
-	ImGui::TextWrapped("%s", locText(bDirect ? "trackingPanel.bodyPoseDirectIntro" : "trackingPanel.bodyPoseIntro"));
+	const bool bFrontCameraMode= shownConfig != nullptr && isFrontCameraProject(*shownConfig);
+	ImGui::TextWrapped("%s",
+					   locText(bFrontCameraMode ? "trackingPanel.bodyPoseFrontCameraIntro"
+												: "trackingPanel.bodyPoseIntro"));
 }
 
 // The body model the shown frame's camera runs, none where it runs none or
@@ -1650,20 +1652,20 @@ void SettingsPanels::drawBodyPoseCameraControls(const TrackingSectionContext& co
 	ImGui::PushID(cameraIndex);
 
 	// The switch is a multi-camera project's choice, and edits the live
-	// config: a direct project decides body pose from its mode
+	// config: a front-camera project decides body pose from its mode
 	bool bChanged= false;
-	if (!isDirectProject(*config) && cameraIndex >= 0 && cameraIndex < (int)config->cameraCount())
+	if (!isFrontCameraProject(*config) && cameraIndex >= 0 && cameraIndex < (int)config->cameraCount())
 	{
 		const std::string label= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
 		bChanged|= ImGui::Checkbox(label.c_str(), &config->camera(cameraIndex).bodyPose.enabled);
 	}
 
 	// What the shown project runs on this camera, and its model
-	if (isDirectProject(*shownConfig))
+	if (isFrontCameraProject(*shownConfig))
 	{
-		const bool bDirectCamera= cameraIndex == shownConfig->direct.cameraIndex;
-		ImGui::TextWrapped("%s", locText(bDirectCamera ? "trackingPanel.bodyPoseDirectCamera"
-													   : "trackingPanel.bodyPoseDirectOtherCamera"));
+		const bool bIsFrontCamera= cameraIndex == shownConfig->frontCamera.cameraIndex;
+		ImGui::TextWrapped("%s", locText(bIsFrontCamera ? "trackingPanel.bodyPoseFrontCamera"
+													   : "trackingPanel.bodyPoseFrontCameraOtherCamera"));
 	}
 	const std::optional<eBodyPoseBackend> backend= getShownBodyPoseBackend(context, cameraIndex);
 	if (backend.has_value())
@@ -1779,30 +1781,30 @@ void SettingsPanels::drawBodySolveReadout(const TrackingSectionContext& context)
 	}
 }
 
-// -- Direct solver -------------------------------------------------------------
+// -- Front-camera solver -------------------------------------------------------------
 
-void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraControl(const TrackingSectionContext& context)
 {
 	AppConfig* config= context.config;
-	DirectConfig& direct= config->direct;
+	FrontCameraConfig& frontCamera= config->frontCamera;
 	bool bChanged= false;
 
 	// The config keeps the index in its camera list. A project that is not
-	// direct (one replaying a direct take) has no role to move.
+	// front-camera (one replaying a front-camera take) has no role to move.
 	if (config->cameraCount() > 1)
 	{
-		ImGui::BeginDisabled(!isDirectProject(*config));
-		const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", direct.cameraIndex + 1);
-		if (ImGui::BeginCombo(locLabel("trackingPanel.directCamera"), selectedLabel.c_str()))
+		ImGui::BeginDisabled(!isFrontCameraProject(*config));
+		const std::string selectedLabel= locFormat("trackingPanel.cameraFmt", frontCamera.cameraIndex + 1);
+		if (ImGui::BeginCombo(locLabel("trackingPanel.activeFrontCamera"), selectedLabel.c_str()))
 		{
 			for (int cameraIndex= 0; cameraIndex < (int)config->cameraCount(); ++cameraIndex)
 			{
 				ImGui::PushID(cameraIndex);
 				const std::string optionLabel= locFormat("trackingPanel.cameraFmt", cameraIndex + 1);
-				if (ImGui::Selectable(optionLabel.c_str(), direct.cameraIndex == cameraIndex) &&
-					direct.cameraIndex != cameraIndex)
+				if (ImGui::Selectable(optionLabel.c_str(), frontCamera.cameraIndex == cameraIndex) &&
+					frontCamera.cameraIndex != cameraIndex)
 				{
-					direct.cameraIndex= cameraIndex;
+					frontCamera.cameraIndex= cameraIndex;
 					bChanged= true;
 				}
 				ImGui::PopID();
@@ -1814,93 +1816,94 @@ void SettingsPanels::drawDirectCameraControl(const TrackingSectionContext& conte
 
 	if (bChanged)
 	{
-		onDirectCameraMoved(context);
+		onFrontCameraMoved(context);
 		commitTrackingConfigChange(context);
 	}
 }
 
-void SettingsPanels::onDirectCameraMoved(const TrackingSectionContext& context)
+void SettingsPanels::onFrontCameraMoved(const TrackingSectionContext& context)
 {
 	// The neutral belongs to the camera it was captured through, and a
 	// countdown started for the old camera would capture through the new
 	// one. A request already sent lands tagged with the old index and is
 	// dropped.
-	clearDirectNeutral(context.config->direct);
-	context.state->directNeutral.reset();
+	clearFrontCameraNeutral(context.config->frontCamera);
+	context.state->frontCameraNeutral.reset();
 }
 
-void SettingsPanels::drawDirectTiltControl(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraTiltControl(const TrackingSectionContext& context)
 {
-	DirectConfig& direct= context.config->direct;
-	if (ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
-						   locText("trackingPanel.directTiltFmt")))
+	FrontCameraConfig& frontCamera= context.config->frontCamera;
+	if (ImGui::SliderFloat(locLabel("trackingPanel.frontCameraTilt"), &frontCamera.cameraTiltDegrees, -30.f, 60.f,
+						   locText("trackingPanel.frontCameraTiltFmt")))
 		commitTrackingConfigChange(context);
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frontCameraTiltTooltip"));
 }
 
-void SettingsPanels::drawDirectWristDepthControls(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraWristDepthControls(const TrackingSectionContext& context)
 {
-	DirectConfig& direct= context.config->direct;
-	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.directFarPlane"), &direct.farPlaneReachFraction, 0.1f, 1.f,
+	FrontCameraConfig& frontCamera= context.config->frontCamera;
+	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.frontCameraFarPlane"), &frontCamera.farPlaneReachFraction, 0.1f, 1.f,
 									  "%.2f");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directFarPlaneTooltip"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frontCameraFarPlaneTooltip"));
 	bChanged|=
-		ImGui::SliderFloat(locLabel("trackingPanel.directNearPlane"), &direct.nearPlaneReachFraction, 0.f, 1.f, "%.2f");
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directNearPlaneTooltip"));
+		ImGui::SliderFloat(locLabel("trackingPanel.frontCameraNearPlane"), &frontCamera.nearPlaneReachFraction,
+						   0.f, 1.f, "%.2f");
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frontCameraNearPlaneTooltip"));
 	if (bChanged)
 		commitTrackingConfigChange(context);
 }
 
-void SettingsPanels::drawDirectNeutralControl(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraNeutralControl(const TrackingSectionContext& context)
 {
-	DirectConfig& direct= context.config->direct;
+	FrontCameraConfig& frontCamera= context.config->frontCamera;
 	bool bChanged= false;
 
 	// The countdown and the landed capture run in updateTrackingState
-	NeutralCaptureControl& neutral= context.state->directNeutral;
-	ImGui::BeginDisabled(neutral.isCountingDown() || !direct.enabled);
-	if (ImGui::Button(locLabel("trackingPanel.directCapture")))
+	NeutralCaptureControl& neutral= context.state->frontCameraNeutral;
+	ImGui::BeginDisabled(neutral.isCountingDown() || !frontCamera.enabled);
+	if (ImGui::Button(locLabel("trackingPanel.frontCameraCapture")))
 		neutral.start();
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directCaptureTooltip"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frontCameraCaptureTooltip"));
 	ImGui::EndDisabled();
 
-	if (direct.neutralPresent)
+	if (frontCamera.neutralPresent)
 	{
 		ImGui::SameLine();
-		if (ImGui::Button(locLabel("trackingPanel.directClear")))
+		if (ImGui::Button(locLabel("trackingPanel.frontCameraClear")))
 		{
-			clearDirectNeutral(direct);
+			clearFrontCameraNeutral(frontCamera);
 			bChanged= true;
 		}
 	}
 
 	if (neutral.isCountingDown())
 	{
-		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.directCountdownFmt"),
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), locText("trackingPanel.frontCameraCountdownFmt"),
 						   (int)ceilf(neutral.getRemainingSeconds()));
 		ImGui::ProgressBar(1.f - neutral.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
 						   ImVec2(-1, 4), "");
 	}
 
-	neutral.drawStatus(direct);
+	neutral.drawStatus(frontCamera);
 
 	if (bChanged)
 		commitTrackingConfigChange(context);
 }
 
-// The shown frame's direct solve, or null after one dim line saying it has
+// The shown frame's front-camera solve, or null after one dim line saying it has
 // none
-static const DirectRetarget::SolveState* getShownDirectSolve(const TrackingSectionContext& context)
+static const FrontCameraRetarget::SolveState* getShownFrontCameraSolve(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= context.direct != nullptr ? context.direct->state : nullptr;
+	const FrontCameraRetarget::SolveState* state= context.frontCamera != nullptr ? context.frontCamera->state : nullptr;
 	if (state == nullptr)
-		ImGui::TextDisabled("%s", locText("directStage.noSolve"));
+		ImGui::TextDisabled("%s", locText("frontCameraStage.noSolve"));
 	return state;
 }
 
 // A readout table: a label column, then one value column or one per side
 // under the side headers
-static bool beginDirectTable(const char* id, bool bPerSide)
+static bool beginFrontCameraTable(const char* id, bool bPerSide)
 {
 	if (!ImGui::BeginTable(id, bPerSide ? 3 : 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
 		return false;
@@ -1919,26 +1922,26 @@ static bool beginDirectTable(const char* id, bool bPerSide)
 }
 
 // A new row with its label, the label carrying the values' unit
-static void drawDirectRowLabel(const char* labelKey)
+static void drawFrontCameraRowLabel(const char* labelKey)
 {
 	ImGui::TableNextRow();
 	ImGui::TableNextColumn();
 	ImGui::TextUnformatted(locText(labelKey));
 }
 
-static void drawDirectTextCell(const char* text)
+static void drawFrontCameraTextCell(const char* text)
 {
 	ImGui::TableNextColumn();
 	ImGui::TextUnformatted(text);
 }
 
-static void drawDirectYesNoCell(bool bYes)
+static void drawFrontCameraYesNoCell(bool bYes)
 {
-	drawDirectTextCell(locText(bYes ? "common.yes" : "common.no"));
+	drawFrontCameraTextCell(locText(bYes ? "common.yes" : "common.no"));
 }
 
 // The value, or a dim dash where the solve did not measure it
-static void drawDirectValueCell(bool bMeasured, const char* format, float value)
+static void drawFrontCameraValueCell(bool bMeasured, const char* format, float value)
 {
 	ImGui::TableNextColumn();
 	if (bMeasured)
@@ -1947,50 +1950,50 @@ static void drawDirectValueCell(bool bMeasured, const char* format, float value)
 		ImGui::TextDisabled("-");
 }
 
-void SettingsPanels::drawDirectSolveSummary(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraSolveSummary(const TrackingSectionContext& context)
 {
-	ImGui::SeparatorText(locText("directStage.solveSection"));
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directSummary", false))
+	ImGui::SeparatorText(locText("frontCameraStage.solveSection"));
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraSummary", false))
 		return;
 
-	drawDirectRowLabel("directStage.person");
-	drawDirectTextCell(locText(state->torsoValid ? "directStage.torsoSeen" : "directStage.noPerson"));
+	drawFrontCameraRowLabel("frontCameraStage.person");
+	drawFrontCameraTextCell(locText(state->torsoValid ? "frontCameraStage.torsoSeen" : "frontCameraStage.noPerson"));
 	// The undistorted pinhole the landmarks were read in
-	drawDirectRowLabel("directStage.cameraModel");
+	drawFrontCameraRowLabel("frontCameraStage.cameraModel");
 	ImGui::TableNextColumn();
-	ImGui::Text(locText("directStage.cameraModelFmt"), state->camera.width, state->camera.height, state->camera.fx,
+	ImGui::Text(locText("frontCameraStage.cameraModelFmt"), state->camera.width, state->camera.height, state->camera.fx,
 				state->camera.fy);
-	drawDirectRowLabel("directStage.tilt");
-	drawDirectValueCell(true, "%.1f", glm::degrees(state->tiltRadians));
+	drawFrontCameraRowLabel("frontCameraStage.tilt");
+	drawFrontCameraValueCell(true, "%.1f", glm::degrees(state->tiltRadians));
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraFiltersReadout(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directFilters", true))
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraFilters", true))
 		return;
 
-	drawDirectRowLabel("directStage.handAgrees");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectYesNoCell(arm.bHandSeen);
-	drawDirectRowLabel("directStage.elbowGate");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectYesNoCell(arm.bElbowSeen);
+	drawFrontCameraRowLabel("frontCameraStage.handAgrees");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraYesNoCell(arm.bHandSeen);
+	drawFrontCameraRowLabel("frontCameraStage.elbowGate");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraYesNoCell(arm.bElbowSeen);
 	ImGui::EndTable();
 
 	// How often a label has cost a hand since the solver started
 	if (state->oppositeWristRejections[0] > 0 || state->oppositeWristRejections[1] > 0)
 	{
-		ImGui::TextDisabled(locText("directStage.oppositeWristRejectionsFmt"), state->oppositeWristRejections[0],
+		ImGui::TextDisabled(locText("frontCameraStage.oppositeWristRejectionsFmt"), state->oppositeWristRejections[0],
 							state->oppositeWristRejections[1]);
 	}
 
 	// And how often the camera's correction kept one
 	if (state->sideCorrections[0] > 0 || state->sideCorrections[1] > 0)
 	{
-		ImGui::TextDisabled(locText("directStage.sideCorrectionsFmt"), state->sideCorrections[0],
+		ImGui::TextDisabled(locText("frontCameraStage.sideCorrectionsFmt"), state->sideCorrections[0],
 							state->sideCorrections[1]);
 	}
 
@@ -2000,90 +2003,94 @@ void SettingsPanels::drawDirectFiltersReadout(const TrackingSectionContext& cont
 	if (state->bHandednessSwapped)
 	{
 		ImGui::PushTextWrapPos(0.f);
-		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", locText("directStage.handednessSwapped"));
+		ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", locText("frontCameraStage.handednessSwapped"));
 		ImGui::PopTextWrapPos();
 		drawFlipHandednessSection(context);
 	}
 }
 
-void SettingsPanels::drawDirectTorsoReadout(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraTorsoReadout(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directTorso", false))
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraTorso", false))
 		return;
 
-	const DirectReadout& readout= *context.direct;
-	drawDirectRowLabel("directStage.person");
-	drawDirectTextCell(locText(state->torsoValid ? "directStage.torsoSeen" : "directStage.noPerson"));
-	drawDirectRowLabel("directStage.shoulderDepth");
-	drawDirectValueCell(state->torsoValid, "%.2f", readout.shoulderDepth);
+	const FrontCameraReadout& readout= *context.frontCamera;
+	drawFrontCameraRowLabel("frontCameraStage.person");
+	drawFrontCameraTextCell(locText(state->torsoValid ? "frontCameraStage.torsoSeen" : "frontCameraStage.noPerson"));
+	drawFrontCameraRowLabel("frontCameraStage.shoulderDepth");
+	drawFrontCameraValueCell(state->torsoValid, "%.2f", readout.shoulderDepth);
 	// The lean is measured against the neutral's torso, so it needs one
-	drawDirectRowLabel("directStage.lean");
-	drawDirectValueCell(state->torsoValid && readout.bNeutralPresent, "%.0f", readout.leanDegrees);
-	drawDirectRowLabel("directStage.head");
-	drawDirectTextCell(locText(state->headMeasured ? "directStage.headMeasured" : "directStage.headNotMeasured"));
-	drawDirectRowLabel("directStage.neutral");
-	drawDirectTextCell(locText(readout.bNeutralPresent ? "directStage.neutralCaptured" : "directStage.neutralNone"));
+	drawFrontCameraRowLabel("frontCameraStage.lean");
+	drawFrontCameraValueCell(state->torsoValid && readout.bNeutralPresent, "%.0f", readout.leanDegrees);
+	drawFrontCameraRowLabel("frontCameraStage.head");
+	drawFrontCameraTextCell(
+		locText(state->headMeasured ? "frontCameraStage.headMeasured" : "frontCameraStage.headNotMeasured"));
+	drawFrontCameraRowLabel("frontCameraStage.neutral");
+	drawFrontCameraTextCell(
+		locText(readout.bNeutralPresent ? "frontCameraStage.neutralCaptured" : "frontCameraStage.neutralNone"));
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawDirectArmChainReadout(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraArmChainReadout(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directArmChain", true))
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraArmChain", true))
 		return;
 
 	// Every row is measured only where the wrist's ray crosses the arm's
 	// reach, and the interval is never empty there
-	drawDirectRowLabel("directStage.plane");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	drawFrontCameraRowLabel("frontCameraStage.plane");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
 	{
 		if (arm.depthHigh > 0.f)
-			drawDirectTextCell(locText(arm.bNearPlane ? "directStage.planeNear" : "directStage.planeFar"));
+			drawFrontCameraTextCell(
+				locText(arm.bNearPlane ? "frontCameraStage.planeNear" : "frontCameraStage.planeFar"));
 		else
-			drawDirectValueCell(false, "", 0.f);
+			drawFrontCameraValueCell(false, "", 0.f);
 	}
-	drawDirectRowLabel("directStage.planeDistance");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.depthHigh > 0.f, "%.2f", arm.planeDistance);
-	drawDirectRowLabel("directStage.wristDistance");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(arm.depthHigh > 0.f, "%.2f", arm.wristDepth);
-	drawDirectRowLabel("directStage.reachInterval");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	drawFrontCameraRowLabel("frontCameraStage.planeDistance");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraValueCell(arm.depthHigh > 0.f, "%.2f", arm.planeDistance);
+	drawFrontCameraRowLabel("frontCameraStage.wristDistance");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraValueCell(arm.depthHigh > 0.f, "%.2f", arm.wristDepth);
+	drawFrontCameraRowLabel("frontCameraStage.reachInterval");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
 	{
 		ImGui::TableNextColumn();
 		if (arm.depthHigh > 0.f)
-			ImGui::Text(locText("directStage.intervalFmt"), arm.depthLow, arm.depthHigh);
+			ImGui::Text(locText("frontCameraStage.intervalFmt"), arm.depthLow, arm.depthHigh);
 		else
 			ImGui::TextDisabled("-");
 	}
 	// The elbow sits by the rig's hint at weight 0 and along the forearm the
 	// camera sees at 1, easing between
-	drawDirectRowLabel("directStage.elbowSource");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	drawFrontCameraRowLabel("frontCameraStage.elbowSource");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
 	{
 		if (arm.depthHigh <= 0.f)
-			drawDirectValueCell(false, "", 0.f);
+			drawFrontCameraValueCell(false, "", 0.f);
 		else if (arm.elbowDirectionWeight <= 0.f)
-			drawDirectTextCell(locText("directStage.elbowSourceHint"));
+			drawFrontCameraTextCell(locText("frontCameraStage.elbowSourceHint"));
 		else if (arm.elbowDirectionWeight >= 1.f)
-			drawDirectTextCell(locText("directStage.elbowSourceLandmark"));
+			drawFrontCameraTextCell(locText("frontCameraStage.elbowSourceLandmark"));
 		else
-			drawDirectValueCell(true, locText("directStage.elbowSourceEasingFmt"), 100.f * arm.elbowDirectionWeight);
+			drawFrontCameraValueCell(true, locText("frontCameraStage.elbowSourceEasingFmt"),
+									 100.f * arm.elbowDirectionWeight);
 	}
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawDirectPalmReadout(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraPalmReadout(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directPalm", true))
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraPalm", true))
 		return;
 
 	// A resting arm reports no hand
-	drawDirectRowLabel("directStage.handMeasured");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	drawFrontCameraRowLabel("frontCameraStage.handMeasured");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
 	{
 		if (arm.bResting)
 		{
@@ -2092,26 +2099,26 @@ void SettingsPanels::drawDirectPalmReadout(const TrackingSectionContext& context
 		}
 		else
 		{
-			drawDirectYesNoCell(arm.bHandMeasured);
+			drawFrontCameraYesNoCell(arm.bHandMeasured);
 		}
 	}
-	drawDirectRowLabel("directStage.forearmTwist");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectValueCell(!arm.bResting && arm.bHandMeasured, "%.0f", glm::degrees(arm.twist));
+	drawFrontCameraRowLabel("frontCameraStage.forearmTwist");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraValueCell(!arm.bResting && arm.bHandMeasured, "%.0f", glm::degrees(arm.twist));
 	ImGui::EndTable();
 }
 
-void SettingsPanels::drawDirectHoldRestReadout(const TrackingSectionContext& context)
+void SettingsPanels::drawFrontCameraHoldRestReadout(const TrackingSectionContext& context)
 {
-	const DirectRetarget::SolveState* state= getShownDirectSolve(context);
-	if (state == nullptr || !beginDirectTable("directHoldRest", true))
+	const FrontCameraRetarget::SolveState* state= getShownFrontCameraSolve(context);
+	if (state == nullptr || !beginFrontCameraTable("frontCameraHoldRest", true))
 		return;
 
-	drawDirectRowLabel("directStage.armState");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
-		drawDirectTextCell(locText(arm.bResting ? "directStage.resting" : "directStage.live"));
-	drawDirectRowLabel("directStage.intoRest");
-	for (const DirectRetarget::SolveState::Arm& arm : state->arms)
+	drawFrontCameraRowLabel("frontCameraStage.armState");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
+		drawFrontCameraTextCell(locText(arm.bResting ? "frontCameraStage.resting" : "frontCameraStage.live"));
+	drawFrontCameraRowLabel("frontCameraStage.intoRest");
+	for (const FrontCameraRetarget::SolveState::Arm& arm : state->arms)
 	{
 		ImGui::TableNextColumn();
 		if (!arm.bResting)
@@ -2178,7 +2185,7 @@ void SettingsPanels::drawHandOverlayControls(const TrackingSectionContext& conte
 	if (ImGui::Checkbox(locLabel("trackingPanel.showDetectionBoxes"), &bShowBoxes))
 		previewPanel->setShowDetectionBoxes(bShowBoxes);
 
-	if (context.config->direct.enabled)
+	if (context.config->frontCamera.enabled)
 	{
 		struct SlotDrawModeOption
 		{
@@ -2466,7 +2473,7 @@ static SourcePose::eFingerZero getSourceFingerZero(const SourcePose& source)
 		if (hand.state != SourcePose::eGroupState::Lost)
 			return hand.fingerZero;
 	}
-	return source.pipeline == SourcePose::ePipeline::Direct ? SourcePose::eFingerZero::Metacarpal
+	return source.pipeline == SourcePose::ePipeline::FrontCamera ? SourcePose::eFingerZero::Metacarpal
 															: SourcePose::eFingerZero::CapturedRest;
 }
 
@@ -2479,7 +2486,7 @@ static void appendCarriedPart(std::string& ioText, const char* partKey)
 }
 
 // What an arm carries, from its flags: the parts the position pipeline
-// measured, the direct chain with the twist once its hand was measured, or
+// measured, the front-camera chain with the twist once its hand was measured, or
 // how far a resting arm has eased into the rest pose. Empty while lost.
 static std::string describeArmCarries(const SourcePose& source, int sideIndex)
 {
@@ -2495,7 +2502,7 @@ static std::string describeArmCarries(const SourcePose& source, int sideIndex)
 		text= buffer;
 		return text;
 	}
-	if (source.pipeline == SourcePose::ePipeline::Direct)
+	if (source.pipeline == SourcePose::ePipeline::FrontCamera)
 	{
 		appendCarriedPart(text, "sourceStage.partChain");
 		// The twist is zero while the hand was never measured, which leaves
@@ -2538,19 +2545,20 @@ static void drawSourceGroupRow(const char* labelKey, SourcePose::eGroupState sta
 
 static void drawSourceSummary(const SourcePose& source)
 {
-	if (!beginDirectTable("sourceSummary", false))
+	if (!beginFrontCameraTable("sourceSummary", false))
 		return;
 
-	drawDirectRowLabel("stageInspector.summaryPipeline");
-	drawDirectTextCell(locText(source.pipeline == SourcePose::ePipeline::Direct ? "sourceStage.pipelineDirect"
-																				: "sourceStage.pipelinePosition"));
-	drawDirectRowLabel("sourceStage.fingerZero");
-	drawDirectTextCell(locText(getSourceFingerZero(source) == SourcePose::eFingerZero::Metacarpal
+	drawFrontCameraRowLabel("stageInspector.summaryPipeline");
+	drawFrontCameraTextCell(
+		locText(source.pipeline == SourcePose::ePipeline::FrontCamera ? "sourceStage.pipelineFrontCamera"
+																	  : "sourceStage.pipelinePosition"));
+	drawFrontCameraRowLabel("sourceStage.fingerZero");
+	drawFrontCameraTextCell(locText(getSourceFingerZero(source) == SourcePose::eFingerZero::Metacarpal
 								   ? "sourceStage.fingerZeroMetacarpal"
 								   : "sourceStage.fingerZeroCapturedRest"));
-	drawDirectRowLabel("sourceStage.frameInterval");
-	drawDirectValueCell(true, "%.1f", (float)source.clock.frameIntervalMs);
-	drawDirectRowLabel("sourceStage.resetEpoch");
+	drawFrontCameraRowLabel("sourceStage.frameInterval");
+	drawFrontCameraValueCell(true, "%.1f", (float)source.clock.frameIntervalMs);
+	drawFrontCameraRowLabel("sourceStage.resetEpoch");
 	ImGui::TableNextColumn();
 	ImGui::Text("%u", source.clock.resetEpoch);
 	ImGui::EndTable();
@@ -2575,12 +2583,12 @@ static void drawSourceGroupsTable(const SourcePose& source)
 	};
 
 	std::string carries;
-	// The torso is the spine's rotation on the direct pipeline and the line
+	// The torso is the spine's rotation on the front-camera pipeline and the line
 	// between the shoulders on the position one, with no confidence of its own
 	if (source.torso.state == eGroupState::Resting)
 		carries= describeRest(source.torso.restBlend);
 	else if (source.torso.state != eGroupState::Lost)
-		carries= locText(source.pipeline == SourcePose::ePipeline::Direct ? "sourceStage.partSpine"
+		carries= locText(source.pipeline == SourcePose::ePipeline::FrontCamera ? "sourceStage.partSpine"
 																		  : "sourceStage.partShoulderLine");
 	drawSourceGroupRow("sourceStage.torso", source.torso.state, nullptr, carries);
 
@@ -2589,7 +2597,7 @@ static void drawSourceGroupsTable(const SourcePose& source)
 		carries= describeRest(source.head.restBlend);
 	else if (source.head.state != eGroupState::Lost)
 		carries= locText("sourceStage.partOrientation");
-	drawSourceGroupRow("directStage.head", source.head.state, &source.head.confidence, carries);
+	drawSourceGroupRow("frontCameraStage.head", source.head.state, &source.head.confidence, carries);
 
 	// An arm's confidence is its forearm's
 	static const char* s_armKeys[2]= {"avatarPanel.leftArmHeader", "avatarPanel.rightArmHeader"};
@@ -2715,7 +2723,7 @@ void SettingsPanels::drawRetargetChainReadout(const TrackingSectionContext& cont
 			ImGui::SetItemTooltip("%s", locText("chains.effectiveIkWeightTooltip"));
 	};
 	drawRow("sourceStage.torso", source->torso.state, -1);
-	drawRow("directStage.head", source->head.state, -1);
+	drawRow("frontCameraStage.head", source->head.state, -1);
 	drawRow("avatarPanel.leftArmHeader", source->arms[0].state, 0);
 	drawRow("avatarPanel.rightArmHeader", source->arms[1].state, 1);
 	drawRow("avatarPanel.leftHandHeader", source->hands[0].state, -1);

@@ -31,10 +31,10 @@ struct FaceSources
 		// Post-filter; all zero unless present
 		VisemeWeights weights{};
 	};
-	// The direct camera's whole-body face block as ARKit columns
+	// The front camera's whole-body face block as ARKit columns
 	struct Webcam
 	{
-		// The direct camera's last whole-body observation is fresh
+		// The front camera's last whole-body observation is fresh
 		bool present= false;
 		// present, and the face block's scores clear the gate
 		bool tracked= false;

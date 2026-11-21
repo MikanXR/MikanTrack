@@ -10,7 +10,7 @@
 #include "glm/ext/vector_double3.hpp"
 
 #include "Countdown.h"
-#include "DirectRetarget.h" // DirectRetarget::SolveState
+#include "FrontCameraRetarget.h" // FrontCameraRetarget::SolveState
 #include "ImuService.h"     // ImuSideStatus
 #include "NeutralCaptureControl.h"
 #include "SourcePose.h"
@@ -57,7 +57,7 @@ struct TrackingPanelState
 	float holdStillSecondsLeft= 0.f; // seconds left in the sampling window
 	double holdStillLastTimestampMs= 0.0; // dedupe: fused results arrive slower than UI frames
 	// The window's frame, chosen when it starts by the live project: camera
-	// space in a direct project, world space in a multi-camera one
+	// space in a front-camera project, world space in a multi-camera one
 	bool bHoldStillCameraFrame= false;
 	struct HoldStillAccum
 	{
@@ -77,8 +77,8 @@ struct TrackingPanelState
 	// The samples each side's result was taken over
 	int holdStillSampleCount[2]= {0, 0};
 
-	// Direct retarget neutral capture
-	NeutralCaptureControl directNeutral;
+	// Front-camera retarget neutral capture
+	NeutralCaptureControl frontCameraNeutral;
 
 	// The diagnostic dump buttons: the owner runs the dump (it needs the
 	// posed avatar, which the panel does not hold), at once or after the
@@ -159,12 +159,12 @@ struct FaceReadout
 	double blinkTimestampMs= 0.0;
 };
 
-// The direct solve behind the shown avatar pose
-struct DirectReadout
+// The front-camera solve behind the shown avatar pose
+struct FrontCameraReadout
 {
-	// Null when the shown frame has no direct solve: no avatar, no
-	// intrinsics, a preview pose, or a frame that is not a direct one
-	const DirectRetarget::SolveState* state= nullptr;
+	// Null when the shown frame has no front-camera solve: no avatar, no
+	// intrinsics, a preview pose, or a frame that is not a front-camera one
+	const FrontCameraRetarget::SolveState* state= nullptr;
 	// The shoulder midpoint's distance from the camera, avatar units, and the
 	// torso's lean against the neutral, degrees. Zero without a solve.
 	float shoulderDepth= 0.f;
@@ -178,7 +178,7 @@ struct DirectReadout
 struct SourcePoseReadout
 {
 	// Null when the shown frame has none: a replay with no avatar loaded, the
-	// direct Rest preview, or live before the vision thread's first frame
+	// front-camera Rest preview, or live before the vision thread's first frame
 	const SourcePose* source= nullptr;
 	// What the target solve made of each arm (by eHandSide) on the same frame,
 	// null with the source
@@ -194,8 +194,8 @@ struct SourcePoseReadout
 // the latest live fused tracking output (hold-still jitter test); fusion: the
 // shown frame's fusion readouts (the Fusion stage's diagnostics); imu: the
 // shown frame's wrist IMU status (the IMU stage's device table); face: the
-// shown frame's phone stream status (the Phone stage's diagnostics); direct:
-// the shown frame's direct solve (the Direct solver stages' diagnostics);
+// shown frame's phone stream status (the Phone stage's diagnostics); frontCamera:
+// the shown frame's front-camera solve (the Front-camera solver stages' diagnostics);
 // sourcePose: the shown frame's source pose (the Source pose stage's
 // diagnostics).
 struct TrackingSectionContext
@@ -213,7 +213,7 @@ struct TrackingSectionContext
 	const FusionReadout* fusion= nullptr;
 	const ImuReadout* imu= nullptr;
 	const FaceReadout* face= nullptr;
-	const DirectReadout* direct= nullptr;
+	const FrontCameraReadout* frontCamera= nullptr;
 	const SourcePoseReadout* sourcePose= nullptr;
 };
 
@@ -261,8 +261,8 @@ void commitOscConfigChange(const OscSectionContext& context);
 // hands, the fusion detail, the per-camera skeletons toggle and the
 // hold-still test are the Fusion stage's; the wrist IMU pieces are the IMU
 // stage's; the body pieces are the Body solver stage's; the face stream
-// pieces are the Phone stage's; and the direct pieces, with the body
-// proportions and the hold-still test again, are the Direct solver stages'.
+// pieces are the Phone stage's; and the front-camera pieces, with the body
+// proportions and the hold-still test again, are the Front-camera solver stages'.
 // The dump buttons are the Timeline panel's.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
@@ -281,7 +281,7 @@ void drawWristImuEnableControl(const TrackingSectionContext& context);
 void drawWristImuArmControls(const TrackingSectionContext& context);
 void drawWristImuDeviceTable(const TrackingSectionContext& context);
 void drawMountingCalibrationControl(const TrackingSectionContext& context);
-// The forearm length slider, which the wrist controls draw and the direct
+// The forearm length slider, which the wrist controls draw and the front-camera
 // solve reads too, with the host's tooltip
 void drawForearmLengthControl(const TrackingSectionContext& context, const char* tooltipKey);
 // Each hand's wrist bend and forearm and wrist rotations in the shown fused
@@ -295,7 +295,7 @@ void drawWristReadoutSection(const TrackingSectionContext& context);
 void drawFaceStreamControls(const TrackingSectionContext& context);
 void drawFaceHeadAlignControls(const TrackingSectionContext& context);
 void drawFaceStreamStatus(const TrackingSectionContext& context);
-// The webcam face source of the shown frame: whether the direct camera sees
+// The webcam face source of the shown frame: whether the front camera sees
 // the face, whether the neutral capture holds it, and the measured columns'
 // raw values
 void drawWebcamFaceReadout(const TrackingSectionContext& context);
@@ -309,7 +309,7 @@ void drawBlinkReadout(const TrackingSectionContext& context);
 // enables are drawBodyPoseCameraControls.
 void drawBodyCalibrationControl(const TrackingSectionContext& context);
 // The localization keys of the proportion controls' tooltips, which the host
-// stage chooses: the body solver and the direct solve read the same values
+// stage chooses: the body solver and the front-camera solve read the same values
 // for different things
 struct BodyDimensionTooltips
 {
@@ -324,31 +324,31 @@ void drawBodyDimensionControls(const TrackingSectionContext& context, const Body
 // Each side's shoulder, elbow and forearm confidence, and the head, in the
 // shown fused result (context.fusion->fused), no header
 void drawBodySolveReadout(const TrackingSectionContext& context);
-// What body tracking is for and which cameras should run it, or in a direct
+// What body tracking is for and which cameras should run it, or in a front-camera
 // shown project that the mode decides it
 void drawBodyPoseIntro(const TrackingSectionContext& context);
 // One camera's body pose: the enable checkbox, only in a multi-camera live
-// project with the camera, editing the live config; in a direct shown
-// project a line saying whether the direct solve runs it on this camera; and
+// project with the camera, editing the live config; in a front-camera shown
+// project a line saying whether the front-camera solve runs it on this camera; and
 // the model the shown frame's camera runs, which the project's mode picks.
 void drawBodyPoseCameraControls(const TrackingSectionContext& context, int cameraIndex);
-// The direct pieces, no headers, editing the live config. The mode itself
+// The front-camera pieces, no headers, editing the live config. The mode itself
 // has no control: the guided setup's tracking variant sets it. Camera: the
 // camera combo, drawn only with more than one camera and disabled unless the
-// live project is direct. Neutral: Capture neutral and Clear, the countdown
+// live project is front-camera. Neutral: Capture neutral and Clear, the countdown
 // updateTrackingState runs, and the neutral's state line. Tilt: the camera's
 // downward pitch.
-void drawDirectCameraControl(const TrackingSectionContext& context);
-// The main thread's half of a direct camera change: clears the neutral and
+void drawFrontCameraControl(const TrackingSectionContext& context);
+// The main thread's half of a front camera change: clears the neutral and
 // cancels a neutral countdown. The vision thread resets its own state at the
 // refresh that applies the new index.
-void onDirectCameraMoved(const TrackingSectionContext& context);
-void drawDirectNeutralControl(const TrackingSectionContext& context);
-void drawDirectTiltControl(const TrackingSectionContext& context);
+void onFrontCameraMoved(const TrackingSectionContext& context);
+void drawFrontCameraNeutralControl(const TrackingSectionContext& context);
+void drawFrontCameraTiltControl(const TrackingSectionContext& context);
 // The two depth planes the wrist sits on, each one's distance ahead of the
 // shoulder as a fraction of the arm's reach
-void drawDirectWristDepthControls(const TrackingSectionContext& context);
-// The direct readouts, reading the shown frame's solve (context.direct), one
+void drawFrontCameraWristDepthControls(const TrackingSectionContext& context);
+// The front-camera readouts, reading the shown frame's solve (context.frontCamera), one
 // dim line when the shown frame has none. Summary: whether a torso is seen
 // and the camera model and tilt the solve used, under its own heading.
 // Filters: each side's hand slot agreement and elbow visibility gate. Torso:
@@ -357,16 +357,16 @@ void drawDirectWristDepthControls(const TrackingSectionContext& context);
 // model depth prior and hand lift. Palm: each side's hand measurement and
 // forearm twist. Hold and rest: each side live or resting and how far into
 // the rest pose.
-void drawDirectSolveSummary(const TrackingSectionContext& context);
-void drawDirectFiltersReadout(const TrackingSectionContext& context);
-void drawDirectTorsoReadout(const TrackingSectionContext& context);
-void drawDirectArmChainReadout(const TrackingSectionContext& context);
-void drawDirectPalmReadout(const TrackingSectionContext& context);
-void drawDirectHoldRestReadout(const TrackingSectionContext& context);
+void drawFrontCameraSolveSummary(const TrackingSectionContext& context);
+void drawFrontCameraFiltersReadout(const TrackingSectionContext& context);
+void drawFrontCameraTorsoReadout(const TrackingSectionContext& context);
+void drawFrontCameraArmChainReadout(const TrackingSectionContext& context);
+void drawFrontCameraPalmReadout(const TrackingSectionContext& context);
+void drawFrontCameraHoldRestReadout(const TrackingSectionContext& context);
 // The hand calibration state, the wizard button and Clear, under its heading
 void drawHandCalibrationSection(const TrackingSectionContext& context);
 // The view toggles, no headers. Hand: the preview's skeleton overlay,
-// detection boxes and, in direct mode, every hand slot. Body: the preview's
+// detection boxes and, in front-camera mode, every hand slot. Body: the preview's
 // body landmarks, and the whole-body face and hands only on a camera whose
 // shown model is the whole-body one. Per-camera skeletons: the 3D scene's
 // unfused skeletons, drawn only with more than one camera.

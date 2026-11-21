@@ -7,7 +7,7 @@
 #include "FaceSources.h"
 #include "WholeBodyFaceRatios.h"
 
-// The webcam face source: the whole-body model's face block on the direct
+// The webcam face source: the whole-body model's face block on the front
 // camera, as ARKit columns beside the phone's. Each column is one face shape
 // ratio mapped from the user's neutral value to a full value, raw: no dead
 // zone and no smoothing, as the phone's columns have none. A pure function of
@@ -16,7 +16,7 @@
 // The face block's lowest score among the points the ratios read, at or over
 // which the source is tracked
 constexpr float k_webcamFaceScoreGate= 0.5f;
-// The direct camera's last observation is fresh while it is no older
+// The front camera's last observation is fresh while it is no older
 constexpr double k_webcamFaceFreshMs= 500.0;
 
 // The ratios' side that feeds each ARKit side. The ratios' sides are the
@@ -36,7 +36,7 @@ inline bool isWebcamFaceColumnMeasured(int arkitIndex)
 	return (webcamFaceMeasuredMask() >> arkitIndex) & 1ull;
 }
 
-// Fills the source from the direct camera's observation. bFresh is whether
+// Fills the source from the front camera's observation. bFresh is whether
 // that observation is recent enough to stand for the face now. neutral is the
 // captured neutral, or nullptr for the defaults.
 void fillWebcamFaceSource(const BodyPoseObservation& body, bool bFresh, const WholeBodyFaceRatios* neutral,

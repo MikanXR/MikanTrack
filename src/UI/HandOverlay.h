@@ -36,7 +36,7 @@ struct ForearmOverlay
 	ImVec2 elbowPx[2]{};
 };
 
-// How the camera view draws a hand slot the direct solver rejected. The palm
+// How the camera view draws a hand slot the front-camera solver rejected. The palm
 // detector keeps finding hand-shaped things in the scene, and a full-strength
 // wireframe on the wall reads as a phantom hand.
 enum class eHandSlotDrawMode
@@ -61,7 +61,7 @@ ForearmOverlay makeForearmOverlay(const CameraProfile& profile, const TrackingFr
 								  float forearmLengthMeters);
 
 // Draws the tracked hand slots and, when asked, the palm detector's boxes.
-// handUsed, when given, is the direct solver's verdict per side (whether the
+// handUsed, when given, is the front-camera solver's verdict per side (whether the
 // slot was the hand this frame), and a slot it rejected is drawn as
 // slotDrawMode says. Without a verdict every slot is drawn at full strength.
 void drawTrackingResult(ImDrawList* drawList, const TrackingFrameResult& result, const ImageToScreenMapping& mapping,

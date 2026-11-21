@@ -77,7 +77,7 @@ PipelineStageId PinnedStageWindows::draw(const PipelineStatusInputs& inputs, con
 {
 	// A stage the project no longer has (a camera removed, the pipeline
 	// switched) is unpinned before anything draws it
-	const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount);
+	const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bFrontCameraMode, inputs.cameraCount);
 	m_entries.erase(std::remove_if(m_entries.begin(), m_entries.end(),
 								   [&](const std::unique_ptr<Entry>& entry) {
 									   return std::find(all.begin(), all.end(), entry->stage) == all.end();
@@ -136,7 +136,8 @@ PipelineStageId PinnedStageWindows::draw(const PipelineStatusInputs& inputs, con
 
 void PinnedStageWindows::drawView(Entry& entry, const PipelineStatusInputs& inputs, const StageView::Frame& frame)
 {
-	const StageViewContent content= decideStageViewContent(entry.stage, inputs.bDirect, inputs.directCameraIndex,
+	const StageViewContent content= decideStageViewContent(entry.stage, inputs.bFrontCameraMode,
+														   inputs.frontCameraIndex,
 														   (int)m_previewPanel->getCameraCount());
 	if (content.bCameras)
 	{

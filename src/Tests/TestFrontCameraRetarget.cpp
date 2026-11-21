@@ -7,15 +7,15 @@
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseTracker.h" // eBodyPoseBackend
-#include "DirectRetarget.h"
-#include "DirectStageSolver.h"
+#include "FrontCameraRetarget.h"
+#include "FrontCameraStageSolver.h"
 #include "HandSideMatch.h"
 #include "MathGLM.h"
 #include "OneEuroFilter.h"
 #include "SyntheticAvatar.h"
-#include "SyntheticDirectUser.h"
+#include "SyntheticFrontCameraUser.h"
 
-// The direct retarget on the shared synthetic rig, seen by a synthetic
+// The front-camera retarget on the shared synthetic rig, seen by a synthetic
 // pinhole pitched down at a synthetic user built from the avatar's own
 // lengths: the neutral capture zeroes the torso, head and wrists, the arm
 // directions come back through the tilt conversion, the wrist sits where
@@ -26,7 +26,7 @@ namespace
 {
 using B= eHumanoidBone;
 using namespace SyntheticAvatar;
-using namespace SyntheticDirectUser;
+using namespace SyntheticFrontCameraUser;
 
 constexpr float kTiltDegrees= 10.f;
 constexpr float kDirectionToleranceRadians= 3.f * glm::pi<float>() / 180.f;
@@ -57,7 +57,7 @@ struct Rig
 {
 	AvatarModel model;
 	std::unique_ptr<AvatarSkeleton> skeleton;
-	DirectRetargetConfig config;
+	FrontCameraRetargetConfig config;
 };
 
 Rig makeRig(float tiltDegrees)
@@ -79,7 +79,7 @@ Rig makeRig(float tiltDegrees)
 
 // Runs the neutral frame a few times (the filters settle on repeats of one
 // pose), captures it, and installs it in the config
-void captureNeutral(Rig& rig, const Camera& camera, DirectStageSolver& solver, double& ioTimestampMs)
+void captureNeutral(Rig& rig, const Camera& camera, FrontCameraStageSolver& solver, double& ioTimestampMs)
 {
 	const User user= makeNeutralUser();
 	const TrackingFrameResult::HeadPose noPhone;
@@ -154,17 +154,17 @@ bool armAtPose(const AvatarPose& pose, const AvatarPose& reference, int sideInde
 }
 } // namespace
 
-static int runDirectRetargetTest(const TestArgs&)
+static int runFrontCameraRetargetTest(const TestArgs&)
 {
 	int failures= 0;
 	auto check= [&](bool bCondition, const char* name) {
 		if (bCondition)
 		{
-			MIKAN_LOG_INFO("test-direct-retarget") << "PASS " << name;
+			MIKAN_LOG_INFO("test-front-camera-retarget") << "PASS " << name;
 		}
 		else
 		{
-			MIKAN_LOG_ERROR("test-direct-retarget") << "FAIL " << name;
+			MIKAN_LOG_ERROR("test-front-camera-retarget") << "FAIL " << name;
 			failures++;
 		}
 	};
@@ -174,12 +174,13 @@ static int runDirectRetargetTest(const TestArgs&)
 	// and the user's up as image up; the tilt turns a point ahead of a
 	// pitched camera into one below the horizon
 	{
-		const glm::quat level= DirectRetarget::worldFromCamera(0.f);
+		const glm::quat level= FrontCameraRetarget::worldFromCamera(0.f);
 		check(glm::length(level * glm::vec3(1.f, 0.f, 0.f) - glm::vec3(0.f, 1.f, 0.f)) < 1e-5f &&
 				  glm::length(level * glm::vec3(0.f, -1.f, 0.f) - glm::vec3(0.f, 0.f, 1.f)) < 1e-5f &&
 				  glm::length(level * glm::vec3(0.f, 0.f, 1.f) - glm::vec3(-1.f, 0.f, 0.f)) < 1e-5f,
 			  "(a) a level camera's right is world +Y, its up world +Z, its forward world -X");
-		const glm::vec3 ahead= DirectRetarget::worldFromCamera(glm::radians(kTiltDegrees)) * glm::vec3(0.f, 0.f, 1.f);
+		const glm::vec3 ahead=
+			FrontCameraRetarget::worldFromCamera(glm::radians(kTiltDegrees)) * glm::vec3(0.f, 0.f, 1.f);
 		check(ahead.z < -0.1f && ahead.x < -0.9f, "(a) a camera pitched down looks down in the world");
 	}
 
@@ -189,7 +190,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		check(rig.config.neutral.present, "(b) the neutral capture measured a torso");
@@ -217,7 +218,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			bArms&= angleBetween(arm.upper, user.elbow[sideIndex] - user.shoulder[sideIndex]) < kDirectionToleranceRadians;
 			bArms&= angleBetween(arm.forearm, user.wrist[sideIndex] - user.elbow[sideIndex]) < kDirectionToleranceRadians;
 			bWrists&= nearlySameRotation(arm.handInForearm, restHandInForearm(*rig.skeleton, sideIndex), 1e-3f);
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bLengths&= chain.valid && nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f) &&
 				nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
 			const glm::vec2 wristPx= project(camera, chain.wrist);
@@ -235,7 +236,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		{
 			User unseen= makeNeutralUser();
 			unseen.bHandTracked[0]= false;
-			DirectStageSolver later;
+			FrontCameraStageSolver later;
 			Rig laterRig= makeRig(kTiltDegrees);
 			for (int repeat= 0; repeat < 3; ++repeat)
 			{
@@ -265,7 +266,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -288,7 +289,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bFallback= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bFallback&= chain.valid;
 			bFallback&= nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f);
 			bFallback&= nearlyEqual(glm::length(chain.wrist - chain.elbow), kForearmLength, 1e-3f);
@@ -305,7 +306,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -364,7 +365,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bPlaced= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bPlaced&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
 		check(bPlaced, "(e) the body model's wrist keeps the arm placed through a hand dropout");
@@ -387,7 +388,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -411,7 +412,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		AvatarPose rest;
 		solver.solve(empty, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, rest);
 		AvatarPose restReference;
-		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
+		FrontCameraRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
 		bool bRest= rest.valid && armAtPose(rest, restReference, 0) && armAtPose(rest, restReference, 1);
 		int presentCount= 0;
 		for (int index= 0; index < HUMANOID_BONE_COUNT; ++index)
@@ -439,8 +440,8 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solverA;
-		DirectStageSolver solverB;
+		FrontCameraStageSolver solverA;
+		FrontCameraStageSolver solverB;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solverA, timestampMs);
 		solverA.reset();
@@ -471,7 +472,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -491,7 +492,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -548,7 +549,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		int frameIndex= 600;
@@ -596,7 +597,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			solveFrame(raised);
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const DirectRetarget::SolveState::Arm& arm= solver.getSolveState().arms[sideIndex];
+				const FrontCameraRetarget::SolveState::Arm& arm= solver.getSolveState().arms[sideIndex];
 				bRead&= arm.bHandSeen && arm.bHandMeasured;
 				bNeverMirrored&= !arm.bPalmMirrored;
 				largestStep= std::max(largestStep, fabsf(AvatarRetargetMath::wrapAngle(arm.twist - lastTwist[sideIndex])));
@@ -661,7 +662,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -694,7 +695,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		AvatarPose phantom;
 		run(user, 50, 40, phantom);
 		AvatarPose restReference;
-		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
+		FrontCameraRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
 		bool bRested= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
@@ -733,7 +734,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bCarried= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bCarried&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
 		check(bCarried, "(k) a placed arm follows a body wrist clear of the frame's edge with no hand slot");
@@ -778,7 +779,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			glm::vec2 carriedPx[2];
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 				carriedPx[sideIndex]= project(camera, chain.wrist);
 				bSizedCarried&= chain.valid && glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) < 1.f;
 			}
@@ -790,7 +791,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			bool bStood= true;
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 				bStood&= chain.valid && glm::length(project(camera, chain.wrist) - carriedPx[sideIndex]) < 1.f &&
 					glm::length(carriedPx[sideIndex] - project(camera, user.wrist[sideIndex])) > 20.f;
 			}
@@ -846,7 +847,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		User user= makeNeutralUser();
 		int frameIndex= 0;
@@ -873,7 +874,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			bool bFollowed= true;
 			for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 			{
-				const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+				const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 				bFollowed&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 			}
 			return bFollowed;
@@ -906,7 +907,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bStood= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bStood&= chain.valid && glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) > 10.f;
 		}
 		run(40, 0.f, 0.45f);
@@ -932,7 +933,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		User user= makeNeutralUser();
 		int frameIndex= 0;
@@ -1004,7 +1005,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		const glm::vec2 lastPx[2]= {chainPx(0), chainPx(1)};
 		setSeen(false);
 		run(1);
-		MIKAN_LOG_INFO("test-direct-retarget") << "  (k00) wrist gone at y " << lastPx[0].y << " of " << frameHeight << ", coasted to " << chainPx(0).y;
+		MIKAN_LOG_INFO("test-front-camera-retarget") << "  (k00) wrist gone at y " << lastPx[0].y << " of " << frameHeight << ", coasted to " << chainPx(0).y;
 		bool bCoasted= bLowered;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
@@ -1030,7 +1031,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		User user= makeNeutralUser();
 		// Four fingertips at the edge and the palm turned over about its
 		// finger axis, the left hand only
-		auto runFrames= [&](DirectStageSolver& solver, const Rig& rig, double& timestampMs, int firstFrame, int frameCount,
+		auto runFrames= [&](FrontCameraStageSolver& solver, const Rig& rig, double& timestampMs, int firstFrame, int frameCount,
 							bool bCut) {
 			for (int repeat= 0; repeat < frameCount; ++repeat)
 			{
@@ -1050,31 +1051,31 @@ static int runDirectRetargetTest(const TestArgs&)
 		auto twistTurn= [](float a, float b) { return fabsf(AvatarRetargetMath::wrapAngle(a - b)); };
 
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		runFrames(solver, rig, timestampMs, 700, 10, false);
 		const float clearTwist[2]= {solver.getSolveState().arms[0].twist, solver.getSolveState().arms[1].twist};
 		runFrames(solver, rig, timestampMs, 710, 10, true);
-		const DirectRetarget::SolveState cut= solver.getSolveState();
+		const FrontCameraRetarget::SolveState cut= solver.getSolveState();
 		check(cut.arms[0].bHandCut && !cut.arms[1].bHandCut, "(k1) a hand with landmarks at the frame's edge is cut");
 		check(cut.arms[0].bHandSeen && cut.arms[0].bHandMeasured && twistTurn(cut.arms[0].twist, clearTwist[0]) < 1e-4f,
 			  "(k1) a cut hand stays on the arm and its palm is held past a turn right round");
 		check(twistTurn(cut.arms[1].twist, clearTwist[1]) < 0.05f, "(k1) the other hand is read as before");
 		runFrames(solver, rig, timestampMs, 720, 10, false);
-		const DirectRetarget::SolveState clear= solver.getSolveState();
+		const FrontCameraRetarget::SolveState clear= solver.getSolveState();
 		check(!clear.arms[0].bHandCut && twistTurn(clear.arms[0].twist, clearTwist[0]) < 0.05f,
 			  "(k1) clear of the edge the hand is read again");
 
 		Rig everyHandRig= makeRig(kTiltDegrees);
 		everyHandRig.config.handCutLandmarks= 0;
-		DirectStageSolver everyHandSolver;
+		FrontCameraStageSolver everyHandSolver;
 		timestampMs= 0.0;
 		captureNeutral(everyHandRig, camera, everyHandSolver, timestampMs);
 		runFrames(everyHandSolver, everyHandRig, timestampMs, 700, 10, false);
 		const float readTwist= everyHandSolver.getSolveState().arms[0].twist;
 		runFrames(everyHandSolver, everyHandRig, timestampMs, 710, 10, true);
-		const DirectRetarget::SolveState read= everyHandSolver.getSolveState();
+		const FrontCameraRetarget::SolveState read= everyHandSolver.getSolveState();
 		check(!read.arms[0].bHandCut && twistTurn(read.arms[0].twist, readTwist) > 1.5f,
 			  "(k1) with the count at zero the turned palm is taken");
 	}
@@ -1086,7 +1087,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -1115,7 +1116,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bBodyPlaced= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bBodyPlaced&= chain.valid && !solver.getSolveState().arms[sideIndex].bHandSeen;
 			bBodyPlaced&= glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
@@ -1197,7 +1198,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		runWithBlocks(40, true, 0.1f);
 		check(!swapped(), "(k3) whole-body hands under the score gate leave the report to the wrists");
 
-		// (k4) The direct camera's correction ahead of the solver. The slots
+		// (k4) The front camera's correction ahead of the solver. The slots
 		// are published under crossed labels with the wrists apart, the
 		// camera moves each to the side the whole-body hands name, and the
 		// lift then runs on the moved hands, which the frame's poses stand in
@@ -1225,9 +1226,9 @@ static int runDirectRetargetTest(const TestArgs&)
 			}
 			return correctedFrames;
 		};
-		const DirectRetarget::SolveState before= solver.getSolveState();
+		const FrontCameraRetarget::SolveState before= solver.getSolveState();
 		const int correctedFrames= runCorrected(20, true);
-		const DirectRetarget::SolveState early= solver.getSolveState();
+		const FrontCameraRetarget::SolveState early= solver.getSolveState();
 		check(correctedFrames == 20, "(k4) slots under crossed labels are moved on every frame");
 		check(bEveryHandDecided, "(k4) each moved hand's side is flagged as the body model's");
 		check(early.arms[0].bHandSeen && early.arms[1].bHandSeen, "(k4) each arm takes the hand moved to its side");
@@ -1253,7 +1254,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -1278,7 +1279,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			return bRest;
 		};
 		auto handsSeen= [&]() {
-			const DirectRetarget::SolveState& state= solver.getSolveState();
+			const FrontCameraRetarget::SolveState& state= solver.getSolveState();
 			return state.arms[0].bHandSeen && state.arms[1].bHandSeen;
 		};
 
@@ -1343,7 +1344,7 @@ static int runDirectRetargetTest(const TestArgs&)
 			rig.config.sides[sideIndex].restFingerCurlRadians= glm::radians(20.f);
 		}
 		AvatarPose restReference;
-		DirectRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
+		FrontCameraRetarget::makeRestPose(*rig.skeleton, rig.config, restReference);
 
 		// Hands raised in front of the shoulders, palms to the camera
 		auto makeRaisedUser= [&]() {
@@ -1360,15 +1361,15 @@ static int runDirectRetargetTest(const TestArgs&)
 			const B upper= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
 			return rotationAngle(glm::inverse(a.bones[(int)upper].deltaWorld) * b.bones[(int)upper].deltaWorld);
 		};
-		auto resting= [](const DirectStageSolver& solver, int sideIndex) {
+		auto resting= [](const FrontCameraStageSolver& solver, int sideIndex) {
 			return solver.getSolveState().arms[sideIndex].bResting;
 		};
 
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 		User user= makeRaisedUser();
-		auto step= [&](DirectStageSolver& stepSolver, int frameIndex, AvatarPose& outPose) {
+		auto step= [&](FrontCameraStageSolver& stepSolver, int frameIndex, AvatarPose& outPose) {
 			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, frameIndex);
 			stepSolver.solve(frame, camera.model, noPhone, timestampMs, *rig.skeleton, rig.config, outPose);
 			timestampMs+= 33.0;
@@ -1444,7 +1445,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bReturned= bMidEase;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bReturned&= chain.valid && !resting(solver, sideIndex) &&
 				glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
@@ -1452,7 +1453,7 @@ static int runDirectRetargetTest(const TestArgs&)
 
 		// No blend: the first frame past the hold is the rest pose
 		rig.config.restBlendMs= 0.f;
-		DirectStageSolver snapSolver;
+		FrontCameraStageSolver snapSolver;
 		timestampMs= 0.0;
 		captureNeutral(rig, camera, snapSolver, timestampMs);
 		for (int repeat= 0; repeat < 40; ++repeat)
@@ -1472,7 +1473,7 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
 		Rig rig= makeRig(kTiltDegrees);
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		captureNeutral(rig, camera, solver, timestampMs);
 
@@ -1543,14 +1544,14 @@ static int runDirectRetargetTest(const TestArgs&)
 		struct Limited
 		{
 			AvatarPose pose;
-			DirectRetarget::SolveState state;
+			FrontCameraRetarget::SolveState state;
 		};
 		auto solveUnder= [&](float headDegrees, float spineDegrees, float wristDegrees) {
 			Rig rig= makeRig(kTiltDegrees);
 			rig.config.headLimitRadians= glm::radians(headDegrees);
 			rig.config.spineLimitRadians= glm::radians(spineDegrees);
 			rig.config.wristLimitRadians= {glm::radians(wristDegrees), glm::radians(wristDegrees)};
-			DirectStageSolver solver;
+			FrontCameraStageSolver solver;
 			double timestampMs= 0.0;
 			captureNeutral(rig, camera, solver, timestampMs);
 			Limited out;
@@ -1669,7 +1670,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		rig.config.nearPlaneReachFraction= 0.25f;
 		rig.config.farPlaneReachFraction= 0.5f;
 		const float reach= kUpperArmLength + kForearmLength;
-		DirectStageSolver solver;
+		FrontCameraStageSolver solver;
 		double timestampMs= 0.0;
 		AvatarPose pose;
 		// The synthetic hand is a point at the wrist; this spreads its knuckle
@@ -1700,7 +1701,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bLengths= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bOnPlane&= chain.valid && glm::length(chain.wrist - user.wrist[sideIndex]) < 2e-3f &&
 				!solver.getSolveState().arms[sideIndex].bNearPlane;
 			bLengths&= nearlyEqual(glm::length(chain.elbow - chain.shoulder), kUpperArmLength, 1e-3f) &&
@@ -1718,7 +1719,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		glm::vec3 hintElbow[2];
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			hintElbow[sideIndex]= chain.elbow;
 			const glm::vec3 axis= glm::normalize(chain.wrist - chain.shoulder);
 			const glm::vec3 centre= chain.shoulder + axis * glm::dot(chain.elbow - chain.shoulder, axis);
@@ -1730,7 +1731,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bFollows= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			const glm::vec2 seen= glm::normalize(project(camera, chain.elbow) - project(camera, chain.wrist));
 			const glm::vec2 wanted=
 				glm::normalize(project(camera, user.elbow[sideIndex]) - project(camera, user.wrist[sideIndex]));
@@ -1754,7 +1755,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		bool bCapped= true;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
+			const FrontCameraRetarget::ArmChain& chain= solver.getArmChain(sideIndex);
 			bCapped&= chain.valid && nearlyEqual(glm::length(chain.wrist - chain.shoulder), reach, 0.01f * reach) &&
 				glm::length(project(camera, chain.wrist) - project(camera, user.wrist[sideIndex])) < 1.f;
 		}
@@ -1771,7 +1772,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		run(user, 45);
 		besideHead(0.8f);
 		run(user, 2);
-		const DirectRetarget::SolveState::Arm& left= solver.getSolveState().arms[0];
+		const FrontCameraRetarget::SolveState::Arm& left= solver.getSolveState().arms[0];
 		check(left.bNearPlane && left.planeDistance < 0.5f * reach - 1e-4f && left.planeDistance > 0.25f * reach + 1e-4f,
 			  "(s) a hand at the head switches to the near plane and eases toward it");
 		run(user, 12);
@@ -1800,88 +1801,91 @@ static int runDirectRetargetTest(const TestArgs&)
 	{
 		AppConfig config;
 		config.cameras.resize(3);
-		config.direct.enabled= true;
-		config.direct.cameraIndex= 2;
-		config.direct.cameraTiltDegrees= 12.5f;
-		config.direct.nearPlaneReachFraction= 0.2f;
-		config.direct.farPlaneReachFraction= 0.7f;
-		config.direct.neutralPresent= true;
-		config.direct.neutralTorso= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
-		config.direct.neutralShoulderMidpoint= glm::vec3(-0.8f, 0.01f, -0.2f);
-		config.direct.neutralHead= glm::angleAxis(-0.2f, glm::vec3(0.f, 1.f, 0.f));
+		config.frontCamera.enabled= true;
+		config.frontCamera.cameraIndex= 2;
+		config.frontCamera.cameraTiltDegrees= 12.5f;
+		config.frontCamera.nearPlaneReachFraction= 0.2f;
+		config.frontCamera.farPlaneReachFraction= 0.7f;
+		config.frontCamera.neutralPresent= true;
+		config.frontCamera.neutralTorso= glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
+		config.frontCamera.neutralShoulderMidpoint= glm::vec3(-0.8f, 0.01f, -0.2f);
+		config.frontCamera.neutralHead= glm::angleAxis(-0.2f, glm::vec3(0.f, 1.f, 0.f));
 		const std::string text= config.toJsonString();
 		AppConfig loaded;
 		const bool bLoaded= loaded.loadFromJsonString(text);
-		const DirectConfig& direct= loaded.direct;
-		check(bLoaded && direct.enabled && direct.cameraIndex == 2 && nearlyEqual(direct.cameraTiltDegrees, 12.5f, 1e-5f) &&
-				  direct.neutralPresent && nearlySameRotation(direct.neutralTorso, config.direct.neutralTorso, 1e-5f) &&
-				  glm::length(direct.neutralShoulderMidpoint - config.direct.neutralShoulderMidpoint) < 1e-5f &&
-				  nearlySameRotation(direct.neutralHead, config.direct.neutralHead, 1e-5f),
-			  "(i) the direct section round-trips through the project JSON");
-		check(!direct.neutralFacePresent, "(i) a neutral captured with the face unseen loads with no face neutral");
-		check(nearlyEqual(direct.nearPlaneReachFraction, 0.2f, 1e-6f) && nearlyEqual(direct.farPlaneReachFraction, 0.7f, 1e-6f),
+		const FrontCameraConfig& frontCamera= loaded.frontCamera;
+		check(bLoaded && frontCamera.enabled && frontCamera.cameraIndex == 2 && nearlyEqual(frontCamera.cameraTiltDegrees, 12.5f, 1e-5f) &&
+				  frontCamera.neutralPresent &&
+				  nearlySameRotation(frontCamera.neutralTorso, config.frontCamera.neutralTorso, 1e-5f) &&
+				  glm::length(frontCamera.neutralShoulderMidpoint -
+							  config.frontCamera.neutralShoulderMidpoint) < 1e-5f &&
+				  nearlySameRotation(frontCamera.neutralHead, config.frontCamera.neutralHead, 1e-5f),
+			  "(i) the front-camera section round-trips through the project JSON");
+		check(!frontCamera.neutralFacePresent,
+			  "(i) a neutral captured with the face unseen loads with no face neutral");
+		check(nearlyEqual(frontCamera.nearPlaneReachFraction, 0.2f, 1e-6f) && nearlyEqual(frontCamera.farPlaneReachFraction, 0.7f, 1e-6f),
 			  "(i) the depth planes' fractions round-trip through the project JSON");
 
 		// The face neutral rides the neutral capture behind its own flag
-		config.direct.neutralFacePresent= true;
-		config.direct.neutralFace.valid= true;
-		config.direct.neutralFace.eyeOpenness[0]= 0.31f;
-		config.direct.neutralFace.eyeOpenness[1]= 0.27f;
-		config.direct.neutralFace.mouthWidth= 0.56f;
-		config.direct.neutralFace.mouthCornerLift[1]= 0.03f;
-		config.direct.neutralFace.browHeight[0]= 0.21f;
-		config.direct.neutralFace.browInnerHeight= 0.19f;
+		config.frontCamera.neutralFacePresent= true;
+		config.frontCamera.neutralFace.valid= true;
+		config.frontCamera.neutralFace.eyeOpenness[0]= 0.31f;
+		config.frontCamera.neutralFace.eyeOpenness[1]= 0.27f;
+		config.frontCamera.neutralFace.mouthWidth= 0.56f;
+		config.frontCamera.neutralFace.mouthCornerLift[1]= 0.03f;
+		config.frontCamera.neutralFace.browHeight[0]= 0.21f;
+		config.frontCamera.neutralFace.browInnerHeight= 0.19f;
 		AppConfig withFace;
 		const bool bFaceLoaded= withFace.loadFromJsonString(config.toJsonString());
-		const WholeBodyFaceRatios& face= withFace.direct.neutralFace;
-		check(bFaceLoaded && withFace.direct.neutralFacePresent && face.valid &&
+		const WholeBodyFaceRatios& face= withFace.frontCamera.neutralFace;
+		check(bFaceLoaded && withFace.frontCamera.neutralFacePresent && face.valid &&
 				  nearlyEqual(face.eyeOpenness[0], 0.31f, 1e-6f) && nearlyEqual(face.eyeOpenness[1], 0.27f, 1e-6f) &&
 				  nearlyEqual(face.mouthWidth, 0.56f, 1e-6f) && nearlyEqual(face.mouthCornerLift[1], 0.03f, 1e-6f) &&
 				  nearlyEqual(face.browHeight[0], 0.21f, 1e-6f) && nearlyEqual(face.browInnerHeight, 0.19f, 1e-6f),
 			  "(i) the face neutral round-trips through the project JSON");
 		AppConfig fresh;
-		check(nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f) &&
-				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.direct.cameraTiltDegrees, 0.f, 1e-5f),
-			  "(i) a fresh config has a level camera, with or without a direct section");
-		check(nearlyEqual(fresh.direct.nearPlaneReachFraction, 0.25f, 1e-6f) &&
-				  nearlyEqual(fresh.direct.farPlaneReachFraction, 0.667f, 1e-6f),
+		check(nearlyEqual(fresh.frontCamera.cameraTiltDegrees, 0.f, 1e-5f) &&
+				  fresh.loadFromJsonString("{}") && nearlyEqual(fresh.frontCamera.cameraTiltDegrees, 0.f, 1e-5f),
+			  "(i) a fresh config has a level camera, with or without a front-camera section");
+		check(nearlyEqual(fresh.frontCamera.nearPlaneReachFraction, 0.25f, 1e-6f) &&
+				  nearlyEqual(fresh.frontCamera.farPlaneReachFraction, 0.667f, 1e-6f),
 			  "(i) a project without the keys has the depth planes at their defaults");
 
 		AvatarRigSettings rig;
 		rig.sides[1].curlGain= 1.5f;
-		const DirectRetargetConfig solverConfig= makeDirectRetargetConfig(loaded, rig);
+		const FrontCameraRetargetConfig solverConfig= makeFrontCameraRetargetConfig(loaded, rig);
 		check(nearlyEqual(solverConfig.nearPlaneReachFraction, 0.2f, 1e-6f) &&
 				  nearlyEqual(solverConfig.farPlaneReachFraction, 0.7f, 1e-6f),
-			  "(i) makeDirectRetargetConfig carries the depth planes onto the solver");
+			  "(i) makeFrontCameraRetargetConfig carries the depth planes onto the solver");
 		check(nearlyEqual(solverConfig.cameraTiltRadians, glm::radians(12.5f), 1e-5f) && solverConfig.neutral.present &&
 				  nearlyEqual(solverConfig.sides[1].curlGain, 1.5f, 1e-5f) &&
 				  nearlyEqual(solverConfig.userShoulderWidthMeters, loaded.body.shoulderWidthMeters, 1e-5f) &&
 				  nearlyEqual(solverConfig.userUpperArmLengthMeters,
 							  loaded.body.shoulderWidthMeters * loaded.body.upperArmPerShoulderWidth, 1e-5f) &&
 				  nearlyEqual(solverConfig.userForearmLengthMeters, loaded.body.forearmLengthMeters, 1e-5f),
-			  "(i) makeDirectRetargetConfig carries the section, the body lengths and the rig onto the solver");
+			  "(i) makeFrontCameraRetargetConfig carries the section, the body lengths and the rig onto the solver");
 
-		// The direct camera index always names a camera the config has: a
+		// The front camera index always names a camera the config has: a
 		// stored index outside the list clamps into it, and the neutral
 		// captured through another camera goes with it
 		AppConfig shrunk= config;
 		shrunk.cameras.resize(1);
 		AppConfig oneCamera;
 		const bool bClampLoaded= oneCamera.loadFromJsonString(shrunk.toJsonString());
-		check(bClampLoaded && oneCamera.direct.enabled && oneCamera.direct.cameraIndex == 0 &&
-				  !oneCamera.direct.neutralPresent && !oneCamera.direct.neutralFacePresent,
-			  "(i) a direct index outside the camera list clamps to the last camera and clears the neutral");
-		AppConfig notDirect= config;
-		notDirect.cameras.resize(2);
-		notDirect.direct.enabled= false;
-		notDirect.direct.cameraIndex= 5;
-		AppConfig notDirectLoaded;
-		check(notDirectLoaded.loadFromJsonString(notDirect.toJsonString()) &&
-				  notDirectLoaded.direct.cameraIndex == 1 && !notDirectLoaded.direct.neutralPresent,
-			  "(i) a project that is not direct clamps its direct index too");
+		check(bClampLoaded && oneCamera.frontCamera.enabled && oneCamera.frontCamera.cameraIndex == 0 &&
+				  !oneCamera.frontCamera.neutralPresent && !oneCamera.frontCamera.neutralFacePresent,
+			  "(i) a front camera index outside the camera list clamps to the last camera and clears the neutral");
+		AppConfig notFrontCamera= config;
+		notFrontCamera.cameras.resize(2);
+		notFrontCamera.frontCamera.enabled= false;
+		notFrontCamera.frontCamera.cameraIndex= 5;
+		AppConfig notFrontCameraLoaded;
+		check(notFrontCameraLoaded.loadFromJsonString(notFrontCamera.toJsonString()) &&
+				  notFrontCameraLoaded.frontCamera.cameraIndex == 1 && !notFrontCameraLoaded.frontCamera.neutralPresent,
+			  "(i) a project that is not a front-camera project clamps its front camera index too");
 	}
 
-	// (t) A direct project has no world calibration: the load clears every
+	// (t) A front-camera project has no world calibration: the load clears every
 	// camera's extrinsics and the extrinsics quality, field by field to the
 	// defaults, and a multi-camera project keeps them
 	{
@@ -1901,7 +1905,7 @@ static int runDirectRetargetTest(const TestArgs&)
 		config.extrinsicsQuality.present= true;
 		config.extrinsicsQuality.pairCount= 1;
 		config.extrinsicsQuality.worstPairReprojectionRmsPx= 1.5;
-		config.direct.cameraIndex= 1;
+		config.frontCamera.cameraIndex= 1;
 
 		AppConfig multiCamera;
 		check(multiCamera.loadFromJsonString(config.toJsonString()) && multiCamera.camera(0).extrinsics.present &&
@@ -1909,50 +1913,50 @@ static int runDirectRetargetTest(const TestArgs&)
 				  multiCamera.extrinsicsQuality.present,
 			  "(t) a multi-camera project keeps its extrinsics on load");
 
-		config.direct.enabled= true;
-		AppConfig direct;
-		const bool bLoaded= direct.loadFromJsonString(config.toJsonString());
+		config.frontCamera.enabled= true;
+		AppConfig frontCamera;
+		const bool bLoaded= frontCamera.loadFromJsonString(config.toJsonString());
 		const ExtrinsicsConfig defaults;
 		bool bCleared= bLoaded;
-		for (int cameraIndex= 0; cameraIndex < (int)direct.cameraCount(); ++cameraIndex)
+		for (int cameraIndex= 0; cameraIndex < (int)frontCamera.cameraCount(); ++cameraIndex)
 		{
-			const ExtrinsicsConfig& extrinsics= direct.camera(cameraIndex).extrinsics;
+			const ExtrinsicsConfig& extrinsics= frontCamera.camera(cameraIndex).extrinsics;
 			bCleared&= !extrinsics.present && extrinsics.markerFromCamera == glm::dmat4(1.0) &&
 				extrinsics.patternReprojectionErrorPx == defaults.patternReprojectionErrorPx &&
 				extrinsics.patternCornerCount == defaults.patternCornerCount &&
 				extrinsics.markerId == defaults.markerId && extrinsics.markerLengthMM == defaults.markerLengthMM;
 		}
-		check(bCleared, "(t) a direct project loads with every camera's extrinsics at their defaults");
-		check(bLoaded && !direct.extrinsicsQuality.present && direct.extrinsicsQuality.pairCount == 0 &&
-				  direct.extrinsicsQuality.worstPairReprojectionRmsPx == 0.0,
-			  "(t) a direct project loads with the extrinsics quality reset");
+		check(bCleared, "(t) a front-camera project loads with every camera's extrinsics at their defaults");
+		check(bLoaded && !frontCamera.extrinsicsQuality.present && frontCamera.extrinsicsQuality.pairCount == 0 &&
+				  frontCamera.extrinsicsQuality.worstPairReprojectionRmsPx == 0.0,
+			  "(t) a front-camera project loads with the extrinsics quality reset");
 	}
 
-	// (u) Removing a camera keeps the direct role on the same physical
-	// camera, or moves it to camera 0 when the direct camera goes
+	// (u) Removing a camera keeps the front-camera role on the same physical
+	// camera, or moves it to camera 0 when the front camera goes
 	{
 		AppConfig config;
 		config.cameras.resize(3);
-		config.direct.enabled= true;
-		config.direct.cameraIndex= 2;
-		config.direct.neutralPresent= true;
+		config.frontCamera.enabled= true;
+		config.frontCamera.cameraIndex= 2;
+		config.frontCamera.neutralPresent= true;
 		const bool bBelowMoved= removeCamera(config, 1);
-		check(!bBelowMoved && config.cameraCount() == 2 && config.direct.cameraIndex == 1 &&
-				  config.direct.neutralPresent,
-			  "(u) removing a camera below the direct one decrements the index and keeps the neutral");
-		const bool bDirectMoved= removeCamera(config, 1);
-		check(bDirectMoved && config.cameraCount() == 1 && config.direct.cameraIndex == 0 &&
-				  !config.direct.neutralPresent,
-			  "(u) removing the direct camera moves the role to camera 0 and clears the neutral");
+		check(!bBelowMoved && config.cameraCount() == 2 && config.frontCamera.cameraIndex == 1 &&
+				  config.frontCamera.neutralPresent,
+			  "(u) removing a camera below the front camera decrements the index and keeps the neutral");
+		const bool bFrontCameraMoved= removeCamera(config, 1);
+		check(bFrontCameraMoved && config.cameraCount() == 1 && config.frontCamera.cameraIndex == 0 &&
+				  !config.frontCamera.neutralPresent,
+			  "(u) removing the front camera moves the role to camera 0 and clears the neutral");
 		check(!removeCamera(config, 0) && config.cameraCount() == 1, "(u) camera 0 is never removed");
 
-		AppConfig notDirect;
-		notDirect.cameras.resize(3);
-		notDirect.direct.cameraIndex= 2;
-		removeCamera(notDirect, 2);
-		check(notDirect.cameraCount() == 2 && notDirect.direct.cameraIndex >= 0 &&
-				  notDirect.direct.cameraIndex < (int)notDirect.cameraCount(),
-			  "(u) a project that is not direct keeps its direct index in range");
+		AppConfig notFrontCamera;
+		notFrontCamera.cameras.resize(3);
+		notFrontCamera.frontCamera.cameraIndex= 2;
+		removeCamera(notFrontCamera, 2);
+		check(notFrontCamera.cameraCount() == 2 && notFrontCamera.frontCamera.cameraIndex >= 0 &&
+				  notFrontCamera.frontCamera.cameraIndex < (int)notFrontCamera.cameraCount(),
+			  "(u) a project that is not a front-camera project keeps its front camera index in range");
 	}
 
 	// (v) The project's mode picks each camera's body pose and model
@@ -1968,15 +1972,15 @@ static int runDirectRetargetTest(const TestArgs&)
 			  "(v) a multi-camera project runs the body model on the cameras with body pose on, none on the others");
 		check(!getBodyPoseBackend(config, 3).has_value() && !getBodyPoseBackend(config, -1).has_value(),
 			  "(v) an index outside the camera list runs none");
-		config.direct.enabled= true;
-		config.direct.cameraIndex= 1;
+		config.frontCamera.enabled= true;
+		config.frontCamera.cameraIndex= 1;
 		check(getBodyPoseBackend(config, 1) == eBodyPoseBackend::Rtmw3dWholeBody,
-			  "(v) a direct project's direct camera runs the whole-body model, whatever its switch says");
+			  "(v) a front-camera project's front camera runs the whole-body model, whatever its switch says");
 		check(!getBodyPoseBackend(config, 0).has_value() && !getBodyPoseBackend(config, 2).has_value(),
-			  "(v) a direct project's other cameras run none, whatever their switches say");
+			  "(v) a front-camera project's other cameras run none, whatever their switches say");
 		check(getBodyPoseBackend(config, 2, 2) == eBodyPoseBackend::Rtmw3dWholeBody &&
 				  !getBodyPoseBackend(config, 1, 2).has_value(),
-			  "(v) the direct camera can be given apart from the config's, as the vision thread applies it");
+			  "(v) the front camera can be given apart from the config's, as the vision thread applies it");
 		const nlohmann::json saved= nlohmann::json::parse(config.toJsonString());
 		bool bNoBackendKey= saved.contains("cameras") && saved["cameras"].size() == 3;
 		for (const nlohmann::json& camera : saved["cameras"])
@@ -1984,10 +1988,11 @@ static int runDirectRetargetTest(const TestArgs&)
 		check(bNoBackendKey, "(v) a saved camera carries no body model key");
 	}
 
-	MIKAN_LOG_INFO("test-direct-retarget") << (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
+	MIKAN_LOG_INFO("test-front-camera-retarget")
+		<< (failures == 0 ? "ALL PASS" : "FAILURES") << " (" << failures << ")";
 	return failures == 0 ? 0 : 1;
 }
 
-MIKAN_REGISTER_TEST("--test-direct-retarget",
-					"Direct retarget: camera world, neutral capture, the depth planes, the palm hold, hold and the ease into rest, determinism, the project mode rules",
-					eTestCategory::SelfTest, runDirectRetargetTest);
+MIKAN_REGISTER_TEST("--test-front-camera-retarget",
+					"Front-camera retarget: camera world, neutral capture, the depth planes, the palm hold, hold and the ease into rest, determinism, the project mode rules",
+					eTestCategory::SelfTest, runFrontCameraRetargetTest);

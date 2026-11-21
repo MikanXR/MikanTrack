@@ -333,7 +333,7 @@ DevicePanel::DrawResult DevicePanel::drawCameraSection(int cameraIndex, bool bWi
 			if (ImGui::Button(locLabel("devicePanel.removeCameraButton"), ImVec2(-1, 0)))
 			{
 				m_videoCapture->closeDevice(cameraIndex);
-				result.bDirectCameraMoved= m_app->removeCamera(cameraIndex);
+				result.bFrontCameraMoved= m_app->removeCamera(cameraIndex);
 				// The cameras after it keep their devices, so their mode and
 				// settings state shifts down with them
 				if (cameraIndex < (int)m_cameraStates.size())

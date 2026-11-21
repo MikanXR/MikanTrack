@@ -15,7 +15,7 @@ public:
 	// UI language code ("en", "ja"); empty until the user picks one, letting
 	// startup fall back to the OS language
 	std::string appLanguage;
-	// How the camera view draws a hand slot the direct solver rejected, by
+	// How the camera view draws a hand slot the front-camera solver rejected, by
 	// the mode's name; empty until the user picks one
 	std::string handSlotDrawMode;
 

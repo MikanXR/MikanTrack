@@ -4,7 +4,7 @@
 #include <cstdint>
 
 #include "AvatarRetarget.h" // AvatarRetargetConfig::Side
-#include "DirectRetarget.h" // DirectRetarget::ArmPlacement
+#include "FrontCameraRetarget.h" // FrontCameraRetarget::ArmPlacement
 #include "SourcePose.h"
 #include "TrackingTypes.h"
 
@@ -26,7 +26,7 @@ enum class eLossHold : uint8_t
 	// hold
 	None,
 	// The pipeline's own hold: a group it reports as held passes as held,
-	// with the values it gave. The direct solver holds its arms for the hold
+	// with the values it gave. The front-camera solver holds its arms for the hold
 	// they earned and its torso and head for its maximum, because its
 	// measurement continues across those frames.
 	Pipeline,
@@ -44,11 +44,11 @@ enum class eLossAfter : uint8_t
 	// The last values handed on, repeated, so the target solve re-solves
 	// them every frame and whatever else moves (the root follow) still moves
 	Freeze,
-	// The rest pose, eased into over restBlendMs (zero snaps). A direct arm
+	// The rest pose, eased into over restBlendMs (zero snaps). A front-camera arm
 	// blends its placement from the last one handed on into the rig's rest
 	// placement. A position arm hands on its last carried values marked
 	// resting, and the target solve blends the bones they pose into the
-	// rig's rest pose, the one the direct pipeline eases into. The torso and
+	// rig's rest pose, the one the front-camera pipeline eases into. The torso and
 	// the head turn from their last values to the identity. Without a
 	// skeleton an arm has no rest pose and freezes instead.
 	EaseToRest,
@@ -99,11 +99,11 @@ struct LossPolicy
 // arriving, which a receiver drops back to the avatar's T-pose.
 LossPolicy makePositionLossPolicy(float minConfidence, float holdOnDropoutMs, bool bFreezeOnLoss);
 
-// The direct pipeline's rules: each arm through the hold the solver earned,
+// The front-camera pipeline's rules: each arm through the hold the solver earned,
 // then eased into the rig's rest pose over restBlendMs; the hands with their
 // arms; the torso and the head through the solver's hold, then at rest at
 // once
-LossPolicy makeDirectLossPolicy(float restBlendMs);
+LossPolicy makeFrontCameraLossPolicy(float restBlendMs);
 
 // The position pipeline's hand poses beside its source pose. In: the frame's.
 // Out: what each side carries (measured, held with its confidences decayed,
@@ -123,7 +123,7 @@ public:
 
 	// Rewrites the source pose with what the target solve gets on this
 	// frame, each group's state saying how it got there. skeleton and
-	// rigSides place the direct pipeline's rest pose; without a skeleton an
+	// rigSides place the front-camera pipeline's rest pose; without a skeleton an
 	// arm that would ease to rest freezes. ioHands: the position pipeline's
 	// hand poses, resolved alongside the source, or null.
 	void apply(const LossPolicy& policy, const AvatarSkeleton* skeleton,
@@ -143,18 +143,18 @@ private:
 	// The ease into rest: what the bones took last frame and whether
 	// anything placed them in this epoch, and when the ease began (negative
 	// while the arm is carried) and the placement it started from. And the
-	// ease out of it: when it began (negative outside one), the direct
+	// ease out of it: when it began (negative outside one), the front-camera
 	// placement it started from, and for a position arm how far into rest
 	// the arm was, which is also what its last resting frame handed on.
 	struct EaseState
 	{
 		bool bPlaced= false;
-		DirectRetarget::ArmPlacement lastPlacement;
+		FrontCameraRetarget::ArmPlacement lastPlacement;
 		double easeStartMs= -1.0;
-		DirectRetarget::ArmPlacement easeFrom;
+		FrontCameraRetarget::ArmPlacement easeFrom;
 		float lastRestBlend= 0.f;
 		double riseStartMs= -1.0;
-		DirectRetarget::ArmPlacement riseFrom;
+		FrontCameraRetarget::ArmPlacement riseFrom;
 		float riseFromRestBlend= 0.f;
 	};
 	// A torso or a head: its timed hold, the last values handed on, and when
@@ -170,8 +170,8 @@ private:
 		double easeStartMs= -1.0;
 	};
 	// One pipeline's memory and the epoch it belongs to. The two pipelines
-	// keep theirs apart: a project in direct mode falls back to the position
-	// pipeline on a frame the direct solve cannot run, and each pipeline's
+	// keep theirs apart: a project in front-camera mode falls back to the position
+	// pipeline on a frame the front-camera solve cannot run, and each pipeline's
 	// epoch counts its own filler's restarts.
 	struct PipelineMemory
 	{
@@ -192,5 +192,5 @@ private:
 					 LossHands* ioHands);
 
 	PipelineMemory m_position;
-	PipelineMemory m_direct;
+	PipelineMemory m_frontCamera;
 };

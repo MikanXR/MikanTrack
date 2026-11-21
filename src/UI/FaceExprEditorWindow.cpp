@@ -287,8 +287,8 @@ void FaceExprEditorWindow::readReferences(const Frame& frame, std::vector<int>& 
 	const std::vector<FaceExprProgram::Expression>& expressions= m_target.bLet ? program.lets : program.outputs;
 	if ((size_t)m_target.index >= expressions.size())
 		return;
-	outInputSlots= expressions[(size_t)m_target.index].directInputs;
-	outLetIndices= expressions[(size_t)m_target.index].directLets;
+	outInputSlots= expressions[(size_t)m_target.index].frontCameraInputs;
+	outLetIndices= expressions[(size_t)m_target.index].frontCameraLets;
 }
 
 float FaceExprEditorWindow::rowValue(const Frame& frame) const

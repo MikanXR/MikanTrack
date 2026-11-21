@@ -46,7 +46,7 @@ uLipSync's method (MIT, hecomi, https://github.com/hecomi/uLipSync, version 3.1.
 - a radix-2 FFT to the magnitude spectrum
 - a mel filterbank of `melFilterBankChannels` triangles (30 by default) on the 1127 ln mel scale from 0 to 8 kHz, with uLipSync's bin indexing
 - 10 log10 of each band
-- a direct, unnormalized DCT-II, keeping coefficients 1 to 12
+- a front-camera, unnormalized DCT-II, keeping coefficients 1 to 12
 
 uLipSync's windowed-sinc low-pass and its decimation have no counterpart: they anti-alias the host's audio before downsampling to 16 kHz, and the capture is already 16 kHz. The block's RMS level in dBFS comes out beside the coefficients, read before the chain touches the samples.
 

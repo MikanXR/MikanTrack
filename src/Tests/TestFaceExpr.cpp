@@ -894,8 +894,8 @@ static int runFaceExprTest(const TestArgs&)
 			const int present= FaceExprInputs::fromName("viseme.present");
 			std::vector<int> expectedInputs= {jaw, blink, present};
 			std::sort(expectedInputs.begin(), expectedInputs.end());
-			bSets= first.directInputs == std::vector<int>{blink} && first.inputs == expectedInputs &&
-				   first.directLets == std::vector<int>{0} && first.lets == (std::vector<int>{0, 1}) &&
+			bSets= first.frontCameraInputs == std::vector<int>{blink} && first.inputs == expectedInputs &&
+				   first.frontCameraLets == std::vector<int>{0} && first.lets == (std::vector<int>{0, 1}) &&
 				   result.program->outputs[1].inputs == std::vector<int>{FaceExprInputs::fromName("viseme.aa")} &&
 				   result.program->lets[0].inputs == (std::vector<int>{std::min(jaw, present), std::max(jaw, present)});
 		}

@@ -67,7 +67,7 @@ struct OscStreamerConfig
 ///     teleport it.
 ///   /VMC/Ext/Bone/Pos ,sfffffff name + local position xyz + rotation xyzw,
 ///     once per measured bone (head, clavicles, arms, hands, fingers, and
-///     the spine, chest, upper chest and neck when a direct pose places them)
+///     the spine, chest, upper chest and neck when a front-camera pose places them)
 ///   while either face source is live (the phone stream or the microphone),
 ///   the face profile's targets (see FaceProfileBinding for the names):
 ///     /VMC/Ext/Blend/Val ,sf name + value [0,1], once per target name, the

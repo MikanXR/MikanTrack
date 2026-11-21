@@ -285,7 +285,7 @@ Profile stage authors other profiles (see
 
 Bones streamed, using Unity's `HumanBodyBones` names: `Head`, `Spine`,
 `Chest`, `UpperChest`, `Neck`, both `Shoulder`/`UpperArm`/`LowerArm`/`Hand`,
-and all 30 finger bones. The torso and neck bones go out only when the direct
+and all 30 finger bones. The torso and neck bones go out only when the front-camera
 retarget places them (a lean); the position retarget never does. A bone not
 sent stays at the receiver's rest pose, and legs, eyes and jaw are never
 streamed.
@@ -387,8 +387,8 @@ monitor before testing the real receiver.
   inference; yellow `CPU` = fallback (forceable with `"onnxEp": "cpu"` in config).
 - MediaPipe's handedness assumes a mirrored selfie view; the **Flip handedness**
   toggle (default on) corrects for a normal non-mirrored camera. Verify on your
-  rig and flip if L/R are swapped. A single-camera direct project checks this
+  rig and flip if L/R are swapped. A front-camera project checks this
   against the body model: the guided setup switches the toggle itself, and the
-  Direct solver stage warns when the hands are swapped.
+  Front-camera solver stage warns when the hands are swapped.
 - Depth accuracy from a single camera is in the ±2 cm class; it depends on a
   good intrinsics calibration and an accurate hand-scale measurement.

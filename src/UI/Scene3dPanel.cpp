@@ -42,7 +42,7 @@ static const glm::mat4 k_glFromCvFlip(
 	glm::vec4(0, 0, -1, 0),
 	glm::vec4(0, 0, 0, 1));
 
-void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cameraToWorld, float zNear, float zFar,
+void makeCameraMatchedView(const FrontCameraModel& camera, const glm::mat4& cameraToWorld, float zNear, float zFar,
 						   glm::mat4& outView, glm::mat4& outProjection)
 {
 	// The camera's frame in display space: its CV axes to world, the world to
@@ -96,7 +96,7 @@ void splitSideBySideLayers(const SceneLayers& layers, SceneLayers& outSource, Sc
 {
 	outSource= layers;
 	outSource.bAvatar= false;
-	outSource.bDirectSolve= false;
+	outSource.bFrontCameraSolve= false;
 	outSource.bGizmos= false;
 	outSource.bIkGoals= false;
 
@@ -216,15 +216,15 @@ void Scene3dPanel::setAvatarPose(const AvatarPose* pose)
 		m_avatarPose= *pose;
 }
 
-void Scene3dPanel::setDirectSolve(const DirectRetarget::SolveState* state, const glm::mat4& solveToWorld)
+void Scene3dPanel::setFrontCameraSolve(const FrontCameraRetarget::SolveState* state, const glm::mat4& solveToWorld)
 {
-	m_bHasDirectSolve= state != nullptr && state->torsoValid;
-	if (m_bHasDirectSolve)
+	m_bHasFrontCameraSolve= state != nullptr && state->torsoValid;
+	if (m_bHasFrontCameraSolve)
 	{
-		m_directSolve= *state;
+		m_frontCameraSolve= *state;
 		m_solveToWorld= solveToWorld;
 	}
-	// The direct source pose is placed by the same transform
+	// The front-camera source pose is placed by the same transform
 	m_bSourceSkeletonDirty= true;
 }
 
@@ -271,33 +271,34 @@ const SourceSkeleton& Scene3dPanel::getSourceSkeleton()
 	{
 		m_bSourceSkeletonDirty= false;
 		SourceSkeletonInputs inputs;
-		std::array<SourceSkeletonInputs::DirectHand, 2> directHands;
+		std::array<SourceSkeletonInputs::FrontCameraHand, 2> frontCameraHands;
 		if (m_bHasSourcePose)
 		{
 			inputs.source= &m_sourcePose;
 			inputs.hands= &m_sourceHands;
 			// A source made by hand is in the scene's world as it stands
 			static const glm::mat4 k_identity(1.f);
-			inputs.directToWorld= m_bHasDirectSolve ? &m_solveToWorld : (m_bHasCustomPalms ? &k_identity : nullptr);
+			inputs.frontCameraToWorld=
+				m_bHasFrontCameraSolve ? &m_solveToWorld : (m_bHasCustomPalms ? &k_identity : nullptr);
 			inputs.headAnchorWorld= m_bHasHeadAnchor ? &m_headAnchorWorld : nullptr;
-			if ((m_bHasDirectSolve || m_bHasCustomPalms) && m_avatarSkeleton != nullptr)
+			if ((m_bHasFrontCameraSolve || m_bHasCustomPalms) && m_avatarSkeleton != nullptr)
 			{
 				// The palm the solve measured, or the one the pose gives, laid
-				// out along the avatar's hand, whose units the direct source
+				// out along the avatar's hand, whose units the front-camera source
 				// is in
 				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 				{
-					const DirectRetarget::SolveState::Arm& arm= m_directSolve.arms[sideIndex];
+					const FrontCameraRetarget::SolveState::Arm& arm= m_frontCameraSolve.arms[sideIndex];
 					const AvatarSkeleton::HandRest& handRest=
 						m_avatarSkeleton->getHand(sideIndex == 0 ? eHandSide::Left : eHandSide::Right);
-					directHands[sideIndex].bValid= handRest.valid && (m_bHasCustomPalms || arm.bHandMeasured);
-					directHands[sideIndex].palmOrientation= m_bHasCustomPalms ? m_customPalms[sideIndex] : arm.filteredPalm;
-					directHands[sideIndex].skeleton= handRest.skeleton;
+					frontCameraHands[sideIndex].bValid= handRest.valid && (m_bHasCustomPalms || arm.bHandMeasured);
+					frontCameraHands[sideIndex].palmOrientation= m_bHasCustomPalms ? m_customPalms[sideIndex] : arm.filteredPalm;
+					frontCameraHands[sideIndex].skeleton= handRest.skeleton;
 				}
-				inputs.directHands= &directHands;
+				inputs.frontCameraHands= &frontCameraHands;
 			}
-			// The face is the direct camera's, which the capture looks through
-			if (m_bHasSourceFace && m_bHasDirectSolve && m_captureMatch.valid)
+			// The face is the front camera's, which the capture looks through
+			if (m_bHasSourceFace && m_bHasFrontCameraSolve && m_captureMatch.valid)
 			{
 				m_sourceFace.fx= m_captureMatch.camera.fx;
 				m_sourceFace.fy= m_captureMatch.camera.fy;
@@ -725,17 +726,18 @@ bool Scene3dPanel::drawAvatar(const glm::mat4& viewProjection, bool bShow)
 	return m_meshView.draw(viewProjection, modelMatrix, m_posedGlobals, lightDirection, m_morphWeights);
 }
 
-void Scene3dPanel::drawDirectSolve()
+void Scene3dPanel::drawFrontCameraSolve()
 {
-	if (!m_bHasDirectSolve)
+	if (!m_bHasFrontCameraSolve)
 		return;
 	// The shoulder line and each solved chain, the measured points in
 	// yellow, carried into the avatar's world
 	const glm::mat4 transform= k_displayFromWorld * m_solveToWorld;
-	drawSegment(*m_lineRenderer, transform, m_directSolve.shoulder[0], m_directSolve.shoulder[1], Colors::Yellow);
+	drawSegment(*m_lineRenderer, transform, m_frontCameraSolve.shoulder[0], m_frontCameraSolve.shoulder[1],
+				Colors::Yellow);
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
-		const DirectRetarget::ArmChain& chain= m_directSolve.arms[sideIndex].chain;
+		const FrontCameraRetarget::ArmChain& chain= m_frontCameraSolve.arms[sideIndex].chain;
 		if (!chain.valid)
 			continue;
 		const glm::vec3 color= sideIndex == 0 ? Colors::CornflowerBlue : Colors::Red;
@@ -756,7 +758,7 @@ bool Scene3dPanel::captureFromCamera(const TrackingFrameResult& fusedResult,
 									 const std::vector<SceneCameraView>& cameras,
 									 const std::vector<const TrackingFrameResult*>& perCameraResults, cv::Mat& outBgr)
 {
-	const DirectCameraModel& camera= m_captureMatch.camera;
+	const FrontCameraModel& camera= m_captureMatch.camera;
 	if (!m_captureMatch.valid || camera.width <= 0 || camera.height <= 0 || camera.width > 0xFFFF ||
 		camera.height > 0xFFFF || !startRenderers())
 		return false;
@@ -1076,8 +1078,8 @@ void Scene3dPanel::renderScene(const TrackingFrameResult& fusedResult, const std
 		drawSourceSkeleton();
 	if (layers.bIkGoals)
 		drawIkGoals();
-	if (layers.bDirectSolve)
-		drawDirectSolve();
+	if (layers.bFrontCameraSolve)
+		drawFrontCameraSolve();
 	if (layers.bGizmos)
 		drawGizmos(gizmos);
 
@@ -1109,10 +1111,10 @@ eScenePovAvailability getScenePovAvailability(const AppConfig& config, int camer
 	const CameraProfile& profile= config.camera(cameraIndex);
 	if (!profile.intrinsics.present)
 		return eScenePovAvailability::NotCalibrated;
-	if (config.direct.enabled)
+	if (config.frontCamera.enabled)
 	{
-		return cameraIndex == config.direct.cameraIndex ? eScenePovAvailability::Available
-														: eScenePovAvailability::NotDirectCamera;
+		return cameraIndex == config.frontCamera.cameraIndex ? eScenePovAvailability::Available
+														: eScenePovAvailability::NotFrontCamera;
 	}
 	return profile.extrinsics.present ? eScenePovAvailability::Available : eScenePovAvailability::NoExtrinsics;
 }

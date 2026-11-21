@@ -893,7 +893,7 @@ static int runReplayTest(const TestArgs& args)
 		}
 	}
 
-	// -- (g2) A hand the direct camera moved to its side carries the flag
+	// -- (g2) A hand the front camera moved to its side carries the flag
 	// through a frame's JSON, and a hand it left alone writes no key, as a
 	// recording from before the flag has none ---------------------------
 	{

@@ -82,7 +82,7 @@ public:
 	// defaults), so a caller can reseed when the neutral changes
 	bool isSeededFrom(const WholeBodyFaceRatios* neutral) const;
 
-	// Steps on a new model frame of the direct camera's observation and
+	// Steps on a new model frame of the front camera's observation and
 	// fills the source. bFresh and the gates are the webcam source's.
 	// timestampMs is the observation's own time.
 	void update(const BodyPoseObservation& body, bool bFresh, double timestampMs, const BlinkConfig& config,

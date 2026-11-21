@@ -26,7 +26,7 @@ json fingersToJson(const std::array<FingerAngles, FINGER_COUNT>& fingers)
 	return out;
 }
 
-json chainToJson(const DirectRetarget::ArmChain& chain)
+json chainToJson(const FrontCameraRetarget::ArmChain& chain)
 {
 	json out= {{"valid", chain.valid}};
 	if (chain.valid)
@@ -38,7 +38,7 @@ json chainToJson(const DirectRetarget::ArmChain& chain)
 	return out;
 }
 
-json armToJson(const DirectRetarget::SolveState::Arm& arm)
+json armToJson(const FrontCameraRetarget::SolveState::Arm& arm)
 {
 	return {
 		{"chain", chainToJson(arm.chain)},
@@ -90,7 +90,7 @@ json avatarPoseToJson(const AvatarSkeleton& skeleton, const AvatarPose& pose)
 	return out;
 }
 
-json directSolveStateToJson(const DirectRetarget::SolveState& state)
+json frontCameraSolveStateToJson(const FrontCameraRetarget::SolveState& state)
 {
 	json out= {
 		{"camera",

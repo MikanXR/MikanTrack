@@ -57,7 +57,7 @@ struct AvatarRigSettings
 		// A disabled finger is left at rest
 		std::array<bool, FINGER_COUNT> fingerEnabled{true, true, true, true, true};
 
-		// The arm's rest pose, where the direct retarget eases an arm whose
+		// The arm's rest pose, where the front-camera retarget eases an arm whose
 		// tracking is lost: the elbow and the wrist relative to the upper-arm
 		// joint in the torso frame above, meters (only their directions are
 		// used, so the pose fits any arm length), the direction the palm
@@ -68,7 +68,7 @@ struct AvatarRigSettings
 		glm::vec3 restPalmNormal{0.f, 0.f, -1.f};
 		float restFingerCurlDegrees= 15.f;
 
-		// The direct retarget's limit on the wrist, the palm's rotation in
+		// The front-camera retarget's limit on the wrist, the palm's rotation in
 		// the forearm frame, degrees
 		float wristLimitDegrees= 80.f;
 	};
@@ -82,7 +82,7 @@ struct AvatarRigSettings
 	// stay for a project without them.
 	float restBlendMs= 300.f;
 
-	// The direct retarget's joint limits, degrees: the head's rotation away
+	// The front-camera retarget's joint limits, degrees: the head's rotation away
 	// from the neutral head, and the spine's (the lean and the shoulder
 	// line's turn) away from the neutral torso
 	float headLimitDegrees= 70.f;

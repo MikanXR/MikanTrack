@@ -90,7 +90,7 @@ struct OscStreamerConfig
 ///     teleport it.
 ///   /VMC/Ext/Bone/Pos ,sfffffff name + local position xyz + rotation xyzw,
 ///     once per measured bone (head, clavicles, arms, hands, fingers, and
-///     the spine, chest, upper chest and neck when a direct pose places them)
+///     the spine, chest, upper chest and neck when a front-camera pose places them)
 ///   while either face source is live (the phone stream or the microphone),
 ///   the face profile's targets (see FaceProfileBinding for the names):
 ///     /VMC/Ext/Blend/Val ,sf name + value [0,1], once per target name, the
@@ -125,16 +125,16 @@ public:
 	/// Encode and send one bundle for the given frame.
 	/// Called from the inference thread; allocation-light after warm-up
 	/// (reuses a pooled bundle and a scratch encode buffer).
-	/// directPose is the pose the single-camera direct retarget solved for this
+	/// frontCameraPose is the pose the single-camera front-camera retarget solved for this
 	/// frame, or null on the stereo path. When it is non-null and valid the
 	/// streamer skips its own confidence gate, dropout hold, freeze rule and
-	/// AvatarRetarget (the direct solver holds and rests on its own) and
+	/// AvatarRetarget (the front-camera solver holds and rests on its own) and
 	/// streams that pose through the configured avatar skeleton: with no
 	/// skeleton the frame carries no bones, while the blendshapes and the OK,
 	/// T, Root and VRM messages go out as usual. The OK tracking status is 1
 	/// when either upper arm is present in the pose. A null or invalid
-	/// directPose leaves the stereo behavior exactly as it was.
-	void sendFrame(const TrackingFrameResult& frame, const AvatarPose* directPose= nullptr);
+	/// frontCameraPose leaves the stereo behavior exactly as it was.
+	void sendFrame(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose= nullptr);
 
 	/// Encode one frame without touching the socket, advancing the same
 	/// streaming state (dropout holds, freeze-on-loss, face and avatar throttles).
@@ -142,9 +142,9 @@ public:
 	/// exactly the bytes a receiver would rather than a reconstruction of them.
 	/// One entry per datagram: a frame too large for a single packet is split
 	/// into several complete bundles (see k_maxDatagramBytes).
-	/// directPose has the meaning it has on sendFrame.
+	/// frontCameraPose has the meaning it has on sendFrame.
 	void encodeFrame(const TrackingFrameResult& frame, std::vector<std::vector<uint8_t>>& outPackets,
-					 const AvatarPose* directPose= nullptr);
+					 const AvatarPose* frontCameraPose= nullptr);
 
 	/// Largest datagram the streamer will put on the wire. Sized to stay inside
 	/// a 1500-byte ethernet MTU (so nothing depends on IP fragmentation, where
@@ -183,9 +183,9 @@ public:
 private:
 	using ClockTimePoint= std::chrono::steady_clock::time_point;
 
-	void encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* directPose,
+	void encodeFrameLocked(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose,
 						   const ClockTimePoint& now, std::vector<std::vector<uint8_t>>& outPackets);
-	void appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* directPose,
+	void appendVmcMessages(const TrackingFrameResult& frame, const AvatarPose* frontCameraPose,
 						   const ClockTimePoint& now);
 	void appendVmcBlendMessages(const TrackingFrameResult& frame);
 	void appendVmcAvatarMessage(const ClockTimePoint& now);

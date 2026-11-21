@@ -46,7 +46,7 @@ enum class eSceneGizmoTrimRule : int
 	// the trim, so the trim takes the turn's inverse and the bone follows
 	// the ring: the head, and a hand in the position pipeline
 	BoneFollows,
-	// The handle is the trimmed frame itself, the axes the direct pipeline
+	// The handle is the trimmed frame itself, the axes the front-camera pipeline
 	// applies the measured wrist rotation about, so the trim takes the turn
 	AxesTurn,
 	// The handle's X axis runs along the forearm, and the trim's x takes the
@@ -88,7 +88,7 @@ struct SceneGizmoInputs
 	// The shown frame's wrist goals; null, or an arm without one, has no
 	// goal offset handle
 	const AvatarRetargetGoals* goals= nullptr;
-	bool bDirect= false;
+	bool bFrontCameraMode= false;
 	// The mode whose settings get handles
 	eChainMode mode= eChainMode::Tracking;
 	// The custom pose the frame was posed from, for the Custom pose mode's

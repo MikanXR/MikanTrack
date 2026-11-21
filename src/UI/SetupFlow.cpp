@@ -135,7 +135,7 @@ SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
 		case eStep::CharucoPrint:
 			return eStep::IntrinsicsRunning;
 		case eStep::IntrinsicsRunning:
-			// The direct retarget has no world to calibrate: the camera is
+			// The front-camera retarget has no world to calibrate: the camera is
 			// the world, and the neutral capture is its only reference
 			return setup == eTrackingSetup::SingleFront ? eStep::HandednessCheck : eStep::ArucoPrint;
 		case eStep::HandednessCheck:
@@ -219,7 +219,7 @@ void SetupFlow::transitionTo(eStep step)
 			m_arucoMarkerLengthMM= (float)config->camera(0).extrinsics.markerLengthMM;
 			break;
 		case eStep::HandednessCheck:
-			// The direct stage picks up the intrinsics just calibrated, so
+			// The front-camera stage picks up the intrinsics just calibrated, so
 			// its solve says where the hand slots sit against the body
 			m_bHandednessFlipApplied= false;
 			m_bHandednessMatched= false;
@@ -227,7 +227,7 @@ void SetupFlow::transitionTo(eStep step)
 			m_app->getVisionThread()->requestConfigRefresh();
 			break;
 		case eStep::NeutralCapture:
-			// The direct stage picks up the intrinsics just calibrated, so
+			// The front-camera stage picks up the intrinsics just calibrated, so
 			// the avatar follows the user through the capture
 			m_neutralCapture.reset();
 			m_app->getVisionThread()->requestConfigRefresh();
@@ -531,9 +531,9 @@ void SetupFlow::applyCameraSelection()
 
 	// The camera that sees the user upright runs the body-pose stage: the
 	// tri-camera front, or the one camera of the single desk variant. The
-	// direct variant drives the avatar from its one camera, and the project's
+	// front-camera variant drives the avatar from its one camera, and the project's
 	// mode runs the whole-body model there, whose shoulders, ears, face and
-	// hand blocks the direct solve reads. Dual variants leave body pose off
+	// hand blocks the front-camera solve reads. Dual variants leave body pose off
 	// everywhere.
 	switch (m_trackingSetup)
 	{
@@ -544,8 +544,8 @@ void SetupFlow::applyCameraSelection()
 			config->camera(0).bodyPose.enabled= true;
 			break;
 		case eTrackingSetup::SingleFront:
-			config->direct.enabled= true;
-			config->direct.cameraIndex= 0;
+			config->frontCamera.enabled= true;
+			config->frontCamera.cameraIndex= 0;
 			break;
 		default:
 			break;
@@ -834,7 +834,7 @@ void SetupFlow::updateHandednessCheckPrompt()
 	// reference: slots that sit on the opposite wrists carry the wrong side,
 	// and the flip setting is switched to match, once. A swap still reported
 	// well after the switch is left to the user.
-	const DirectRetarget::SolveState& state= m_mainWindow->getLatestDirectState();
+	const FrontCameraRetarget::SolveState& state= m_mainWindow->getLatestFrontCameraState();
 	if (state.arms[0].bHandSeen && state.arms[1].bHandSeen && !state.bHandednessSwapped)
 		m_bHandednessMatched= true;
 	if (m_bHandednessFlipApplied)
@@ -890,7 +890,7 @@ void SetupFlow::updateNeutralCapturePrompt()
 
 	AppConfig* config= m_app->getConfig();
 	VisionThread* visionThread= m_app->getVisionThread();
-	DirectConfig& direct= config->direct;
+	FrontCameraConfig& frontCamera= config->frontCamera;
 
 	ImGui::PushTextWrapPos(k_promptWrapWidth);
 	ImGui::TextUnformatted(locText("setupFlow.neutralPrompt"));
@@ -898,18 +898,18 @@ void SetupFlow::updateNeutralCapturePrompt()
 	ImGui::Spacing();
 
 	// The capture needs a solved torso, which the window's copy of the
-	// thread's output shows: the direct pose exists once the solver runs on
+	// thread's output shows: the front-camera pose exists once the solver runs on
 	// the avatar, the body observation once the camera sees the user
-	const bool bTracking= m_mainWindow->getLatestDirectPose().valid && m_mainWindow->getLatestFused().body.valid;
+	const bool bTracking= m_mainWindow->getLatestFrontCameraPose().valid && m_mainWindow->getLatestFused().body.valid;
 	ImGui::TextColored(bTracking ? k_colorGood : k_colorWait, "%s",
 					   locText(bTracking ? "setupFlow.neutralTrackingReady" : "setupFlow.neutralTrackingWaiting"));
 
-	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.directTilt"), &direct.cameraTiltDegrees, -30.f, 60.f,
-									  locText("trackingPanel.directTiltFmt"));
-	ImGui::SetItemTooltip("%s", locText("trackingPanel.directTiltTooltip"));
+	bool bChanged= ImGui::SliderFloat(locLabel("trackingPanel.frontCameraTilt"), &frontCamera.cameraTiltDegrees, -30.f,
+									  60.f, locText("trackingPanel.frontCameraTiltFmt"));
+	ImGui::SetItemTooltip("%s", locText("trackingPanel.frontCameraTiltTooltip"));
 
 	ImGui::BeginDisabled(m_neutralCapture.isCountingDown() || !bTracking);
-	const char* captureKey= direct.neutralPresent ? "setupFlow.neutralRecaptureButton" : "setupFlow.neutralCaptureButton";
+	const char* captureKey= frontCamera.neutralPresent ? "setupFlow.neutralRecaptureButton" : "setupFlow.neutralCaptureButton";
 	if (ImGui::Button(locLabel(captureKey), ImVec2(-1, 0)))
 		m_neutralCapture.start();
 	ImGui::EndDisabled();
@@ -917,13 +917,13 @@ void SetupFlow::updateNeutralCapturePrompt()
 	bChanged|= m_neutralCapture.update(ImGui::GetIO().DeltaTime, visionThread, config);
 	if (m_neutralCapture.isCountingDown())
 	{
-		ImGui::TextColored(k_colorWait, locText("trackingPanel.directCountdownFmt"),
+		ImGui::TextColored(k_colorWait, locText("trackingPanel.frontCameraCountdownFmt"),
 						   (int)ceilf(m_neutralCapture.getRemainingSeconds()));
 		ImGui::ProgressBar(1.f - m_neutralCapture.getRemainingSeconds() / NeutralCaptureControl::k_countdownSeconds,
 						   ImVec2(-1, 4), "");
 	}
 
-	m_neutralCapture.drawStatus(direct);
+	m_neutralCapture.drawStatus(frontCamera);
 
 	if (bChanged)
 	{
@@ -932,7 +932,7 @@ void SetupFlow::updateNeutralCapturePrompt()
 	}
 
 	ImGui::Separator();
-	ImGui::BeginDisabled(!direct.neutralPresent);
+	ImGui::BeginDisabled(!frontCamera.neutralPresent);
 	if (ImGui::Button(locLabel("setupFlow.neutralFinishButton"), ImVec2(120, 0)))
 	{
 		ImGui::CloseCurrentPopup();

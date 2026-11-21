@@ -12,7 +12,7 @@
 class AvatarSkeleton;
 
 // Rotation helpers shared by the retargets that pose an AvatarPose: the
-// position-based retarget over fused world poses and the direct retarget
+// position-based retarget over fused world poses and the front-camera retarget
 // over one camera's landmarks. Every delta here is a WORLD rotation measured
 // against a bone's rooted rest rotation, the AvatarPose convention.
 namespace AvatarRetargetMath

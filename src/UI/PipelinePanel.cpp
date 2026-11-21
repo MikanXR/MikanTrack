@@ -225,7 +225,8 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	// switched) is dropped before anything reads it
 	if (m_selected.isValid())
 	{
-		const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount);
+		const std::vector<PipelineStageId> all=
+			PipelineModel::getAllStages(inputs.bFrontCameraMode, inputs.cameraCount);
 		if (std::find(all.begin(), all.end(), m_selected) == all.end())
 			m_selected= PipelineStageId();
 	}
@@ -260,7 +261,7 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	};
 
 	// The top row: each stage in frame order, the source pose as a pill
-	const std::vector<PipelineStageId> topRow= PipelineModel::getTopRow(inputs.bDirect);
+	const std::vector<PipelineStageId> topRow= PipelineModel::getTopRow(inputs.bFrontCameraMode);
 	const float topMidY= origin.y + kTopHeight * 0.5f;
 	float x= origin.x;
 	float retargetX= origin.x;
@@ -324,7 +325,7 @@ void PipelinePanel::draw(bool* pOpen, const PipelineStatusInputs& inputs)
 	float contentBottom= lanesY + kLaneHeight;
 	float lanesRight= origin.x;
 	const std::vector<std::vector<PipelineStageId>> lanes=
-		PipelineModel::getSubStageLanes(m_selected, inputs.bDirect, inputs.cameraCount);
+		PipelineModel::getSubStageLanes(m_selected, inputs.bFrontCameraMode, inputs.cameraCount);
 	if (lanes.empty())
 	{
 		const std::string hint= m_selected.isValid()
