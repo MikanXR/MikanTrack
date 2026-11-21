@@ -15,6 +15,8 @@
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
 #include "CustomPoseLibrary.h"
+#include "FaceExprInputs.h"
+#include "FaceProfileBinding.h"
 #include "HandPoseModel.h"
 #include "PathUtils.h"
 #include "RetargetChains.h"
@@ -185,6 +187,7 @@ bool AvatarPanel::setSelectedChain(eRetargetChain chain)
 	if (chain != m_selectedChain)
 		m_gizmoTarget= SceneGizmoTarget();
 	m_selectedChain= chain;
+	m_bPoseFaceSelected= false;
 	return true;
 }
 
@@ -602,14 +605,20 @@ void AvatarPanel::drawChains()
 		drawPoseBar();
 		ImGui::PopID();
 	}
+	// The pose has a face as well as chains
+	const bool bFace= mode == eChainMode::CustomPose && m_bPoseFaceSelected;
 	ImGui::SeparatorText(locText("chains.chainsHeading"));
-	drawChainRow(bAvatar);
-	ImGui::SeparatorText(locText(k_chainLabelKeys[(int)chain]));
+	drawChainRow(bAvatar, mode == eChainMode::CustomPose);
+	ImGui::SeparatorText(locText(bFace ? "chains.poseFaceButton" : k_chainLabelKeys[(int)chain]));
 
 	ImGui::PushID("chain");
 	if (mode == eChainMode::RestPose)
 	{
 		drawRestRows(chain);
+	}
+	else if (bFace)
+	{
+		drawPoseFaceRows();
 	}
 	else if (mode == eChainMode::CustomPose)
 	{
@@ -717,6 +726,58 @@ void AvatarPanel::drawPoseBar()
 		}
 		ImGui::EndPopup();
 	}
+}
+
+void AvatarPanel::drawPoseFaceRows()
+{
+	CustomPose pose= m_app->getActiveCustomPose();
+	const bool bBuiltIn= isBuiltInCustomPoseId(pose.id);
+	bool bChanged= false;
+
+	// The inputs the bound profile's outputs read, themselves or through
+	// their variables, in the input table's order
+	std::vector<int> slots;
+	const std::shared_ptr<const FaceProfileBinding>& binding= m_app->getFaceBinding();
+	if (binding != nullptr && binding->getProgram() != nullptr)
+	{
+		for (const FaceExprProgram::Expression& output : binding->getProgram()->outputs)
+		{
+			for (const int slot : output.inputs)
+			{
+				if (!FaceExprInputs::isFlagSlot(slot))
+					slots.push_back(slot);
+			}
+		}
+		std::sort(slots.begin(), slots.end());
+		slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+	}
+
+	drawNote(slots.empty() ? "chains.poseFaceNoInputsNote" : "chains.poseFaceNote");
+	ImGui::BeginDisabled(bBuiltIn);
+	for (const int slot : slots)
+	{
+		const std::string name= FaceExprInputs::name(slot);
+		const auto found= pose.face.find(name);
+		float value= found != pose.face.end() ? found->second : 0.f;
+		if (ImGui::SliderFloat(name.c_str(), &value, 0.f, 1.f, "%.2f"))
+		{
+			pose.face[name]= value;
+			bChanged= true;
+		}
+	}
+	if (!slots.empty())
+	{
+		ImGui::Spacing();
+		if (ImGui::Button(locLabel("chains.poseResetFaceButton")))
+		{
+			pose.face.clear();
+			bChanged= true;
+		}
+	}
+	ImGui::EndDisabled();
+
+	if (bChanged && !bBuiltIn)
+		m_app->editActiveCustomPose(pose);
 }
 
 void AvatarPanel::drawPoseRows(eRetargetChain chain)
@@ -940,7 +1001,7 @@ void AvatarPanel::drawRestRows(eRetargetChain chain)
 		m_app->setRetargetChains(chains);
 }
 
-void AvatarPanel::drawChainRow(bool bAvatar)
+void AvatarPanel::drawChainRow(bool bAvatar, bool bFaceEntry)
 {
 	// One button per chain, the selected one drawn pressed, wrapping when
 	// the next would not fit
@@ -958,11 +1019,29 @@ void AvatarPanel::drawChainRow(bool bAvatar)
 			ImGui::SameLine();
 		bFirst= false;
 
-		const bool bSelected= chain == m_selectedChain;
+		const bool bSelected= chain == m_selectedChain && !(bFaceEntry && m_bPoseFaceSelected);
 		if (bSelected)
 			ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
 		if (ImGui::Button(label))
 			setSelectedChain(chain);
+		if (bSelected)
+			ImGui::PopStyleColor();
+	}
+	if (bFaceEntry)
+	{
+		const char* label= locLabel("chains.poseFaceButton");
+		const float width= ImGui::CalcTextSize(label, nullptr, true).x + style.FramePadding.x * 2.f;
+		if (ImGui::GetItemRectMax().x + style.ItemSpacing.x + width <= rightEdge)
+			ImGui::SameLine();
+		const bool bSelected= m_bPoseFaceSelected;
+		if (bSelected)
+			ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+		if (ImGui::Button(label))
+		{
+			// A chain's handle does not belong to the face
+			m_bPoseFaceSelected= true;
+			m_gizmoTarget= SceneGizmoTarget();
+		}
 		if (bSelected)
 			ImGui::PopStyleColor();
 	}

@@ -136,6 +136,41 @@ void fill(const FaceSources& sources, float* outInputs)
 	outInputs[k_blinkTracked]= sources.blink.tracked ? 1.f : 0.f;
 }
 
+bool isFlagSlot(int slot)
+{
+	return slot == k_phonePresent || slot == k_phoneTracked || slot == k_visemePresent || slot == k_webcamPresent ||
+		   slot == k_webcamTracked || slot == k_blinkPresent || slot == k_blinkTracked;
+}
+
+void makeSources(const std::map<std::string, float>& values, FaceSources& outSources)
+{
+	outSources= FaceSources();
+	outSources.phone.present= true;
+	outSources.phone.tracked= true;
+	outSources.viseme.present= true;
+	outSources.webcam.present= true;
+	outSources.webcam.tracked= true;
+	outSources.webcam.measuredMask= ~0ull;
+	outSources.blink.present= true;
+	outSources.blink.tracked= true;
+	for (const auto& [inputName, value] : values)
+	{
+		const int slot= fromName(inputName);
+		if (slot < 0 || isFlagSlot(slot))
+			continue;
+		if (slot < k_phonePresent)
+			outSources.phone.blendshapes[slot - k_phoneBlendshapeBase]= value;
+		else if (slot >= k_visemeBase && slot < k_visemePresent)
+			outSources.viseme.weights[slot - k_visemeBase]= value;
+		else if (slot >= k_webcamBlendshapeBase && slot < k_webcamPresent)
+			outSources.webcam.blendshapes[slot - k_webcamBlendshapeBase]= value;
+		else if (slot == k_blinkEyeBlinkLeft)
+			outSources.blink.eyeBlinkLeft= value;
+		else if (slot == k_blinkEyeBlinkRight)
+			outSources.blink.eyeBlinkRight= value;
+	}
+}
+
 const ExprInputTable& table()
 {
 	static const FaceInputTable s_table;

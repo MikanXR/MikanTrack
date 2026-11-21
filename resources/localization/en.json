@@ -231,6 +231,10 @@
 		"unloadButton": "Unload"
 	},
 	"chains": {
+		"poseFaceButton": "Face",
+		"poseFaceNote": "The inputs the avatar's active face profile reads, as if a face tracker had sent them. The avatar's face shows what the profile makes of them.",
+		"poseFaceNoInputsNote": "The avatar's active face profile reads no inputs, so there is nothing to set.",
+		"poseResetFaceButton": "Reset face",
 		"poseHeading": "Pose",
 		"poseCombo": "Pose",
 		"poseDemoItem": "Demo (built-in)",

@@ -155,7 +155,8 @@ private:
 	// Without a model the position pipeline's stream runs in either shape.
 	bool isDirectPipeline() const;
 	void drawModeRow();
-	void drawChainRow(bool bAvatar);
+	// bFaceEntry adds the Face entry after the chains
+	void drawChainRow(bool bAvatar, bool bFaceEntry);
 	// The Rest pose mode's rows for a chain: where a lost arm and hand go,
 	// and how long each chain takes to get there and back
 	void drawRestRows(eRetargetChain chain);
@@ -165,6 +166,9 @@ private:
 	// The Custom pose mode's rows for a chain: that part of the active pose,
 	// read-only on the built-in pose
 	void drawPoseRows(eRetargetChain chain);
+	// The Custom pose mode's face rows: a value for each input the active
+	// face profile reads
+	void drawPoseFaceRows();
 	void drawTorsoChain();
 	void drawHeadChain();
 	void drawArmChain(int sideIndex, bool bAvatar);
@@ -189,6 +193,9 @@ private:
 	std::string m_poseNameEdit;
 	std::string m_poseNameEditId;
 	std::string m_pendingDeletePoseId;
+	// The chain row's Face entry is what the Custom pose mode shows, in
+	// place of the selected chain. Selecting a chain ends it.
+	bool m_bPoseFaceSelected= false;
 	SceneGizmoTarget m_gizmoTarget;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
 	std::array<RetargetArmReadout, 2> m_shownArmParameters{};

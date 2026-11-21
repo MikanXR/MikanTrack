@@ -22,6 +22,7 @@
 #include "AvatarPanel.h"
 #include "CustomPose.h"
 #include "CustomPoseLibrary.h"
+#include "FaceExprInputs.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
@@ -1231,8 +1232,15 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			m_avatarPose= m_displayResult.pose;
 			shownResult= &m_displayResult;
 			bCustomPose= true;
+
+			// The pose's face inputs through the avatar's bound profile, on
+			// the same clock, the way the stream evaluates a tracked face
+			if (m_customFaceRunner.getBinding() != m_app->getFaceBinding())
+				m_customFaceRunner.setBinding(m_app->getFaceBinding());
+			FaceExprInputs::makeSources(customPose.face, m_customFace);
+			m_customFaceRunner.evaluate(m_customFace, m_customPoseClockMs);
 		}
-		m_scene3dPanel->setAvatarFace(nullptr);
+		m_scene3dPanel->setAvatarFace(bCustomPose ? &m_customFace : nullptr);
 	}
 	else if (bReplay)
 	{

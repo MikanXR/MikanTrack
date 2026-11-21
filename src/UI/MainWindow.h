@@ -12,6 +12,7 @@
 #include "DirectRetarget.h"
 #include "RetargetStage.h"
 #include "CustomPose.h"
+#include "FaceProfileRunner.h"
 #include "Scene3dPanel.h" // SceneGizmos
 #include "SettingsPanels.h" // TrackingPanelState
 #include "VisionThread.h"    // VisionPreviewFrame
@@ -251,6 +252,9 @@ private:
 	// the window's own retarget stage solves it, a replay through the
 	// playhead, which plays forward steps and pre-rolls a scrub.
 	RetargetStage m_displayStage;
+	// The face profile over the custom pose's face inputs
+	FaceProfileRunner m_customFaceRunner;
+	FaceSources m_customFace;
 	RetargetResult m_displayResult;
 	RetargetPlayhead m_replayPlayhead;
 	AvatarPose m_avatarPose;

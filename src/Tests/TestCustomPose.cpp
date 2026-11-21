@@ -10,6 +10,7 @@
 #include "AvatarSkeleton.h"
 #include "CustomPose.h"
 #include "CustomPoseLibrary.h"
+#include "FaceExprInputs.h"
 #include "RetargetStage.h"
 #include "SyntheticAvatar.h"
 
@@ -250,6 +251,29 @@ static int runCustomPoseTest(const TestArgs& args)
 		RetargetResult empty;
 		fillCustomSource(pose, CustomPoseSolveInputs(), SourcePose::Clock(), empty);
 		check(empty.source.pipeline == SourcePose::ePipeline::None, "(f) no skeleton fills no source");
+	}
+
+	// (g) The pose's face inputs as sources: each named input at its value
+	// with its source present and tracked, a name the table lacks and a flag
+	// ignored
+	{
+		const std::map<std::string, float> values= {{"phone.jawOpen", 0.4f},   {"viseme.aa", 0.7f},
+													 {"webcam.mouthSmileLeft", 0.3f}, {"blink.eyeBlinkLeft", 1.f},
+													 {"phone.tracked", 0.f},  {"bogus.input", 1.f}};
+		FaceSources sources;
+		FaceExprInputs::makeSources(values, sources);
+		float inputs[FaceExprInputs::k_count];
+		FaceExprInputs::fill(sources, inputs);
+		const bool bValues= inputs[FaceExprInputs::fromName("phone.jawOpen")] == 0.4f &&
+			inputs[FaceExprInputs::fromName("viseme.aa")] == 0.7f &&
+			inputs[FaceExprInputs::fromName("webcam.mouthSmileLeft")] == 0.3f &&
+			inputs[FaceExprInputs::k_blinkEyeBlinkLeft] == 1.f && inputs[FaceExprInputs::fromName("phone.jawForward")] == 0.f;
+		const bool bFlags= inputs[FaceExprInputs::k_phoneTracked] == 1.f && inputs[FaceExprInputs::k_visemePresent] == 1.f &&
+			inputs[FaceExprInputs::k_webcamTracked] == 1.f && inputs[FaceExprInputs::k_blinkTracked] == 1.f &&
+			sources.isPresent() && sources.outputs.generation == 0;
+		check(bValues && bFlags && FaceExprInputs::isFlagSlot(FaceExprInputs::k_phonePresent) &&
+				  !FaceExprInputs::isFlagSlot(FaceExprInputs::fromName("phone.jawOpen")),
+			  "(g) the pose's face inputs fill sources that give the values back");
 	}
 
 	MIKAN_LOG_INFO("test-custom-pose") << (result == 0 ? "ALL PASS" : "FAILURES");
