@@ -11,6 +11,8 @@
 #include "PipelineModel.h"
 #include "DirectRetarget.h"
 #include "RetargetStage.h"
+#include "CustomPose.h"
+#include "FaceProfileRunner.h"
 #include "Scene3dPanel.h" // SceneGizmos
 #include "SettingsPanels.h" // TrackingPanelState
 #include "VisionThread.h"    // VisionPreviewFrame
@@ -250,6 +252,9 @@ private:
 	// the window's own retarget stage solves it, a replay through the
 	// playhead, which plays forward steps and pre-rolls a scrub.
 	RetargetStage m_displayStage;
+	// The face profile over the custom pose's face inputs
+	FaceProfileRunner m_customFaceRunner;
+	FaceSources m_customFace;
 	RetargetResult m_displayResult;
 	RetargetPlayhead m_replayPlayhead;
 	AvatarPose m_avatarPose;
@@ -278,11 +283,22 @@ private:
 														   const std::shared_ptr<const AvatarSkeleton>& skeleton);
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
+	// The chain mode the scene's avatar is posed from: the panel's while the
+	// chains' settings are shown, in the Inspector or a pinned window, and
+	// tracking otherwise
+	eChainMode getShownChainMode() const;
 	// The rig and the chains as a gizmo drag found them, which Escape puts back
 	std::vector<SceneGizmoHandle> m_gizmoHandles;
+	// The custom pose the display stage last solved, the epoch its source
+	// clock carries, bumped when the pose or the feed changes, and that
+	// clock's time, which runs on the UI's frames
+	std::string m_customPoseShownId;
+	uint32_t m_customPoseEpoch= 0;
+	double m_customPoseClockMs= 0.0;
 	bool m_bGizmoDragStartValid= false;
 	AvatarRigSettings m_gizmoDragStartRig;
 	RetargetChains m_gizmoDragStartChains;
+	CustomPose m_gizmoDragStartPose;
 	// scene gizmo: the setting the scene's gizmo is attached to, its stored
 	// value and the selected chain's handles; with a verb, attaches it or
 	// sets the value

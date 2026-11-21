@@ -125,10 +125,8 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 		// The profiles belong to the loaded avatar
 		return section == eStageSection::Diagnostics || m_app->getAvatarModel() != nullptr;
 	case ePipelineStage::Retarget:
-		// The preview pose needs a model; the chains' states read the shown
-		// frame with or without one
-		return section == eStageSection::Diagnostics ||
-			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
+		// The chains' states read the shown frame with or without a model
+		return section == eStageSection::Diagnostics;
 	case ePipelineStage::VrmModel:
 		return section == eStageSection::Inputs ||
 			   (section == eStageSection::Settings && m_app->getAvatarModel() != nullptr);
@@ -366,10 +364,7 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		}
 		break;
 	case ePipelineStage::Retarget:
-		if (section == eStageSection::Settings)
-			m_avatarPanel->drawPreviewPose();
-		else
-			SettingsPanels::drawRetargetChainReadout(m_tracking, m_app->getAvatarModel() != nullptr);
+		SettingsPanels::drawRetargetChainReadout(m_tracking, m_app->getAvatarModel() != nullptr);
 		break;
 	case ePipelineStage::VrmModel:
 		if (section == eStageSection::Inputs)
@@ -383,23 +378,17 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		}
 		else
 		{
-			m_avatarPanel->drawPreviewPose();
 			m_avatarPanel->drawShowInScene();
 			ImGui::SeparatorText(locText("avatarPanel.tabMapping"));
 			m_avatarPanel->drawMapping();
 		}
 		break;
 	case ePipelineStage::Placement:
-		m_avatarPanel->drawPreviewPose();
 		m_avatarPanel->drawPlacement();
 		break;
 	case ePipelineStage::Chains:
 		if (section == eStageSection::Settings)
 		{
-			// The preview pose needs a model, read as it draws since a
-			// pinned VRM model window can unload it this frame
-			if (m_app->getAvatarModel() != nullptr)
-				m_avatarPanel->drawPreviewPose();
 			m_avatarPanel->drawChains();
 		}
 		else

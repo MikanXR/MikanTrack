@@ -20,7 +20,9 @@
 #include "AvatarFaceTab.h"
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
-#include "AvatarPreviewPoses.h"
+#include "CustomPose.h"
+#include "CustomPoseLibrary.h"
+#include "FaceExprInputs.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
@@ -110,6 +112,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
+		 "pipeline mode [tracking|rest|custom]", "pipeline pose", "pipeline pose list",
+		 "pipeline pose select <id>|demo", "pipeline pose new <name...>", "pipeline pose delete <id>",
 		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
 		 "pipeline mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]",
 		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
@@ -126,7 +130,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		"scene",
 		{"scene camera", "scene camera set <yawDegrees> <pitchDegrees> <radius>", "scene camera target <x> <y> <z>",
 		 "scene camera frame", "scene camera view front|back|left|right|top|bottom", "scene gizmo",
-		 "scene gizmo select none|<chain> <elbowHint|goalOffset|restElbow|restWrist|trim>",
+		 "scene gizmo select none|<chain> <elbowHint|goalOffset|restElbow|restWrist|trim|poseWrist|poseElbow|posePalm|"
+		 "poseHead>",
 		 "scene gizmo set <x> <y> <z>"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handleSceneAutomation(args, outLines, outError);
@@ -1121,6 +1126,7 @@ void MainWindow::updateOscReadout()
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
 	m_gizmoHandles.clear();
+	m_scene3dPanel->setCustomSourcePalms(nullptr);
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
@@ -1145,48 +1151,96 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const AppConfig* config= m_app->getConfig();
 	const AvatarRigSettings& rig= m_app->getAvatarRig();
 
-	// The feed: a preview pose from the Retarget stage, else replay frames,
-	// else the live output. Switching feeds starts the window's stage over,
-	// so nothing it holds or filters bridges two timelines.
-	const AvatarPanel::ePreviewPose preview= m_avatarPanel->getPreviewPose();
+	// The feed: the chain mode's pose while the chains' settings are shown,
+	// else replay frames, else the live output. Switching feeds starts the
+	// window's stage over, so nothing it holds or filters bridges two
+	// timelines.
+	const eChainMode mode= getShownChainMode();
 	const bool bReplay= m_shown.bReplay;
-	const int feed= preview != AvatarPanel::ePreviewPose::Live ? 1 + (int)preview : (bReplay ? 1 : 0);
+	const int feed= mode != eChainMode::Tracking ? 1 + (int)mode : (bReplay ? 1 : 0);
 	if (feed != m_avatarPoseFeed)
 	{
 		m_displayStage.reset();
 		m_replayPlayhead.invalidate();
 		m_avatarPoseFeed= feed;
+		++m_customPoseEpoch;
 	}
 
 	const DirectRetarget::SolveState* directState= nullptr;
-	// The direct Rest preview is posed from no source
+	// The rest pose is posed from no source
 	const RetargetResult* shownResult= nullptr;
 	// The head the shown result's frame measured
 	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
-	if (preview != AvatarPanel::ePreviewPose::Live)
+	// The custom pose's direct palms, and whether it is what is shown
+	bool bCustomPose= false;
+	std::array<glm::quat, 2> customPalms;
+	if (mode != eChainMode::Tracking)
 	{
-		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
+		if (mode == eChainMode::RestPose)
 		{
-			// Direct mode: the same rest pose the stream falls back to
+			// The rest pose a lost chain eases into in either pipeline. It is
+			// posed with the root at the identity, which is the direct
+			// pipeline's root, and a multi-camera project's fixed root carries
+			// it the way the solve carries a resting arm.
 			DirectRetarget::makeRestPose(*skeleton, makeDirectRetargetConfig(*config, rig), m_avatarPose);
+			if (!config->direct.enabled)
+			{
+				const glm::quat root=
+					glm::angleAxis(glm::radians(config->avatar.rootYawDegrees), glm::vec3(0.f, 0.f, 1.f));
+				const glm::quat inverseRoot= glm::inverse(root);
+				for (AvatarPose::Bone& bone : m_avatarPose.bones)
+				{
+					if (bone.present)
+						bone.deltaWorld= root * bone.deltaWorld * inverseRoot;
+				}
+				m_avatarPose.rootRotationWorld= root;
+				m_avatarPose.rootPositionWorld= config->avatar.rootPositionWorld;
+			}
 		}
 		else
 		{
-			TrackingFrameResult frame;
-			BodyDimensions user;
-			if (preview == AvatarPanel::ePreviewPose::Rest)
-				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
-			else
-				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-			RetargetStageConfig stageConfig= makeRetargetStageConfig(*config, rig, skeleton);
-			stageConfig.user= user;
-			m_displayStage.setConfig(stageConfig);
-			m_displayStage.solvePosition(frame, m_displayResult);
+			// The custom pose as the source the project's own pipeline would
+			// hand on, through the target solve alone: nothing was measured,
+			// so the fill and the loss stage have no part. The source's clock
+			// runs on the UI's frames, so whatever the solve steps over time
+			// (a smoothed function, the root) settles as it does live.
+			const CustomPose& customPose= m_app->getActiveCustomPose();
+			if (customPose.id != m_customPoseShownId)
+			{
+				m_displayStage.reset();
+				m_customPoseShownId= customPose.id;
+				++m_customPoseEpoch;
+			}
+			m_displayStage.setConfig(makeRetargetStageConfig(*config, rig, skeleton));
+
+			CustomPoseSolveInputs solveInputs;
+			solveInputs.skeleton= skeleton.get();
+			solveInputs.rig= &rig;
+			solveInputs.bDirect= config->direct.enabled;
+			solveInputs.rootPositionWorld= config->avatar.rootPositionWorld;
+			solveInputs.rootYawDegrees= config->avatar.rootYawDegrees;
+			const double frameMs= (double)ImGui::GetIO().DeltaTime * 1000.0;
+			m_customPoseClockMs+= frameMs;
+			SourcePose::Clock clock;
+			clock.timestampMs= m_customPoseClockMs;
+			clock.stepMs= m_customPoseClockMs;
+			clock.frameIntervalMs= frameMs;
+			clock.resetEpoch= m_customPoseEpoch;
+			fillCustomSource(customPose, solveInputs, clock, m_displayResult, &customPalms);
+			m_displayStage.solveTarget(m_displayResult.source, m_displayResult.pose, &m_displayResult.goals,
+									   &m_displayResult.armParameters);
 			m_avatarPose= m_displayResult.pose;
 			shownResult= &m_displayResult;
-			shownHead= frame.head;
+			bCustomPose= true;
+
+			// The pose's face inputs through the avatar's bound profile, on
+			// the same clock, the way the stream evaluates a tracked face
+			if (m_customFaceRunner.getBinding() != m_app->getFaceBinding())
+				m_customFaceRunner.setBinding(m_app->getFaceBinding());
+			FaceExprInputs::makeSources(customPose.face, customPose.lostFaceSources, m_customFace);
+			m_customFaceRunner.evaluate(m_customFace, m_customPoseClockMs);
 		}
-		m_scene3dPanel->setAvatarFace(nullptr);
+		m_scene3dPanel->setAvatarFace(bCustomPose ? &m_customFace : nullptr);
 	}
 	else if (bReplay)
 	{
@@ -1224,6 +1278,10 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		gizmoInputs.chains= &chains;
 		gizmoInputs.goals= shownResult != nullptr ? &shownResult->goals : nullptr;
 		gizmoInputs.bDirect= config->direct.enabled;
+		gizmoInputs.mode= mode;
+		// The built-in pose is read-only, so it has no handles
+		const CustomPose& gizmoPose= m_app->getActiveCustomPose();
+		gizmoInputs.customPose= bCustomPose && !isBuiltInCustomPoseId(gizmoPose.id) ? &gizmoPose : nullptr;
 		buildSceneGizmoHandles(gizmoInputs, m_avatarPanel->getSelectedChain(), outGizmos.handles);
 		outGizmos.selected= m_avatarPanel->getGizmoTarget();
 	}
@@ -1232,6 +1290,15 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
 	computePosedBones(*skeleton, m_avatarPose, posed);
 	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
+	if (bCustomPose)
+	{
+		// A pose made by hand measured no head position, so the source's head
+		// is drawn on the avatar's
+		shownHead.valid= true;
+		shownHead.positionWorld= posedHeadWorld;
+		if (config->direct.enabled)
+			m_scene3dPanel->setCustomSourcePalms(&customPalms);
+	}
 	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
 	m_scene3dPanel->setFocusHead(&posedHeadWorld);
 }
@@ -1419,6 +1486,15 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 	return m_displayResult.bDirectState ? &m_displayResult.directState : nullptr;
 }
 
+eChainMode MainWindow::getShownChainMode() const
+{
+	const PipelineStageId& selected= m_pipelinePanel->getSelected();
+	bool bShown= selected.isValid() && selected.stage == ePipelineStage::Chains;
+	for (const PipelineStageId& pinned : m_pinnedWindows->getPinned())
+		bShown|= pinned.stage == ePipelineStage::Chains;
+	return bShown ? m_avatarPanel->getChainMode() : eChainMode::Tracking;
+}
+
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 {
 	if (gizmos.bPicked)
@@ -1429,6 +1505,7 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 		{
 			m_app->setAvatarRig(m_gizmoDragStartRig);
 			m_app->setRetargetChains(m_gizmoDragStartChains);
+			m_app->editActiveCustomPose(m_gizmoDragStartPose);
 		}
 		m_bGizmoDragStartValid= false;
 		return;
@@ -1439,6 +1516,7 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 	{
 		m_gizmoDragStartRig= m_app->getAvatarRig();
 		m_gizmoDragStartChains= m_app->getRetargetChains();
+		m_gizmoDragStartPose= m_app->getActiveCustomPose();
 		m_bGizmoDragStartValid= true;
 	}
 	for (const SceneGizmoHandle& handle : gizmos.handles)
@@ -1453,14 +1531,18 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 			break;
 		AvatarRigSettings rig= m_app->getAvatarRig();
 		RetargetChains chains= m_app->getRetargetChains();
-		bool bRigChanged= false;
-		bool bChainsChanged= false;
-		applySceneGizmoEdit(handle, gizmos.draggedPositionWorld, gizmos.draggedFrameWorld,
-							m_avatarPose.rootRotationWorld, rig, chains, bRigChanged, bChainsChanged);
-		if (bRigChanged)
+		CustomPose pose= m_app->getActiveCustomPose();
+		SceneGizmoEdit edit;
+		edit.rig= &rig;
+		edit.chains= &chains;
+		edit.pose= &pose;
+		applySceneGizmoEdit(handle, gizmos.draggedPositionWorld, gizmos.draggedFrameWorld, edit);
+		if (edit.bRigChanged)
 			m_app->setAvatarRig(rig);
-		if (bChainsChanged)
+		if (edit.bChainsChanged)
 			m_app->setRetargetChains(chains);
+		if (edit.bPoseChanged)
+			m_app->editActiveCustomPose(pose);
 		break;
 	}
 }
@@ -1482,7 +1564,8 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 			glm::vec3 value;
 			if (args.size() != 4 || !AvatarPanel::parseChainId(args[2], target.chain) ||
 				!parseSceneGizmoValueId(args[3], target.value) ||
-				!getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+				!getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(),
+									&m_app->getActiveCustomPose(), value))
 			{
 				outError= "expected none, or a chain and one of its values";
 				return false;
@@ -1513,13 +1596,23 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 		}
 		AvatarRigSettings rig= m_app->getAvatarRig();
 		RetargetChains chains= m_app->getRetargetChains();
-		bool bRigChanged= false;
-		bool bChainsChanged= false;
-		setSceneGizmoValue(target, value, rig, chains, bRigChanged, bChainsChanged);
-		if (bRigChanged)
+		CustomPose pose= m_app->getActiveCustomPose();
+		SceneGizmoEdit edit;
+		edit.rig= &rig;
+		edit.chains= &chains;
+		// The built-in pose takes no edit
+		edit.pose= isBuiltInCustomPoseId(pose.id) ? nullptr : &pose;
+		if (!setSceneGizmoValue(target, value, edit))
+		{
+			outError= "the setting cannot be set";
+			return false;
+		}
+		if (edit.bRigChanged)
 			m_app->setAvatarRig(rig);
-		if (bChainsChanged)
+		if (edit.bChainsChanged)
 			m_app->setRetargetChains(chains);
+		if (edit.bPoseChanged)
+			m_app->editActiveCustomPose(pose);
 	}
 	else if (!verb.empty())
 	{
@@ -1529,7 +1622,8 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 
 	const SceneGizmoTarget target= m_avatarPanel->getGizmoTarget();
 	glm::vec3 value;
-	if (target.isValid() && getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+	if (target.isValid() && getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(),
+											   &m_app->getActiveCustomPose(), value))
 	{
 		char line[160];
 		snprintf(line, sizeof(line), "target %s %s value %.4f %.4f %.4f", AvatarPanel::getChainId(target.chain),
@@ -1898,6 +1992,77 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 			}
 		}
 		outLines.push_back(AvatarPanel::getChainId(m_avatarPanel->getSelectedChain()));
+		return true;
+	}
+	if (verb == "mode")
+	{
+		// The chains' settings mode, which poses the scene's avatar while the
+		// IK chains stage is selected or pinned
+		if (args.size() >= 2)
+		{
+			eChainMode mode;
+			if (!AvatarPanel::parseChainModeId(args[1], mode))
+			{
+				outError= "expected tracking, rest or custom: " + args[1];
+				return false;
+			}
+			if (!m_avatarPanel->setChainMode(mode))
+			{
+				outError= "no avatar loaded, only tracking is set: " + args[1];
+				return false;
+			}
+		}
+		outLines.push_back(std::string("mode ") + AvatarPanel::getChainModeId(m_avatarPanel->getChainMode()) +
+						   " shown " + AvatarPanel::getChainModeId(getShownChainMode()));
+		return true;
+	}
+	if (verb == "pose")
+	{
+		// The custom pose the project shows, and the library's poses
+		CustomPoseLibrary* library= m_app->getCustomPoseLibrary();
+		const std::string action= args.size() >= 2 ? args[1] : std::string();
+		if (action == "list")
+		{
+			outLines.push_back(std::string(k_demoCustomPoseId) + " Demo");
+			for (const CustomPose& pose : library->getPoses())
+				outLines.push_back(pose.id + " " + pose.name);
+			return true;
+		}
+		if (action == "select")
+		{
+			if (args.size() != 3 || (!isBuiltInCustomPoseId(args[2]) && library->find(args[2]) == nullptr))
+			{
+				outError= "expected demo or a pose id in the library";
+				return false;
+			}
+			m_app->setActiveCustomPose(args[2]);
+		}
+		else if (action == "new")
+		{
+			std::string name;
+			for (size_t index= 2; index < args.size(); ++index)
+				name+= (index > 2 ? " " : "") + args[index];
+			if (name.empty() || m_app->createCustomPose(name).empty())
+			{
+				outError= name.empty() ? "missing name" : "the pose could not be saved";
+				return false;
+			}
+		}
+		else if (action == "delete")
+		{
+			if (args.size() != 3 || !m_app->deleteCustomPose(args[2]))
+			{
+				outError= "no such pose in the library";
+				return false;
+			}
+		}
+		else if (!action.empty())
+		{
+			outError= "unknown action: " + action;
+			return false;
+		}
+		const CustomPose& active= m_app->getActiveCustomPose();
+		outLines.push_back("pose " + active.id + " " + active.name);
 		return true;
 	}
 	if (verb == "fx")

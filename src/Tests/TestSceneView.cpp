@@ -4,6 +4,7 @@
 #include "glm/gtc/quaternion.hpp"
 
 #include "AvatarOverlay.h"
+#include "CustomPose.h"
 #include "DirectRetarget.h"
 #include "OrbitCamera.h"
 #include "PipelineModel.h"
@@ -526,25 +527,25 @@ static int runSceneViewTest(const TestArgs& args)
 		const glm::quat root= glm::angleAxis(glm::radians(35.f), glm::vec3(0.f, 0.f, 1.f));
 		AvatarRigSettings rig;
 		RetargetChains chains;
-		bool bRigChanged= false;
-		bool bChainsChanged= false;
+		SceneGizmoEdit edit;
+		edit.rig= &rig;
+		edit.chains= &chains;
 
 		// A moved point is its offset from the anchor in the rooted torso frame
 		SceneGizmoHandle hint;
 		hint.target= {eRetargetChain::RightArm, eSceneGizmoValue::ElbowHint};
 		hint.kind= eSceneGizmoKind::Translate;
 		hint.anchorWorld= glm::vec3(0.1f, -0.2f, 1.3f);
+		hint.frameWorld= root;
 		const glm::vec3 offset(-0.2f, 0.05f, -0.25f);
-		applySceneGizmoEdit(hint, hint.anchorWorld + root * offset, root, root, rig, chains, bRigChanged,
-							bChainsChanged);
-		const bool bHint= glm::length(rig.sides[1].elbowHintOffset - offset) < 1e-5f && bRigChanged && !bChainsChanged;
+		applySceneGizmoEdit(hint, hint.anchorWorld + root * offset, root, edit);
+		const bool bHint= glm::length(rig.sides[1].elbowHintOffset - offset) < 1e-5f && edit.bRigChanged && !edit.bChainsChanged;
 
 		SceneGizmoHandle goal= hint;
 		goal.target= {eRetargetChain::LeftArm, eSceneGizmoValue::GoalOffset};
-		bRigChanged= false;
-		applySceneGizmoEdit(goal, goal.anchorWorld + root * offset, root, root, rig, chains, bRigChanged,
-							bChainsChanged);
-		const bool bGoal= glm::length(chains.arms[0].goalOffset - offset) < 1e-5f && !bRigChanged && bChainsChanged;
+		edit.bRigChanged= false;
+		applySceneGizmoEdit(goal, goal.anchorWorld + root * offset, root, edit);
+		const bool bGoal= glm::length(chains.arms[0].goalOffset - offset) < 1e-5f && !edit.bRigChanged && edit.bChainsChanged;
 		check(bHint && bGoal, "(r) a moved handle stores its offset from the anchor in the rooted torso frame");
 
 		// A bone that follows its ring: the solve poses the bone as the
@@ -560,7 +561,7 @@ static int runSceneViewTest(const TestArgs& args)
 		head.trimRule= eSceneGizmoTrimRule::BoneFollows;
 		head.frameWorld= measured * glm::inverse(glm::quat(glm::radians(startTrim)));
 		const glm::quat turnedHead= head.frameWorld * turn;
-		applySceneGizmoEdit(head, glm::vec3(0.f), turnedHead, root, rig, chains, bRigChanged, bChainsChanged);
+		applySceneGizmoEdit(head, glm::vec3(0.f), turnedHead, edit);
 		const glm::quat posedHead=
 			measured * glm::inverse(glm::quat(glm::radians(rig.rotationTrimDegrees[(int)eHumanoidBone::Head])));
 		const bool bFollows= std::fabs(glm::dot(posedHead, turnedHead)) > 1.f - 1e-5f;
@@ -573,7 +574,7 @@ static int runSceneViewTest(const TestArgs& args)
 		hand.trimRule= eSceneGizmoTrimRule::AxesTurn;
 		hand.frameWorld= measured * glm::quat(glm::radians(startTrim));
 		const glm::quat turnedHand= hand.frameWorld * turn;
-		applySceneGizmoEdit(hand, glm::vec3(0.f), turnedHand, root, rig, chains, bRigChanged, bChainsChanged);
+		applySceneGizmoEdit(hand, glm::vec3(0.f), turnedHand, edit);
 		const glm::quat trimmedAxes=
 			measured * glm::quat(glm::radians(rig.rotationTrimDegrees[(int)eHumanoidBone::LeftHand]));
 		const bool bAxes= std::fabs(glm::dot(trimmedAxes, turnedHand)) > 1.f - 1e-5f;
@@ -586,8 +587,7 @@ static int runSceneViewTest(const TestArgs& args)
 		forearm.trimRule= eSceneGizmoTrimRule::ForearmRoll;
 		forearm.frameWorld= measured;
 		applySceneGizmoEdit(forearm, glm::vec3(0.f),
-							measured * glm::angleAxis(glm::radians(20.f), glm::vec3(1.f, 0.f, 0.f)), root, rig, chains,
-							bRigChanged, bChainsChanged);
+							measured * glm::angleAxis(glm::radians(20.f), glm::vec3(1.f, 0.f, 0.f)), edit);
 		const glm::vec3 roll= rig.rotationTrimDegrees[(int)eHumanoidBone::RightLowerArm];
 		const bool bRoll= std::fabs(roll.x + 170.f) < 1e-3f && roll.y == 0.f && roll.z == 0.f;
 		check(bFollows && bAxes && bRoll,
@@ -603,14 +603,51 @@ static int runSceneViewTest(const TestArgs& args)
 		}
 		bNames&= !parseSceneGizmoValueId("none", parsed) && !parseSceneGizmoValueId("bogus", parsed);
 		glm::vec3 stored;
-		const bool bHas= getSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::RestWrist}, rig, chains, stored) &&
-			getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::Trim}, rig, chains, stored) &&
-			!getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::ElbowHint}, rig, chains, stored) &&
-			!getSceneGizmoValue({eRetargetChain::Torso, eSceneGizmoValue::Trim}, rig, chains, stored);
-		setSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::Trim}, glm::vec3(12.f, 5.f, 7.f), rig, chains,
-						   bRigChanged, bChainsChanged);
+		const bool bHas= getSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::RestWrist}, rig, chains, nullptr, stored) &&
+			getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::Trim}, rig, chains, nullptr, stored) &&
+			!getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::ElbowHint}, rig, chains, nullptr, stored) &&
+			!getSceneGizmoValue({eRetargetChain::Torso, eSceneGizmoValue::Trim}, rig, chains, nullptr, stored);
+		setSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::Trim}, glm::vec3(12.f, 5.f, 7.f), edit);
 		const bool bRollOnly= rig.rotationTrimDegrees[(int)eHumanoidBone::LeftLowerArm] == glm::vec3(12.f, 0.f, 0.f);
 		check(bNames && bHas && bRollOnly, "(t) the gizmo's values by name, by chain, and a forearm's trim as its roll");
+
+		// The custom pose's handles: a wrist in arm lengths in the handle's
+		// frame, a frame stored as Euler degrees in its base frame, and no
+		// edit without a pose to take it
+		CustomPose customPose= makeDefaultCustomPose();
+		edit.pose= &customPose;
+		SceneGizmoHandle wrist;
+		wrist.target= {eRetargetChain::LeftArm, eSceneGizmoValue::PoseWrist};
+		wrist.kind= eSceneGizmoKind::Translate;
+		wrist.anchorWorld= glm::vec3(0.f, 0.2f, 1.4f);
+		wrist.frameWorld= root;
+		wrist.offsetScale= 0.5f;
+		const glm::vec3 wristOffset(0.4f, -0.2f, 0.1f);
+		applySceneGizmoEdit(wrist, wrist.anchorWorld + root * (wristOffset * 0.5f), root, edit);
+		const bool bWrist= glm::length(customPose.arms[0].wristOffset - wristOffset) < 1e-5f && edit.bPoseChanged;
+
+		SceneGizmoHandle palm;
+		palm.target= {eRetargetChain::RightArm, eSceneGizmoValue::PosePalm};
+		palm.kind= eSceneGizmoKind::Rotate;
+		palm.trimRule= eSceneGizmoTrimRule::StoredFrame;
+		palm.baseFrameWorld= root;
+		palm.frameWorld= root;
+		const glm::quat palmTurn= glm::quat(glm::radians(glm::vec3(20.f, -30.f, 40.f)));
+		applySceneGizmoEdit(palm, glm::vec3(0.f), root * palmTurn, edit);
+		const bool bPalm=
+			std::fabs(glm::dot(glm::quat(glm::radians(customPose.arms[1].palmDegrees)), palmTurn)) > 1.f - 1e-5f;
+
+		glm::vec3 poseValue;
+		const SceneGizmoTarget headTarget{eRetargetChain::Head, eSceneGizmoValue::PoseHead};
+		const bool bValues= setSceneGizmoValue(headTarget, glm::vec3(1.f, 2.f, 3.f), edit) &&
+			getSceneGizmoValue(headTarget, rig, chains, &customPose, poseValue) && poseValue == glm::vec3(1.f, 2.f, 3.f) &&
+			!getSceneGizmoValue(headTarget, rig, chains, nullptr, poseValue) &&
+			!getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::PoseWrist}, rig, chains, &customPose, poseValue);
+		edit.pose= nullptr;
+		edit.bPoseChanged= false;
+		applySceneGizmoEdit(wrist, wrist.anchorWorld, root, edit);
+		check(bWrist && bPalm && bValues && !edit.bPoseChanged && !setSceneGizmoValue(headTarget, glm::vec3(0.f), edit),
+			  "(u) the custom pose's handles store a wrist in arm lengths and a frame as Euler degrees");
 	}
 
 	MIKAN_LOG_INFO("test-scene-view") << (result == 0 ? "ALL PASS" : "FAILURES");

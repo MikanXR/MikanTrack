@@ -24,9 +24,20 @@ enum class eRetargetChain
 	Count,
 };
 
+// What the chains' settings are showing and the scene's avatar is posed
+// from while they are shown, one purpose at a time: how each chain follows
+// tracking, the rest pose a lost chain goes to, or a pose made by hand
+enum class eChainMode
+{
+	Tracking,
+	RestPose,
+	CustomPose,
+	Count,
+};
+
 // A chain's setting the scene's gizmo edits. An arm has the first four and
 // its forearm's roll trim, the head and a hand their frame trim, the torso
-// none.
+// none. The pose's values are the Custom pose mode's.
 enum class eSceneGizmoValue : int
 {
 	None,
@@ -39,6 +50,11 @@ enum class eSceneGizmoValue : int
 	RestWrist,
 	// AvatarRigSettings::rotationTrimDegrees of the chain's bone
 	Trim,
+	// The custom pose's: an arm's wrist, elbow and palm, and the head
+	PoseWrist,
+	PoseElbow,
+	PosePalm,
+	PoseHead,
 	Count,
 };
 
@@ -58,7 +74,7 @@ struct SceneGizmoTarget
 // with its per-bone overrides (Mapping), a preview pose to tune against, and
 // the chains, one at a time: each chain's rig corrections and the project's
 // chain settings. The face profiles are the Profile stage's (see
-// AvatarFaceTab). Owns the preview pose, the setting the scene's gizmo
+// AvatarFaceTab). Owns the chain mode, the setting the scene's gizmo
 // edits, the mapping view's selection and the chain selection.
 // Loading goes through App (the model is main-thread, GL-adjacent state);
 // placement edits go to the persisted AvatarConfig, rig edits to
@@ -90,10 +106,10 @@ public:
 	void drawPlacement();
 	// The view buttons, the figure, the reset, the filter and the bone table
 	void drawMapping();
-	void drawPreviewPose();
-	// The chain row and the selected chain's settings. Without a model the
-	// row holds the two arms and an arm shows its loss controls only, the
-	// rules the stream applies to the measured-length skeleton.
+	// The mode row, the chain row and the selected chain's settings for the
+	// mode. Without a model there is no mode row, the chain row holds the two
+	// arms and an arm shows its loss controls only, the rules the stream
+	// applies to the measured-length skeleton.
 	void drawChains();
 
 	// The chain the settings show. A setter for whatever else picks a chain
@@ -106,16 +122,15 @@ public:
 	static const char* getChainId(eRetargetChain chain);
 	static bool parseChainId(const std::string& id, eRetargetChain& outChain);
 
-	// What the 3D scene's avatar is posed from. Rest and Demo are canned
-	// frames for tuning the rig without cameras; the VMC output always
-	// follows live tracking.
-	enum class ePreviewPose
-	{
-		Live,
-		Rest,
-		Demo,
-	};
-	ePreviewPose getPreviewPose() const { return m_previewPose; }
+	// The mode the settings show. The scene's avatar takes its pose from it
+	// while the chains' settings are shown, and the VMC output always follows
+	// live tracking. Without a model only Tracking can be set.
+	eChainMode getChainMode() const { return m_chainMode; }
+	// False, and no change, for a mode that needs a model with none loaded
+	bool setChainMode(eChainMode mode);
+	// The mode's name in automation: tracking, rest, custom
+	static const char* getChainModeId(eChainMode mode);
+	static bool parseChainModeId(const std::string& id, eChainMode& outMode);
 	// The setting the scene's gizmo is attached to, one of the selected
 	// chain's or none: a row's toggle and a click on a handle in the scene
 	// both set it, and selecting another chain clears it
@@ -139,7 +154,21 @@ private:
 	// The direct pipeline poses the avatar: a direct project with a model.
 	// Without a model the position pipeline's stream runs in either shape.
 	bool isDirectPipeline() const;
-	void drawChainRow(bool bAvatar);
+	void drawModeRow();
+	// bFaceEntry adds the Face entry after the chains
+	void drawChainRow(bool bAvatar, bool bFaceEntry);
+	// The Rest pose mode's rows for a chain: where a lost arm and hand go,
+	// and how long each chain takes to get there and back
+	void drawRestRows(eRetargetChain chain);
+	// The Custom pose mode's pose bar: the project's pose from the library
+	// or the built-in one, new, duplicate, delete and rename
+	void drawPoseBar();
+	// The Custom pose mode's rows for a chain: that part of the active pose,
+	// read-only on the built-in pose
+	void drawPoseRows(eRetargetChain chain);
+	// The Custom pose mode's face rows: a value for each input the active
+	// face profile reads
+	void drawPoseFaceRows();
 	void drawTorsoChain();
 	void drawHeadChain();
 	void drawArmChain(int sideIndex, bool bAvatar);
@@ -158,7 +187,15 @@ private:
 	bool m_bScrollToSelected= false;
 	char m_nodeFilter[64]= {};
 
-	ePreviewPose m_previewPose= ePreviewPose::Live;
+	eChainMode m_chainMode= eChainMode::Tracking;
+	// The pose bar's name field and the pose it is editing, and the pose a
+	// delete is asking about
+	std::string m_poseNameEdit;
+	std::string m_poseNameEditId;
+	std::string m_pendingDeletePoseId;
+	// The chain row's Face entry is what the Custom pose mode shows, in
+	// place of the selected chain. Selecting a chain ends it.
+	bool m_bPoseFaceSelected= false;
 	SceneGizmoTarget m_gizmoTarget;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
 	std::array<RetargetArmReadout, 2> m_shownArmParameters{};

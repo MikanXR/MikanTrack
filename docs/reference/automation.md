@@ -112,13 +112,13 @@ The Stage View's orbit camera, the one the free point of view looks through. Eve
 
 The view cube in the scene's corner is driven by `input`: a `press`, `move` and `release` across frames on it turns the orbit, and a `click` on a face turns it to that face over about 40 frames, so a drive sleeps a second or two before reading `scene camera` back.
 
-The scene's transform gizmo edits one setting of the chain selected in the Retarget stage's settings. Every `scene gizmo` form answers two lines: `target <chain> <value> value <x> <y> <z>` or `target none`, then `handles <chain>` followed by the values that had a handle in the scene on the last frame. A value is `elbowHint`, `goalOffset`, `restElbow`, `restWrist` (meters in the rooted torso frame) or `trim` (Euler degrees, a forearm's being its roll in x).
+The scene's transform gizmo edits one setting of the chain selected in the Retarget stage's settings. Every `scene gizmo` form answers two lines: `target <chain> <value> value <x> <y> <z>` or `target none`, then `handles <chain>` followed by the values that had a handle in the scene on the last frame. A value is `elbowHint`, `goalOffset`, `restElbow`, `restWrist` (meters in the rooted torso frame), `trim` (Euler degrees, a forearm's being its roll in x), or one of the custom pose's: `poseWrist`, `poseElbow` (arm lengths from the shoulder), `posePalm` on an arm or `poseHead` on the head (Euler degrees). The handles are the ones of the chains' mode, so a pose value has one only under `pipeline mode custom` on a pose that is not the built-in one.
 
 - `scene gizmo`: the attached setting, its stored value and the selected chain's handles
 - `scene gizmo select <chain> <value>`: selects the chain and attaches the gizmo to that setting, with an error for a value the chain does not have. `scene gizmo select none` detaches it.
 - `scene gizmo set <x> <y> <z>`: stores the attached setting's value through the path a drag takes, which writes the rig's sidecar about three seconds later for a rig setting
 
-A drag is driven by `input`: `press` on an arrow or a ring, `move` across frames, `release`, and `input key escape` before the release to cancel. The handles follow the live pose, so a drive that aims at one by pixel sets the preview pose to Demo first, or reads a fresh screenshot right before the press.
+A drag is driven by `input`: `press` on an arrow or a ring, `move` across frames, `release`, and `input key escape` before the release to cancel. The handles follow the live pose, so a drive that aims at one by pixel sets `pipeline mode custom` first, whose pose holds still, or reads a fresh screenshot right before the press.
 
 ### Performance panel (performance)
 
@@ -143,6 +143,13 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pov free|<cameraIndex>`: sets it, with an error naming the reason for a camera that cannot be looked through
 - `pipeline chain`: the chain selected in the Retarget stage's settings, by its id (`torso`, `head`, `leftArm`, `rightArm`, `leftHand`, `rightHand`, the chain block's keys)
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
+- `pipeline mode`: the chains' settings mode and the one the scene's avatar is posed from (`mode <tracking|rest|custom> shown <tracking|rest|custom>`). The scene takes the mode only while the IK chains stage is selected or pinned, and tracking otherwise
+- `pipeline mode tracking|rest|custom`: sets it, with an error for rest or custom without an avatar
+- `pipeline pose`: the custom pose the project shows, `pose <id> <name>`, the built-in one being `pose demo Demo`
+- `pipeline pose list`: every pose, one `<id> <name>` a line, the built-in one first
+- `pipeline pose select <id>|demo`: makes a library pose the project's, with an error for an id the library lacks
+- `pipeline pose new <name...>`: a new pose at the default under that name, saved and made the project's
+- `pipeline pose delete <id>`: deletes the pose's file, and a project that showed it shows the built-in pose
 - `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
 - `pipeline loss <chain> after <release|freeze|easeToRest>`, `pipeline loss <chain> hold <ms>`, `pipeline loss <chain> blend <ms>`, `pipeline loss <leftArm|rightArm> rise <ms>`: set that field of the chain's stored policy. `rise` is an arm's ease out of rest, and the policy lines carry it as `rise <ms>` after the blend. A hold on the head also makes its hold timed
 - `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note when the arm maps by bone angles, which has no goal) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)

@@ -8,6 +8,7 @@
 
 #include "AvatarRig.h"
 #include "FaceExprCompiler.h"
+#include "CustomPose.h"
 #include "FaceProfile.h"
 
 struct SDL_Window;
@@ -19,6 +20,7 @@ class AvatarSkeleton;
 class GlobalSettings;
 class AudioService;
 class FaceProfileBinding;
+class CustomPoseLibrary;
 class FaceProfileLibrary;
 class FaceService;
 class ImuService;
@@ -157,6 +159,29 @@ public:
 	// missing and runs Auto while it is active.
 	bool deleteFaceProfile(const std::string& id);
 
+	// -- Custom poses -------------------------------------------------------
+	// The global pose library. The project names the pose it shows by id.
+	CustomPoseLibrary* getCustomPoseLibrary() { return m_customPoses.get(); }
+	// The pose the chains' Custom pose mode shows, as last edited: the one
+	// the project names, or the built-in pose when it names none or one the
+	// library lacks
+	const CustomPose& getActiveCustomPose();
+	bool isActiveCustomPoseBuiltIn();
+	// Makes a library pose the project's; "" or the built-in id for the
+	// built-in pose
+	void setActiveCustomPose(const std::string& id);
+	// Applies an edit of the active pose and saves it to the library after a
+	// short settle. The built-in pose is read-only and ignores edits.
+	void editActiveCustomPose(const CustomPose& pose);
+	// A new pose (the default, or a copy of source under a fresh id), saved
+	// and made the project's; its id, or "" on failure
+	std::string createCustomPose(const std::string& name);
+	std::string duplicateCustomPose(const CustomPose& source, const std::string& name);
+	bool renameCustomPose(const std::string& id, const std::string& name);
+	// Deletes the pose's file. A project that named it shows the built-in
+	// pose.
+	bool deleteCustomPose(const std::string& id);
+
 	AppConfig* getConfig() { return m_config.get(); }
 	GlobalSettings* getGlobalSettings() { return m_globalSettings.get(); }
 	LocalizationManager* getLocalization() { return m_localization.get(); }
@@ -231,6 +256,8 @@ private:
 	void pushRetargetChains();
 	void updateFaceProfileAutoSave(float deltaSeconds);
 	void saveFaceProfileIfDirty();
+	void updateCustomPoseAutoSave(float deltaSeconds);
+	void saveCustomPoseIfDirty();
 	// Mutable here only so the rig's mapping can be reapplied on the main
 	// thread; everything else sees it const (the vision thread never does)
 	std::shared_ptr<AvatarModel> m_avatarModel;
@@ -249,6 +276,11 @@ private:
 	std::vector<FaceExprCompileError> m_faceProfileErrors;
 	bool m_bFaceProfileDirty= false;
 	float m_faceProfileSecondsSinceDirty= 0.f;
+
+	std::unique_ptr<CustomPoseLibrary> m_customPoses;
+	CustomPose m_activeCustomPose;
+	bool m_bCustomPoseDirty= false;
+	float m_customPoseSecondsSinceDirty= 0.f;
 
 	SDL_Window* m_sdlWindow= nullptr;
 	SDL_GLContext m_glContext= nullptr;

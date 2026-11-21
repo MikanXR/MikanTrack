@@ -113,6 +113,12 @@ std::string name(int slot)
 	return "";
 }
 
+std::string sourceName(int slot)
+{
+	const std::string slotName= name(slot);
+	return slotName.substr(0, slotName.find('.'));
+}
+
 void fill(const FaceSources& sources, float* outInputs)
 {
 	for (int index= 0; index < ARKIT_BLENDSHAPE_COUNT; ++index)
@@ -134,6 +140,47 @@ void fill(const FaceSources& sources, float* outInputs)
 	outInputs[k_blinkEyeBlinkRight]= sources.blink.tracked ? sources.blink.eyeBlinkRight : 0.f;
 	outInputs[k_blinkPresent]= sources.blink.present ? 1.f : 0.f;
 	outInputs[k_blinkTracked]= sources.blink.tracked ? 1.f : 0.f;
+}
+
+bool isFlagSlot(int slot)
+{
+	return slot == k_phonePresent || slot == k_phoneTracked || slot == k_visemePresent || slot == k_webcamPresent ||
+		   slot == k_webcamTracked || slot == k_blinkPresent || slot == k_blinkTracked;
+}
+
+void makeSources(const std::map<std::string, float>& values, const std::set<std::string>& lostSources,
+				 FaceSources& outSources)
+{
+	const bool bPhone= lostSources.count("phone") == 0;
+	const bool bViseme= lostSources.count("viseme") == 0;
+	const bool bWebcam= lostSources.count("webcam") == 0;
+	const bool bBlink= lostSources.count("blink") == 0;
+
+	outSources= FaceSources();
+	outSources.phone.present= bPhone;
+	outSources.phone.tracked= bPhone;
+	outSources.viseme.present= bViseme;
+	outSources.webcam.present= bWebcam;
+	outSources.webcam.tracked= bWebcam;
+	outSources.webcam.measuredMask= ~0ull;
+	outSources.blink.present= bBlink;
+	outSources.blink.tracked= bBlink;
+	for (const auto& [inputName, value] : values)
+	{
+		const int slot= fromName(inputName);
+		if (slot < 0 || isFlagSlot(slot))
+			continue;
+		if (slot < k_phonePresent)
+			outSources.phone.blendshapes[slot - k_phoneBlendshapeBase]= value;
+		else if (slot >= k_visemeBase && slot < k_visemePresent)
+			outSources.viseme.weights[slot - k_visemeBase]= value;
+		else if (slot >= k_webcamBlendshapeBase && slot < k_webcamPresent)
+			outSources.webcam.blendshapes[slot - k_webcamBlendshapeBase]= value;
+		else if (slot == k_blinkEyeBlinkLeft)
+			outSources.blink.eyeBlinkLeft= value;
+		else if (slot == k_blinkEyeBlinkRight)
+			outSources.blink.eyeBlinkRight= value;
+	}
 }
 
 const ExprInputTable& table()

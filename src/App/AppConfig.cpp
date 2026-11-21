@@ -897,6 +897,7 @@ static void applyConfigJson(AppConfig& config, const json& j)
 			glm::vec3((float)av["rootPosition"][0], (float)av["rootPosition"][1], (float)av["rootPosition"][2]);
 	}
 	config.avatar.rootYawDegrees= av.value("rootYawDegrees", 0.f);
+	config.avatar.customPoseId= av.value("customPose", "");
 
 	const json& dr= j.value("direct", json::object());
 	config.direct= DirectConfig();
@@ -1123,6 +1124,7 @@ std::string AppConfig::toJsonString(const std::shared_ptr<const RetargetChains>&
 		{"followShoulders", avatar.followShoulders},
 		{"rootPosition", json::array({avatar.rootPositionWorld.x, avatar.rootPositionWorld.y, avatar.rootPositionWorld.z})},
 		{"rootYawDegrees", avatar.rootYawDegrees},
+		{"customPose", avatar.customPoseId},
 	};
 
 	{

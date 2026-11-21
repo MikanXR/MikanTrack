@@ -312,6 +312,19 @@ public:
 	static ArmPlacement makeRestPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
 										  const AvatarRetargetConfig::Side& sideConfig);
 
+	// A placement for a chain posed by hand rather than measured: the chain's
+	// directions through the given elbow, or through the elbow on the bone
+	// circle nearest elbowHint when elbow is null (straight toward the wrist
+	// when it is out of reach), and a world palm frame through the same hand
+	// math as a measured palm. outElbow and outWrist receive the chain's
+	// joints at the avatar's bone lengths, the wrist being wristTarget when
+	// it is within reach.
+	static ArmPlacement makePosedPlacement(const AvatarSkeleton& skeleton, int sideIndex, const glm::quat& spineDelta,
+										   const glm::vec3& shoulder, const glm::vec3& wristTarget,
+										   const glm::vec3* elbow, const glm::vec3& elbowHint, const glm::quat& palm,
+										   const std::array<FingerAngles, FINGER_COUNT>& fingers, glm::vec3& outElbow,
+										   glm::vec3& outWrist);
+
 	// The placement part way from one to another: the directions and the
 	// finger angles linearly, the twist by the shorter way round, the wrist
 	// along the arc
