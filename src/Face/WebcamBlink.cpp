@@ -33,6 +33,10 @@ constexpr float k_floorAdaptRate= 0.3f;
 // drops that far within the window, so it moves the baseline instead.
 constexpr double k_dropWindowMs= 200.0;
 constexpr float k_closeDropFraction= 0.17f;
+// A closure whose first frame lands this many start drops under the baseline
+// reads at once. A shallower one waits for a second frame under the start
+// level: jitter drops that far for one frame, and a blink drops further.
+constexpr float k_unconfirmedDropCount= 2.f;
 // The closed band: within this share of the travel over the floor
 constexpr float k_closedBandFraction= 0.3f;
 // A closure ends when the eye returns within this share of the travel under
@@ -44,7 +48,7 @@ constexpr double k_longClosureMs= 600.0;
 
 // The nose tip's offset from the eyes' midpoint along the eye line, over the
 // face width, past which the head is turned too far for the baseline to
-// learn from the frame
+// learn from the frame or for the eyes' difference to hold a wink
 constexpr float k_maxYawOffset= 0.15f;
 constexpr int k_noseTip= 30;
 constexpr int k_rightEyeOuter= 36;
@@ -55,6 +59,29 @@ constexpr int k_leftEyeOuter= 45;
 // that small is a few px tall, and one eye's drop there is more often noise
 constexpr float k_winkFaceFullPx= 90.f;
 constexpr float k_winkFaceNonePx= 50.f;
+
+// The eyes' log openness ratio moves this far per unit of yaw offset as the
+// head turns, which is taken out before the eyes are compared
+constexpr float k_ratioPerYawOffset= 1.2f;
+// The quiet frames the ratio's reference is the median of, and how many it
+// needs before it stands on them rather than on the neutral's ratio
+constexpr double k_ratioReferenceWindowMs= 8000.0;
+constexpr int k_ratioReferenceMinSamples= 30;
+// The eyes' difference is the mean of the ratio over this window, once it
+// holds this many frames
+constexpr double k_differenceWindowMs= 200.0;
+constexpr int k_differenceMinSamples= 3;
+// A wink latches on a closure that is running, or one that ended this
+// recently: the held eye's points drift back up and end the closure within a
+// few frames of its start
+constexpr double k_winkLatchGraceMs= 300.0;
+
+// The drop a closure starts on, as a fraction of the baseline
+float closeDropFraction(const BlinkConfig& config)
+{
+	return k_closeDropFraction /
+		std::clamp(config.sensitivity, BlinkConfig::k_minSensitivity, BlinkConfig::k_maxSensitivity);
+}
 
 float yawOffset(const WholeBodyExtras& extras, float faceWidthPx)
 {
@@ -103,6 +130,9 @@ void WebcamBlinkFilter::reset(const WholeBodyFaceRatios* neutral)
 		m_eyes[side].baseline= seed.eyeOpenness[side];
 		m_eyes[side].floorFraction= k_seedFloorFraction;
 	}
+	m_ratioReferenceSamples.clear();
+	m_ratioReference= std::log(std::max(seed.eyeOpenness[0], 1e-4f) / std::max(seed.eyeOpenness[1], 1e-4f));
+	m_ratioSamples.clear();
 	m_lastModelFrameIndex= -1;
 	m_bHasLast= false;
 	m_last= FaceSources::Blink();
@@ -136,19 +166,27 @@ void WebcamBlinkFilter::update(const BodyPoseObservation& body, bool bFresh, dou
 	const WholeBodyFaceRatios ratios= computeWholeBodyFaceRatios(body.wholeBody);
 	if (!ratios.valid || ratios.minScore < k_webcamFaceScoreGate)
 	{
-		// An unseen eye ends any closure. The baseline keeps what it learned.
+		// An unseen eye ends any closure. The baseline and the ratio's
+		// reference keep what they learned.
 		for (Eye& eye : m_eyes)
 		{
 			eye.state= eEyeState::Open;
 			eye.recentSamples.clear();
 			eye.closure= 0.f;
+			eye.bPending= false;
+			eye.bWinkHeld= false;
+			eye.difference= 0.f;
 		}
+		m_ratioSamples.clear();
 		m_last= outBlink;
 		return;
 	}
 	outBlink.tracked= true;
 
-	const bool bOnAngle= std::fabs(yawOffset(body.wholeBody, ratios.faceWidthPx)) <= k_maxYawOffset;
+	const float yaw= yawOffset(body.wholeBody, ratios.faceWidthPx);
+	const bool bOnAngle= std::fabs(yaw) <= k_maxYawOffset;
+	updateWinkHold(ratios.eyeOpenness, yaw, timestampMs, bOnAngle);
+
 	float closures[2];
 	bool bSettled= true;
 	for (int side= 0; side < 2; ++side)
@@ -158,11 +196,18 @@ void WebcamBlinkFilter::update(const BodyPoseObservation& body, bool bFresh, dou
 		closures[side]= eye.state == eEyeState::Open ? 0.f : shapeBlinkClosure(eye.closure, config.clarity);
 		bSettled= bSettled && (int)eye.baselineSamples.size() >= k_baselineMinSamples;
 
+		const float floorLevel= eye.baseline * eye.floorFraction;
+		const float travel= eye.baseline - floorLevel;
 		outBlink.openness[side]= eye.openness;
 		outBlink.baseline[side]= eye.baseline;
-		outBlink.floor[side]= eye.baseline * eye.floorFraction;
+		outBlink.floor[side]= floorLevel;
+		outBlink.startLevel[side]= eye.baseline * (1.f - closeDropFraction(config));
+		outBlink.releaseLevel[side]= eye.baseline - k_releaseFraction * travel;
+		outBlink.closedLevel[side]= floorLevel + k_closedBandFraction * travel;
 		outBlink.state[side]= (uint8_t)eye.state;
 		outBlink.closure[side]= closures[side];
+		outBlink.bWinkHeld[side]= eye.bWinkHeld;
+		outBlink.difference[side]= eye.difference;
 	}
 	outBlink.bBaselineSettled= bSettled;
 
@@ -173,6 +218,90 @@ void WebcamBlinkFilter::update(const BodyPoseObservation& body, bool bFresh, dou
 	m_last= outBlink;
 }
 
+void WebcamBlinkFilter::updateWinkHold(const float openness[2], float yawOffset, double timestampMs, bool bOnAngle)
+{
+	const bool bBothOpen= m_eyes[0].state == eEyeState::Open && m_eyes[1].state == eEyeState::Open;
+	const bool bBothClosing= m_eyes[0].state != eEyeState::Open && m_eyes[1].state != eEyeState::Open;
+
+	// The ratio against its own slow reference rather than each eye against
+	// its baseline: one eye's baseline moves alone when that eye widens or
+	// its lowered lids restart it, and that would read as a difference
+	const float ratio=
+		std::log(std::max(openness[0], 1e-4f) / std::max(openness[1], 1e-4f)) - k_ratioPerYawOffset * yawOffset;
+	if (bOnAngle && bBothOpen)
+		m_ratioReferenceSamples.push_back({timestampMs, ratio});
+	while (!m_ratioReferenceSamples.empty() &&
+		   timestampMs - m_ratioReferenceSamples.front().timestampMs > k_ratioReferenceWindowMs)
+		m_ratioReferenceSamples.pop_front();
+	const int referenceCount= (int)m_ratioReferenceSamples.size();
+	if (referenceCount >= k_ratioReferenceMinSamples)
+	{
+		std::vector<float> levels;
+		levels.reserve(referenceCount);
+		for (const Sample& sample : m_ratioReferenceSamples)
+			levels.push_back(sample.value);
+		std::sort(levels.begin(), levels.end());
+		m_ratioReference= referenceCount % 2 == 1
+							  ? levels[referenceCount / 2]
+							  : 0.5f * (levels[referenceCount / 2 - 1] + levels[referenceCount / 2]);
+	}
+
+	// A difference is evidence of a wink only while the other eye is open:
+	// through a blink of both eyes the ratio of two small numbers is noise
+	if (bBothClosing)
+		m_ratioSamples.clear();
+	else
+		m_ratioSamples.push_back({timestampMs, ratio - m_ratioReference});
+	while (!m_ratioSamples.empty() && timestampMs - m_ratioSamples.front().timestampMs > k_differenceWindowMs)
+		m_ratioSamples.pop_front();
+	float meanRatio= 0.f;
+	for (const Sample& sample : m_ratioSamples)
+		meanRatio+= sample.value;
+	if (!m_ratioSamples.empty())
+		meanRatio/= (float)m_ratioSamples.size();
+	const bool bMeasured= (int)m_ratioSamples.size() >= k_differenceMinSamples;
+
+	// A positive ratio is the left eye the more open, so the right eye the
+	// more closed
+	const float differences[2]= {-meanRatio, meanRatio};
+	const bool bOtherClosing[2]= {m_eyes[1].state != eEyeState::Open && !m_eyes[1].bPending,
+								  m_eyes[0].state != eEyeState::Open && !m_eyes[0].bPending};
+	const bool bOtherOpen[2]= {m_eyes[1].state == eEyeState::Open, m_eyes[0].state == eEyeState::Open};
+	for (int side= 0; side < 2; ++side)
+	{
+		Eye& eye= m_eyes[side];
+		eye.difference= differences[side];
+		if (!eye.bWinkHeld)
+		{
+			// A wink starts as a closure does, on a fast drop of this eye
+			// alone. The difference only holds it.
+			const bool bClosureRecent= (eye.state != eEyeState::Open && !eye.bPending) ||
+				timestampMs - eye.closureEndMs <= k_winkLatchGraceMs;
+			if (bMeasured && bOnAngle && bClosureRecent && bOtherOpen[side] &&
+				differences[side] >= k_winkHoldOnDifference)
+			{
+				eye.bWinkHeld= true;
+				if (eye.state == eEyeState::Open)
+				{
+					eye.state= eEyeState::Closed;
+					eye.closureStartMs= timestampMs;
+					eye.closureMinimum= openness[side];
+				}
+			}
+		}
+		else if ((!m_ratioSamples.empty() && differences[side] < k_winkHoldOffDifference) || !bOnAngle ||
+				 bOtherClosing[side])
+		{
+			// The eyes agree again, the head has turned too far to compare
+			// them, or the other eye has closed too, which is a blink
+			eye.bWinkHeld= false;
+			eye.state= eEyeState::Open;
+			eye.closure= 0.f;
+			eye.recentSamples.clear();
+		}
+	}
+}
+
 void WebcamBlinkFilter::stepEye(Eye& eye, float openness, double timestampMs, bool bOnAngle,
 								const BlinkConfig& config)
 {
@@ -181,8 +310,8 @@ void WebcamBlinkFilter::stepEye(Eye& eye, float openness, double timestampMs, bo
 	while (timestampMs - eye.recentSamples.front().timestampMs > k_dropWindowMs)
 		eye.recentSamples.pop_front();
 
-	const float sensitivity= std::clamp(config.sensitivity, BlinkConfig::k_minSensitivity, BlinkConfig::k_maxSensitivity);
-	const float dropFraction= k_closeDropFraction / sensitivity;
+	const float dropFraction= closeDropFraction(config);
+	const float startDrop= dropFraction * eye.baseline;
 	const float floorLevel= eye.baseline * eye.floorFraction;
 	const float travel= std::max(eye.baseline - floorLevel, 1e-4f);
 
@@ -190,28 +319,49 @@ void WebcamBlinkFilter::stepEye(Eye& eye, float openness, double timestampMs, bo
 	{
 		float recentMax= openness;
 		for (const Sample& sample : eye.recentSamples)
-			recentMax= std::max(recentMax, sample.openness);
-		const float threshold= dropFraction * eye.baseline;
-		if (eye.baseline > 1e-4f && recentMax - openness >= threshold && openness <= eye.baseline - threshold)
+			recentMax= std::max(recentMax, sample.value);
+		if (eye.baseline > 1e-4f && recentMax - openness >= startDrop && openness <= eye.baseline - startDrop)
 		{
 			eye.state= eEyeState::Closing;
 			eye.closureStartMs= timestampMs;
 			eye.closureMinimum= openness;
+			eye.bPending= openness > eye.baseline - k_unconfirmedDropCount * startDrop;
 		}
 		else
 		{
-			if (bOnAngle)
-				eye.baselineSamples.push_back({timestampMs, openness});
-			updateBaseline(eye, timestampMs);
+			feedBaseline(eye, openness, timestampMs, bOnAngle);
 			eye.closure= 0.f;
+			return;
+		}
+	}
+	else if (eye.bPending)
+	{
+		if (openness <= eye.baseline - startDrop)
+		{
+			eye.bPending= false;
+		}
+		else
+		{
+			// One frame under the start level and back: jitter, and an open
+			// frame like any other
+			eye.state= eEyeState::Open;
+			eye.bPending= false;
+			eye.closure= 0.f;
+			feedBaseline(eye, openness, timestampMs, bOnAngle);
 			return;
 		}
 	}
 
 	eye.closureMinimum= std::min(eye.closureMinimum, openness);
+	if (eye.bWinkHeld)
+	{
+		eye.state= eEyeState::Closed;
+		eye.closure= 1.f;
+		return;
+	}
 	if (openness >= eye.baseline - k_releaseFraction * travel)
 	{
-		endClosure(eye);
+		endClosure(eye, timestampMs);
 		return;
 	}
 	const bool bInClosedBand= openness <= floorLevel + k_closedBandFraction * travel;
@@ -219,6 +369,7 @@ void WebcamBlinkFilter::stepEye(Eye& eye, float openness, double timestampMs, bo
 	{
 		// Lowered lids: the level is the new open level
 		eye.state= eEyeState::Open;
+		eye.bPending= false;
 		eye.closure= 0.f;
 		eye.baselineSamples.clear();
 		eye.baselineSamples.push_back({timestampMs, openness});
@@ -226,7 +377,14 @@ void WebcamBlinkFilter::stepEye(Eye& eye, float openness, double timestampMs, bo
 		return;
 	}
 	eye.state= bInClosedBand ? eEyeState::Closed : eEyeState::Closing;
-	eye.closure= std::clamp((eye.baseline - openness) / travel, 0.f, 1.f);
+	eye.closure= eye.bPending ? 0.f : std::clamp((eye.baseline - openness) / travel, 0.f, 1.f);
+}
+
+void WebcamBlinkFilter::feedBaseline(Eye& eye, float openness, double timestampMs, bool bOnAngle)
+{
+	if (bOnAngle)
+		eye.baselineSamples.push_back({timestampMs, openness});
+	updateBaseline(eye, timestampMs);
 }
 
 void WebcamBlinkFilter::updateBaseline(Eye& eye, double timestampMs)
@@ -240,7 +398,7 @@ void WebcamBlinkFilter::updateBaseline(Eye& eye, double timestampMs)
 	std::vector<float> levels;
 	levels.reserve(count);
 	for (const Sample& sample : eye.baselineSamples)
-		levels.push_back(sample.openness);
+		levels.push_back(sample.value);
 	std::sort(levels.begin(), levels.end());
 	const int trim= (int)((float)count * k_baselineTrim);
 	float sum= 0.f;
@@ -249,7 +407,7 @@ void WebcamBlinkFilter::updateBaseline(Eye& eye, double timestampMs)
 	eye.baseline= sum / (float)(count - 2 * trim);
 }
 
-void WebcamBlinkFilter::endClosure(Eye& eye)
+void WebcamBlinkFilter::endClosure(Eye& eye, double timestampMs)
 {
 	// A closure that reached the closed band measured the floor
 	const float floorLevel= eye.baseline * eye.floorFraction;
@@ -261,5 +419,7 @@ void WebcamBlinkFilter::endClosure(Eye& eye)
 									  k_minFloorFraction, k_maxFloorFraction);
 	}
 	eye.state= eEyeState::Open;
+	eye.bPending= false;
 	eye.closure= 0.f;
+	eye.closureEndMs= timestampMs;
 }

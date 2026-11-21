@@ -59,10 +59,20 @@ struct FaceSources
 		float openness[2]= {0.f, 0.f};
 		float baseline[2]= {0.f, 0.f};
 		float floor[2]= {0.f, 0.f};
+		// The openness a fast drop must land under to start a closure, the
+		// openness a closure ends over, and the top of the closed band
+		float startLevel[2]= {0.f, 0.f};
+		float releaseLevel[2]= {0.f, 0.f};
+		float closedLevel[2]= {0.f, 0.f};
 		// WebcamBlinkFilter::eEyeState
 		uint8_t state[2]= {0, 0};
 		// Before the eyes are linked
 		float closure[2]= {0.f, 0.f};
+		// The closure is a wink held by the eyes' difference
+		bool bWinkHeld[2]= {false, false};
+		// How much more closed than the other eye each eye reads: the log of
+		// their openness ratio against its slow reference
+		float difference[2]= {0.f, 0.f};
 	};
 	// The face profile evaluated over the sources for this frame. Empty until
 	// a profile has run on the frame.

@@ -42,7 +42,7 @@ The service has no thread of its own. The vision thread calls `update(steadyNowM
 - `blink`: the Blink stage over the webcam's eye openness (below)
 	- `present`, `tracked`: the webcam source's
 	- `eyeBlinkLeft`, `eyeBlinkRight`: the stage's output, sides crossed as the webcam's are
-	- per eye by the person's own side, for the readout: the openness, the baseline, the floor, the state, and the closure before the eyes are linked
+	- per eye by the person's own side, for the readout: the openness, the baseline, the floor, the state, the closure before the eyes are linked, the three levels the openness is read against (where a closure starts, where it ends, and the top of the closed band), whether a wink is held, and how much more closed than the other eye the eye reads
 - `outputs`: the active face profile's values for this frame, with the generation of the binding that produced them
 
 A source's values read zero unless it is tracked: the phone's blendshapes while the stream is quiet or the phone reports the face lost, the visemes past the stale window. An expression without a guard therefore relaxes instead of freezing on the last raw values. The face is present while any source is.
@@ -78,13 +78,13 @@ The blink columns have a limit that the other seven do not. The eye openness rea
 
 ## Blink stage
 
-`WebcamBlinkFilter` (`src/Face/WebcamBlink.h`) turns the direct camera's eye openness into blinks over time. One frame cannot tell lowered lids from a shut eye, and their timing can: a blink is a fast drop and a return, a lowered gaze a slow sag. Each eye keeps an open baseline that follows slow changes, and its output rises only once a fast drop under that baseline has started a closure. It is stateful and deterministic in the observations' own timestamps, so a replay that feeds the same frames in order reads the same values. It steps once per model frame (by `modelFrameIndex`), and an output frame that repeats a model frame re-emits that frame's values. Its presence and tracking gates are the webcam source's.
+`WebcamBlinkFilter` (`src/Face/WebcamBlink.h`) turns the direct camera's eye openness into blinks over time. One frame cannot tell lowered lids from a shut eye, and their timing can: a blink is a fast drop and a return, a lowered gaze a slow sag. Each eye keeps an open baseline that follows slow changes, and its output rises only once a fast drop under that baseline has started a closure. A shallow drop must hold for a second model frame before it reads, and a wink is held by the difference between the eyes, since an eye held shut does not stay at the floor. It is stateful and deterministic in the observations' own timestamps, so a replay that feeds the same frames in order reads the same values. It steps once per model frame (by `modelFrameIndex`), and an output frame that repeats a model frame re-emits that frame's values. Its presence and tracking gates are the webcam source's.
 
 Each eye runs three states:
 
 - Open: the frame feeds the baseline, when the face is on-angle
 - Closing: a closure has started and the eye is not yet in the closed band
-- Closed: within 0.3 of the travel over the floor
+- Closed: within 0.3 of the travel over the floor, or a wink held by the eyes' difference
 
 The parts, with their constants in `WebcamBlink.cpp`:
 
@@ -94,9 +94,13 @@ The parts, with their constants in `WebcamBlink.cpp`:
 
 - A closure starts when the openness drops by 0.17 of the baseline within 200 ms and lands at least that far under the baseline. The sensitivity setting divides the 0.17. A slow sag never drops that far within the window, so it moves the baseline instead.
 
+- A closure whose first frame lands at least two start drops under the baseline reads at once. A shallower one reads zero until a second model frame lands under the start level, and never was if that frame does not: point jitter drops that far for one frame, and a blink drops further. The Closing state covers the waiting frame.
+
 - A closure ends when the openness returns within 0.3 of the travel under the baseline. A closure that sits between the closed band and the baseline for 600 ms is lowered lids: it ends, and the baseline restarts at that level. A closure in the closed band holds as long as the eye stays there.
 
-- The output is the closure's depth between the baseline and the floor, through an S-curve symmetric about a half with the exponent 1.5 times the clarity setting. An Open eye reads zero.
+- A wink is held by the eyes' difference: the log of the left eye's openness over the right's, less 1.2 times the yaw offset (the ratio moves that far as the head turns), against its own reference, and averaged over the last 200 ms once that holds 3 frames. The reference is the median of the last 8 s of frames with both eyes Open and the face on-angle, once it has 30, and the neutral capture's ratio until then. An eye latches when its closure is running or ended within 300 ms, the other eye is Open, the face is on-angle, and the eye reads more closed than the other by 0.12. A held eye is Closed and reads fully closed whatever its openness, and its closure neither releases nor restarts the baseline. It releases when the difference falls under 0.06, the face goes off-angle, or the other eye starts a closure, which makes it a blink. A wink never starts on the difference alone: head turns, a hand over the face and glasses make differences as large as a wink's. The frames of a blink of both eyes are left out of the average, since the ratio of two small numbers is noise.
+
+- The output is the closure's depth between the baseline and the floor, through an S-curve symmetric about a half with the exponent 1.5 times the clarity setting. An Open eye reads zero, and a held wink reads one.
 
 - The eyes are then linked: each is pulled toward the less closed eye, fully when they agree and not at all once they differ by the wink threshold. A face under 90 px of outer eye corner span lets winks through less, down to none at 50 px. With sync on, both read their mean.
 
@@ -111,7 +115,9 @@ Settings, `BlinkConfig` on `AppConfig::blink`, persisted under `blink` in the pr
 
 The stage reads them every frame, so an edit applies without a config refresh and does not end a recording in progress.
 
-Auto does not read `blink.*`. On the 92 s rig take the stage finds the phone's blinks as the raw points do, and it still reads over a half on 24 percent of the frames outside the rest window where the phone reads 5, from short false closures that point jitter and head motion make. On a take with a still head it reads over a half on 1 to 5 percent, and it tells a wink's eye where the raw points do not.
+Auto does not read `blink.*`. On the 92 s rig take the stage finds 15 of 15 and 18 of 19 of the phone's blinks at every frame, and it still reads over a half on 22 to 27 percent of the frames outside the rest window where the phone reads 5, from closures that head sweeps and hands over the face make. On a take with a still head it reads over a half on 1 to 5 percent, and it tells a wink's eye where the raw points do not.
+
+A held closure is the stage's weak case, because the lid points do not collapse on an eye held shut. With no glasses on a 160 px face a held wink reads 0.19 to 0.29 against 0.31 open, where a fast blink's lowest frame reads 0.04 to 0.15 and an open eye's frame-to-frame scatter is about 0.03. The eyes' noise is mostly common to both, so their difference is the cleaner signal: 0.16 to 0.26 on a wink against 0.03 over the 200 ms average. On a take of four held winks the output was over a half on 17, 69, 0 and 0 percent of each hold's frames with the timing rule alone, and on 93, 69, 38 and 90 percent with the held wink. The second is a wink whose other eye narrowed with it, so both eyes read closed. The third is a hold whose points read fully open after eight frames, which nothing on these points recovers. With glasses on a 105 px face a wink lowers both eyes about 15 percent with a difference of 0.03 to 0.09, and is not held. A floor learned from held levels was measured and not taken: it raised those holds to 28 to 86 percent and read 12 percent of the open frames as closed.
 
 ## Profiles
 
@@ -231,7 +237,7 @@ The timeline's replay (`TimelinePanel`) keeps its own `FaceProfileRunner` and ev
 
 The Webcam stage, under Face and mouth beside the Phone stage, shows the shown frame's webcam source: whether the direct camera sees the face, a prompt to capture the neutral again when it holds no face, and the measured columns' raw values. It is inactive on a project with no direct camera.
 
-The Blink stage, after the Webcam stage, holds the four settings and a readout of the shown frame: per eye the openness, the baseline and the floor, the state, and where the openness sits between the floor and the baseline, then the two output columns. It is inactive on a project with no direct camera and degraded while the baselines still stand on their seed.
+The Blink stage, after the Webcam stage, holds the four settings and a readout that plots the last 6 s of shown frames, live or in a replay. Each eye has a plot of its openness over the baseline, the floor, the level a closure starts under and the level it ends over, with the closed band shaded and a strip along the top over the frames of a closure. A third plot draws how much more closed than the other eye each eye reads over the levels a wink is held and released at, and a fourth the two output columns over each eye's closure before the link. A held wink has its own color on the strip. The sensitivity setting moves the start level, the clarity setting bends a closure into its output, and the wink threshold is the gap between a closure and its output. The history starts over on a seek, and hovering a plot reads the nearest frame's values. It is inactive on a project with no direct camera and degraded while the baselines still stand on their seed.
 
 The Phone stage in the Inspector, under Face and mouth, holds the enable checkbox, the port, the phone address, and a status readout: bound or not, streaming or quiet, datagrams per second, unknown-name and parse-failure counts, the last unknown name, and the last head rotation. Below it sit the head alignment button, its reset, and whether the head is aligned.
 

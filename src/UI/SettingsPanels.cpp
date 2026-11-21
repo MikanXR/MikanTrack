@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 #include "imgui.h"
+#include "implot.h"
 
 #include "glm/gtc/quaternion.hpp"
 #include "glm/trigonometric.hpp"
@@ -24,6 +26,8 @@
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
 #include "VisionThread.h"
+#include "WebcamBlink.h"
+#include "WebcamFace.h"
 
 // Hold-still jitter test: countdown mirrors the calibration captures (the mouse
 // hand needs to get back into position), then the sampling window
@@ -601,6 +605,33 @@ void SettingsPanels::drawHoldStillSection(const TrackingSectionContext& context)
 
 // -- Tracking panel ----------------------------------------------------------
 
+// The seconds of shown frames the Blink readout plots
+static constexpr double k_blinkHistoryWindowMs= 6000.0;
+static constexpr size_t k_blinkHistoryMaxSamples= 720;
+// A step forward this long is a seek, which starts the history over as a
+// step backwards does
+static constexpr double k_blinkHistorySeekMs= 1000.0;
+
+using BlinkHistory= std::deque<TrackingPanelState::BlinkSample>;
+
+static void updateBlinkHistory(const TrackingSectionContext& context)
+{
+	BlinkHistory& history= context.state->blinkHistory;
+	const double timestampMs= context.face->blinkTimestampMs;
+	if (!history.empty())
+	{
+		const double stepMs= timestampMs - history.back().timestampMs;
+		if (stepMs == 0.0)
+			return;
+		if (stepMs < 0.0 || stepMs > k_blinkHistorySeekMs)
+			history.clear();
+	}
+	history.push_back({timestampMs, context.face->blink});
+	while (history.front().timestampMs < timestampMs - k_blinkHistoryWindowMs ||
+		   history.size() > k_blinkHistoryMaxSamples)
+		history.pop_front();
+}
+
 void SettingsPanels::updateTrackingState(const TrackingSectionContext& context, float deltaSeconds)
 {
 	AppConfig* config= context.config;
@@ -628,6 +659,7 @@ void SettingsPanels::updateTrackingState(const TrackingSectionContext& context, 
 
 	updateCaptureTimingEma(context, deltaSeconds);
 	updateHoldStill(context, deltaSeconds);
+	updateBlinkHistory(context);
 
 	if (bChanged)
 		commitTrackingConfigChange(context);
@@ -1175,6 +1207,387 @@ void SettingsPanels::drawBlinkControls(const TrackingSectionContext& context)
 	}
 }
 
+static const char* const k_blinkStateKeys[3]= {"trackingPanel.blinkStateOpen", "trackingPanel.blinkStateClosing",
+												"trackingPanel.blinkStateClosed"};
+
+static const ImVec4 k_blinkOpennessColor(0.92f, 0.92f, 0.92f, 1.f);
+static const ImVec4 k_blinkBaselineColor(0.45f, 0.82f, 0.45f, 1.f);
+static const ImVec4 k_blinkFloorColor(0.42f, 0.62f, 1.f, 1.f);
+static const ImVec4 k_blinkStartColor(1.f, 0.75f, 0.3f, 1.f);
+static const ImVec4 k_blinkReleaseColor(0.45f, 0.85f, 0.85f, 1.f);
+static const ImVec4 k_blinkClosedBandColor(0.42f, 0.62f, 1.f, 0.22f);
+static const ImVec4 k_blinkClosingColor(1.f, 0.75f, 0.3f, 0.9f);
+static const ImVec4 k_blinkClosedColor(1.f, 0.4f, 0.4f, 0.9f);
+static const ImVec4 k_blinkHeldColor(0.78f, 0.5f, 1.f, 0.9f);
+static const ImVec4 k_blinkHoldOnColor(0.78f, 0.5f, 1.f, 1.f);
+static const ImVec4 k_blinkHoldOffColor(0.6f, 0.6f, 0.6f, 1.f);
+// The two output columns. An eye's closure draws in the color of the column
+// that reads it.
+static const ImVec4 k_blinkOutputColors[2]= {ImVec4(0.95f, 0.6f, 0.3f, 1.f), ImVec4(0.42f, 0.7f, 1.f, 1.f)};
+static constexpr float k_blinkClosureAlpha= 0.55f;
+static constexpr float k_blinkMainLineWeight= 2.f;
+// The strip along a plot's top edge that marks the frames of a closure
+static constexpr float k_blinkStateStripPx= 5.f;
+
+enum class eBlinkSeries
+{
+	Openness,
+	Baseline,
+	Floor,
+	StartLevel,
+	ReleaseLevel,
+	Closure,
+	Difference,
+	// index 0 is eyeBlinkLeft and 1 eyeBlinkRight, not a person's side
+	Output,
+};
+
+// The state a blink readout names: a held wink over the eye's state
+static const char* getBlinkStateKey(const FaceSources::Blink& blink, int side)
+{
+	return blink.bWinkHeld[side] ? "trackingPanel.blinkStateHeld" : k_blinkStateKeys[std::min<int>(blink.state[side], 2)];
+}
+
+static float getBlinkSeriesValue(const FaceSources::Blink& blink, eBlinkSeries series, int index)
+{
+	switch (series)
+	{
+	case eBlinkSeries::Openness:
+		return blink.openness[index];
+	case eBlinkSeries::Baseline:
+		return blink.baseline[index];
+	case eBlinkSeries::Floor:
+		return blink.floor[index];
+	case eBlinkSeries::StartLevel:
+		return blink.startLevel[index];
+	case eBlinkSeries::ReleaseLevel:
+		return blink.releaseLevel[index];
+	case eBlinkSeries::Closure:
+		return blink.closure[index];
+	case eBlinkSeries::Difference:
+		return blink.difference[index];
+	case eBlinkSeries::Output:
+		return index == 0 ? blink.eyeBlinkLeft : blink.eyeBlinkRight;
+	}
+	return 0.f;
+}
+
+// A sample's place on a blink plot's time axis: seconds before the newest
+static double getBlinkPlotSeconds(const BlinkHistory& history, const TrackingPanelState::BlinkSample& sample)
+{
+	return (sample.timestampMs - history.back().timestampMs) / 1000.0;
+}
+
+static void plotBlinkSeries(const char* label, const BlinkHistory& history, eBlinkSeries series, int index,
+							const ImVec4& color, float weight)
+{
+	struct PointSource
+	{
+		const BlinkHistory* history;
+		eBlinkSeries series;
+		int index;
+	};
+	const ImPlotGetter getPoint= [](int sampleIndex, void* data) -> ImPlotPoint {
+		const PointSource& source= *static_cast<const PointSource*>(data);
+		const TrackingPanelState::BlinkSample& sample= (*source.history)[(size_t)sampleIndex];
+		// An untracked frame is a gap in the line
+		const double value= sample.blink.tracked
+								? (double)getBlinkSeriesValue(sample.blink, source.series, source.index)
+								: std::numeric_limits<double>::quiet_NaN();
+		return ImPlotPoint(getBlinkPlotSeconds(*source.history, sample), value);
+	};
+	PointSource source{&history, series, index};
+	ImPlotSpec spec;
+	spec.LineColor= color;
+	spec.LineWeight= weight;
+	ImPlot::PlotLineG(label, getPoint, &source, (int)history.size(), spec);
+}
+
+struct BlinkLegendEntry
+{
+	const char* label;
+	ImVec4 color;
+};
+
+// A plot's legend under it: a swatch and a name per entry, wrapping at the
+// available width, which ImPlot's own horizontal legend does not
+static void drawBlinkLegend(const BlinkLegendEntry* entries, int entryCount)
+{
+	constexpr float k_swatchInset= 2.f;
+	const ImGuiStyle& style= ImGui::GetStyle();
+	const float lineHeight= ImGui::GetTextLineHeight();
+	for (int index= 0; index < entryCount; ++index)
+	{
+		const BlinkLegendEntry& entry= entries[index];
+		const float width= lineHeight + style.ItemInnerSpacing.x + ImGui::CalcTextSize(entry.label).x;
+		if (index > 0)
+		{
+			ImGui::SameLine(0.f, style.ItemSpacing.x * 2.f);
+			if (ImGui::GetContentRegionAvail().x < width)
+				ImGui::NewLine();
+		}
+		const ImVec2 origin= ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			ImVec2(origin.x + k_swatchInset, origin.y + k_swatchInset),
+			ImVec2(origin.x + lineHeight - k_swatchInset, origin.y + lineHeight - k_swatchInset),
+			ImGui::ColorConvertFloat4ToU32(entry.color));
+		ImGui::Dummy(ImVec2(lineHeight, lineHeight));
+		ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+		ImGui::TextUnformatted(entry.label);
+	}
+}
+
+// The axes are locked: time is seconds before the shown frame, and the value
+// runs from zero to yMax
+static bool beginBlinkPlot(const char* id, float heightInFontSizes, double yMax)
+{
+	constexpr ImPlotFlags k_plotFlags= ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMenus |
+									   ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText;
+	constexpr ImPlotAxisFlags k_axisFlags=
+		ImPlotAxisFlags_Lock | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoSideSwitch;
+	if (!ImPlot::BeginPlot(id, ImVec2(-1.f, ImGui::GetFontSize() * heightInFontSizes), k_plotFlags))
+		return false;
+	ImPlot::SetupAxes(nullptr, nullptr, k_axisFlags, k_axisFlags);
+	ImPlot::SetupAxisLimits(ImAxis_X1, -k_blinkHistoryWindowMs / 1000.0, 0.0, ImPlotCond_Always);
+	ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, yMax, ImPlotCond_Always);
+	ImPlot::SetupAxisFormat(ImAxis_X1, "%g s");
+	return true;
+}
+
+// The tracked sample nearest the mouse over the current plot, with a cursor
+// drawn at it. nullptr while the plot is not hovered or the sample is a gap.
+static const TrackingPanelState::BlinkSample* drawBlinkPlotCursor(const BlinkHistory& history, double yMax)
+{
+	if (!ImPlot::IsPlotHovered() || history.empty())
+		return nullptr;
+	const double hoverMs= history.back().timestampMs + ImPlot::GetPlotMousePos().x * 1000.0;
+	auto nearest= std::lower_bound(
+		history.begin(), history.end(), hoverMs,
+		[](const TrackingPanelState::BlinkSample& sample, double timestampMs) { return sample.timestampMs < timestampMs; });
+	if (nearest == history.end())
+		--nearest;
+	else if (nearest != history.begin() && hoverMs - (nearest - 1)->timestampMs < nearest->timestampMs - hoverMs)
+		--nearest;
+	const double seconds= getBlinkPlotSeconds(history, *nearest);
+
+	ImPlot::PushPlotClipRect();
+	ImPlot::GetPlotDrawList()->AddLine(ImPlot::PlotToPixels(ImPlotPoint(seconds, yMax)),
+									   ImPlot::PlotToPixels(ImPlotPoint(seconds, 0.0)), IM_COL32(255, 255, 255, 110),
+									   1.f);
+	ImPlot::PopPlotClipRect();
+	return nearest->blink.tracked ? &*nearest : nullptr;
+}
+
+static void drawBlinkTooltipRow(const char* label, const ImVec4& color, const char* format, float value)
+{
+	ImGui::TextColored(color, "%s", label);
+	ImGui::SameLine();
+	ImGui::Text(format, value);
+}
+
+// One eye, by the person's own side: the openness over the levels it is read
+// against, the closed band shaded, and a strip along the top over the frames
+// of a closure
+static void drawBlinkEyePlot(const BlinkHistory& history, int side)
+{
+	// The range never shrinks below a resting eye's, so a quiet history does
+	// not zoom into noise
+	float top= 0.4f;
+	for (const TrackingPanelState::BlinkSample& sample : history)
+	{
+		if (sample.blink.tracked)
+			top= std::max(top, std::max(sample.blink.openness[side], sample.blink.baseline[side]));
+	}
+	const double yMax= (double)top * 1.1;
+	if (!beginBlinkPlot(side == 0 ? "##blinkEyeLeft" : "##blinkEyeRight", 11.f, yMax))
+		return;
+
+	// Under the lines. The fills butt against each other, so they draw
+	// without the antialiased fringe that would show as seams.
+	ImDrawList* drawList= ImPlot::GetPlotDrawList();
+	const ImDrawListFlags savedFlags= drawList->Flags;
+	drawList->Flags&= ~ImDrawListFlags_AntiAliasedFill;
+	ImPlot::PushPlotClipRect();
+	const float stripTop= ImPlot::GetPlotPos().y;
+	const ImU32 bandColor= ImGui::ColorConvertFloat4ToU32(k_blinkClosedBandColor);
+	for (size_t index= 1; index < history.size(); ++index)
+	{
+		const FaceSources::Blink& from= history[index - 1].blink;
+		const FaceSources::Blink& to= history[index].blink;
+		if (!from.tracked || !to.tracked)
+			continue;
+		const double fromSeconds= getBlinkPlotSeconds(history, history[index - 1]);
+		const double toSeconds= getBlinkPlotSeconds(history, history[index]);
+		drawList->AddQuadFilled(ImPlot::PlotToPixels(ImPlotPoint(fromSeconds, (double)from.floor[side])),
+								ImPlot::PlotToPixels(ImPlotPoint(toSeconds, (double)to.floor[side])),
+								ImPlot::PlotToPixels(ImPlotPoint(toSeconds, (double)to.closedLevel[side])),
+								ImPlot::PlotToPixels(ImPlotPoint(fromSeconds, (double)from.closedLevel[side])),
+								bandColor);
+		if (to.state[side] != (uint8_t)WebcamBlinkFilter::eEyeState::Open)
+		{
+			const bool bClosed= to.state[side] == (uint8_t)WebcamBlinkFilter::eEyeState::Closed;
+			const ImVec4& stripColor= to.bWinkHeld[side] ? k_blinkHeldColor
+									  : bClosed			 ? k_blinkClosedColor
+														 : k_blinkClosingColor;
+			const float fromX= ImPlot::PlotToPixels(ImPlotPoint(fromSeconds, 0.0)).x;
+			const float toX= ImPlot::PlotToPixels(ImPlotPoint(toSeconds, 0.0)).x;
+			drawList->AddRectFilled(ImVec2(fromX, stripTop), ImVec2(toX, stripTop + k_blinkStateStripPx),
+									ImGui::ColorConvertFloat4ToU32(stripColor));
+		}
+	}
+	ImPlot::PopPlotClipRect();
+	drawList->Flags= savedFlags;
+
+	plotBlinkSeries(locText("trackingPanel.blinkSeriesBaseline"), history, eBlinkSeries::Baseline, side,
+					k_blinkBaselineColor, 1.f);
+	plotBlinkSeries(locText("trackingPanel.blinkSeriesStart"), history, eBlinkSeries::StartLevel, side,
+					k_blinkStartColor, 1.f);
+	plotBlinkSeries(locText("trackingPanel.blinkSeriesRelease"), history, eBlinkSeries::ReleaseLevel, side,
+					k_blinkReleaseColor, 1.f);
+	plotBlinkSeries(locText("trackingPanel.blinkSeriesFloor"), history, eBlinkSeries::Floor, side, k_blinkFloorColor,
+					1.f);
+	plotBlinkSeries(locText("trackingPanel.blinkSeriesOpenness"), history, eBlinkSeries::Openness, side,
+					k_blinkOpennessColor, k_blinkMainLineWeight);
+
+	if (const TrackingPanelState::BlinkSample* hovered= drawBlinkPlotCursor(history, yMax))
+	{
+		const FaceSources::Blink& blink= hovered->blink;
+		ImGui::BeginTooltip();
+		ImGui::TextDisabled("%.2f s", getBlinkPlotSeconds(history, *hovered));
+		ImGui::SameLine();
+		ImGui::TextUnformatted(locText(getBlinkStateKey(blink, side)));
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesOpenness"), k_blinkOpennessColor, "%.3f",
+							blink.openness[side]);
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesBaseline"), k_blinkBaselineColor, "%.3f",
+							blink.baseline[side]);
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesStart"), k_blinkStartColor, "%.3f",
+							blink.startLevel[side]);
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesRelease"), k_blinkReleaseColor, "%.3f",
+							blink.releaseLevel[side]);
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesClosedBand"), k_blinkFloorColor, "%.3f",
+							blink.closedLevel[side]);
+		drawBlinkTooltipRow(locText("trackingPanel.blinkSeriesFloor"), k_blinkFloorColor, "%.3f", blink.floor[side]);
+		ImGui::EndTooltip();
+	}
+	ImPlot::EndPlot();
+
+	const BlinkLegendEntry legend[]= {
+		{locText("trackingPanel.blinkSeriesOpenness"), k_blinkOpennessColor},
+		{locText("trackingPanel.blinkSeriesBaseline"), k_blinkBaselineColor},
+		{locText("trackingPanel.blinkSeriesStart"), k_blinkStartColor},
+		{locText("trackingPanel.blinkSeriesRelease"), k_blinkReleaseColor},
+		{locText("trackingPanel.blinkSeriesFloor"), k_blinkFloorColor},
+		{locText("trackingPanel.blinkSeriesClosedBand"), k_blinkClosedBandColor},
+		{locText("trackingPanel.blinkStateClosing"), k_blinkClosingColor},
+		{locText("trackingPanel.blinkStateClosed"), k_blinkClosedColor},
+		{locText("trackingPanel.blinkStateHeld"), k_blinkHeldColor},
+	};
+	drawBlinkLegend(legend, IM_ARRAYSIZE(legend));
+}
+
+// The two output columns over each eye's closure before the eyes are linked
+static void drawBlinkOutputPlot(const BlinkHistory& history)
+{
+	constexpr double k_yMax= 1.05;
+	if (!beginBlinkPlot("##blinkOutput", 9.f, k_yMax))
+		return;
+
+	static const char* const s_outputNames[2]= {"eyeBlinkLeft", "eyeBlinkRight"};
+	static const char* const s_closureKeys[2]= {"trackingPanel.blinkSeriesClosureLeft",
+												"trackingPanel.blinkSeriesClosureRight"};
+	// The person's own side each output column reads
+	static constexpr int s_sideOfOutput[2]= {k_ratioSideOfArkitLeft, k_ratioSideOfArkitRight};
+	for (int output= 0; output < 2; ++output)
+	{
+		ImVec4 closureColor= k_blinkOutputColors[output];
+		closureColor.w= k_blinkClosureAlpha;
+		plotBlinkSeries(locText(s_closureKeys[s_sideOfOutput[output]]), history, eBlinkSeries::Closure,
+						s_sideOfOutput[output], closureColor, 1.f);
+	}
+	for (int output= 0; output < 2; ++output)
+	{
+		plotBlinkSeries(s_outputNames[output], history, eBlinkSeries::Output, output, k_blinkOutputColors[output],
+						k_blinkMainLineWeight);
+	}
+
+	if (const TrackingPanelState::BlinkSample* hovered= drawBlinkPlotCursor(history, k_yMax))
+	{
+		const FaceSources::Blink& blink= hovered->blink;
+		ImGui::BeginTooltip();
+		ImGui::TextDisabled("%.2f s", getBlinkPlotSeconds(history, *hovered));
+		for (int output= 0; output < 2; ++output)
+		{
+			ImVec4 closureColor= k_blinkOutputColors[output];
+			closureColor.w= k_blinkClosureAlpha;
+			drawBlinkTooltipRow(s_outputNames[output], k_blinkOutputColors[output], "%.2f",
+								getBlinkSeriesValue(blink, eBlinkSeries::Output, output));
+			drawBlinkTooltipRow(locText(s_closureKeys[s_sideOfOutput[output]]), closureColor, "%.2f",
+								blink.closure[s_sideOfOutput[output]]);
+		}
+		ImGui::EndTooltip();
+	}
+	ImPlot::EndPlot();
+
+	BlinkLegendEntry legend[4];
+	for (int output= 0; output < 2; ++output)
+	{
+		legend[output]= {s_outputNames[output], k_blinkOutputColors[output]};
+		legend[2 + output]= {locText(s_closureKeys[s_sideOfOutput[output]]), k_blinkOutputColors[output]};
+		legend[2 + output].color.w= k_blinkClosureAlpha;
+	}
+	drawBlinkLegend(legend, IM_ARRAYSIZE(legend));
+}
+
+// How much more closed than the other eye each eye reads, over the levels a
+// wink is held and released at. An eye's line is in view only while it is the
+// more closed one.
+static void drawBlinkDifferencePlot(const BlinkHistory& history)
+{
+	constexpr double k_yMax= 0.4;
+	if (!beginBlinkPlot("##blinkDifference", 7.f, k_yMax))
+		return;
+
+	static const char* const s_differenceKeys[2]= {"trackingPanel.blinkSeriesDifferenceLeft",
+												   "trackingPanel.blinkSeriesDifferenceRight"};
+	// An eye draws in the color of the output column that reads it
+	const ImVec4 sideColors[2]= {k_blinkOutputColors[k_ratioSideOfArkitLeft == 0 ? 0 : 1],
+								 k_blinkOutputColors[k_ratioSideOfArkitLeft == 1 ? 0 : 1]};
+	const double holdOn= (double)WebcamBlinkFilter::k_winkHoldOnDifference;
+	const double holdOff= (double)WebcamBlinkFilter::k_winkHoldOffDifference;
+	ImPlotSpec levelSpec;
+	levelSpec.Flags= ImPlotInfLinesFlags_Horizontal;
+	levelSpec.LineColor= k_blinkHoldOnColor;
+	ImPlot::PlotInfLines(locText("trackingPanel.blinkSeriesHoldOn"), &holdOn, 1, levelSpec);
+	levelSpec.LineColor= k_blinkHoldOffColor;
+	ImPlot::PlotInfLines(locText("trackingPanel.blinkSeriesHoldOff"), &holdOff, 1, levelSpec);
+	for (int side= 0; side < 2; ++side)
+	{
+		plotBlinkSeries(locText(s_differenceKeys[side]), history, eBlinkSeries::Difference, side, sideColors[side],
+						k_blinkMainLineWeight);
+	}
+
+	if (const TrackingPanelState::BlinkSample* hovered= drawBlinkPlotCursor(history, k_yMax))
+	{
+		ImGui::BeginTooltip();
+		ImGui::TextDisabled("%.2f s", getBlinkPlotSeconds(history, *hovered));
+		for (int side= 0; side < 2; ++side)
+		{
+			drawBlinkTooltipRow(locText(s_differenceKeys[side]), sideColors[side], "%.3f",
+								hovered->blink.difference[side]);
+		}
+		ImGui::EndTooltip();
+	}
+	ImPlot::EndPlot();
+
+	const BlinkLegendEntry legend[]= {
+		{locText(s_differenceKeys[0]), sideColors[0]},
+		{locText(s_differenceKeys[1]), sideColors[1]},
+		{locText("trackingPanel.blinkSeriesHoldOn"), k_blinkHoldOnColor},
+		{locText("trackingPanel.blinkSeriesHoldOff"), k_blinkHoldOffColor},
+	};
+	drawBlinkLegend(legend, IM_ARRAYSIZE(legend));
+}
+
 void SettingsPanels::drawBlinkReadout(const TrackingSectionContext& context)
 {
 	const FaceSources::Blink& blink= context.face->blink;
@@ -1183,45 +1596,33 @@ void SettingsPanels::drawBlinkReadout(const TrackingSectionContext& context)
 		ImGui::TextDisabled("%s", locText("trackingPanel.webcamFaceNone"));
 		return;
 	}
+	// A lost face keeps the plots, with a gap where it was lost
 	if (!blink.tracked)
-	{
 		ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s", locText("trackingPanel.webcamFaceLost"));
-		return;
-	}
-	if (!blink.bBaselineSettled)
+	else if (!blink.bBaselineSettled)
 		ImGui::TextWrapped("%s", locText("trackingPanel.blinkSettling"));
 
-	static const char* const s_stateKeys[3]= {"trackingPanel.blinkStateOpen", "trackingPanel.blinkStateClosing",
-											   "trackingPanel.blinkStateClosed"};
+	const BlinkHistory& history= context.state->blinkHistory;
 	static const char* const s_sideKeys[2]= {"trackingPanel.blinkEyeLeft", "trackingPanel.blinkEyeRight"};
 	for (int side= 0; side < 2; ++side)
 	{
 		ImGui::SeparatorText(locText(s_sideKeys[side]));
-		ImGui::Text(locText("trackingPanel.blinkLevelsFmt"), blink.openness[side], blink.baseline[side],
-					blink.floor[side]);
-		ImGui::TextUnformatted(locText(s_stateKeys[std::min<int>(blink.state[side], 2)]));
-		// Where the openness sits between the floor and the baseline
-		const float span= blink.baseline[side] - blink.floor[side];
-		const float level= span > 1e-4f ? std::clamp((blink.openness[side] - blink.floor[side]) / span, 0.f, 1.f) : 0.f;
-		char overlay[16];
-		snprintf(overlay, sizeof(overlay), "%.2f", level);
-		ImGui::ProgressBar(level, ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
-		ImGui::SameLine();
-		ImGui::TextUnformatted(locText("trackingPanel.blinkOpenLevel"));
+		if (blink.tracked)
+		{
+			ImGui::Text(locText("trackingPanel.blinkLevelsFmt"), blink.openness[side], blink.baseline[side],
+						blink.floor[side]);
+			ImGui::SameLine();
+			ImGui::TextUnformatted(locText(getBlinkStateKey(blink, side)));
+		}
+		drawBlinkEyePlot(history, side);
 	}
 
-	// The output, in ARKit columns
+	ImGui::SeparatorText(locText("trackingPanel.blinkDifferenceHeader"));
+	drawBlinkDifferencePlot(history);
+
+	// The output, in ARKit columns, over each eye's closure before the link
 	ImGui::SeparatorText(locText("trackingPanel.blinkOutputHeader"));
-	const float values[2]= {blink.eyeBlinkLeft, blink.eyeBlinkRight};
-	const char* const names[2]= {"eyeBlinkLeft", "eyeBlinkRight"};
-	for (int index= 0; index < 2; ++index)
-	{
-		char overlay[16];
-		snprintf(overlay, sizeof(overlay), "%.2f", values[index]);
-		ImGui::ProgressBar(values[index], ImVec2(ImGui::GetFontSize() * 8.f, 0.f), overlay);
-		ImGui::SameLine();
-		ImGui::TextUnformatted(names[index]);
-	}
+	drawBlinkOutputPlot(history);
 }
 
 void SettingsPanels::drawBodyPoseIntro(const TrackingSectionContext& context)

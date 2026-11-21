@@ -388,6 +388,9 @@ static int runFaceExprTest(const TestArgs&)
 		check(open.out.tracked && open.out.bBaselineSettled && near(open.out.baseline[0], 0.3f, 1e-4f) &&
 				  near(open.out.eyeBlinkLeft, 0.f) && near(open.out.eyeBlinkRight, 0.f),
 			  "open eyes settle the baseline at their openness and read no blink");
+		check(near(open.out.floor[0], 0.195f, 1e-4f) && near(open.out.startLevel[0], 0.249f, 1e-4f) &&
+				  near(open.out.releaseLevel[0], 0.2685f, 1e-4f) && near(open.out.closedLevel[0], 0.2265f, 1e-4f),
+			  "the readout levels sit where a closure starts, ends and counts as closed");
 
 		Run blink;
 		settled(blink);
@@ -444,6 +447,64 @@ static int runFaceExprTest(const TestArgs&)
 		smallWink.step(2.f, 6.f, 0.5f, make);
 		check(near(smallWink.out.eyeBlinkRight, 0.f) && near(smallWink.out.eyeBlinkLeft, 0.f),
 			  "a wink on a 40 px face links to the open eye");
+
+		// A drop to 0.24: under the start level, short of twice the start drop
+		Run jitter;
+		settled(jitter);
+		jitter.step(4.8f, 4.8f, 1.f, make);
+		const bool bWaiting= jitter.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Closing &&
+			near(jitter.out.eyeBlinkLeft, 0.f) && near(jitter.out.eyeBlinkRight, 0.f);
+		jitter.step(6.f, 6.f, 1.f, make);
+		check(bWaiting && jitter.out.state[0] == (uint8_t)WebcamBlinkFilter::eEyeState::Open &&
+				  near(jitter.out.eyeBlinkLeft, 0.f),
+			  "a shallow drop of one model frame reads no blink");
+		Run shallow;
+		settled(shallow);
+		shallow.step(4.8f, 4.8f, 1.f, make);
+		shallow.step(4.8f, 4.8f, 1.f, make);
+		check(shallow.out.eyeBlinkLeft > 0.5f && shallow.out.eyeBlinkRight > 0.5f,
+			  "a shallow drop that holds for a second model frame reads");
+
+		// The person's left eye shuts, and its points drift back up to 0.26
+		// against the open eye's 0.3: over the release level, and still the
+		// more closed eye
+		Run heldWink;
+		settled(heldWink, 1.5f);
+		heldWink.step(2.f, 6.f, 1.5f, make);
+		for (int index= 0; index < 45; ++index)
+			heldWink.step(5.2f, 6.f, 1.5f, make);
+		const bool bHeld= heldWink.out.bWinkHeld[0] && !heldWink.out.bWinkHeld[1] &&
+			heldWink.out.eyeBlinkRight > 0.9f && near(heldWink.out.eyeBlinkLeft, 0.f) &&
+			heldWink.out.difference[0] > WebcamBlinkFilter::k_winkHoldOnDifference;
+		for (int index= 0; index < 8; ++index)
+			heldWink.step(6.f, 6.f, 1.5f, make);
+		check(bHeld && !heldWink.out.bWinkHeld[0] && near(heldWink.out.eyeBlinkRight, 0.f),
+			  "a wink whose points drift back up is held by the eyes' difference and released when they agree");
+
+		// The same levels on both eyes are lowered lids, with no difference
+		// to hold them
+		Run bothLowered;
+		settled(bothLowered, 1.5f);
+		bothLowered.step(2.f, 2.f, 1.5f, make);
+		bool bEverHeld= false;
+		for (int index= 0; index < 45; ++index)
+		{
+			bothLowered.step(5.2f, 5.2f, 1.5f, make);
+			bEverHeld= bEverHeld || bothLowered.out.bWinkHeld[0] || bothLowered.out.bWinkHeld[1];
+		}
+		check(!bEverHeld && near(bothLowered.out.eyeBlinkLeft, 0.f) && near(bothLowered.out.eyeBlinkRight, 0.f),
+			  "both eyes drifting up together after a blink hold no wink");
+
+		// The other eye closing too makes it a blink
+		Run winkThenBlink;
+		settled(winkThenBlink, 1.5f);
+		winkThenBlink.step(2.f, 6.f, 1.5f, make);
+		for (int index= 0; index < 10; ++index)
+			winkThenBlink.step(5.2f, 6.f, 1.5f, make);
+		const bool bHeldBefore= winkThenBlink.out.bWinkHeld[0];
+		winkThenBlink.step(5.2f, 2.f, 1.5f, make);
+		winkThenBlink.step(5.2f, 2.f, 1.5f, make);
+		check(bHeldBefore && !winkThenBlink.out.bWinkHeld[0], "a held wink ends when the other eye closes");
 
 		BlinkConfig linkConfig;
 		float partial[2]= {0.3f, 0.f};
