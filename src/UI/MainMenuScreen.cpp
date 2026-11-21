@@ -65,7 +65,9 @@ MainMenuScreen::Action MainMenuScreen::draw(bool bHasLastProject, const std::str
 		action.type= Action::Type::Exit;
 
 	ImGui::Separator();
-	ImGui::SetNextItemWidth(-1.f);
+	// The combo's label draws to its right, so the combo leaves it room
+	ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(locText("settingsPanel.language")).x +
+							  ImGui::GetStyle().ItemInnerSpacing.x));
 	SettingsPanels::drawLanguageCombo();
 
 	if (!m_statusMessage.empty())

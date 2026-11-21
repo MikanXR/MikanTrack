@@ -2308,23 +2308,6 @@ void SettingsPanels::drawDiagnosticsSection(const TrackingSectionContext& contex
 	}
 }
 
-void SettingsPanels::drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context)
-{
-	if (!ImGui::Begin(locWindowTitle("windows.tracking"), pOpen))
-	{
-		ImGui::End();
-		return;
-	}
-
-	// The tracking/fusion tuning values (staleness window, jitter and
-	// residual references, detector cadence) live in config.json and the
-	// Timeline what-if panel, where they can be swept against a recording.
-	// The live panel holds rig facts, calibration, and readouts only.
-	drawDiagnosticsSection(context);
-
-	ImGui::End();
-}
-
 // -- OSC output --------------------------------------------------------------
 
 void SettingsPanels::drawOscEnableControl(const OscSectionContext& context)

@@ -55,7 +55,6 @@
 		"viewMenu": "表示",
 		"viewSettingsPanel": "設定パネル",
 		"viewStageViewPanel": "ステージビュー",
-		"viewTrackingPanel": "トラッキングパネル",
 		"viewPipelinePanel": "パイプラインパネル",
 		"viewInspectorPanel": "インスペクターパネル",
 		"viewPerformancePanel": "パフォーマンスパネル",
@@ -86,7 +85,6 @@
 		"stageView": "ステージビュー",
 		"performance": "パフォーマンス",
 		"timeline": "タイムライン",
-		"tracking": "トラッキング",
 		"audioWizard": "マイクのキャリブレーション",
 		"expressionEditor": "表情式エディター"
 	},
@@ -851,6 +849,7 @@
 		"noVideoStreamText": "映像ストリームがありません - パイプラインのキャプチャステージでカメラを選択してください"
 	},
 	"scene3dPanel": {
+		"cameraControlsHint": "左ドラッグ: 回転\n中ドラッグ: 移動\nホイール: ズーム   F: 頭に合わせる",
 		"rendererInitFailedText": "3Dレンダラーの初期化に失敗しました（ログを確認してください）",
 		"sourcePoseHalfLabel": "ソースポーズ",
 		"avatarHalfLabel": "アバター"

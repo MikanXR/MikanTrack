@@ -55,7 +55,6 @@
 		"viewMenu": "View",
 		"viewSettingsPanel": "Settings Panel",
 		"viewStageViewPanel": "Stage View",
-		"viewTrackingPanel": "Tracking Panel",
 		"viewPipelinePanel": "Pipeline Panel",
 		"viewInspectorPanel": "Inspector Panel",
 		"viewPerformancePanel": "Performance Panel",
@@ -86,7 +85,6 @@
 		"stageView": "Stage View",
 		"performance": "Performance",
 		"timeline": "Timeline",
-		"tracking": "Tracking",
 		"audioWizard": "Microphone Calibration",
 		"expressionEditor": "Expression Editor"
 	},
@@ -851,6 +849,7 @@
 		"noVideoStreamText": "No video stream - select a camera in the Pipeline's Capture stage"
 	},
 	"scene3dPanel": {
+		"cameraControlsHint": "Left drag: orbit\nMiddle drag: pan\nWheel: zoom   F: frame head",
 		"rendererInitFailedText": "3D renderer failed to initialize (see log)",
 		"sourcePoseHalfLabel": "Source pose",
 		"avatarHalfLabel": "Avatar"

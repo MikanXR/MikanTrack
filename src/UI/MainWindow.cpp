@@ -408,7 +408,6 @@ void MainWindow::drawDockspaceAndMenuBar()
 
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.pipeline"), topId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageView"), centerId);
-		ImGui::DockBuilderDockWindow(locWindowTitle("windows.tracking"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.settings"), leftId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.stageInspector"), rightId);
 		ImGui::DockBuilderDockWindow(locWindowTitle("windows.log"), bottomId);
@@ -428,8 +427,7 @@ void MainWindow::drawDockspaceAndMenuBar()
 	// tabs one frame apart once the windows exist, ending on the Stage View
 	if (m_dockFrontTabsCountdown > 0)
 	{
-		static const char* k_frontTabs[]= {"windows.stageView", "windows.stageInspector", "windows.tracking",
-										   "windows.timeline"};
+		static const char* k_frontTabs[]= {"windows.stageView", "windows.stageInspector", "windows.timeline"};
 		--m_dockFrontTabsCountdown;
 		if (m_dockFrontTabsCountdown < IM_ARRAYSIZE(k_frontTabs))
 			ImGui::SetWindowFocus(locWindowTitle(k_frontTabs[m_dockFrontTabsCountdown]));
@@ -502,19 +500,18 @@ void MainWindow::drawDockspaceAndMenuBar()
 			ImGui::MenuItem(locLabel("mainWindow.viewPipelinePanel"), nullptr, &m_bShowPipelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewInspectorPanel"), nullptr, &m_bShowInspectorPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewStageViewPanel"), nullptr, &m_bShowStageViewPanel);
-			ImGui::MenuItem(locLabel("mainWindow.viewTrackingPanel"), nullptr, &m_bShowTrackingPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewTimelinePanel"), nullptr, &m_bShowTimelinePanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewSettingsPanel"), nullptr, &m_bShowSettingsPanel);
 			ImGui::MenuItem(locLabel("mainWindow.logPanel"), nullptr, &m_bShowLogPanel);
 			ImGui::MenuItem(locLabel("mainWindow.viewPerformancePanel"), nullptr, &m_bShowPerformancePanel);
 			ImGui::Separator();
-			// Every panel shown again in the default arrangement
+			// The default arrangement, with the panels that start hidden
+			// hidden again
 			if (ImGui::MenuItem(locLabel("mainWindow.resetLayout")))
 			{
 				m_bResetDockLayout= true;
-				m_bShowStageViewPanel= m_bShowTrackingPanel= true;
-				m_bShowTimelinePanel= m_bShowLogPanel= m_bShowSettingsPanel= true;
-				m_bShowPipelinePanel= m_bShowInspectorPanel= m_bShowPerformancePanel= true;
+				m_bShowStageViewPanel= m_bShowPipelinePanel= m_bShowInspectorPanel= true;
+				m_bShowTimelinePanel= m_bShowLogPanel= m_bShowSettingsPanel= m_bShowPerformancePanel= false;
 			}
 			ImGui::EndMenu();
 		}
@@ -691,8 +688,15 @@ void MainWindow::update(float deltaSeconds)
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
 							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
 							   m_faceExprEditor->getTarget(), bWizardActive);
-	if (m_bShowTrackingPanel)
-		SettingsPanels::drawTrackingPanel(&m_bShowTrackingPanel, trackingContext);
+	if (m_bShowSettingsPanel)
+		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
+	if (m_bShowTimelinePanel)
+	{
+		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread, trackingContext);
+		// A scrub or a view switch in the panel changes the shown frame
+		updateShownFrame(perCameraResults);
+	}
+	// The dump buttons the Timeline panel draws
 	if (m_trackingPanelState.bDumpRequested)
 	{
 		m_trackingPanelState.bDumpRequested= false;
@@ -702,14 +706,6 @@ void MainWindow::update(float deltaSeconds)
 	{
 		m_trackingPanelState.bDelayedDumpRequested= false;
 		dumpDiagnosticsDelayed();
-	}
-	if (m_bShowSettingsPanel)
-		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
-	if (m_bShowTimelinePanel)
-	{
-		m_timelinePanel->draw(&m_bShowTimelinePanel, config, visionThread);
-		// A scrub or a view switch in the panel changes the shown frame
-		updateShownFrame(perCameraResults);
 	}
 
 	// Launch requests raised by the panels this frame
