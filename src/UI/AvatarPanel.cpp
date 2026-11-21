@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "imgui.h"
+#include "misc/cpp/imgui_stdlib.h"
 
 #include "LocText.h"
 
@@ -13,6 +14,7 @@
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
+#include "CustomPoseLibrary.h"
 #include "HandPoseModel.h"
 #include "PathUtils.h"
 #include "RetargetChains.h"
@@ -593,6 +595,13 @@ void AvatarPanel::drawChains()
 		ImGui::SeparatorText(locText("chains.modeHeading"));
 		drawModeRow();
 	}
+	if (mode == eChainMode::CustomPose)
+	{
+		ImGui::SeparatorText(locText("chains.poseHeading"));
+		ImGui::PushID("pose");
+		drawPoseBar();
+		ImGui::PopID();
+	}
 	ImGui::SeparatorText(locText("chains.chainsHeading"));
 	drawChainRow(bAvatar);
 	ImGui::SeparatorText(locText(k_chainLabelKeys[(int)chain]));
@@ -604,7 +613,7 @@ void AvatarPanel::drawChains()
 	}
 	else if (mode == eChainMode::CustomPose)
 	{
-		drawNote("chains.customDemoNote");
+		drawPoseRows(chain);
 	}
 	else
 	{
@@ -629,6 +638,224 @@ void AvatarPanel::drawChains()
 		}
 	}
 	ImGui::PopID();
+}
+
+void AvatarPanel::drawPoseBar()
+{
+	CustomPoseLibrary* library= m_app->getCustomPoseLibrary();
+	// A copy: every action below can replace the app's
+	const CustomPose active= m_app->getActiveCustomPose();
+	const bool bBuiltIn= isBuiltInCustomPoseId(active.id);
+
+	const std::string activeLabel= bBuiltIn ? std::string(locText("chains.poseDemoItem")) : active.name;
+	if (ImGui::BeginCombo(locLabel("chains.poseCombo"), activeLabel.c_str()))
+	{
+		if (ImGui::Selectable(locText("chains.poseDemoItem"), bBuiltIn))
+			m_app->setActiveCustomPose(std::string());
+		for (const CustomPose& pose : library->getPoses())
+		{
+			ImGui::PushID(pose.id.c_str());
+			if (ImGui::Selectable(pose.name.c_str(), pose.id == active.id))
+				m_app->setActiveCustomPose(pose.id);
+			ImGui::PopID();
+		}
+		ImGui::EndCombo();
+	}
+
+	if (ImGui::Button(locLabel("faceTab.newButton")))
+		m_app->createCustomPose(locText("chains.newPoseName"));
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel(bBuiltIn ? "faceTab.duplicateAutoButton" : "faceTab.duplicateButton")))
+	{
+		const std::string sourceName= bBuiltIn ? std::string(locText("chains.poseDemoName")) : active.name;
+		m_app->duplicateCustomPose(active, locFormat("faceTab.copyNameFmt", sourceName.c_str()));
+	}
+	ImGui::BeginDisabled(bBuiltIn);
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("faceTab.deleteButton")))
+	{
+		m_pendingDeletePoseId= active.id;
+		ImGui::OpenPopup(locWindowTitle("windows.modalDeleteCustomPose"));
+	}
+	ImGui::EndDisabled();
+
+	// Rename in place: the name inside the file changes, the id stays
+	if (!bBuiltIn)
+	{
+		if (m_poseNameEditId != active.id)
+		{
+			m_poseNameEditId= active.id;
+			m_poseNameEdit= active.name;
+		}
+		ImGui::InputText(locLabel("faceTab.nameInput"), &m_poseNameEdit);
+		if (ImGui::IsItemDeactivatedAfterEdit() && !m_poseNameEdit.empty() && m_poseNameEdit != active.name)
+			m_app->renameCustomPose(active.id, m_poseNameEdit);
+	}
+	else
+	{
+		m_poseNameEditId.clear();
+		drawNote("chains.poseReadOnlyNote");
+	}
+
+	if (ImGui::BeginPopupModal(locWindowTitle("windows.modalDeleteCustomPose"), nullptr,
+							   ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		const CustomPose* pending= library->find(m_pendingDeletePoseId);
+		const std::string pendingName= pending != nullptr ? pending->name : m_pendingDeletePoseId;
+		ImGui::TextWrapped("%s", locFormat("chains.deletePosePromptFmt", pendingName.c_str()).c_str());
+		if (ImGui::Button(locLabel("chains.deletePoseConfirmButton")))
+		{
+			m_app->deleteCustomPose(m_pendingDeletePoseId);
+			m_pendingDeletePoseId.clear();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("common.cancel")))
+		{
+			m_pendingDeletePoseId.clear();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+}
+
+void AvatarPanel::drawPoseRows(eRetargetChain chain)
+{
+	CustomPose pose= m_app->getActiveCustomPose();
+	const bool bBuiltIn= isBuiltInCustomPoseId(pose.id);
+	bool bChanged= false;
+
+	ImGui::BeginDisabled(bBuiltIn);
+	switch (chain)
+	{
+	case eRetargetChain::Torso:
+		// Only the direct placement places a spine
+		if (!isDirectPipeline())
+			drawNote("chains.poseLeanPositionNote");
+		bChanged|= ImGui::DragFloat3(locLabel("chains.poseLeanDrag"), &pose.leanDegrees.x, 0.25f, -90.f, 90.f, "%.1f");
+		ImGui::SetItemTooltip("%s", locText("chains.poseLeanTooltip"));
+		break;
+	case eRetargetChain::Head:
+		bChanged|= ImGui::DragFloat3(locLabel("chains.poseHeadDrag"), &pose.headDegrees.x, 0.25f, -180.f, 180.f, "%.1f");
+		ImGui::SetItemTooltip("%s", locText("chains.poseHeadTooltip"));
+		break;
+	case eRetargetChain::LeftArm:
+	case eRetargetChain::RightArm:
+	{
+		const int sideIndex= chain == eRetargetChain::LeftArm ? 0 : 1;
+		CustomPose::Arm& arm= pose.arms[sideIndex];
+		bChanged|= ImGui::Checkbox(locLabel("chains.poseArmEnabledCheckbox"), &arm.bEnabled);
+		ImGui::SetItemTooltip("%s", locText("chains.poseArmEnabledTooltip"));
+		ImGui::BeginDisabled(!arm.bEnabled);
+		bChanged|= ImGui::DragFloat3(locLabel("chains.poseWristDrag"), &arm.wristOffset.x, 0.005f, -1.2f, 1.2f, "%.3f");
+		ImGui::SetItemTooltip("%s", locText("chains.poseWristTooltip"));
+		bChanged|= ImGui::DragFloat3(locLabel("chains.posePalmDrag"), &arm.palmDegrees.x, 0.5f, -180.f, 180.f, "%.1f");
+		ImGui::SetItemTooltip("%s", locText("chains.posePalmTooltip"));
+		bChanged|= ImGui::Checkbox(locLabel("chains.poseElbowCheckbox"), &arm.bHasElbow);
+		ImGui::SetItemTooltip("%s", locText("chains.poseElbowTooltip"));
+		if (arm.bHasElbow)
+		{
+			bChanged|=
+				ImGui::DragFloat3(locLabel("chains.poseElbowDrag"), &arm.elbowOffset.x, 0.005f, -1.2f, 1.2f, "%.3f");
+			ImGui::SetItemTooltip("%s", locText("chains.poseWristTooltip"));
+		}
+		ImGui::EndDisabled();
+
+		ImGui::Spacing();
+		if (ImGui::Button(locLabel("chains.poseResetArmButton")))
+		{
+			arm= makeDefaultCustomPose().arms[sideIndex];
+			bChanged= true;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("chains.copyToOtherArmButton")))
+		{
+			pose.arms[1 - sideIndex]= mirrorCustomPoseArm(arm);
+			bChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText("chains.poseMirrorArmTooltip"));
+		break;
+	}
+	case eRetargetChain::LeftHand:
+	case eRetargetChain::RightHand:
+	{
+		const int sideIndex= chain == eRetargetChain::LeftHand ? 0 : 1;
+		std::array<FingerAngles, FINGER_COUNT>& fingers= pose.fingers[sideIndex];
+		if (!pose.arms[sideIndex].bEnabled)
+			drawNote("chains.poseHandArmOffNote");
+
+		// One row a finger, its four angles in degrees
+		static const char* const k_fingerKeys[FINGER_COUNT]= {
+			"avatarPanel.fingerThumbCheckbox", "avatarPanel.fingerIndexCheckbox", "avatarPanel.fingerMiddleCheckbox",
+			"avatarPanel.fingerRingCheckbox", "avatarPanel.fingerLittleCheckbox",
+		};
+		static const char* const k_columnKeys[5]= {"chains.poseFingerColumn", "chains.poseSplayColumn",
+													"chains.poseBaseColumn", "chains.poseMiddleColumn",
+													"chains.poseTipColumn"};
+		if (ImGui::BeginTable("##poseFingers", 5, ImGuiTableFlags_SizingStretchSame))
+		{
+			for (const char* columnKey : k_columnKeys)
+				ImGui::TableSetupColumn(locText(columnKey));
+			ImGui::TableHeadersRow();
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				FingerAngles& angles= fingers[finger];
+				float* const values[4]= {&angles.lateral, &angles.proximal, &angles.intermediate, &angles.distal};
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted(locText(k_fingerKeys[finger]));
+				ImGui::PushID(finger);
+				for (int column= 0; column < 4; ++column)
+				{
+					ImGui::TableNextColumn();
+					ImGui::PushID(column);
+					ImGui::SetNextItemWidth(-FLT_MIN);
+					float degrees= glm::degrees(*values[column]);
+					// The splay runs either way, a bend from a little back
+					// to folded
+					const float low= column == 0 ? -60.f : -30.f;
+					const float high= column == 0 ? 60.f : 120.f;
+					if (ImGui::DragFloat("##angle", &degrees, 0.5f, low, high, "%.0f"))
+					{
+						*values[column]= glm::radians(degrees);
+						bChanged= true;
+					}
+					ImGui::PopID();
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndTable();
+		}
+
+		if (ImGui::Button(locLabel("chains.poseOpenHandButton")))
+		{
+			fingers= {};
+			bChanged= true;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("chains.poseFistButton")))
+		{
+			for (int finger= 1; finger < FINGER_COUNT; ++finger)
+				fingers[finger]= {0.f, 1.3f, 1.2f, 0.7f};
+			fingers[(int)eFinger::Thumb]= {0.3f, 0.6f, 0.8f, 0.4f};
+			bChanged= true;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(locLabel("chains.poseCopyHandButton")))
+		{
+			pose.fingers[1 - sideIndex]= mirrorCustomPoseFingers(fingers);
+			bChanged= true;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	ImGui::EndDisabled();
+
+	if (bChanged && !bBuiltIn)
+		m_app->editActiveCustomPose(pose);
 }
 
 void AvatarPanel::drawRestRows(eRetargetChain chain)

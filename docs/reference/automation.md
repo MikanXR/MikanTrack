@@ -145,6 +145,11 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline chain <id>`: selects that chain and answers its id. Without an avatar only the two arms select
 - `pipeline mode`: the chains' settings mode and the one the scene's avatar is posed from (`mode <tracking|rest|custom> shown <tracking|rest|custom>`). The scene takes the mode only while the IK chains stage is selected or pinned, and tracking otherwise
 - `pipeline mode tracking|rest|custom`: sets it, with an error for rest or custom without an avatar
+- `pipeline pose`: the custom pose the project shows, `pose <id> <name>`, the built-in one being `pose demo Demo`
+- `pipeline pose list`: every pose, one `<id> <name>` a line, the built-in one first
+- `pipeline pose select <id>|demo`: makes a library pose the project's, with an error for an id the library lacks
+- `pipeline pose new <name...>`: a new pose at the default under that name, saved and made the project's
+- `pipeline pose delete <id>`: deletes the pose's file, and a project that showed it shows the built-in pose
 - `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
 - `pipeline loss <chain> after <release|freeze|easeToRest>`, `pipeline loss <chain> hold <ms>`, `pipeline loss <chain> blend <ms>`, `pipeline loss <leftArm|rightArm> rise <ms>`: set that field of the chain's stored policy. `rise` is an arm's ease out of rest, and the policy lines carry it as `rise <ms>` after the blend. A hold on the head also makes its hold timed
 - `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note when the arm maps by bone angles, which has no goal) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)

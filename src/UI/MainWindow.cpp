@@ -21,6 +21,7 @@
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
 #include "CustomPose.h"
+#include "CustomPoseLibrary.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
@@ -110,7 +111,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
-		 "pipeline mode [tracking|rest|custom]",
+		 "pipeline mode [tracking|rest|custom]", "pipeline pose", "pipeline pose list",
+		 "pipeline pose select <id>|demo", "pipeline pose new <name...>", "pipeline pose delete <id>",
 		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
 		 "pipeline mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]",
 		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
@@ -1982,6 +1984,55 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 		}
 		outLines.push_back(std::string("mode ") + AvatarPanel::getChainModeId(m_avatarPanel->getChainMode()) +
 						   " shown " + AvatarPanel::getChainModeId(getShownChainMode()));
+		return true;
+	}
+	if (verb == "pose")
+	{
+		// The custom pose the project shows, and the library's poses
+		CustomPoseLibrary* library= m_app->getCustomPoseLibrary();
+		const std::string action= args.size() >= 2 ? args[1] : std::string();
+		if (action == "list")
+		{
+			outLines.push_back(std::string(k_demoCustomPoseId) + " Demo");
+			for (const CustomPose& pose : library->getPoses())
+				outLines.push_back(pose.id + " " + pose.name);
+			return true;
+		}
+		if (action == "select")
+		{
+			if (args.size() != 3 || (!isBuiltInCustomPoseId(args[2]) && library->find(args[2]) == nullptr))
+			{
+				outError= "expected demo or a pose id in the library";
+				return false;
+			}
+			m_app->setActiveCustomPose(args[2]);
+		}
+		else if (action == "new")
+		{
+			std::string name;
+			for (size_t index= 2; index < args.size(); ++index)
+				name+= (index > 2 ? " " : "") + args[index];
+			if (name.empty() || m_app->createCustomPose(name).empty())
+			{
+				outError= name.empty() ? "missing name" : "the pose could not be saved";
+				return false;
+			}
+		}
+		else if (action == "delete")
+		{
+			if (args.size() != 3 || !m_app->deleteCustomPose(args[2]))
+			{
+				outError= "no such pose in the library";
+				return false;
+			}
+		}
+		else if (!action.empty())
+		{
+			outError= "unknown action: " + action;
+			return false;
+		}
+		const CustomPose& active= m_app->getActiveCustomPose();
+		outLines.push_back("pose " + active.id + " " + active.name);
 		return true;
 	}
 	if (verb == "fx")

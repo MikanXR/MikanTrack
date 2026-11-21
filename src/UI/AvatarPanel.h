@@ -154,6 +154,12 @@ private:
 	// The Rest pose mode's rows for a chain: where a lost arm and hand go,
 	// and how long each chain takes to get there and back
 	void drawRestRows(eRetargetChain chain);
+	// The Custom pose mode's pose bar: the project's pose from the library
+	// or the built-in one, new, duplicate, delete and rename
+	void drawPoseBar();
+	// The Custom pose mode's rows for a chain: that part of the active pose,
+	// read-only on the built-in pose
+	void drawPoseRows(eRetargetChain chain);
 	void drawTorsoChain();
 	void drawHeadChain();
 	void drawArmChain(int sideIndex, bool bAvatar);
@@ -173,6 +179,11 @@ private:
 	char m_nodeFilter[64]= {};
 
 	eChainMode m_chainMode= eChainMode::Tracking;
+	// The pose bar's name field and the pose it is editing, and the pose a
+	// delete is asking about
+	std::string m_poseNameEdit;
+	std::string m_poseNameEditId;
+	std::string m_pendingDeletePoseId;
 	SceneGizmoTarget m_gizmoTarget;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
 	std::array<RetargetArmReadout, 2> m_shownArmParameters{};
