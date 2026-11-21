@@ -13,6 +13,7 @@
 
 class AppConfig;
 class VisionThread;
+struct TrackingSectionContext;
 
 // Timeline panel: tracking-recording control (record/stop), recording loader,
 // deterministic replay transport (scrub/step/play), checksum divergence
@@ -26,7 +27,8 @@ public:
 	// whether or not the panel is drawn, so a Timeline that is hidden or
 	// tabbed behind another panel keeps the replay moving.
 	void update(float deltaSeconds);
-	void draw(bool* pOpen, AppConfig* config, VisionThread* visionThread);
+	// tracking carries the diagnostic dump buttons' state, drawn at the bottom
+	void draw(bool* pOpen, AppConfig* config, VisionThread* visionThread, const TrackingSectionContext& tracking);
 
 	// The face profile binding the replayed face is evaluated through, the
 	// live one, so a profile edit can be judged against a recorded take

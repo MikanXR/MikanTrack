@@ -513,6 +513,22 @@ bool Scene3dPanel::drawViewImage(SceneViewState& view, bool bCameraView, bool bS
 	else
 		drawViewCube(view, outImageMin, outImageSize);
 
+	// How the free camera is driven, at the Stage View's lower left. Drawn
+	// over the image like the names below, and left out of a view too short
+	// to spare the room.
+	if (!bCameraView && &view == &m_mainView)
+	{
+		const char* hint= locText("scene3dPanel.cameraControlsHint");
+		const ImVec2 hintSize= ImGui::CalcTextSize(hint);
+		const float inset= ImGui::GetStyle().ItemSpacing.x;
+		if ((float)fbHeight >= hintSize.y * 4.f)
+		{
+			ImGui::GetWindowDrawList()->AddText(
+				ImVec2(imageMin.x + inset, imageMin.y + (float)fbHeight - hintSize.y - inset),
+				ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
+		}
+	}
+
 	// Each half's name at its top left, drawn over the image rather than as
 	// items, so the image stays the last item for the orbit and the picks
 	if (bSideBySide)

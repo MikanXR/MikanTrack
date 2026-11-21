@@ -263,7 +263,7 @@ void commitOscConfigChange(const OscSectionContext& context);
 // stage's; the body pieces are the Body solver stage's; the face stream
 // pieces are the Phone stage's; and the direct pieces, with the body
 // proportions and the hold-still test again, are the Direct solver stages'.
-// The Tracking panel itself draws only the dump buttons.
+// The dump buttons are the Timeline panel's.
 void drawFlipHandednessSection(const TrackingSectionContext& context);
 // Fusion and Hand Scale read context.fusion and draw only when the shown
 // frame has more than one camera
@@ -412,7 +412,6 @@ void drawSourcePoseReadout(const TrackingSectionContext& context);
 void drawRetargetChainReadout(const TrackingSectionContext& context, bool bAvatar);
 
 // Draws the sections only; updateTrackingState runs the panel's state
-void drawTrackingPanel(bool* pOpen, const TrackingSectionContext& context);
 // App-level settings dock window (language selection, app-global options)
 void drawAppSettingsPanel(bool* pOpen);
 // The language combo alone, shared between the Settings panel and the main

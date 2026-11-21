@@ -7,6 +7,7 @@
 
 #include "FaceService.h"
 #include "LocText.h"
+#include "SettingsPanels.h"
 
 #include "AppConfig.h"
 #include "VisionThread.h"
@@ -31,7 +32,8 @@ void TimelinePanel::update(float deltaSeconds)
 	rebuildDisplayFrame();
 }
 
-void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThread)
+void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThread,
+						 const TrackingSectionContext& tracking)
 {
 	if (!ImGui::Begin(locWindowTitle("windows.timeline"), pOpen))
 	{
@@ -49,6 +51,7 @@ void TimelinePanel::draw(bool* pOpen, AppConfig* config, VisionThread* visionThr
 		ImGui::SeparatorText(locText("timelinePanel.whatIfHeader"));
 		drawWhatIfSection();
 	}
+	SettingsPanels::drawDiagnosticsSection(tracking);
 
 	rebuildDisplayFrame();
 	ImGui::End();

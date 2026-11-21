@@ -308,13 +308,13 @@ private:
 	// Panel visibility, the View menu's toggles and the close box of a panel's
 	// window. Not persisted: every panel is shown again on the next launch.
 	bool m_bShowStageViewPanel= true;
-	bool m_bShowTrackingPanel= true;
-	bool m_bShowTimelinePanel= true;
-	bool m_bShowLogPanel= true;
-	bool m_bShowSettingsPanel= true;
+	// The diagnostic panels start hidden, and the View menu shows them
+	bool m_bShowTimelinePanel= false;
+	bool m_bShowLogPanel= false;
+	bool m_bShowSettingsPanel= false;
 	bool m_bShowPipelinePanel= true;
 	bool m_bShowInspectorPanel= true;
-	bool m_bShowPerformancePanel= true;
+	bool m_bShowPerformancePanel= false;
 	bool m_bDockLayoutInitialized= false;
 	// View > Reset Layout: rebuild the default dock layout on the next frame
 	bool m_bResetDockLayout= false;
