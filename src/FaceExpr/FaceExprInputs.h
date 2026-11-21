@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <string>
 
 #include "ExprInputTable.h"
@@ -43,6 +44,8 @@ int fromName(const std::string& name);
 
 // The canonical spelling of a slot ("phone.jawOpen"); "" out of range
 std::string name(int slot);
+// The namespace a slot's name starts with ("phone"); "" out of range
+std::string sourceName(int slot);
 
 // Writes every slot from the sources; outInputs holds k_count floats.
 // Booleans are 0 and 1.
@@ -50,10 +53,12 @@ void fill(const FaceSources& sources, float* outInputs);
 
 // The other way, for inputs made by hand: sources with every one present
 // and tracked and every webcam column measured, each named input at its
-// value and every other at zero, so fill gives the values back. A name the
-// table lacks, and a present or tracked flag, is ignored. The outputs are
-// left empty for a profile to fill.
-void makeSources(const std::map<std::string, float>& values, FaceSources& outSources);
+// value and every other at zero, so fill gives the values back. A source
+// named in lostSources ("phone") is neither present nor tracked, so fill
+// gives its values as zero. A name the table lacks, and a present or tracked
+// flag, is ignored. The outputs are left empty for a profile to fill.
+void makeSources(const std::map<std::string, float>& values, const std::set<std::string>& lostSources,
+				 FaceSources& outSources);
 // Whether a slot is a source's present or tracked flag rather than a value
 bool isFlagSlot(int slot);
 

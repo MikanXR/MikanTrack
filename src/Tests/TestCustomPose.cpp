@@ -45,6 +45,7 @@ static int runCustomPoseTest(const TestArgs& args)
 		pose.arms[1].elbowOffset= glm::vec3(0.1f, -0.3f, -0.2f);
 		pose.face["phone.jawOpen"]= 0.4f;
 		pose.face["viseme.aa"]= 0.f;
+		pose.lostFaceSources= {"phone", "blink"};
 
 		CustomPose read;
 		std::string error;
@@ -67,7 +68,7 @@ static int runCustomPoseTest(const TestArgs& args)
 			maxFingerMiss < 1e-5f;
 		// A zero face value is not written
 		const bool bFace= read.face.size() == 1 && read.face.count("phone.jawOpen") == 1 &&
-			std::fabs(read.face["phone.jawOpen"] - 0.4f) < 1e-6f;
+			std::fabs(read.face["phone.jawOpen"] - 0.4f) < 1e-6f && read.lostFaceSources == pose.lostFaceSources;
 		check(bSame && bFace, "(a) a pose round trips through its file");
 
 		CustomPose partial;
@@ -255,13 +256,14 @@ static int runCustomPoseTest(const TestArgs& args)
 
 	// (g) The pose's face inputs as sources: each named input at its value
 	// with its source present and tracked, a name the table lacks and a flag
-	// ignored
+	// ignored, and a source the pose lists as lost neither present nor
+	// tracked with its values at zero
 	{
 		const std::map<std::string, float> values= {{"phone.jawOpen", 0.4f},   {"viseme.aa", 0.7f},
 													 {"webcam.mouthSmileLeft", 0.3f}, {"blink.eyeBlinkLeft", 1.f},
 													 {"phone.tracked", 0.f},  {"bogus.input", 1.f}};
 		FaceSources sources;
-		FaceExprInputs::makeSources(values, sources);
+		FaceExprInputs::makeSources(values, {}, sources);
 		float inputs[FaceExprInputs::k_count];
 		FaceExprInputs::fill(sources, inputs);
 		const bool bValues= inputs[FaceExprInputs::fromName("phone.jawOpen")] == 0.4f &&
@@ -271,9 +273,21 @@ static int runCustomPoseTest(const TestArgs& args)
 		const bool bFlags= inputs[FaceExprInputs::k_phoneTracked] == 1.f && inputs[FaceExprInputs::k_visemePresent] == 1.f &&
 			inputs[FaceExprInputs::k_webcamTracked] == 1.f && inputs[FaceExprInputs::k_blinkTracked] == 1.f &&
 			sources.isPresent() && sources.outputs.generation == 0;
-		check(bValues && bFlags && FaceExprInputs::isFlagSlot(FaceExprInputs::k_phonePresent) &&
+
+		FaceSources withoutPhone;
+		FaceExprInputs::makeSources(values, {"phone"}, withoutPhone);
+		float lostInputs[FaceExprInputs::k_count];
+		FaceExprInputs::fill(withoutPhone, lostInputs);
+		const bool bLost= lostInputs[FaceExprInputs::k_phonePresent] == 0.f &&
+			lostInputs[FaceExprInputs::k_phoneTracked] == 0.f && lostInputs[FaceExprInputs::fromName("phone.jawOpen")] == 0.f &&
+			lostInputs[FaceExprInputs::fromName("viseme.aa")] == 0.7f && lostInputs[FaceExprInputs::k_visemePresent] == 1.f &&
+			lostInputs[FaceExprInputs::fromName("webcam.mouthSmileLeft")] == 0.3f &&
+			lostInputs[FaceExprInputs::k_webcamTracked] == 1.f && withoutPhone.isPresent() &&
+			FaceExprInputs::sourceName(FaceExprInputs::fromName("webcam.mouthSmileLeft")) == "webcam" &&
+			FaceExprInputs::sourceName(FaceExprInputs::k_visemePresent) == "viseme" && FaceExprInputs::sourceName(-1).empty();
+		check(bValues && bFlags && bLost && FaceExprInputs::isFlagSlot(FaceExprInputs::k_phonePresent) &&
 				  !FaceExprInputs::isFlagSlot(FaceExprInputs::fromName("phone.jawOpen")),
-			  "(g) the pose's face inputs fill sources that give the values back");
+			  "(g) the pose's face inputs fill sources that give the values back, less a source the pose lists as lost");
 	}
 
 	MIKAN_LOG_INFO("test-custom-pose") << (result == 0 ? "ALL PASS" : "FAILURES");

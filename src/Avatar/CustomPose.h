@@ -2,6 +2,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <string>
 
 #include "glm/ext/quaternion_float.hpp"
@@ -55,6 +56,11 @@ struct CustomPose
 	// The face inputs a profile reads, by the name the expression language
 	// gives them ("phone.jawOpen"). An input that is not listed is zero.
 	std::map<std::string, float> face;
+	// The face sources that read as lost, by the namespace the expression
+	// language gives them ("phone"). A source that is not listed is tracked,
+	// so a profile that reads one source only while another is lost needs
+	// the other listed here.
+	std::set<std::string> lostFaceSources;
 };
 
 // The id of the built-in pose, which is never a file's
@@ -78,7 +84,8 @@ CustomPose::Arm mirrorCustomPoseArm(const CustomPose::Arm& arm);
 std::array<FingerAngles, FINGER_COUNT> mirrorCustomPoseFingers(const std::array<FingerAngles, FINGER_COUNT>& fingers);
 
 // The file format: the finger angles in degrees, a finger with all four
-// angles at zero and an arm's elbow without one left out. Reading takes a
+// angles at zero, an arm's elbow without one and a face value at zero left
+// out. Reading takes a
 // file with any part missing and leaves that part at its default; false,
 // with a message, for text that is not a pose.
 std::string customPoseToJson(const CustomPose& pose);

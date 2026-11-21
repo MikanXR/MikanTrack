@@ -1237,7 +1237,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			// the same clock, the way the stream evaluates a tracked face
 			if (m_customFaceRunner.getBinding() != m_app->getFaceBinding())
 				m_customFaceRunner.setBinding(m_app->getFaceBinding());
-			FaceExprInputs::makeSources(customPose.face, m_customFace);
+			FaceExprInputs::makeSources(customPose.face, customPose.lostFaceSources, m_customFace);
 			m_customFaceRunner.evaluate(m_customFace, m_customPoseClockMs);
 		}
 		m_scene3dPanel->setAvatarFace(bCustomPose ? &m_customFace : nullptr);

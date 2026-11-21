@@ -223,6 +223,7 @@ A custom pose is a pose made by hand for tuning the rig without cameras, stored 
 - per arm an enable, the wrist from the shoulder joint in arm lengths (the upper arm plus the forearm, so 1 is a straight arm), the palm frame as XYZ Euler degrees, and optionally the elbow in arm lengths
 - per hand the finger angle table
 - the face inputs a profile reads, by name
+- the face sources that read as lost, by namespace
 
 The offsets and rotations are in the rooted torso frame. Zero finger angles are the avatar's rest hand in both pipelines, since the finger solve starts from the avatar's own rest directions, so one table feeds either.
 
@@ -234,7 +235,7 @@ The offsets and rotations are in the rooted torso frame. Zero finger angles are 
 
 An elbow the pose gives reads as measured (forearm confidence 1) and one the hint placed does not (0), which is what a chain's elbow weight reads.
 
-The pose's face values become a `FaceSources` through `FaceExprInputs::makeSources`, every source present and tracked and every webcam column measured, so `fill` gives the values back and an input the pose does not list is zero. `MainWindow` evaluates the avatar's bound profile over it with a `FaceProfileRunner` of its own on the main thread and hands the result to the scene, so the avatar's face shows what the profile makes of the inputs. The Tracking and Rest pose modes are unchanged: the tracked face, and the rest face.
+The pose's face values become a `FaceSources` through `FaceExprInputs::makeSources`, every source present and tracked and every webcam column measured, so `fill` gives the values back and an input the pose does not list is zero. A source the pose lists as lost (`lostFaceSources`) is neither present nor tracked and its inputs read zero. The Auto profile reads the webcam and the visemes only while the phone is not tracked, so a pose reaches them by listing the phone as lost. `MainWindow` evaluates the avatar's bound profile over it with a `FaceProfileRunner` of its own on the main thread and hands the result to the scene, so the avatar's face shows what the profile makes of the inputs. The Tracking and Rest pose modes are unchanged: the tracked face, and the rest face.
 
 The source's clock runs on the UI's frames rather than standing still. A constant timestamp would freeze whatever the solve steps over time, a `smooth()` in a function field or the root follow, at its first value.
 

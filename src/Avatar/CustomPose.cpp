@@ -176,6 +176,7 @@ std::string customPoseToJson(const CustomPose& pose)
 			face[name]= value;
 	}
 	j["face"]= face;
+	j["lostFaceSources"]= pose.lostFaceSources;
 	return j.dump(2);
 }
 
@@ -235,6 +236,16 @@ bool customPoseFromJson(const std::string& text, CustomPose& outPose, std::strin
 			{
 				if (it.value().is_number())
 					pose.face[it.key()]= it.value().get<float>();
+			}
+		}
+
+		const json lostFaceSources= j.value("lostFaceSources", json::array());
+		if (lostFaceSources.is_array())
+		{
+			for (const json& source : lostFaceSources)
+			{
+				if (source.is_string())
+					pose.lostFaceSources.insert(source.get<std::string>());
 			}
 		}
 	}

@@ -232,9 +232,11 @@
 	},
 	"chains": {
 		"poseFaceButton": "Face",
-		"poseFaceNote": "The inputs the avatar's active face profile reads, as if a face tracker had sent them. The avatar's face shows what the profile makes of them.",
+		"poseFaceNote": "The inputs the avatar's active face profile reads, as if a face tracker had sent them. The avatar's face shows what the profile makes of them. A profile can read one source only while another is lost, so turn a source's Tracked off to pose the ones behind it.",
 		"poseFaceNoInputsNote": "The avatar's active face profile reads no inputs, so there is nothing to set.",
 		"poseResetFaceButton": "Reset face",
+		"poseFaceSourceTrackedCheckbox": "Tracked",
+		"poseFaceSourceTrackedTooltip": "Off, this source reads as lost and its inputs as zero, so the profile falls back to whatever it reads in that source's place.",
 		"poseHeading": "Pose",
 		"poseCombo": "Pose",
 		"poseDemoItem": "Demo (built-in)",

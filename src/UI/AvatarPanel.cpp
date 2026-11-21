@@ -754,16 +754,42 @@ void AvatarPanel::drawPoseFaceRows()
 
 	drawNote(slots.empty() ? "chains.poseFaceNoInputsNote" : "chains.poseFaceNote");
 	ImGui::BeginDisabled(bBuiltIn);
+	// The sliders by source, each source under a switch for whether it is
+	// tracked, since a profile can read one source only while another is
+	// lost. The slots are in table order, so a source's are together.
+	std::string groupSource;
+	bool bGroupTracked= true;
 	for (const int slot : slots)
 	{
+		const std::string source= FaceExprInputs::sourceName(slot);
+		if (source != groupSource)
+		{
+			groupSource= source;
+			bGroupTracked= pose.lostFaceSources.count(source) == 0;
+			ImGui::SeparatorText(source.c_str());
+			ImGui::PushID(source.c_str());
+			if (ImGui::Checkbox(locLabel("chains.poseFaceSourceTrackedCheckbox"), &bGroupTracked))
+			{
+				if (bGroupTracked)
+					pose.lostFaceSources.erase(source);
+				else
+					pose.lostFaceSources.insert(source);
+				bChanged= true;
+			}
+			ImGui::SetItemTooltip("%s", locText("chains.poseFaceSourceTrackedTooltip"));
+			ImGui::PopID();
+		}
+
 		const std::string name= FaceExprInputs::name(slot);
 		const auto found= pose.face.find(name);
 		float value= found != pose.face.end() ? found->second : 0.f;
+		ImGui::BeginDisabled(!bGroupTracked);
 		if (ImGui::SliderFloat(name.c_str(), &value, 0.f, 1.f, "%.2f"))
 		{
 			pose.face[name]= value;
 			bChanged= true;
 		}
+		ImGui::EndDisabled();
 	}
 	if (!slots.empty())
 	{
@@ -771,6 +797,7 @@ void AvatarPanel::drawPoseFaceRows()
 		if (ImGui::Button(locLabel("chains.poseResetFaceButton")))
 		{
 			pose.face.clear();
+			pose.lostFaceSources.clear();
 			bChanged= true;
 		}
 	}
