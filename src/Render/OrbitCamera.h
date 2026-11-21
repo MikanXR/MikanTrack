@@ -21,6 +21,11 @@ public:
 	void adjustOrbitAngles(float deltaYawDegrees, float deltaPitchDegrees);
 	void adjustOrbitRadius(float deltaRadius);
 	void adjustOrbitTargetPosition(const glm::vec3& deltaTarget);
+	// Takes the yaw and the pitch a view matrix looks at the orbit target
+	// with, keeping the target and the radius: the way back from a widget
+	// that turns the view matrix itself. A view looking straight down or up
+	// keeps the yaw, which it does not define.
+	void setOrbitAnglesFromViewMatrix(const glm::mat4& viewMatrix);
 
 	float getOrbitYawDegrees() const { return m_orbitYawDegrees; }
 	float getOrbitPitchDegrees() const { return m_orbitPitchDegrees; }

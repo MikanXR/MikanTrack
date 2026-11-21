@@ -212,6 +212,11 @@ private:
 	void gatherPipelineInputs();
 	bool handlePipelineAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 								  std::string& outError);
+	// scene camera: the Stage View's orbit camera, its angles, radius and
+	// target in world space; with a verb, sets them, frames the head or
+	// turns to a named side
+	bool handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							   std::string& outError);
 	// performance source: the Performance panel's source, the samples its
 	// chart holds and the marked sample's total; with a source, sets it
 	bool handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
@@ -273,6 +278,16 @@ private:
 														   const std::shared_ptr<const AvatarSkeleton>& skeleton);
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
+	// The rig and the chains as a gizmo drag found them, which Escape puts back
+	std::vector<SceneGizmoHandle> m_gizmoHandles;
+	bool m_bGizmoDragStartValid= false;
+	AvatarRigSettings m_gizmoDragStartRig;
+	RetargetChains m_gizmoDragStartChains;
+	// scene gizmo: the setting the scene's gizmo is attached to, its stored
+	// value and the selected chain's handles; with a verb, attaches it or
+	// sets the value
+	bool handleSceneGizmoAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									std::string& outError);
 
 	// Panel visibility, the View menu's toggles and the close box of a panel's
 	// window. Not persisted: every panel is shown again on the next launch.

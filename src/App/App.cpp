@@ -11,6 +11,7 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
 #include "implot.h"
+#include "ImGuizmo.h"
 
 #include "AppConfig.h"
 #include "AutomationServer.h"
@@ -919,6 +920,7 @@ void App::tick(float deltaSeconds)
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplSDL2_NewFrame();
 	ImGui::NewFrame();
+	ImGuizmo::BeginFrame();
 
 	// Before any window begins this frame, so a moved window is placed by the
 	// Begin that follows

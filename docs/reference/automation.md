@@ -100,6 +100,26 @@ Registered by `FaceExprEditorWindow::registerAutomation` from `MainWindow`, the 
 
 The commands after `edit` need the editor open and answer an error otherwise.
 
+### Scene camera and gizmo (scene)
+
+The Stage View's orbit camera, the one the free point of view looks through. Every form answers one line, `yaw <degrees> pitch <degrees> radius <meters> target <x> <y> <z>`, the target in world space. A negative pitch looks down from above.
+
+- `scene camera`: the orbit as it is
+- `scene camera set <yawDegrees> <pitchDegrees> <radius>`: sets the angles and the distance, the pitch clamped to 89 degrees either way
+- `scene camera target <x> <y> <z>`: sets the point the orbit turns about, world space
+- `scene camera frame`: aims the orbit at the head as the Frame head button does, with an error when the frame has no head
+- `scene camera view front|back|left|right|top|bottom`: turns the orbit to look from that side of the avatar, the sides being the avatar's own, keeping the target and the distance
+
+The view cube in the scene's corner is driven by `input`: a `press`, `move` and `release` across frames on it turns the orbit, and a `click` on a face turns it to that face over about 40 frames, so a drive sleeps a second or two before reading `scene camera` back.
+
+The scene's transform gizmo edits one setting of the chain selected in the Retarget stage's settings. Every `scene gizmo` form answers two lines: `target <chain> <value> value <x> <y> <z>` or `target none`, then `handles <chain>` followed by the values that had a handle in the scene on the last frame. A value is `elbowHint`, `goalOffset`, `restElbow`, `restWrist` (meters in the rooted torso frame) or `trim` (Euler degrees, a forearm's being its roll in x).
+
+- `scene gizmo`: the attached setting, its stored value and the selected chain's handles
+- `scene gizmo select <chain> <value>`: selects the chain and attaches the gizmo to that setting, with an error for a value the chain does not have. `scene gizmo select none` detaches it.
+- `scene gizmo set <x> <y> <z>`: stores the attached setting's value through the path a drag takes, which writes the rig's sidecar about three seconds later for a rig setting
+
+A drag is driven by `input`: `press` on an arrow or a ring, `move` across frames, `release`, and `input key escape` before the release to cancel. The handles follow the live pose, so a drive that aims at one by pixel sets the preview pose to Demo first, or reads a fresh screenshot right before the press.
+
 ### Performance panel (performance)
 
 - `performance source`: `live` or `recording`, the number of samples charted and the newest or playhead sample's total (`recording samples 600 total 8.22`)

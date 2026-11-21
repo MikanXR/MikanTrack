@@ -54,6 +54,18 @@ void OrbitCamera::adjustOrbitTargetPosition(const glm::vec3& deltaTarget)
 	applyOrbitParamsToViewMatrix();
 }
 
+void OrbitCamera::setOrbitAnglesFromViewMatrix(const glm::mat4& viewMatrix)
+{
+	// The camera sits along the view's back axis from the target, which is
+	// the third row of the view's rotation
+	const glm::vec3 offset= glm::normalize(glm::vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]));
+	const float elevationDegrees= radians_to_degrees(asinf(clampf(offset.y, -1.f, 1.f)));
+	float yawDegrees= m_orbitYawDegrees;
+	if (offset.x * offset.x + offset.z * offset.z > 1e-8f)
+		yawDegrees= radians_to_degrees(atan2f(offset.x, offset.z));
+	setOrbitLocation(yawDegrees, -elevationDegrees, m_orbitRadius);
+}
+
 void OrbitCamera::setPerspectiveProjection(float fovYDegrees, float aspectRatio, float zNear, float zFar)
 {
 	m_fovYDegrees= fovYDegrees;

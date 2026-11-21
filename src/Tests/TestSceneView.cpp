@@ -1,11 +1,14 @@
 #include "TestCommon.h"
 
 #include "glm/ext/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 #include "AvatarOverlay.h"
 #include "DirectRetarget.h"
+#include "OrbitCamera.h"
 #include "PipelineModel.h"
 #include "Scene3dPanel.h"
+#include "SceneGizmo.h"
 #include "SourceSkeleton.h"
 #include "StageView.h"
 
@@ -228,7 +231,7 @@ static int runSceneViewTest(const TestArgs& args)
 
 	// The direct pipeline: the chain is carried by the solve's transform, a
 	// resting arm carries no positions and draws nothing, the head is a
-	// marker alone, and without the transform nothing draws
+	// marker with its facing and up, and without the transform nothing draws
 	{
 		SourcePose direct= position;
 		direct.pipeline= SourcePose::ePipeline::Direct;
@@ -254,7 +257,103 @@ static int runSceneViewTest(const TestArgs& args)
 		const int restingPieces= countSegments(skeleton, eRetargetChain::RightArm, false) +
 			countSegments(skeleton, eRetargetChain::RightArm, true) + countMarkers(skeleton, eRetargetChain::RightArm);
 		const bool bHead= countMarkers(skeleton, eRetargetChain::Head) == 1 &&
-			countSegments(skeleton, eRetargetChain::Head, false) == 0;
+			countSegments(skeleton, eRetargetChain::Head, false) == 2;
+
+		// A direct hand hangs on the drawn chain's wrist, four bones a finger,
+		// and a resting arm's hand draws nothing whatever was measured
+		std::array<SourceSkeletonInputs::DirectHand, 2> directHands;
+		for (SourceSkeletonInputs::DirectHand& directHand : directHands)
+		{
+			directHand.bValid= true;
+			for (int finger= 0; finger < FINGER_COUNT; ++finger)
+			{
+				directHand.skeleton.baseInPalm[finger]= glm::vec3(0.04f, 0.02f * (float)(finger - 2), 0.f);
+				directHand.skeleton.phalanxLengths[finger]= {0.04f, 0.025f, 0.02f};
+				directHand.skeleton.neutralDirInPalm[finger]= glm::vec3(1.f, 0.f, 0.f);
+			}
+		}
+		direct.hands[0].state= SourcePose::eGroupState::Measured;
+		direct.hands[1].state= SourcePose::eGroupState::Measured;
+		inputs.directHands= &directHands;
+		SourceSkeleton withHands;
+		buildSourceSkeleton(inputs, withHands);
+		bool bOnWrist= false;
+		float maxReach= 0.f;
+		const glm::vec3 wristWorld= direct.arms[0].wristPosition + offset;
+		for (const SourceSkeleton::Segment& segment : withHands.segments)
+		{
+			if (segment.chain != eRetargetChain::LeftHand)
+				continue;
+			bOnWrist|= glm::length(segment.start - wristWorld) < 1e-5f;
+			maxReach= std::max(maxReach, glm::length(segment.end - wristWorld));
+		}
+		// A finger at zero runs straight on along its own metacarpal, so the
+		// outermost reaches furthest: its metacarpal, 8 cm ahead and 4 cm to
+		// the side of the wrist, then its three bones
+		const float outerReach= std::sqrt(0.08f * 0.08f + 0.04f * 0.04f) + 0.04f + 0.025f + 0.02f;
+		const bool bHands= countSegments(withHands, eRetargetChain::LeftHand, false) == 4 * FINGER_COUNT && bOnWrist &&
+			std::fabs(maxReach - outerReach) < 1e-4f &&
+			countSegments(withHands, eRetargetChain::RightHand, false) +
+					countSegments(withHands, eRetargetChain::RightHand, true) ==
+				0;
+		directHands[0].bValid= false;
+		SourceSkeleton unmeasured;
+		buildSourceSkeleton(inputs, unmeasured);
+		const bool bUnmeasured= countSegments(unmeasured, eRetargetChain::LeftHand, false) == 0;
+		check(bHands && bUnmeasured,
+			  "(k2) a direct hand draws on its chain's wrist from the measured palm, and not for a resting arm or a "
+			  "hand never measured");
+
+		// The tracked face lies on the plane through the anchor that faces the
+		// camera: the landmarks' center on the anchor, a pixel offset at the
+		// anchor's depth, and a landmark under the score gate left out
+		SourceSkeletonInputs::Face face;
+		face.fx= 600.f;
+		face.fy= 600.f;
+		// A camera 2 m in front of the anchor looking back along world -X, its
+		// image's right along world +Y and its down along world -Z
+		face.cameraToWorld= glm::mat4(glm::vec4(0.f, 1.f, 0.f, 0.f), glm::vec4(0.f, 0.f, -1.f, 0.f),
+									  glm::vec4(-1.f, 0.f, 0.f, 0.f), glm::vec4(headAnchor + glm::vec3(2.f, 0.f, 0.f), 1.f));
+		for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+		{
+			face.pixels[index]= glm::vec2(320.f, 240.f);
+			face.scores[index]= 1.f;
+		}
+		// The jaw line's first two points 30 px either side of the center
+		face.pixels[0]= glm::vec2(290.f, 240.f);
+		face.pixels[1]= glm::vec2(350.f, 240.f);
+		glm::vec3 placedCenter, placedRight;
+		const bool bPlaced= placeSourceFacePoint(face, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(320.f, 240.f),
+												 placedCenter) &&
+			placeSourceFacePoint(face, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(350.f, 270.f), placedRight);
+		// 30 px at 600 px focal length and 2 m is 10 cm: right is world +Y, down world -Z
+		const bool bPlane= bPlaced && glm::length(placedCenter - headAnchor) < 1e-5f &&
+			glm::length(placedRight - (headAnchor + glm::vec3(0.f, 0.1f, -0.1f))) < 1e-5f;
+		glm::vec3 behind;
+		SourceSkeletonInputs::Face faceBehind= face;
+		faceBehind.cameraToWorld[3]= glm::vec4(headAnchor - glm::vec3(2.f, 0.f, 0.f), 1.f);
+		const bool bBehind=
+			!placeSourceFacePoint(faceBehind, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(320.f, 240.f), behind);
+
+		inputs.directHands= nullptr;
+		inputs.face= &face;
+		SourceSkeleton withFace;
+		buildSourceSkeleton(inputs, withFace);
+		// Every contour segment: 63 open runs' steps and closed runs' steps
+		int contourSegments= 0;
+		for (const WholeBodyFaceContour& contour : WHOLEBODY_FACE_CONTOURS)
+			contourSegments+= contour.last - contour.first + (contour.bClosed ? 1 : 0);
+		const int headSegments= countSegments(withFace, eRetargetChain::Head, false);
+		face.scores[1]= 0.2f;
+		SourceSkeleton gated;
+		buildSourceSkeleton(inputs, gated);
+		// The gated landmark takes the jaw line's first two segments with it
+		const bool bFace= headSegments == 2 + contourSegments &&
+			countSegments(gated, eRetargetChain::Head, false) == headSegments - 2;
+		inputs.face= nullptr;
+		check(bPlane && bBehind && bFace,
+			  "(k3) the tracked face is laid on the camera-facing plane through the head's anchor, gated by score");
+
 		inputs.directToWorld= nullptr;
 		SourceSkeleton unplaced;
 		buildSourceSkeleton(inputs, unplaced);
@@ -379,6 +478,139 @@ static int runSceneViewTest(const TestArgs& args)
 		check(bRefused && bChosen && bHeld && bFellBack && bStayedFree && bRemoved && bOtherNotMatched && bMatched,
 			  "(o) the camera choice refuses an unavailable camera, falls back to the free camera, and matches only "
 			  "its own camera");
+	}
+
+	// The orbit takes its angles back from a view matrix turned about its
+	// target, keeping the target and the radius, and a named side looks at
+	// the target from that side of an avatar facing display +X
+	{
+		OrbitCamera source;
+		source.setOrbitTargetPosition(glm::vec3(0.2f, 1.4f, -0.1f));
+		OrbitCamera orbit;
+		orbit.setOrbitTargetPosition(source.getOrbitTargetPosition());
+		orbit.setOrbitLocation(10.f, -20.f, 2.5f);
+		float maxAngleMiss= 0.f;
+		const float angles[][2]= {{30.f, -40.f}, {-135.f, 25.f}, {170.f, -80.f}, {0.f, 0.f}, {90.f, 60.f}};
+		for (const auto& yawPitch : angles)
+		{
+			source.setOrbitLocation(yawPitch[0], yawPitch[1], 0.7f);
+			orbit.setOrbitAnglesFromViewMatrix(source.getViewMatrix());
+			// The source wraps its yaw the way the orbit does
+			maxAngleMiss= std::max(maxAngleMiss, std::fabs(orbit.getOrbitYawDegrees() - source.getOrbitYawDegrees()));
+			maxAngleMiss=
+				std::max(maxAngleMiss, std::fabs(orbit.getOrbitPitchDegrees() - source.getOrbitPitchDegrees()));
+		}
+		const bool bKept= std::fabs(orbit.getOrbitRadius() - 2.5f) < 1e-5f &&
+			glm::length(orbit.getOrbitTargetPosition() - source.getOrbitTargetPosition()) < 1e-6f;
+		check(maxAngleMiss < 0.01f && bKept, "(p) the orbit takes its angles from a view matrix and keeps its target and radius");
+
+		float yawDegrees= 0.f;
+		float pitchDegrees= 0.f;
+		OrbitCamera faced;
+		const bool bFront= getSceneViewFaceAngles("front", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bFrontSide= glm::length(faced.getCameraPosition() - glm::vec3(2.f, 0.f, 0.f)) < 1e-4f;
+		const bool bLeft= getSceneViewFaceAngles("left", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bLeftSide= glm::length(faced.getCameraPosition() - glm::vec3(0.f, 0.f, -2.f)) < 1e-4f;
+		const bool bTop= getSceneViewFaceAngles("top", yawDegrees, pitchDegrees);
+		faced.setOrbitLocation(yawDegrees, pitchDegrees, 2.f);
+		const bool bTopSide= faced.getCameraPosition().y > 1.99f;
+		const bool bUnknown= !getSceneViewFaceAngles("sideways", yawDegrees, pitchDegrees);
+		check(bFront && bFrontSide && bLeft && bLeftSide && bTop && bTopSide && bUnknown,
+			  "(q) a named side looks from that side of the avatar");
+	}
+
+	// The scene gizmo's way back from a dragged handle to the stored setting
+	{
+		const glm::quat root= glm::angleAxis(glm::radians(35.f), glm::vec3(0.f, 0.f, 1.f));
+		AvatarRigSettings rig;
+		RetargetChains chains;
+		bool bRigChanged= false;
+		bool bChainsChanged= false;
+
+		// A moved point is its offset from the anchor in the rooted torso frame
+		SceneGizmoHandle hint;
+		hint.target= {eRetargetChain::RightArm, eSceneGizmoValue::ElbowHint};
+		hint.kind= eSceneGizmoKind::Translate;
+		hint.anchorWorld= glm::vec3(0.1f, -0.2f, 1.3f);
+		const glm::vec3 offset(-0.2f, 0.05f, -0.25f);
+		applySceneGizmoEdit(hint, hint.anchorWorld + root * offset, root, root, rig, chains, bRigChanged,
+							bChainsChanged);
+		const bool bHint= glm::length(rig.sides[1].elbowHintOffset - offset) < 1e-5f && bRigChanged && !bChainsChanged;
+
+		SceneGizmoHandle goal= hint;
+		goal.target= {eRetargetChain::LeftArm, eSceneGizmoValue::GoalOffset};
+		bRigChanged= false;
+		applySceneGizmoEdit(goal, goal.anchorWorld + root * offset, root, root, rig, chains, bRigChanged,
+							bChainsChanged);
+		const bool bGoal= glm::length(chains.arms[0].goalOffset - offset) < 1e-5f && !bRigChanged && bChainsChanged;
+		check(bHint && bGoal, "(r) a moved handle stores its offset from the anchor in the rooted torso frame");
+
+		// A bone that follows its ring: the solve poses the bone as the
+		// measurement turned back by the trim, so after the edit the same
+		// measurement must pose the bone where the ring was turned to
+		const glm::vec3 startTrim(10.f, -20.f, 30.f);
+		const glm::quat turn= glm::angleAxis(glm::radians(25.f), glm::normalize(glm::vec3(0.3f, 1.f, -0.4f)));
+		const glm::quat measured= glm::angleAxis(glm::radians(50.f), glm::normalize(glm::vec3(1.f, 0.2f, 0.5f)));
+		rig.rotationTrimDegrees[(int)eHumanoidBone::Head]= startTrim;
+		SceneGizmoHandle head;
+		head.target= {eRetargetChain::Head, eSceneGizmoValue::Trim};
+		head.kind= eSceneGizmoKind::Rotate;
+		head.trimRule= eSceneGizmoTrimRule::BoneFollows;
+		head.frameWorld= measured * glm::inverse(glm::quat(glm::radians(startTrim)));
+		const glm::quat turnedHead= head.frameWorld * turn;
+		applySceneGizmoEdit(head, glm::vec3(0.f), turnedHead, root, rig, chains, bRigChanged, bChainsChanged);
+		const glm::quat posedHead=
+			measured * glm::inverse(glm::quat(glm::radians(rig.rotationTrimDegrees[(int)eHumanoidBone::Head])));
+		const bool bFollows= std::fabs(glm::dot(posedHead, turnedHead)) > 1.f - 1e-5f;
+
+		// Trimmed axes that take the turn themselves
+		rig.rotationTrimDegrees[(int)eHumanoidBone::LeftHand]= startTrim;
+		SceneGizmoHandle hand;
+		hand.target= {eRetargetChain::LeftHand, eSceneGizmoValue::Trim};
+		hand.kind= eSceneGizmoKind::Rotate;
+		hand.trimRule= eSceneGizmoTrimRule::AxesTurn;
+		hand.frameWorld= measured * glm::quat(glm::radians(startTrim));
+		const glm::quat turnedHand= hand.frameWorld * turn;
+		applySceneGizmoEdit(hand, glm::vec3(0.f), turnedHand, root, rig, chains, bRigChanged, bChainsChanged);
+		const glm::quat trimmedAxes=
+			measured * glm::quat(glm::radians(rig.rotationTrimDegrees[(int)eHumanoidBone::LeftHand]));
+		const bool bAxes= std::fabs(glm::dot(trimmedAxes, turnedHand)) > 1.f - 1e-5f;
+
+		// A forearm's ring adds the angle turned about its X axis to the roll
+		rig.rotationTrimDegrees[(int)eHumanoidBone::RightLowerArm]= glm::vec3(170.f, 0.f, 0.f);
+		SceneGizmoHandle forearm;
+		forearm.target= {eRetargetChain::RightArm, eSceneGizmoValue::Trim};
+		forearm.kind= eSceneGizmoKind::RotateX;
+		forearm.trimRule= eSceneGizmoTrimRule::ForearmRoll;
+		forearm.frameWorld= measured;
+		applySceneGizmoEdit(forearm, glm::vec3(0.f),
+							measured * glm::angleAxis(glm::radians(20.f), glm::vec3(1.f, 0.f, 0.f)), root, rig, chains,
+							bRigChanged, bChainsChanged);
+		const glm::vec3 roll= rig.rotationTrimDegrees[(int)eHumanoidBone::RightLowerArm];
+		const bool bRoll= std::fabs(roll.x + 170.f) < 1e-3f && roll.y == 0.f && roll.z == 0.f;
+		check(bFollows && bAxes && bRoll,
+			  "(s) a turned handle becomes the trim its rule asks for: the bone follows, the axes turn, the roll adds");
+
+		// The automation names and the values a chain has
+		eSceneGizmoValue parsed= eSceneGizmoValue::None;
+		bool bNames= true;
+		for (int value= 1; value < (int)eSceneGizmoValue::Count; ++value)
+		{
+			bNames&= parseSceneGizmoValueId(getSceneGizmoValueId((eSceneGizmoValue)value), parsed) &&
+				parsed == (eSceneGizmoValue)value;
+		}
+		bNames&= !parseSceneGizmoValueId("none", parsed) && !parseSceneGizmoValueId("bogus", parsed);
+		glm::vec3 stored;
+		const bool bHas= getSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::RestWrist}, rig, chains, stored) &&
+			getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::Trim}, rig, chains, stored) &&
+			!getSceneGizmoValue({eRetargetChain::Head, eSceneGizmoValue::ElbowHint}, rig, chains, stored) &&
+			!getSceneGizmoValue({eRetargetChain::Torso, eSceneGizmoValue::Trim}, rig, chains, stored);
+		setSceneGizmoValue({eRetargetChain::LeftArm, eSceneGizmoValue::Trim}, glm::vec3(12.f, 5.f, 7.f), rig, chains,
+						   bRigChanged, bChainsChanged);
+		const bool bRollOnly= rig.rotationTrimDegrees[(int)eHumanoidBone::LeftLowerArm] == glm::vec3(12.f, 0.f, 0.f);
+		check(bNames && bHas && bRollOnly, "(t) the gizmo's values by name, by chain, and a forearm's trim as its roll");
 	}
 
 	MIKAN_LOG_INFO("test-scene-view") << (result == 0 ? "ALL PASS" : "FAILURES");

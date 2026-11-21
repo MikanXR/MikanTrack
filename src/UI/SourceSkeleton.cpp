@@ -116,7 +116,95 @@ void addHand(SourceSkeleton& skeleton, const HandPose& pose, const SourcePose::H
 			addSegment(skeleton, joints[finger][joint], joints[finger][joint + 1], chain, hand.state, color);
 	}
 }
+
+// One direct hand: the palm frame the solve measured, hung on the chain's
+// wrist half a palm back from the palm's center, its fingers from the source's
+// angles. Those are measured against each finger's own metacarpal, so that is
+// where the forward kinematics starts them.
+void addDirectHand(SourceSkeleton& skeleton, const SourceSkeletonInputs::DirectHand& directHand,
+				   const SourcePose::Hand& hand, const glm::vec3& wristPosition, int sideIndex,
+				   const glm::mat4& toWorld)
+{
+	const eRetargetChain chain= handChain(sideIndex);
+	const glm::vec3 color= getSourceConfidenceColor(hand.confidence);
+
+	HandSkeleton handSkeleton= directHand.skeleton;
+	const float halfPalm= handSkeleton.baseInPalm[(int)eFinger::Middle].x;
+	const glm::vec3 wristInPalm(-halfPalm, 0.f, 0.f);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		glm::vec3 metacarpal= handSkeleton.baseInPalm[finger] - wristInPalm;
+		metacarpal.z= 0.f;
+		const float length= glm::length(metacarpal);
+		if (length > 1e-6f)
+			handSkeleton.neutralDirInPalm[finger]= metacarpal / length;
+	}
+
+	glm::mat4 palmTransform= glm::mat4_cast(directHand.palmOrientation);
+	palmTransform[3]= glm::vec4(wristPosition + directHand.palmOrientation * glm::vec3(halfPalm, 0.f, 0.f), 1.f);
+	palmTransform= toWorld * palmTransform;
+	const glm::vec3 wristWorld= glm::vec3(toWorld * glm::vec4(wristPosition, 1.f));
+
+	std::array<std::array<glm::vec3, 4>, FINGER_COUNT> joints;
+	HandPoseModel::buildFingerJoints(palmTransform, handSkeleton, hand.fingers, joints);
+	for (int finger= 0; finger < FINGER_COUNT; ++finger)
+	{
+		addSegment(skeleton, wristWorld, joints[finger][0], chain, hand.state, color);
+		for (int joint= 0; joint < 3; ++joint)
+			addSegment(skeleton, joints[finger][joint], joints[finger][joint + 1], chain, hand.state, color);
+	}
+}
+
+// The tracked face's contours about the head's anchor
+void addFace(SourceSkeleton& skeleton, const SourceSkeletonInputs::Face& face, const glm::vec3& anchorWorld,
+			 SourcePose::eGroupState state, const glm::vec3& color)
+{
+	// The center of the landmarks that are drawn, which sits on the anchor
+	glm::vec2 center(0.f);
+	int counted= 0;
+	for (int index= 0; index < WHOLEBODY_FACE_LANDMARK_COUNT; ++index)
+	{
+		if (face.scores[index] < SourceSkeletonStyle::kFaceScoreGate)
+			continue;
+		center+= face.pixels[index];
+		++counted;
+	}
+	if (counted == 0)
+		return;
+	center/= (float)counted;
+
+	auto addContourSegment= [&](int a, int b) {
+		glm::vec3 start, end;
+		if (face.scores[a] < SourceSkeletonStyle::kFaceScoreGate || face.scores[b] < SourceSkeletonStyle::kFaceScoreGate)
+			return;
+		if (placeSourceFacePoint(face, center, anchorWorld, face.pixels[a], start) &&
+			placeSourceFacePoint(face, center, anchorWorld, face.pixels[b], end))
+			addSegment(skeleton, start, end, eRetargetChain::Head, state, color);
+	};
+	for (const WholeBodyFaceContour& contour : WHOLEBODY_FACE_CONTOURS)
+	{
+		for (int index= contour.first; index < contour.last; ++index)
+			addContourSegment(index, index + 1);
+		if (contour.bClosed)
+			addContourSegment(contour.last, contour.first);
+	}
+}
 } // namespace
+
+bool placeSourceFacePoint(const SourceSkeletonInputs::Face& face, const glm::vec2& centerPixel,
+						  const glm::vec3& anchorWorld, const glm::vec2& pixel, glm::vec3& outWorld)
+{
+	if (face.fx <= 0.f || face.fy <= 0.f)
+		return false;
+	const glm::vec3 anchorInCamera= glm::vec3(glm::inverse(face.cameraToWorld) * glm::vec4(anchorWorld, 1.f));
+	if (anchorInCamera.z <= 1e-4f)
+		return false;
+	// OpenCV camera axes: +X right, +Y down, +Z ahead
+	const glm::vec3 inCamera= anchorInCamera +
+		glm::vec3((pixel.x - centerPixel.x) / face.fx, (pixel.y - centerPixel.y) / face.fy, 0.f) * anchorInCamera.z;
+	outWorld= glm::vec3(face.cameraToWorld * glm::vec4(inCamera, 1.f));
+	return true;
+}
 
 void SourceSkeleton::clear()
 {
@@ -175,6 +263,20 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 		}
 	}
 
+	// The direct hands, on the wrists of the chains that are drawn
+	if (bDirect && inputs.directHands != nullptr)
+	{
+		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+		{
+			const SourcePose::Arm& arm= source.arms[sideIndex];
+			const SourcePose::Hand& hand= source.hands[sideIndex];
+			const SourceSkeletonInputs::DirectHand& directHand= (*inputs.directHands)[sideIndex];
+			if (directHand.bValid && isSourceGroupDrawn(hand.state) && isSourceGroupDrawn(arm.state) &&
+				arm.state != eGroupState::Resting)
+				addDirectHand(outSkeleton, directHand, hand, arm.wristPosition, sideIndex, toWorld);
+		}
+	}
+
 	// The torso: the shoulder line, and the neck to the head where it is
 	// drawn
 	const SourcePose::Arm& left= source.arms[0];
@@ -191,8 +293,9 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 		addSegment(outSkeleton, leftShoulder, rightShoulder, eRetargetChain::Torso, source.torso.state, k_neutralColor);
 	}
 
-	// The head: its marker at the anchor, and in the position pipeline,
-	// whose head is a world frame (+X facing, +Z up), its facing and up
+	// The head: its marker at the anchor with its facing and up. The position
+	// pipeline's head is a world frame (+X facing, +Z up), and the direct
+	// one's a rotation from the neutral head, which faces the same way.
 	if (isSourceGroupDrawn(source.head.state) && inputs.headAnchorWorld != nullptr)
 	{
 		const glm::vec3& anchor= *inputs.headAnchorWorld;
@@ -200,13 +303,12 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 		if (bShoulderLine)
 			addSegment(outSkeleton, shoulderMidpoint, anchor, eRetargetChain::Torso, source.torso.state, k_neutralColor);
 		addMarker(outSkeleton, anchor, eRetargetChain::Head, source.head.state, color);
-		if (bPosition)
-		{
-			addSegment(outSkeleton, anchor, anchor + source.head.orientation * glm::vec3(kHeadFacingLength, 0.f, 0.f),
-					   eRetargetChain::Head, source.head.state, color);
-			addSegment(outSkeleton, anchor, anchor + source.head.orientation * glm::vec3(0.f, 0.f, kHeadUpLength),
-					   eRetargetChain::Head, source.head.state, color);
-		}
+		addSegment(outSkeleton, anchor, anchor + source.head.orientation * glm::vec3(kHeadFacingLength, 0.f, 0.f),
+				   eRetargetChain::Head, source.head.state, color);
+		addSegment(outSkeleton, anchor, anchor + source.head.orientation * glm::vec3(0.f, 0.f, kHeadUpLength),
+				   eRetargetChain::Head, source.head.state, color);
+		if (inputs.face != nullptr)
+			addFace(outSkeleton, *inputs.face, anchor, source.head.state, color);
 	}
 }
 

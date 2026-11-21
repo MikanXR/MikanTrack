@@ -43,6 +43,7 @@
 #include "Profiler.h"
 #include "ProjectManager.h"
 #include "RetargetChains.h"
+#include "OrbitCamera.h"
 #include "Scene3dPanel.h"
 #include "SourcePoseInputs.h"
 #include "SettingsPanels.h"
@@ -122,10 +123,99 @@ void MainWindow::registerAutomation(AutomationServer* server)
 			return handlePipelineAutomation(args, outLines, outError);
 		});
 	server->registerCommandNamespace(
+		"scene",
+		{"scene camera", "scene camera set <yawDegrees> <pitchDegrees> <radius>", "scene camera target <x> <y> <z>",
+		 "scene camera frame", "scene camera view front|back|left|right|top|bottom", "scene gizmo",
+		 "scene gizmo select none|<chain> <elbowHint|goalOffset|restElbow|restWrist|trim>",
+		 "scene gizmo set <x> <y> <z>"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handleSceneAutomation(args, outLines, outError);
+		});
+	server->registerCommandNamespace(
 		"performance", {"performance source", "performance source live|recording"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePerformanceAutomation(args, outLines, outError);
 		});
+}
+
+bool MainWindow::handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									   std::string& outError)
+{
+	if (!args.empty() && args[0] == "gizmo")
+		return handleSceneGizmoAutomation(args, outLines, outError);
+	if (args.empty() || args[0] != "camera")
+	{
+		outError= args.empty() ? "missing subject" : "unknown subject: " + args[0];
+		return false;
+	}
+	// The Stage View's orbit camera. Its target is answered and taken in
+	// world space, the scene's own being the display's.
+	OrbitCamera& camera= m_scene3dPanel->getOrbitCamera();
+	auto parseNumbers= [&](size_t first, size_t count, float* outValues) {
+		if (args.size() != first + count)
+			return false;
+		for (size_t index= 0; index < count; ++index)
+		{
+			char* end= nullptr;
+			outValues[index]= strtof(args[first + index].c_str(), &end);
+			if (end == args[first + index].c_str() || *end != '\0')
+				return false;
+		}
+		return true;
+	};
+	const std::string verb= args.size() >= 2 ? args[1] : std::string();
+	if (verb == "set")
+	{
+		float values[3];
+		if (!parseNumbers(2, 3, values))
+		{
+			outError= "expected <yawDegrees> <pitchDegrees> <radius>";
+			return false;
+		}
+		camera.setOrbitLocation(values[0], values[1], values[2]);
+	}
+	else if (verb == "target")
+	{
+		float values[3];
+		if (!parseNumbers(2, 3, values))
+		{
+			outError= "expected <x> <y> <z>";
+			return false;
+		}
+		camera.setOrbitTargetPosition(
+			glm::vec3(displayFromWorld() * glm::vec4(values[0], values[1], values[2], 1.f)));
+	}
+	else if (verb == "frame")
+	{
+		if (!m_scene3dPanel->frameHead())
+		{
+			outError= "no head to frame";
+			return false;
+		}
+	}
+	else if (verb == "view")
+	{
+		float yawDegrees= 0.f;
+		float pitchDegrees= 0.f;
+		if (args.size() != 3 || !getSceneViewFaceAngles(args[2], yawDegrees, pitchDegrees))
+		{
+			outError= "expected front, back, left, right, top or bottom";
+			return false;
+		}
+		camera.setOrbitLocation(yawDegrees, pitchDegrees, camera.getOrbitRadius());
+	}
+	else if (!verb.empty())
+	{
+		outError= "unknown verb: " + verb;
+		return false;
+	}
+	const glm::vec3 targetWorld=
+		glm::vec3(glm::inverse(displayFromWorld()) * glm::vec4(camera.getOrbitTargetPosition(), 1.f));
+	char line[160];
+	snprintf(line, sizeof(line), "yaw %.2f pitch %.2f radius %.3f target %.3f %.3f %.3f", camera.getOrbitYawDegrees(),
+			 camera.getOrbitPitchDegrees(), camera.getOrbitRadius(), targetWorld.x, targetWorld.y, targetWorld.z);
+	outLines.push_back(line);
+	return true;
 }
 
 bool MainWindow::handlePerformanceAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
@@ -1030,6 +1120,7 @@ void MainWindow::updateOscReadout()
 
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
+	m_gizmoHandles.clear();
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
@@ -1045,6 +1136,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			updateSourcePoseReadout(&m_latestRetarget);
 			updateSceneSourcePose(&m_latestRetarget, &m_shown.fused->head, nullptr);
 		}
+		m_scene3dPanel->setFocusHead(m_shown.fused->head.valid ? &m_shown.fused->head.positionWorld : nullptr);
 		m_scene3dPanel->setAvatarPose(nullptr);
 		m_scene3dPanel->setAvatarFace(nullptr);
 		updateSceneCameraMatch(nullptr, nullptr);
@@ -1120,21 +1212,28 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	updateSourcePoseReadout(shownResult);
 	updateSceneCameraMatch(directState, skeleton.get());
 
-	// The elbow hints where the solve put them: off the posed upper-arm
-	// joint, turned with the root
+	// The selected chain's handles on the avatar as the shown frame posed
+	// it, and the one the panel attached the gizmo to
+	if (config->avatar.showInScene)
+	{
+		const RetargetChains chains= m_app->getRetargetChains();
+		SceneGizmoInputs gizmoInputs;
+		gizmoInputs.skeleton= skeleton.get();
+		gizmoInputs.pose= &m_avatarPose;
+		gizmoInputs.rig= &rig;
+		gizmoInputs.chains= &chains;
+		gizmoInputs.goals= shownResult != nullptr ? &shownResult->goals : nullptr;
+		gizmoInputs.bDirect= config->direct.enabled;
+		buildSceneGizmoHandles(gizmoInputs, m_avatarPanel->getSelectedChain(), outGizmos.handles);
+		outGizmos.selected= m_avatarPanel->getGizmoTarget();
+	}
+	m_gizmoHandles= outGizmos.handles;
+
 	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
 	computePosedBones(*skeleton, m_avatarPose, posed);
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
-	{
-		SceneGizmos::ElbowHint& hint= outGizmos.elbowHints[sideIndex];
-		hint.bEnabled= config->avatar.showInScene && m_avatarPanel->getShowElbowGizmo(sideIndex);
-		const eHumanoidBone upperArm= sideIndex == 0 ? eHumanoidBone::LeftUpperArm : eHumanoidBone::RightUpperArm;
-		hint.shoulderWorld= posed[(int)upperArm].positionWorld;
-		hint.hintWorld= hint.shoulderWorld + m_avatarPose.rootRotationWorld * rig.sides[sideIndex].elbowHintOffset;
-	}
-
 	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
 	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
+	m_scene3dPanel->setFocusHead(&posedHeadWorld);
 }
 
 void MainWindow::updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,
@@ -1143,14 +1242,26 @@ void MainWindow::updateSceneSourcePose(const RetargetResult* result, const Track
 	m_scene3dPanel->setSelectedChain(m_avatarPanel->getSelectedChain());
 	if (result == nullptr || result->source.pipeline == SourcePose::ePipeline::None)
 	{
+		m_scene3dPanel->setSourceFace(nullptr);
 		m_scene3dPanel->setSourcePose(nullptr, nullptr);
 		return;
 	}
 	const glm::vec3* headAnchor= nullptr;
+	const BodyPoseObservation* faceBody= nullptr;
 	if (result->source.pipeline == SourcePose::ePipeline::Position)
+	{
 		headAnchor= measuredHead != nullptr && measuredHead->valid ? &measuredHead->positionWorld : nullptr;
+	}
 	else
+	{
 		headAnchor= posedHeadWorld;
+		// The direct camera's body model tracks the face the source's head
+		// was read from
+		const int cameraIndex= m_shown.config->direct.cameraIndex;
+		if (cameraIndex >= 0 && cameraIndex < (int)m_shown.perCamera.size() && m_shown.perCamera[cameraIndex] != nullptr)
+			faceBody= &m_shown.perCamera[cameraIndex]->body;
+	}
+	m_scene3dPanel->setSourceFace(faceBody);
 	m_scene3dPanel->setSourcePose(result, headAnchor);
 }
 
@@ -1310,17 +1421,131 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 {
-	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
+	if (gizmos.bPicked)
+		m_avatarPanel->setGizmoTarget(gizmos.picked);
+	if (gizmos.bCancelled)
 	{
-		const SceneGizmos::ElbowHint& hint= gizmos.elbowHints[sideIndex];
-		if (!hint.bDragging || hint.draggedHintWorld == hint.hintWorld)
-			continue;
-		// Back into the rooted torso frame the hint is stored in
-		AvatarRigSettings rig= m_app->getAvatarRig();
-		rig.sides[sideIndex].elbowHintOffset=
-			glm::inverse(m_avatarPose.rootRotationWorld) * (hint.draggedHintWorld - hint.shoulderWorld);
-		m_app->setAvatarRig(rig);
+		if (m_bGizmoDragStartValid)
+		{
+			m_app->setAvatarRig(m_gizmoDragStartRig);
+			m_app->setRetargetChains(m_gizmoDragStartChains);
+		}
+		m_bGizmoDragStartValid= false;
+		return;
 	}
+	if (!gizmos.bDragging)
+		return;
+	if (gizmos.bDragStarted)
+	{
+		m_gizmoDragStartRig= m_app->getAvatarRig();
+		m_gizmoDragStartChains= m_app->getRetargetChains();
+		m_bGizmoDragStartValid= true;
+	}
+	for (const SceneGizmoHandle& handle : gizmos.handles)
+	{
+		if (handle.target != gizmos.selected)
+			continue;
+		// A held handle that did not move this frame writes nothing
+		const bool bMoved= handle.kind == eSceneGizmoKind::Translate
+			? gizmos.draggedPositionWorld != handle.positionWorld
+			: std::fabs(glm::dot(gizmos.draggedFrameWorld, handle.frameWorld)) < 1.f - 1e-9f;
+		if (!bMoved)
+			break;
+		AvatarRigSettings rig= m_app->getAvatarRig();
+		RetargetChains chains= m_app->getRetargetChains();
+		bool bRigChanged= false;
+		bool bChainsChanged= false;
+		applySceneGizmoEdit(handle, gizmos.draggedPositionWorld, gizmos.draggedFrameWorld,
+							m_avatarPose.rootRotationWorld, rig, chains, bRigChanged, bChainsChanged);
+		if (bRigChanged)
+			m_app->setAvatarRig(rig);
+		if (bChainsChanged)
+			m_app->setRetargetChains(chains);
+		break;
+	}
+}
+
+bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+											std::string& outError)
+{
+	// args[0] is "gizmo"
+	const std::string verb= args.size() >= 2 ? args[1] : std::string();
+	if (verb == "select")
+	{
+		if (args.size() == 3 && args[2] == "none")
+		{
+			m_avatarPanel->setGizmoTarget(SceneGizmoTarget());
+		}
+		else
+		{
+			SceneGizmoTarget target;
+			glm::vec3 value;
+			if (args.size() != 4 || !AvatarPanel::parseChainId(args[2], target.chain) ||
+				!parseSceneGizmoValueId(args[3], target.value) ||
+				!getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+			{
+				outError= "expected none, or a chain and one of its values";
+				return false;
+			}
+			if (!m_avatarPanel->setSelectedChain(target.chain))
+			{
+				outError= "no avatar loaded";
+				return false;
+			}
+			m_avatarPanel->setGizmoTarget(target);
+		}
+	}
+	else if (verb == "set")
+	{
+		const SceneGizmoTarget target= m_avatarPanel->getGizmoTarget();
+		glm::vec3 value(0.f);
+		bool bParsed= args.size() == 5 && target.isValid();
+		for (int axis= 0; bParsed && axis < 3; ++axis)
+		{
+			char* end= nullptr;
+			value[axis]= strtof(args[2 + axis].c_str(), &end);
+			bParsed= end != args[2 + axis].c_str() && *end == '\0';
+		}
+		if (!bParsed)
+		{
+			outError= target.isValid() ? "expected <x> <y> <z>" : "no setting is selected";
+			return false;
+		}
+		AvatarRigSettings rig= m_app->getAvatarRig();
+		RetargetChains chains= m_app->getRetargetChains();
+		bool bRigChanged= false;
+		bool bChainsChanged= false;
+		setSceneGizmoValue(target, value, rig, chains, bRigChanged, bChainsChanged);
+		if (bRigChanged)
+			m_app->setAvatarRig(rig);
+		if (bChainsChanged)
+			m_app->setRetargetChains(chains);
+	}
+	else if (!verb.empty())
+	{
+		outError= "unknown verb: " + verb;
+		return false;
+	}
+
+	const SceneGizmoTarget target= m_avatarPanel->getGizmoTarget();
+	glm::vec3 value;
+	if (target.isValid() && getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+	{
+		char line[160];
+		snprintf(line, sizeof(line), "target %s %s value %.4f %.4f %.4f", AvatarPanel::getChainId(target.chain),
+				 getSceneGizmoValueId(target.value), value.x, value.y, value.z);
+		outLines.push_back(line);
+	}
+	else
+	{
+		outLines.push_back("target none");
+	}
+	// The handles the scene drew on the last frame, the selected chain's
+	std::string handles= std::string("handles ") + AvatarPanel::getChainId(m_avatarPanel->getSelectedChain());
+	for (const SceneGizmoHandle& handle : m_gizmoHandles)
+		handles+= std::string(" ") + getSceneGizmoValueId(handle.target.value);
+	outLines.push_back(handles);
+	return true;
 }
 
 // -- Pipeline ---------------------------------------------------------------

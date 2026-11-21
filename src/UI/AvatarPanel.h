@@ -24,13 +24,42 @@ enum class eRetargetChain
 	Count,
 };
 
+// A chain's setting the scene's gizmo edits. An arm has the first four and
+// its forearm's roll trim, the head and a hand their frame trim, the torso
+// none.
+enum class eSceneGizmoValue : int
+{
+	None,
+	// AvatarRigSettings::Side::elbowHintOffset
+	ElbowHint,
+	// RetargetChains::Arm::goalOffset
+	GoalOffset,
+	// AvatarRigSettings::Side::restElbowOffset and restWristOffset
+	RestElbow,
+	RestWrist,
+	// AvatarRigSettings::rotationTrimDegrees of the chain's bone
+	Trim,
+	Count,
+};
+
+// One setting of one chain
+struct SceneGizmoTarget
+{
+	eRetargetChain chain= eRetargetChain::Count;
+	eSceneGizmoValue value= eSceneGizmoValue::None;
+
+	bool isValid() const { return chain != eRetargetChain::Count && value != eSceneGizmoValue::None; }
+	bool operator==(const SceneGizmoTarget& other) const { return chain == other.chain && value == other.value; }
+	bool operator!=(const SceneGizmoTarget& other) const { return !(*this == other); }
+};
+
 // The Retarget stage's sections, which the Inspector hosts: which VRM is
 // loaded and what the loader read from it, its placement, the humanoid map
 // with its per-bone overrides (Mapping), a preview pose to tune against, and
 // the chains, one at a time: each chain's rig corrections and the project's
 // chain settings. The face profiles are the Profile stage's (see
-// AvatarFaceTab). Owns the preview pose, the elbow gizmo toggles, the
-// mapping view's selection and the chain selection.
+// AvatarFaceTab). Owns the preview pose, the setting the scene's gizmo
+// edits, the mapping view's selection and the chain selection.
 // Loading goes through App (the model is main-thread, GL-adjacent state);
 // placement edits go to the persisted AvatarConfig, rig edits to
 // App::setAvatarRig and chain edits to App::setRetargetChains.
@@ -87,8 +116,11 @@ public:
 		Demo,
 	};
 	ePreviewPose getPreviewPose() const { return m_previewPose; }
-	// Whether an arm's elbow hint is shown as a draggable gizmo in the scene
-	bool getShowElbowGizmo(int sideIndex) const { return m_bShowElbowGizmo[sideIndex]; }
+	// The setting the scene's gizmo is attached to, one of the selected
+	// chain's or none: a row's toggle and a click on a handle in the scene
+	// both set it, and selecting another chain clears it
+	const SceneGizmoTarget& getGizmoTarget() const { return m_gizmoTarget; }
+	void setGizmoTarget(const SceneGizmoTarget& target);
 
 	// The result the scene shows, or null when nothing was solved: what each
 	// arm's parameters evaluated to, which the parameter fields draw, and the
@@ -115,6 +147,8 @@ private:
 	// performs it, then what follows it; true when anything changed
 	bool drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains);
 	void drawHandChain(int sideIndex);
+	// The toggle ahead of a row the gizmo can edit, on the row's line
+	void drawGizmoToggle(eSceneGizmoValue value);
 
 	App* m_app;
 	AppConfig* m_config;
@@ -125,7 +159,7 @@ private:
 	char m_nodeFilter[64]= {};
 
 	ePreviewPose m_previewPose= ePreviewPose::Live;
-	bool m_bShowElbowGizmo[2]= {false, false};
+	SceneGizmoTarget m_gizmoTarget;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
 	std::array<RetargetArmReadout, 2> m_shownArmParameters{};
 	AvatarRetargetGoals m_shownGoals;

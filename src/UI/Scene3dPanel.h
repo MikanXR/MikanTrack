@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "glm/ext/matrix_float4x4.hpp"
@@ -16,6 +17,7 @@
 #include "AvatarRetarget.h"
 #include "DirectRetarget.h"
 #include "RetargetStage.h" // RetargetResult
+#include "SceneGizmo.h"
 #include "SourceSkeleton.h"
 #include "TrackingTypes.h"
 
@@ -42,22 +44,26 @@ struct SceneCameraView
 // applies the GL flip for the frustum itself.
 std::vector<SceneCameraView> makeSceneCameraViews(const AppConfig& config);
 
-// Draggable handles over the scene, world space. Per arm: the avatar's elbow
-// hint, drawn as a ring joined to the shoulder. The caller fills the inputs
-// each frame; draw() fills the outputs.
+// The selected chain's handles over the scene, world space, and the one the
+// transform gizmo is attached to. The caller fills the inputs each frame and
+// drawBody fills the outputs.
 struct SceneGizmos
 {
-	struct ElbowHint
-	{
-		bool bEnabled= false;
-		glm::vec3 shoulderWorld{0.f};
-		glm::vec3 hintWorld{0.f};
+	std::vector<SceneGizmoHandle> handles;
+	SceneGizmoTarget selected;
 
-		// While the hint is dragged: true, with where it was dragged to this frame
-		bool bDragging= false;
-		glm::vec3 draggedHintWorld{0.f};
-	};
-	std::array<ElbowHint, 2> elbowHints{};
+	// A click on a handle's marker picked it
+	bool bPicked= false;
+	SceneGizmoTarget picked;
+	// While the selected handle's gizmo is dragged: true, with where it was
+	// moved or turned to this frame, and bDragStarted on the drag's first
+	// frame
+	bool bDragging= false;
+	bool bDragStarted= false;
+	glm::vec3 draggedPositionWorld{0.f};
+	glm::quat draggedFrameWorld{1.f, 0.f, 0.f, 0.f};
+	// Escape ended the drag: the caller puts back what the drag changed
+	bool bCancelled= false;
 };
 
 // What one render of the scene draws. The grid takes the marker axes with
@@ -171,7 +177,19 @@ struct SceneViewState
 	// side, the source half, while the view's is the avatar half
 	glm::mat4 sourceViewProjection{1.f};
 	glm::ivec4 sourceViewport{0};
+	// Whether the orbit has been aimed at the head yet: the first draw with a
+	// head to aim at does it, and the orbit is the user's from then on
+	bool bFramedHead= false;
+	// The view cube on the last draw: under the mouse, or holding a press
+	// that began on it, so the orbit, the picks and the gizmos stand down
+	bool bCubeHasMouse= false;
+	bool bCubePressed= false;
 };
+
+// The orbit angles that look at the target from a named side of the avatar,
+// which faces display +X: front, back, left, right, top or bottom, the sides
+// being the avatar's own. False for any other name.
+bool getSceneViewFaceAngles(const std::string& face, float& outYawDegrees, float& outPitchDegrees);
 
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
 // calibrated camera, the FUSED hand/arm skeletons (full brightness), each
@@ -191,10 +209,10 @@ public:
 
 	// Draws the scene into the current window's remaining content region,
 	// with the orbit camera or, while the camera view is on, the matched
-	// camera, and runs the orbit and the gizmo drags on the image. The
-	// gizmos are picked only while their layer is on. Side by side, the
-	// gizmos belong to the avatar half and the source chains are picked in
-	// the source half.
+	// camera, and runs the orbit, the handle picks and the transform gizmo
+	// on the image. The handles are drawn and picked only while their layer
+	// is on. Side by side, they belong to the avatar half and the source
+	// chains are picked in the source half.
 	void drawBody(const TrackingFrameResult& fusedResult,
 				  const std::vector<SceneCameraView>& cameras,
 				  const std::vector<const TrackingFrameResult*>& perCameraResults,
@@ -275,6 +293,10 @@ public:
 	// are carried into the avatar's world by the direct solve's transform,
 	// so they draw only while a direct solve is set.
 	void setSourcePose(const RetargetResult* result, const glm::vec3* headAnchorWorld);
+	// The face the direct camera's body model tracked on the shown frame
+	// (copied), drawn with the source pose's head through the capture's
+	// camera; null, or an observation without the face block, draws none
+	void setSourceFace(const BodyPoseObservation* body);
 	// The chain highlighted on the source pose
 	void setSelectedChain(eRetargetChain chain) { m_selectedChain= chain; }
 	// The source skeleton the layer draws and the picking hits
@@ -282,6 +304,19 @@ public:
 	// The chain a click on the source pose picked since the last call; false
 	// when none was
 	bool consumePickedChain(eRetargetChain& outChain);
+
+	// The head an orbit is aimed at (copied): the posed avatar's, or the
+	// tracked one while no avatar is loaded. Null leaves every orbit where it
+	// is.
+	void setFocusHead(const glm::vec3* headWorld);
+	// Aims a view's orbit at that head, keeping its angles and its distance.
+	// False without a head. Every view does it once on its own, and again on
+	// the F key while its image is hovered.
+	bool frameHead(SceneViewState& view);
+	// The same for the Stage View's own view
+	bool frameHead() { return frameHead(m_mainView); }
+	// The Stage View's orbit camera
+	OrbitCamera& getOrbitCamera() { return *m_mainView.camera; }
 
 	// The view's camera choice, not persisted: -1 is the free (orbit) camera,
 	// else the configured camera the view looks through, the frame's aspect
@@ -343,11 +378,18 @@ private:
 	// drag turns it (unless bLeftDragOrbits is off, when a gizmo holds the
 	// mouse), the middle drag pans, the wheel zooms
 	static void updateOrbit(OrbitCamera& camera, bool bLeftDragOrbits);
+	// The view cube at the top right of the view's viewport, over the image
+	// item just drawn: a drag on it turns the view's orbit about its target
+	// and a click on a face, an edge or a corner turns it to look from there.
+	// Fills the view's cube state.
+	static void drawViewCube(SceneViewState& view, const glm::vec2& imageMin, const glm::vec2& imageSize);
 	void drawGizmos(const SceneGizmos& gizmos);
 	void drawDirectSolve();
-	// Picks and drags the gizmos with the mouse over the scene image; returns
-	// whether a gizmo owns the mouse this frame (the orbit drag stands down)
-	bool updateGizmoDrag(SceneGizmos& gizmos, const glm::vec2& imageMin, const glm::vec2& imageSize);
+	// Runs the transform gizmo on the selected handle and the click that
+	// picks a handle by its marker, over the scene image; returns whether
+	// either owns the mouse this frame (the orbit drag and the chain pick
+	// stand down). Escape during a drag ends it and reports it cancelled.
+	bool updateGizmo(SceneGizmos& gizmos, const glm::vec2& imageMin, const glm::vec2& imageSize);
 	// World point -> image pixel; false when behind the camera
 	bool projectToImage(const glm::vec3& world, const glm::vec2& imageMin, const glm::vec2& imageSize,
 						glm::vec2& outPixel) const;
@@ -379,6 +421,8 @@ private:
 	AvatarRetargetGoals m_sourceGoals;
 	bool m_bHasHeadAnchor= false;
 	glm::vec3 m_headAnchorWorld{0.f};
+	bool m_bHasSourceFace= false;
+	SourceSkeletonInputs::Face m_sourceFace;
 	SourceSkeleton m_sourceSkeleton;
 	bool m_bSourceSkeletonDirty= true;
 	eRetargetChain m_selectedChain= eRetargetChain::LeftArm;
@@ -399,11 +443,13 @@ private:
 	FaceSources m_avatarFace;
 	std::vector<std::vector<float>> m_morphWeights;
 	std::vector<glm::mat4> m_posedGlobals;
-	// The gizmo being dragged (-1 none) and the camera-facing plane it moves
-	// in, display space
-	int m_draggedElbowHint= -1;
-	glm::vec3 m_dragPlanePoint{0.f};
-	glm::vec3 m_dragPlaneNormal{0.f};
+	// The transform gizmo is mid drag, and the mouse press that a cancelled
+	// drag or a handle pick took is still held
+	bool m_bGizmoDragging= false;
+	bool m_bGizmoPressHeld= false;
+	bool m_bGizmoOwnsMouse= false;
 	bool m_bShowPerCameraSkeletons= false;
 	float m_forearmLengthMeters= 0.25f;
+	bool m_bHasFocusHead= false;
+	glm::vec3 m_focusHeadWorld{0.f};
 };

@@ -9,6 +9,7 @@
 #include "glm/ext/vector_int4.hpp"
 
 #include "AvatarPanel.h" // eRetargetChain
+#include "BodyPoseTypes.h" // WHOLEBODY_FACE_LANDMARK_COUNT
 #include "SourcePose.h"
 
 struct LossHands;
@@ -58,12 +59,42 @@ struct SourceSkeletonInputs
 	// Where the head is drawn, in the scene's world; the source pose carries
 	// the head's orientation alone. Null leaves the head out.
 	const glm::vec3* headAnchorWorld= nullptr;
+
+	// A direct hand, which the source pose carries as a wrist rotation and
+	// finger angles alone: the palm frame the solve measured, in the solve's
+	// world, and the hand skeleton its fingers are laid out along, in the
+	// source's units (the avatar's)
+	struct DirectHand
+	{
+		bool bValid= false;
+		glm::quat palmOrientation{1.f, 0.f, 0.f, 0.f};
+		HandSkeleton skeleton;
+	};
+	// By eHandSide; null draws no direct hands
+	const std::array<DirectHand, 2>* directHands= nullptr;
+
+	// The face the direct camera's body model tracked: its landmarks in the
+	// camera's undistorted pixels with their scores, and the camera they are
+	// in, its focal lengths and its pose in the scene's world (OpenCV camera
+	// axes to world)
+	struct Face
+	{
+		std::array<glm::vec2, WHOLEBODY_FACE_LANDMARK_COUNT> pixels{};
+		std::array<float, WHOLEBODY_FACE_LANDMARK_COUNT> scores{};
+		float fx= 0.f;
+		float fy= 0.f;
+		glm::mat4 cameraToWorld{1.f};
+	};
+	// Null draws no face. It needs the head's anchor to be placed.
+	const Face* face= nullptr;
 };
 
 // The source skeleton's style: a dash and the gap after it along a carried
-// over bone, meters, and the marker sizes, pixels
+// over bone, meters, the marker sizes, pixels, and the score a face landmark
+// needs to be drawn, the bar the camera view's overlay draws at full strength
 namespace SourceSkeletonStyle
 {
+constexpr float kFaceScoreGate= 0.5f;
 constexpr float kDashLength= 0.015f;
 constexpr float kGapLength= 0.01f;
 constexpr float kMeasuredMarkerSize= 7.f;
@@ -76,10 +107,27 @@ constexpr float kCarriedMarkerSize= 5.f;
 // shoulder line and a neck line from its midpoint to the head while the
 // torso is carried, and the head's marker with its facing and up lines.
 // Direct pipeline: each carried arm's solved chain and the shoulder line,
-// carried by directToWorld, and the head's marker. A lost group draws
+// carried by directToWorld, the hand at the chain's wrist through the same
+// finger forward kinematics from the palm frame the solve measured, with the
+// fingers' zero along their metacarpals as the direct angles have it, and
+// the head's marker with its facing and up lines. A lost group draws
 // nothing, and so does a resting arm, which carries a placement and no
-// positions.
+// positions, and its hand with it.
+//
+// The tracked face draws with the head, in the head's chain: the landmarks'
+// contours laid flat on the plane through the head's anchor that faces the
+// camera, each landmark's pixel offset from the landmarks' center carried to
+// the anchor's depth, so the face is the size and shape the camera saw and
+// has no depth of its own. A contour segment with an end under the score
+// gate is left out.
 void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& outSkeleton);
+
+// Where a tracked face landmark is drawn: the pixel's offset from the
+// landmarks' center, carried to the anchor's depth along the camera's axis
+// and laid on the plane through the anchor that faces the camera. False for
+// an anchor that is not ahead of the camera.
+bool placeSourceFacePoint(const SourceSkeletonInputs::Face& face, const glm::vec2& centerPixel,
+						  const glm::vec3& anchorWorld, const glm::vec2& pixel, glm::vec3& outWorld);
 
 // Whether a group in this state is drawn, and whether it is drawn dashed
 bool isSourceGroupDrawn(SourcePose::eGroupState state);
