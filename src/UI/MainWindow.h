@@ -284,6 +284,12 @@ private:
 	eChainMode getShownChainMode() const;
 	// The rig and the chains as a gizmo drag found them, which Escape puts back
 	std::vector<SceneGizmoHandle> m_gizmoHandles;
+	// The custom pose the display stage last solved, the epoch its source
+	// clock carries, bumped when the pose or the feed changes, and that
+	// clock's time, which runs on the UI's frames
+	std::string m_customPoseShownId;
+	uint32_t m_customPoseEpoch= 0;
+	double m_customPoseClockMs= 0.0;
 	bool m_bGizmoDragStartValid= false;
 	AvatarRigSettings m_gizmoDragStartRig;
 	RetargetChains m_gizmoDragStartChains;

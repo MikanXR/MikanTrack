@@ -4,7 +4,7 @@
 
 #include "glm/ext/matrix_transform.hpp"
 
-#include "AvatarPreviewPoses.h"
+#include "CustomPose.h"
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
@@ -96,17 +96,20 @@ static int runRenderAvatarTool(const TestArgs& args)
 			std::vector<glm::mat4> globals= skeleton.getRestGlobalsAvatar();
 			if (bDemoPose)
 			{
-				TrackingFrameResult frame;
-				BodyDimensions user;
-				AvatarPreviewPoses::makeDemoFrame(skeleton, frame, user);
+				// The built-in custom pose as a position source, through the
+				// target solve under a default project's settings
 				AppConfig placement;
 				placement.avatar.followShoulders= false;
-				const AvatarRetargetConfig retargetConfig= makeAvatarRetargetConfig(placement, rig);
-				AvatarRetarget retarget;
-				AvatarPose pose;
-				retarget.solve(frame, user, skeleton, retargetConfig, pose,
-							   {rig.sides[0].elbowHintConfidence, rig.sides[1].elbowHintConfidence});
-				computePosedGlobals(*loaded.model, skeleton, pose, globals);
+				const std::shared_ptr<const AvatarSkeleton> sharedSkeleton(&skeleton, [](const AvatarSkeleton*) {});
+				RetargetStage stage;
+				stage.setConfig(makeRetargetStageConfig(placement, rig, sharedSkeleton));
+				CustomPoseSolveInputs solveInputs;
+				solveInputs.skeleton= &skeleton;
+				solveInputs.rig= &rig;
+				RetargetResult result;
+				fillCustomSource(makeDemoCustomPose(), solveInputs, SourcePose::Clock(), result);
+				stage.solveTarget(result.source, result.pose);
+				computePosedGlobals(*loaded.model, skeleton, result.pose, globals);
 			}
 
 			const glm::mat4 modelMatrix= displayFromWorld() * skeleton.getWorldFromAvatar();

@@ -464,6 +464,34 @@ DirectRetarget::ArmPlacement DirectRetarget::makeRestPlacement(const AvatarSkele
 	return rest;
 }
 
+DirectRetarget::ArmPlacement DirectRetarget::makePosedPlacement(const AvatarSkeleton& skeleton, int sideIndex,
+																const glm::quat& spineDelta, const glm::vec3& shoulder,
+																const glm::vec3& wristTarget, const glm::vec3* elbow,
+																const glm::vec3& elbowHint, const glm::quat& palm,
+																const std::array<FingerAngles, FINGER_COUNT>& fingers,
+																glm::vec3& outElbow, glm::vec3& outWrist)
+{
+	const eHandSide side= (eHandSide)sideIndex;
+	const float upperArm= skeleton.getUpperArmLength(side);
+	const float forearm= skeleton.getForearmLength(side);
+	const glm::vec3 chainElbow=
+		elbow != nullptr ? *elbow : solveElbow(shoulder, wristTarget, upperArm, forearm, elbowHint);
+
+	ArmPlacement placement;
+	placement.upperDirection= safeNormalize(chainElbow - shoulder);
+	placement.forearmDirection= safeNormalize(wristTarget - chainElbow);
+	const ChainSwing swing=
+		swingChain(skeleton, sideIndex, spineDelta, placement.upperDirection, placement.forearmDirection);
+	placement.forearmDirection= swing.forearmDirection;
+	handFromPalm(swing.forearmDirection, restPalmNormalUnder(skeleton, side, swing), palm, placement.twist,
+				 placement.wristRotation);
+	placement.fingers= fingers;
+
+	outElbow= shoulder + placement.upperDirection * upperArm;
+	outWrist= outElbow + placement.forearmDirection * forearm;
+	return placement;
+}
+
 DirectRetarget::ArmPlacement DirectRetarget::blendPlacements(const ArmPlacement& from, const ArmPlacement& to, float t)
 {
 	ArmPlacement out;

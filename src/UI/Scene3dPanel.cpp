@@ -257,6 +257,14 @@ void Scene3dPanel::setSourceFace(const BodyPoseObservation* body)
 	m_bSourceSkeletonDirty= true;
 }
 
+void Scene3dPanel::setCustomSourcePalms(const std::array<glm::quat, 2>* palms)
+{
+	m_bHasCustomPalms= palms != nullptr;
+	if (m_bHasCustomPalms)
+		m_customPalms= *palms;
+	m_bSourceSkeletonDirty= true;
+}
+
 const SourceSkeleton& Scene3dPanel::getSourceSkeleton()
 {
 	if (m_bSourceSkeletonDirty)
@@ -268,19 +276,22 @@ const SourceSkeleton& Scene3dPanel::getSourceSkeleton()
 		{
 			inputs.source= &m_sourcePose;
 			inputs.hands= &m_sourceHands;
-			inputs.directToWorld= m_bHasDirectSolve ? &m_solveToWorld : nullptr;
+			// A source made by hand is in the scene's world as it stands
+			static const glm::mat4 k_identity(1.f);
+			inputs.directToWorld= m_bHasDirectSolve ? &m_solveToWorld : (m_bHasCustomPalms ? &k_identity : nullptr);
 			inputs.headAnchorWorld= m_bHasHeadAnchor ? &m_headAnchorWorld : nullptr;
-			if (m_bHasDirectSolve && m_avatarSkeleton != nullptr)
+			if ((m_bHasDirectSolve || m_bHasCustomPalms) && m_avatarSkeleton != nullptr)
 			{
-				// The palm the solve measured, laid out along the avatar's
-				// hand, whose units the direct source is in
+				// The palm the solve measured, or the one the pose gives, laid
+				// out along the avatar's hand, whose units the direct source
+				// is in
 				for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 				{
 					const DirectRetarget::SolveState::Arm& arm= m_directSolve.arms[sideIndex];
 					const AvatarSkeleton::HandRest& handRest=
 						m_avatarSkeleton->getHand(sideIndex == 0 ? eHandSide::Left : eHandSide::Right);
-					directHands[sideIndex].bValid= arm.bHandMeasured && handRest.valid;
-					directHands[sideIndex].palmOrientation= arm.filteredPalm;
+					directHands[sideIndex].bValid= handRest.valid && (m_bHasCustomPalms || arm.bHandMeasured);
+					directHands[sideIndex].palmOrientation= m_bHasCustomPalms ? m_customPalms[sideIndex] : arm.filteredPalm;
 					directHands[sideIndex].skeleton= handRest.skeleton;
 				}
 				inputs.directHands= &directHands;

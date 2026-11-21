@@ -20,7 +20,7 @@
 #include "AvatarFaceTab.h"
 #include "AvatarMouthReadout.h"
 #include "AvatarPanel.h"
-#include "AvatarPreviewPoses.h"
+#include "CustomPose.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
 #include "BodyPoseSolver.h"
@@ -1122,6 +1122,7 @@ void MainWindow::updateOscReadout()
 void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
 	m_gizmoHandles.clear();
+	m_scene3dPanel->setCustomSourcePalms(nullptr);
 	updateDirectReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
@@ -1158,6 +1159,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		m_displayStage.reset();
 		m_replayPlayhead.invalidate();
 		m_avatarPoseFeed= feed;
+		++m_customPoseEpoch;
 	}
 
 	const DirectRetarget::SolveState* directState= nullptr;
@@ -1165,6 +1167,9 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const RetargetResult* shownResult= nullptr;
 	// The head the shown result's frame measured
 	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
+	// The custom pose's direct palms, and whether it is what is shown
+	bool bCustomPose= false;
+	std::array<glm::quat, 2> customPalms;
 	if (mode != eChainMode::Tracking)
 	{
 		if (mode == eChainMode::RestPose)
@@ -1190,16 +1195,39 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		}
 		else
 		{
-			TrackingFrameResult frame;
-			BodyDimensions user;
-			AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
-			RetargetStageConfig stageConfig= makeRetargetStageConfig(*config, rig, skeleton);
-			stageConfig.user= user;
-			m_displayStage.setConfig(stageConfig);
-			m_displayStage.solvePosition(frame, m_displayResult);
+			// The custom pose as the source the project's own pipeline would
+			// hand on, through the target solve alone: nothing was measured,
+			// so the fill and the loss stage have no part. The source's clock
+			// runs on the UI's frames, so whatever the solve steps over time
+			// (a smoothed function, the root) settles as it does live.
+			const CustomPose& customPose= m_app->getActiveCustomPose();
+			if (customPose.id != m_customPoseShownId)
+			{
+				m_displayStage.reset();
+				m_customPoseShownId= customPose.id;
+				++m_customPoseEpoch;
+			}
+			m_displayStage.setConfig(makeRetargetStageConfig(*config, rig, skeleton));
+
+			CustomPoseSolveInputs solveInputs;
+			solveInputs.skeleton= skeleton.get();
+			solveInputs.rig= &rig;
+			solveInputs.bDirect= config->direct.enabled;
+			solveInputs.rootPositionWorld= config->avatar.rootPositionWorld;
+			solveInputs.rootYawDegrees= config->avatar.rootYawDegrees;
+			const double frameMs= (double)ImGui::GetIO().DeltaTime * 1000.0;
+			m_customPoseClockMs+= frameMs;
+			SourcePose::Clock clock;
+			clock.timestampMs= m_customPoseClockMs;
+			clock.stepMs= m_customPoseClockMs;
+			clock.frameIntervalMs= frameMs;
+			clock.resetEpoch= m_customPoseEpoch;
+			fillCustomSource(customPose, solveInputs, clock, m_displayResult, &customPalms);
+			m_displayStage.solveTarget(m_displayResult.source, m_displayResult.pose, &m_displayResult.goals,
+									   &m_displayResult.armParameters);
 			m_avatarPose= m_displayResult.pose;
 			shownResult= &m_displayResult;
-			shownHead= frame.head;
+			bCustomPose= true;
 		}
 		m_scene3dPanel->setAvatarFace(nullptr);
 	}
@@ -1248,6 +1276,15 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	std::array<AvatarPosedBone, HUMANOID_BONE_COUNT> posed;
 	computePosedBones(*skeleton, m_avatarPose, posed);
 	const glm::vec3 posedHeadWorld= posed[(int)eHumanoidBone::Head].positionWorld;
+	if (bCustomPose)
+	{
+		// A pose made by hand measured no head position, so the source's head
+		// is drawn on the avatar's
+		shownHead.valid= true;
+		shownHead.positionWorld= posedHeadWorld;
+		if (config->direct.enabled)
+			m_scene3dPanel->setCustomSourcePalms(&customPalms);
+	}
 	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
 	m_scene3dPanel->setFocusHead(&posedHeadWorld);
 }

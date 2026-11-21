@@ -16,6 +16,7 @@
 #include "AppConfig.h"
 #include "AutomationServer.h"
 #include "AvatarSkeleton.h"
+#include "CustomPoseLibrary.h"
 #include "FrameTimer.h"
 #include "AudioService.h"
 #include "FaceAutoProfile.h"
@@ -228,6 +229,9 @@ bool App::startup()
 
 	m_faceProfiles= std::make_unique<FaceProfileLibrary>();
 	m_faceProfiles->refresh();
+	m_customPoses= std::make_unique<CustomPoseLibrary>();
+	m_customPoses->refresh();
+	m_activeCustomPose= makeDemoCustomPose();
 	rebuildFaceBinding();
 
 	m_mainWindow= std::make_unique<MainWindow>(this);
@@ -685,6 +689,102 @@ bool App::deleteFaceProfile(const std::string& id)
 	return bRemoved;
 }
 
+const CustomPose& App::getActiveCustomPose()
+{
+	// The project's choice is read as it is, so a project loaded in place of
+	// another, or a pose deleted from under this one, shows on the next read
+	const std::string& wanted= m_config->avatar.customPoseId;
+	const CustomPose* stored= CustomPoseLibrary::isValidId(wanted) ? m_customPoses->find(wanted) : nullptr;
+	const std::string resolved= stored != nullptr ? wanted : std::string(k_demoCustomPoseId);
+	if (m_activeCustomPose.id != resolved)
+	{
+		saveCustomPoseIfDirty();
+		m_activeCustomPose= stored != nullptr ? *stored : makeDemoCustomPose();
+	}
+	return m_activeCustomPose;
+}
+
+bool App::isActiveCustomPoseBuiltIn()
+{
+	return isBuiltInCustomPoseId(getActiveCustomPose().id);
+}
+
+void App::setActiveCustomPose(const std::string& id)
+{
+	saveCustomPoseIfDirty();
+	const std::string stored= isBuiltInCustomPoseId(id) ? std::string() : id;
+	if (m_config->avatar.customPoseId == stored)
+		return;
+	m_config->avatar.customPoseId= stored;
+	m_config->markDirty();
+}
+
+void App::editActiveCustomPose(const CustomPose& pose)
+{
+	if (isActiveCustomPoseBuiltIn() || pose.id != m_activeCustomPose.id)
+		return;
+	m_activeCustomPose= pose;
+	if (!m_bCustomPoseDirty)
+		m_customPoseSecondsSinceDirty= 0.f;
+	m_bCustomPoseDirty= true;
+}
+
+std::string App::createCustomPose(const std::string& name)
+{
+	saveCustomPoseIfDirty();
+	const std::string id= m_customPoses->create(name);
+	if (!id.empty())
+		setActiveCustomPose(id);
+	return id;
+}
+
+std::string App::duplicateCustomPose(const CustomPose& source, const std::string& name)
+{
+	saveCustomPoseIfDirty();
+	const std::string id= m_customPoses->duplicate(source, name);
+	if (!id.empty())
+		setActiveCustomPose(id);
+	return id;
+}
+
+bool App::renameCustomPose(const std::string& id, const std::string& name)
+{
+	saveCustomPoseIfDirty();
+	if (!m_customPoses->rename(id, name))
+		return false;
+	if (m_activeCustomPose.id == id)
+		m_activeCustomPose.name= name;
+	return true;
+}
+
+bool App::deleteCustomPose(const std::string& id)
+{
+	if (m_activeCustomPose.id == id)
+		m_bCustomPoseDirty= false;
+	const bool bRemoved= m_customPoses->remove(id);
+	if (m_config->avatar.customPoseId == id)
+		setActiveCustomPose(std::string());
+	return bRemoved;
+}
+
+void App::updateCustomPoseAutoSave(float deltaSeconds)
+{
+	if (!m_bCustomPoseDirty)
+		return;
+	m_customPoseSecondsSinceDirty+= deltaSeconds;
+	if (m_customPoseSecondsSinceDirty >= k_faceProfileAutoSaveSeconds)
+		saveCustomPoseIfDirty();
+}
+
+void App::saveCustomPoseIfDirty()
+{
+	if (!m_bCustomPoseDirty)
+		return;
+	m_bCustomPoseDirty= false;
+	if (!isBuiltInCustomPoseId(m_activeCustomPose.id))
+		m_customPoses->save(m_activeCustomPose);
+}
+
 void App::updateFaceProfileAutoSave(float deltaSeconds)
 {
 	if (!m_bFaceProfileDirty)
@@ -814,6 +914,7 @@ void App::shutdown()
 		m_config->save();
 	saveAvatarRigIfDirty();
 	saveFaceProfileIfDirty();
+	saveCustomPoseIfDirty();
 
 	if (m_visionThread != nullptr)
 	{
@@ -978,6 +1079,7 @@ void App::tick(float deltaSeconds)
 		m_config->updateAutoSave(deltaSeconds);
 		updateAvatarRigAutoSave(deltaSeconds);
 		updateFaceProfileAutoSave(deltaSeconds);
+		updateCustomPoseAutoSave(deltaSeconds);
 	}
 }
 

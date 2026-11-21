@@ -297,6 +297,11 @@ public:
 	// (copied), drawn with the source pose's head through the capture's
 	// camera; null, or an observation without the face block, draws none
 	void setSourceFace(const BodyPoseObservation* body);
+	// A direct source made by hand has no solve behind it: its positions are
+	// the scene's world already, and its palms are given here, each in that
+	// world, where a solved source's come from the solve. Null for a source
+	// a solve produced.
+	void setCustomSourcePalms(const std::array<glm::quat, 2>* palms);
 	// The chain highlighted on the source pose
 	void setSelectedChain(eRetargetChain chain) { m_selectedChain= chain; }
 	// The source skeleton the layer draws and the picking hits
@@ -421,6 +426,8 @@ private:
 	AvatarRetargetGoals m_sourceGoals;
 	bool m_bHasHeadAnchor= false;
 	glm::vec3 m_headAnchorWorld{0.f};
+	bool m_bHasCustomPalms= false;
+	std::array<glm::quat, 2> m_customPalms{};
 	bool m_bHasSourceFace= false;
 	SourceSkeletonInputs::Face m_sourceFace;
 	SourceSkeleton m_sourceSkeleton;

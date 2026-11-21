@@ -351,6 +351,10 @@ struct AvatarConfig
 	// +Z in degrees (0 = facing world +X, the rest-pose facing)
 	glm::vec3 rootPositionWorld{0.f, 0.f, 0.f};
 	float rootYawDegrees= 0.f;
+	// The custom pose the chains' Custom pose mode shows, by its id in the
+	// pose library. Empty, or an id the library lacks, shows the built-in
+	// pose.
+	std::string customPoseId;
 };
 
 // The single-camera direct retarget: one camera's landmarks posed straight
