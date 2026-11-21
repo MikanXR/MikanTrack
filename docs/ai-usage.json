@@ -920,6 +920,54 @@
           "output": 176012
         }
       }
+    },
+    "1a6721d5-ae7c-423d-995c-32f97871a731": {
+      "label": "Implement the Direct-mode UI regroup",
+      "firstActivity": "2026-11-20T07:06:10.191Z",
+      "lastActivity": "2026-11-20T20:52:00.252Z",
+      "branch": "direct-mode-ui-regroup",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 163,
+          "input": 348,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 345787,
+          "cacheRead": 44443106,
+          "output": 87294
+        },
+        "claude-opus-5-5": {
+          "calls": 275,
+          "input": 562,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 468316,
+          "cacheRead": 60356650,
+          "output": 139208
+        }
+      }
+    },
+    "632efd84-40aa-436e-b06b-adaeade89846": {
+      "label": "Scene view cube and chain gizmo, IK chain modes, custom pose library",
+      "firstActivity": "2026-11-20T21:20:36.368Z",
+      "lastActivity": "2026-11-21T03:30:09.949Z",
+      "branch": "token-stats-cost-badge",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 230,
+          "input": 482,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 1266848,
+          "cacheRead": 77610717,
+          "output": 332292
+        },
+        "claude-opus-5-5": {
+          "calls": 125,
+          "input": 250,
+          "cacheWrite5m": 659797,
+          "cacheWrite1h": 0,
+          "cacheRead": 20749199,
+          "output": 64774
+        }
+      }
     }
   },
   "excluded": {
@@ -994,6 +1042,9 @@
     },
     "3514f9af-f5a4-4a70-bf06-1c513c02c87a": {
       "reason": "manual"
+    },
+    "37369649-79f4-441f-802b-10eb99828b09": {
+      "reason": "outside-repo"
     },
     "3b01234b-3dfa-43cd-a5bf-f2c43e241f02": {
       "reason": "manual"
