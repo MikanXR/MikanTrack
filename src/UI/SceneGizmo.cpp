@@ -7,13 +7,14 @@
 #include "glm/trigonometric.hpp"
 
 #include "AvatarSkeleton.h"
+#include "CustomPose.h"
 
 namespace
 {
 using B= eHumanoidBone;
 
 const char* const k_valueIds[(int)eSceneGizmoValue::Count]= {
-	"none", "elbowHint", "goalOffset", "restElbow", "restWrist", "trim",
+	"none", "elbowHint", "goalOffset", "restElbow", "restWrist", "trim", "poseWrist", "poseElbow", "posePalm", "poseHead",
 };
 
 bool isArmChain(eRetargetChain chain)
@@ -57,26 +58,49 @@ bool getTrimBone(eRetargetChain chain, B& outBone)
 	}
 }
 
-// A translated value's storage; null for a target that is not one
-glm::vec3* findOffset(const SceneGizmoTarget& target, AvatarRigSettings& rig, RetargetChains& chains, bool& outIsRig)
+// A translated value's storage and the flag its edit sets; null for a target
+// that is not one, or whose destination the edit lacks
+glm::vec3* findOffset(const SceneGizmoTarget& target, SceneGizmoEdit& edit, bool*& outChanged)
 {
 	if (!isArmChain(target.chain))
 		return nullptr;
 	const int sideIndex= getSideIndex(target.chain);
-	outIsRig= target.value != eSceneGizmoValue::GoalOffset;
 	switch (target.value)
 	{
 		case eSceneGizmoValue::ElbowHint:
-			return &rig.sides[sideIndex].elbowHintOffset;
+			outChanged= &edit.bRigChanged;
+			return edit.rig != nullptr ? &edit.rig->sides[sideIndex].elbowHintOffset : nullptr;
 		case eSceneGizmoValue::GoalOffset:
-			return &chains.arms[sideIndex].goalOffset;
+			outChanged= &edit.bChainsChanged;
+			return edit.chains != nullptr ? &edit.chains->arms[sideIndex].goalOffset : nullptr;
 		case eSceneGizmoValue::RestElbow:
-			return &rig.sides[sideIndex].restElbowOffset;
+			outChanged= &edit.bRigChanged;
+			return edit.rig != nullptr ? &edit.rig->sides[sideIndex].restElbowOffset : nullptr;
 		case eSceneGizmoValue::RestWrist:
-			return &rig.sides[sideIndex].restWristOffset;
+			outChanged= &edit.bRigChanged;
+			return edit.rig != nullptr ? &edit.rig->sides[sideIndex].restWristOffset : nullptr;
+		case eSceneGizmoValue::PoseWrist:
+			outChanged= &edit.bPoseChanged;
+			return edit.pose != nullptr ? &edit.pose->arms[sideIndex].wristOffset : nullptr;
+		case eSceneGizmoValue::PoseElbow:
+			outChanged= &edit.bPoseChanged;
+			return edit.pose != nullptr ? &edit.pose->arms[sideIndex].elbowOffset : nullptr;
 		default:
 			return nullptr;
 	}
+}
+
+// A frame the custom pose stores as Euler degrees; null for a target that
+// is not one, or a pose that is not there
+glm::vec3* findPoseFrame(const SceneGizmoTarget& target, CustomPose* pose)
+{
+	if (pose == nullptr)
+		return nullptr;
+	if (target.value == eSceneGizmoValue::PoseHead && target.chain == eRetargetChain::Head)
+		return &pose->headDegrees;
+	if (target.value == eSceneGizmoValue::PosePalm && isArmChain(target.chain))
+		return &pose->arms[getSideIndex(target.chain)].palmDegrees;
+	return nullptr;
 }
 
 // Degrees into (-180, 180], the range the trim fields show
@@ -121,6 +145,14 @@ const char* getSceneGizmoValueLabelKey(const SceneGizmoTarget& target)
 			if (target.chain == eRetargetChain::Head)
 				return "chains.headTrim";
 			return isHandChain(target.chain) ? "chains.handTrim" : "chains.rollTrim";
+		case eSceneGizmoValue::PoseWrist:
+			return "chains.poseWristDrag";
+		case eSceneGizmoValue::PoseElbow:
+			return "chains.poseElbowDrag";
+		case eSceneGizmoValue::PosePalm:
+			return "chains.posePalmDrag";
+		case eSceneGizmoValue::PoseHead:
+			return "chains.poseHeadDrag";
 		default:
 			return "";
 	}
@@ -147,7 +179,68 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 	const bool bTracking= inputs.mode == eChainMode::Tracking;
 	const bool bRest= inputs.mode == eChainMode::RestPose;
 	if (!bTracking && !bRest)
+	{
+		// The custom pose's own values, where the pose put them
+		const CustomPose* custom= inputs.customPose;
+		if (custom == nullptr)
+			return;
+		if (chain == eRetargetChain::Head)
+		{
+			if (!skeleton.getBone(B::Head).present)
+				return;
+			SceneGizmoHandle handle;
+			handle.target= {chain, eSceneGizmoValue::PoseHead};
+			handle.kind= eSceneGizmoKind::Rotate;
+			handle.trimRule= eSceneGizmoTrimRule::StoredFrame;
+			handle.baseFrameWorld= rootRotation;
+			handle.positionWorld= posed[(int)B::Head].positionWorld;
+			handle.frameWorld= glm::normalize(rootRotation * glm::quat(glm::radians(custom->headDegrees)));
+			outHandles.push_back(handle);
+			return;
+		}
+		if (!isArmChain(chain))
+			return;
+		const int sideIndex= getSideIndex(chain);
+		const eHandSide side= sideIndex == 0 ? eHandSide::Left : eHandSide::Right;
+		const B upperArmBone= sideIndex == 0 ? B::LeftUpperArm : B::RightUpperArm;
+		const B handBone= sideIndex == 0 ? B::LeftHand : B::RightHand;
+		const CustomPose::Arm& arm= custom->arms[sideIndex];
+		if (!arm.bEnabled || !skeleton.getBone(upperArmBone).present)
+			return;
+		// The frame the pose's offsets and palm are in: the rooted torso,
+		// which the direct pipeline leans
+		const glm::quat torsoFrame= glm::normalize(
+			inputs.bDirect ? rootRotation * glm::quat(glm::radians(custom->leanDegrees)) : rootRotation);
+		const float armLength= skeleton.getUpperArmLength(side) + skeleton.getForearmLength(side);
+		const glm::vec3 shoulder= posed[(int)upperArmBone].positionWorld;
+		auto addPoint= [&](eSceneGizmoValue value, const glm::vec3& offset, bool bLine) {
+			SceneGizmoHandle handle;
+			handle.target= {chain, value};
+			handle.kind= eSceneGizmoKind::Translate;
+			handle.anchorWorld= shoulder;
+			handle.offsetScale= armLength;
+			handle.positionWorld= shoulder + torsoFrame * (offset * armLength);
+			handle.frameWorld= torsoFrame;
+			handle.bDrawAnchorLine= bLine;
+			outHandles.push_back(handle);
+		};
+		addPoint(eSceneGizmoValue::PoseWrist, arm.wristOffset, false);
+		if (arm.bHasElbow)
+			addPoint(eSceneGizmoValue::PoseElbow, arm.elbowOffset, true);
+		if (skeleton.getBone(handBone).present)
+		{
+			SceneGizmoHandle handle;
+			handle.target= {chain, eSceneGizmoValue::PosePalm};
+			handle.kind= eSceneGizmoKind::Rotate;
+			handle.trimRule= eSceneGizmoTrimRule::StoredFrame;
+			handle.baseFrameWorld= torsoFrame;
+			handle.frameWorld= glm::normalize(torsoFrame * glm::quat(glm::radians(arm.palmDegrees)));
+			const float halfPalm= skeleton.getHand(side).skeleton.baseInPalm[(int)eFinger::Middle].x;
+			handle.positionWorld= posed[(int)handBone].positionWorld + handle.frameWorld * glm::vec3(halfPalm, 0.f, 0.f);
+			outHandles.push_back(handle);
+		}
 		return;
+	}
 
 	if (isArmChain(chain))
 	{
@@ -254,24 +347,34 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 }
 
 void applySceneGizmoEdit(const SceneGizmoHandle& handle, const glm::vec3& draggedPositionWorld,
-						 const glm::quat& draggedFrameWorld, const glm::quat& rootRotationWorld, AvatarRigSettings& ioRig,
-						 RetargetChains& ioChains, bool& outRigChanged, bool& outChainsChanged)
+						 const glm::quat& draggedFrameWorld, SceneGizmoEdit& ioEdit)
 {
 	if (handle.kind == eSceneGizmoKind::Translate)
 	{
-		bool bIsRig= true;
-		glm::vec3* offset= findOffset(handle.target, ioRig, ioChains, bIsRig);
-		if (offset == nullptr)
+		bool* changed= nullptr;
+		glm::vec3* offset= findOffset(handle.target, ioEdit, changed);
+		if (offset == nullptr || handle.offsetScale <= 0.f)
 			return;
-		*offset= glm::inverse(rootRotationWorld) * (draggedPositionWorld - handle.anchorWorld);
-		(bIsRig ? outRigChanged : outChainsChanged)= true;
+		*offset= glm::inverse(handle.frameWorld) * (draggedPositionWorld - handle.anchorWorld) / handle.offsetScale;
+		*changed= true;
+		return;
+	}
+
+	if (handle.trimRule == eSceneGizmoTrimRule::StoredFrame)
+	{
+		glm::vec3* degrees= findPoseFrame(handle.target, ioEdit.pose);
+		if (degrees == nullptr)
+			return;
+		*degrees= glm::degrees(glm::eulerAngles(glm::normalize(glm::inverse(handle.baseFrameWorld) * draggedFrameWorld)));
+		ioEdit.bPoseChanged= true;
 		return;
 	}
 
 	B trimBone;
-	if (handle.target.value != eSceneGizmoValue::Trim || !getTrimBone(handle.target.chain, trimBone))
+	if (ioEdit.rig == nullptr || handle.target.value != eSceneGizmoValue::Trim ||
+		!getTrimBone(handle.target.chain, trimBone))
 		return;
-	glm::vec3& trimDegrees= ioRig.rotationTrimDegrees[(int)trimBone];
+	glm::vec3& trimDegrees= ioEdit.rig->rotationTrimDegrees[(int)trimBone];
 	// The turn in the handle's own axes
 	const glm::quat turn= glm::normalize(glm::inverse(handle.frameWorld) * draggedFrameWorld);
 	if (handle.trimRule == eSceneGizmoTrimRule::ForearmRoll)
@@ -289,11 +392,11 @@ void applySceneGizmoEdit(const SceneGizmoHandle& handle, const glm::vec3& dragge
 																					 : trim * turn;
 		trimDegrees= glm::degrees(glm::eulerAngles(glm::normalize(turned)));
 	}
-	outRigChanged= true;
+	ioEdit.bRigChanged= true;
 }
 
 bool getSceneGizmoValue(const SceneGizmoTarget& target, const AvatarRigSettings& rig, const RetargetChains& chains,
-						glm::vec3& outValue)
+						const CustomPose* pose, glm::vec3& outValue)
 {
 	if (target.value == eSceneGizmoValue::Trim)
 	{
@@ -303,33 +406,47 @@ bool getSceneGizmoValue(const SceneGizmoTarget& target, const AvatarRigSettings&
 		outValue= rig.rotationTrimDegrees[(int)trimBone];
 		return true;
 	}
-	bool bIsRig= true;
-	const glm::vec3* offset=
-		findOffset(target, const_cast<AvatarRigSettings&>(rig), const_cast<RetargetChains&>(chains), bIsRig);
+	// Read through the edit's lookups, which write nothing
+	SceneGizmoEdit read;
+	read.rig= const_cast<AvatarRigSettings*>(&rig);
+	read.chains= const_cast<RetargetChains*>(&chains);
+	read.pose= const_cast<CustomPose*>(pose);
+	if (const glm::vec3* degrees= findPoseFrame(target, read.pose))
+	{
+		outValue= *degrees;
+		return true;
+	}
+	bool* changed= nullptr;
+	const glm::vec3* offset= findOffset(target, read, changed);
 	if (offset == nullptr)
 		return false;
 	outValue= *offset;
 	return true;
 }
 
-bool setSceneGizmoValue(const SceneGizmoTarget& target, const glm::vec3& value, AvatarRigSettings& ioRig,
-						RetargetChains& ioChains, bool& outRigChanged, bool& outChainsChanged)
+bool setSceneGizmoValue(const SceneGizmoTarget& target, const glm::vec3& value, SceneGizmoEdit& ioEdit)
 {
 	if (target.value == eSceneGizmoValue::Trim)
 	{
 		B trimBone;
-		if (!getTrimBone(target.chain, trimBone))
+		if (ioEdit.rig == nullptr || !getTrimBone(target.chain, trimBone))
 			return false;
 		// A forearm's trim is its roll alone
-		ioRig.rotationTrimDegrees[(int)trimBone]= isArmChain(target.chain) ? glm::vec3(value.x, 0.f, 0.f) : value;
-		outRigChanged= true;
+		ioEdit.rig->rotationTrimDegrees[(int)trimBone]= isArmChain(target.chain) ? glm::vec3(value.x, 0.f, 0.f) : value;
+		ioEdit.bRigChanged= true;
 		return true;
 	}
-	bool bIsRig= true;
-	glm::vec3* offset= findOffset(target, ioRig, ioChains, bIsRig);
+	if (glm::vec3* degrees= findPoseFrame(target, ioEdit.pose))
+	{
+		*degrees= value;
+		ioEdit.bPoseChanged= true;
+		return true;
+	}
+	bool* changed= nullptr;
+	glm::vec3* offset= findOffset(target, ioEdit, changed);
 	if (offset == nullptr)
 		return false;
 	*offset= value;
-	(bIsRig ? outRigChanged : outChainsChanged)= true;
+	*changed= true;
 	return true;
 }

@@ -129,7 +129,8 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		"scene",
 		{"scene camera", "scene camera set <yawDegrees> <pitchDegrees> <radius>", "scene camera target <x> <y> <z>",
 		 "scene camera frame", "scene camera view front|back|left|right|top|bottom", "scene gizmo",
-		 "scene gizmo select none|<chain> <elbowHint|goalOffset|restElbow|restWrist|trim>",
+		 "scene gizmo select none|<chain> <elbowHint|goalOffset|restElbow|restWrist|trim|poseWrist|poseElbow|posePalm|"
+		 "poseHead>",
 		 "scene gizmo set <x> <y> <z>"},
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handleSceneAutomation(args, outLines, outError);
@@ -1270,6 +1271,9 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		gizmoInputs.goals= shownResult != nullptr ? &shownResult->goals : nullptr;
 		gizmoInputs.bDirect= config->direct.enabled;
 		gizmoInputs.mode= mode;
+		// The built-in pose is read-only, so it has no handles
+		const CustomPose& gizmoPose= m_app->getActiveCustomPose();
+		gizmoInputs.customPose= bCustomPose && !isBuiltInCustomPoseId(gizmoPose.id) ? &gizmoPose : nullptr;
 		buildSceneGizmoHandles(gizmoInputs, m_avatarPanel->getSelectedChain(), outGizmos.handles);
 		outGizmos.selected= m_avatarPanel->getGizmoTarget();
 	}
@@ -1493,6 +1497,7 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 		{
 			m_app->setAvatarRig(m_gizmoDragStartRig);
 			m_app->setRetargetChains(m_gizmoDragStartChains);
+			m_app->editActiveCustomPose(m_gizmoDragStartPose);
 		}
 		m_bGizmoDragStartValid= false;
 		return;
@@ -1503,6 +1508,7 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 	{
 		m_gizmoDragStartRig= m_app->getAvatarRig();
 		m_gizmoDragStartChains= m_app->getRetargetChains();
+		m_gizmoDragStartPose= m_app->getActiveCustomPose();
 		m_bGizmoDragStartValid= true;
 	}
 	for (const SceneGizmoHandle& handle : gizmos.handles)
@@ -1517,14 +1523,18 @@ void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
 			break;
 		AvatarRigSettings rig= m_app->getAvatarRig();
 		RetargetChains chains= m_app->getRetargetChains();
-		bool bRigChanged= false;
-		bool bChainsChanged= false;
-		applySceneGizmoEdit(handle, gizmos.draggedPositionWorld, gizmos.draggedFrameWorld,
-							m_avatarPose.rootRotationWorld, rig, chains, bRigChanged, bChainsChanged);
-		if (bRigChanged)
+		CustomPose pose= m_app->getActiveCustomPose();
+		SceneGizmoEdit edit;
+		edit.rig= &rig;
+		edit.chains= &chains;
+		edit.pose= &pose;
+		applySceneGizmoEdit(handle, gizmos.draggedPositionWorld, gizmos.draggedFrameWorld, edit);
+		if (edit.bRigChanged)
 			m_app->setAvatarRig(rig);
-		if (bChainsChanged)
+		if (edit.bChainsChanged)
 			m_app->setRetargetChains(chains);
+		if (edit.bPoseChanged)
+			m_app->editActiveCustomPose(pose);
 		break;
 	}
 }
@@ -1546,7 +1556,8 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 			glm::vec3 value;
 			if (args.size() != 4 || !AvatarPanel::parseChainId(args[2], target.chain) ||
 				!parseSceneGizmoValueId(args[3], target.value) ||
-				!getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+				!getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(),
+									&m_app->getActiveCustomPose(), value))
 			{
 				outError= "expected none, or a chain and one of its values";
 				return false;
@@ -1577,13 +1588,23 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 		}
 		AvatarRigSettings rig= m_app->getAvatarRig();
 		RetargetChains chains= m_app->getRetargetChains();
-		bool bRigChanged= false;
-		bool bChainsChanged= false;
-		setSceneGizmoValue(target, value, rig, chains, bRigChanged, bChainsChanged);
-		if (bRigChanged)
+		CustomPose pose= m_app->getActiveCustomPose();
+		SceneGizmoEdit edit;
+		edit.rig= &rig;
+		edit.chains= &chains;
+		// The built-in pose takes no edit
+		edit.pose= isBuiltInCustomPoseId(pose.id) ? nullptr : &pose;
+		if (!setSceneGizmoValue(target, value, edit))
+		{
+			outError= "the setting cannot be set";
+			return false;
+		}
+		if (edit.bRigChanged)
 			m_app->setAvatarRig(rig);
-		if (bChainsChanged)
+		if (edit.bChainsChanged)
 			m_app->setRetargetChains(chains);
+		if (edit.bPoseChanged)
+			m_app->editActiveCustomPose(pose);
 	}
 	else if (!verb.empty())
 	{
@@ -1593,7 +1614,8 @@ bool MainWindow::handleSceneGizmoAutomation(const std::vector<std::string>& args
 
 	const SceneGizmoTarget target= m_avatarPanel->getGizmoTarget();
 	glm::vec3 value;
-	if (target.isValid() && getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(), value))
+	if (target.isValid() && getSceneGizmoValue(target, m_app->getAvatarRig(), m_app->getRetargetChains(),
+											   &m_app->getActiveCustomPose(), value))
 	{
 		char line[160];
 		snprintf(line, sizeof(line), "target %s %s value %.4f %.4f %.4f", AvatarPanel::getChainId(target.chain),

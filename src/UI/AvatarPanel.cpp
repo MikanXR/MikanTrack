@@ -736,6 +736,7 @@ void AvatarPanel::drawPoseRows(eRetargetChain chain)
 		ImGui::SetItemTooltip("%s", locText("chains.poseLeanTooltip"));
 		break;
 	case eRetargetChain::Head:
+		drawGizmoToggle(eSceneGizmoValue::PoseHead);
 		bChanged|= ImGui::DragFloat3(locLabel("chains.poseHeadDrag"), &pose.headDegrees.x, 0.25f, -180.f, 180.f, "%.1f");
 		ImGui::SetItemTooltip("%s", locText("chains.poseHeadTooltip"));
 		break;
@@ -747,14 +748,17 @@ void AvatarPanel::drawPoseRows(eRetargetChain chain)
 		bChanged|= ImGui::Checkbox(locLabel("chains.poseArmEnabledCheckbox"), &arm.bEnabled);
 		ImGui::SetItemTooltip("%s", locText("chains.poseArmEnabledTooltip"));
 		ImGui::BeginDisabled(!arm.bEnabled);
+		drawGizmoToggle(eSceneGizmoValue::PoseWrist);
 		bChanged|= ImGui::DragFloat3(locLabel("chains.poseWristDrag"), &arm.wristOffset.x, 0.005f, -1.2f, 1.2f, "%.3f");
 		ImGui::SetItemTooltip("%s", locText("chains.poseWristTooltip"));
+		drawGizmoToggle(eSceneGizmoValue::PosePalm);
 		bChanged|= ImGui::DragFloat3(locLabel("chains.posePalmDrag"), &arm.palmDegrees.x, 0.5f, -180.f, 180.f, "%.1f");
 		ImGui::SetItemTooltip("%s", locText("chains.posePalmTooltip"));
 		bChanged|= ImGui::Checkbox(locLabel("chains.poseElbowCheckbox"), &arm.bHasElbow);
 		ImGui::SetItemTooltip("%s", locText("chains.poseElbowTooltip"));
 		if (arm.bHasElbow)
 		{
+			drawGizmoToggle(eSceneGizmoValue::PoseElbow);
 			bChanged|=
 				ImGui::DragFloat3(locLabel("chains.poseElbowDrag"), &arm.elbowOffset.x, 0.005f, -1.2f, 1.2f, "%.3f");
 			ImGui::SetItemTooltip("%s", locText("chains.poseWristTooltip"));

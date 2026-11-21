@@ -11,6 +11,7 @@
 #include "PipelineModel.h"
 #include "DirectRetarget.h"
 #include "RetargetStage.h"
+#include "CustomPose.h"
 #include "Scene3dPanel.h" // SceneGizmos
 #include "SettingsPanels.h" // TrackingPanelState
 #include "VisionThread.h"    // VisionPreviewFrame
@@ -293,6 +294,7 @@ private:
 	bool m_bGizmoDragStartValid= false;
 	AvatarRigSettings m_gizmoDragStartRig;
 	RetargetChains m_gizmoDragStartChains;
+	CustomPose m_gizmoDragStartPose;
 	// scene gizmo: the setting the scene's gizmo is attached to, its stored
 	// value and the selected chain's handles; with a verb, attaches it or
 	// sets the value

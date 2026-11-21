@@ -198,8 +198,9 @@ Every free-orbit scene view draws ImGuizmo's view cube at the top right of its v
 
 The Retarget view draws a handle for each setting of the selected chain that has a place in the scene, and an ImGuizmo transform gizmo on the one that is attached (`src/UI/SceneGizmo.h`, with no ImGui and no GL, and `Scene3dPanel::updateGizmo`). The settings:
 
-- An arm: the elbow hint, the goal offset while the arm maps toward a goal and the frame has one, the rest elbow and rest wrist while the arm eases to rest, and the forearm's roll trim
-- The head and each hand: the frame trim
+- Tracking: an arm's elbow hint, its goal offset while the arm maps toward a goal and the frame has one, and its forearm's roll trim, and the head's and each hand's frame trim
+- Rest pose: an arm's rest elbow and rest wrist
+- Custom pose: an arm's wrist, its elbow when the pose gives one, and its palm, while the arm is on, and the head's turn. The built-in pose has none
 - The torso: none
 
 A handle is a small ring, yellow, white when attached, with a line to its anchor for the points measured from the shoulder. Hovering one names its setting, a click attaches the gizmo, and so does the toggle ahead of the setting's row in the chain's settings: both set `AvatarPanel`'s one gizmo target, which selecting another chain clears. The handles belong to the Stage View's Retarget view alone, the avatar half's side by side, and never to the view from a camera or a pinned window.
@@ -212,7 +213,9 @@ A point's gizmo moves it along the rooted torso frame's axes, the frame its offs
 
 - A forearm: the angle turned about the forearm is added to the roll.
 
-The gizmo works in display space and the edit comes back through the one display conversion. `MainWindow::applyGizmoDrags` writes a drag through `App::setAvatarRig` or `App::setRetargetChains` every frame it moves, as the rows do. It keeps the rig and the chains as the drag found them, and Escape during the drag puts them back. There is no undo past the release.
+A custom pose's wrist and elbow move in the same frame, leaned with the torso on a direct project, and are stored in arm lengths (`SceneGizmoHandle::offsetScale`). Its palm and head are frames stored as Euler degrees in that frame (`eSceneGizmoTrimRule::StoredFrame`), and take the turned frame as it is. The palm's handle sits at the palm's center, clear of the wrist's.
+
+The gizmo works in display space and the edit comes back through the one display conversion. An edit has three destinations, the rig, the chains and the custom pose (`SceneGizmoEdit`), and `MainWindow::applyGizmoDrags` writes a drag through `App::setAvatarRig`, `App::setRetargetChains` or `App::editActiveCustomPose` every frame it moves, as the rows do. It keeps all three as the drag found them, and Escape during the drag puts them back. There is no undo past the release.
 
 The split mode (Cameras + 3D scene) draws both bodies side by side, each in a child region since each fills the region it is given, with a bar between them that drags the camera half's share (0.2 to 0.8, half at start, not persisted). The camera half shows the selection's camera on a camera stage and every camera otherwise, and the scene half the selection's stage layers or the whole scene on a camera stage (`resolveStageViewContent`, the pure rule for every mode). The scene's point-of-view choice and the Retarget layout apply to the scene half.
 

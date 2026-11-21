@@ -37,7 +37,7 @@ enum class eChainMode
 
 // A chain's setting the scene's gizmo edits. An arm has the first four and
 // its forearm's roll trim, the head and a hand their frame trim, the torso
-// none.
+// none. The pose's values are the Custom pose mode's.
 enum class eSceneGizmoValue : int
 {
 	None,
@@ -50,6 +50,11 @@ enum class eSceneGizmoValue : int
 	RestWrist,
 	// AvatarRigSettings::rotationTrimDegrees of the chain's bone
 	Trim,
+	// The custom pose's: an arm's wrist, elbow and palm, and the head
+	PoseWrist,
+	PoseElbow,
+	PosePalm,
+	PoseHead,
 	Count,
 };
 
