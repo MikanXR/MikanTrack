@@ -20,6 +20,7 @@
 #include "PatternExport.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
+#include "VideoPrivacy.h"
 #include "VisionThread.h"
 #include "WebcamIntrinsicsTable.h"
 
@@ -77,6 +78,9 @@ void SetupFlow::update()
 		case eStep::AvatarLoad:
 			updateAvatarLoadPrompt();
 			break;
+		case eStep::VideoWarning:
+			updateVideoWarningPrompt();
+			break;
 		case eStep::CameraSelection:
 			updateCameraSelectionPrompt();
 			break;
@@ -127,8 +131,10 @@ SetupFlow::eStep SetupFlow::nextStep(eTrackingSetup setup, eStep completed)
 	switch (completed)
 	{
 		case eStep::TrackingSetup:
-			return bSingleCamera ? eStep::AvatarLoad : eStep::CameraSelection;
+			return bSingleCamera ? eStep::AvatarLoad : eStep::VideoWarning;
 		case eStep::AvatarLoad:
+			return eStep::VideoWarning;
+		case eStep::VideoWarning:
 			return eStep::CameraSelection;
 		case eStep::CameraSelection:
 			return eStep::CharucoPrint;
@@ -361,6 +367,31 @@ void SetupFlow::updateAvatarLoadPrompt()
 		advanceFrom(eStep::AvatarLoad);
 	}
 	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		enterConfirmCancel();
+	}
+	ImGui::EndPopup();
+}
+
+void SetupFlow::updateVideoWarningPrompt()
+{
+	if (!beginCenteredModal(locWindowTitle("windows.modalSetupVideoWarning")))
+		return;
+
+	ImGui::PushTextWrapPos(k_promptWrapWidth);
+	ImGui::TextUnformatted(locText("setupFlow.videoWarningPrompt"));
+	VideoPrivacy::drawStreamingWarning(m_streamingWatch.poll());
+	ImGui::PopTextWrapPos();
+
+	ImGui::Separator();
+	if (ImGui::Button(locLabel("common.continueLabel"), ImVec2(120, 0)))
+	{
+		ImGui::CloseCurrentPopup();
+		advanceFrom(eStep::VideoWarning);
+	}
 	ImGui::SameLine();
 	if (ImGui::Button(locLabel("common.cancel"), ImVec2(120, 0)))
 	{

@@ -36,6 +36,7 @@ const char* stepName(eStep step)
 		case eStep::Inactive: return "Inactive";
 		case eStep::TrackingSetup: return "TrackingSetup";
 		case eStep::AvatarLoad: return "AvatarLoad";
+		case eStep::VideoWarning: return "VideoWarning";
 		case eStep::CameraSelection: return "CameraSelection";
 		case eStep::CharucoPrint: return "CharucoPrint";
 		case eStep::IntrinsicsRunning: return "Intrinsics";
@@ -85,21 +86,22 @@ static int runSetupFlowTest(const TestArgs&)
 		check(chain == expected, name);
 	};
 
-	const std::vector<eStep> dual= {eStep::TrackingSetup, eStep::CameraSelection, eStep::CharucoPrint,
-									eStep::IntrinsicsRunning, eStep::IntrinsicsRunning, eStep::ArucoPrint,
-									eStep::ExtrinsicsRunning, eStep::HandCalibRunning};
+	const std::vector<eStep> dual= {eStep::TrackingSetup, eStep::VideoWarning, eStep::CameraSelection,
+									eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::IntrinsicsRunning,
+									eStep::ArucoPrint, eStep::ExtrinsicsRunning, eStep::HandCalibRunning};
 	std::vector<eStep> joyCons= dual;
 	joyCons.push_back(eStep::MountingRunning);
-	const std::vector<eStep> tri= {eStep::TrackingSetup, eStep::CameraSelection, eStep::CharucoPrint,
-								   eStep::IntrinsicsRunning, eStep::IntrinsicsRunning, eStep::IntrinsicsRunning,
-								   eStep::ArucoPrint, eStep::ExtrinsicsRunning, eStep::HandCalibRunning,
-								   eStep::BodyCalibRunning};
-	const std::vector<eStep> singleFront= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::CameraSelection,
-										   eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::HandednessCheck,
-										   eStep::NeutralCapture};
-	const std::vector<eStep> singleDesk= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::CameraSelection,
-										  eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::ArucoPrint,
-										  eStep::ExtrinsicsRunning, eStep::HandCalibRunning, eStep::BodyCalibRunning};
+	const std::vector<eStep> tri= {eStep::TrackingSetup, eStep::VideoWarning, eStep::CameraSelection,
+								   eStep::CharucoPrint, eStep::IntrinsicsRunning, eStep::IntrinsicsRunning,
+								   eStep::IntrinsicsRunning, eStep::ArucoPrint, eStep::ExtrinsicsRunning,
+								   eStep::HandCalibRunning, eStep::BodyCalibRunning};
+	const std::vector<eStep> singleFront= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::VideoWarning,
+										   eStep::CameraSelection, eStep::CharucoPrint, eStep::IntrinsicsRunning,
+										   eStep::HandednessCheck, eStep::NeutralCapture};
+	const std::vector<eStep> singleDesk= {eStep::TrackingSetup, eStep::AvatarLoad, eStep::VideoWarning,
+										  eStep::CameraSelection, eStep::CharucoPrint, eStep::IntrinsicsRunning,
+										  eStep::ArucoPrint, eStep::ExtrinsicsRunning, eStep::HandCalibRunning,
+										  eStep::BodyCalibRunning};
 
 	checkChain(eSetup::DualOverhead, dual, "(a) the dual overhead chain ends at the hand wizard");
 	checkChain(eSetup::DualOverheadJoyCons, joyCons, "(a) the Joy-Con chain adds the mounting wizard");
@@ -132,6 +134,24 @@ static int runSetupFlowTest(const TestArgs&)
 		bHandednessSingleFrontOnly&= bReaches == (setup == eSetup::SingleFront);
 	}
 	check(bHandednessSingleFrontOnly, "(d) only the single-front variant reaches the handedness check");
+
+	// The camera selection shows live previews, so every variant reaches it
+	// through the video warning and by no other step
+	bool bWarnedBeforeCameras= true;
+	const eStep allSteps[]= {eStep::TrackingSetup,     eStep::AvatarLoad,       eStep::VideoWarning,
+							 eStep::CameraSelection,   eStep::CharucoPrint,     eStep::IntrinsicsRunning,
+							 eStep::ArucoPrint,        eStep::ExtrinsicsRunning, eStep::HandCalibRunning,
+							 eStep::MountingRunning,   eStep::BodyCalibRunning, eStep::HandednessCheck,
+							 eStep::NeutralCapture,    eStep::ConfirmCancel};
+	for (eSetup setup : setups)
+	{
+		for (eStep step : allSteps)
+		{
+			const bool bReachesCameras= SetupFlow::nextStep(setup, step) == eStep::CameraSelection;
+			bWarnedBeforeCameras&= bReachesCameras == (step == eStep::VideoWarning);
+		}
+	}
+	check(bWarnedBeforeCameras, "(f) the camera selection is reached only through the video warning");
 
 	// The lens step's exits: a calibration runs the intrinsics wizard next,
 	// and a table or skipped lens goes straight to what follows it

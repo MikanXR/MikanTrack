@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "opencv2/core/mat.hpp"
@@ -15,6 +16,10 @@ class GlTexture;
 // camera filling the region. The "active" camera (used by the calibration
 // wizards) gets a highlight border; wizards pin it via setActiveCamera(). It
 // owns no window: a host draws the body.
+//
+// A camera's pixels are uploaded only while its video is visible. A hidden
+// camera's pane is a dark frame of the image's shape under the same overlay,
+// and its texture does not exist.
 class VideoPreviewPanel
 {
 public:
@@ -24,8 +29,23 @@ public:
 	void setCameraCount(size_t count);
 	size_t getCameraCount() const { return m_panes.size(); }
 
-	// Uploads a new BGR frame for one camera
+	// Whether a camera's video is shown, set every frame before setFrame.
+	// Hiding it destroys the camera's texture. bGranted says a calibration
+	// holds the video on, which the pane's button then cannot turn off.
+	void setVideoVisible(int cameraIndex, bool bVisible, bool bGranted);
+	bool getVideoVisible(int cameraIndex) const;
+
+	// Takes one camera's new BGR frame: its size always, and its pixels only
+	// while the camera's video is visible
 	void setFrame(int cameraIndex, const cv::Mat& bgr);
+
+	// The camera whose pane had its video button pressed since the last
+	// call, in any window showing it, -1 for none
+	int consumeVideoToggleRequest();
+
+	// The running streaming program a visible camera's badge names, empty
+	// for none
+	void setStreamingSoftwareName(const std::string& name) { m_streamingSoftwareName= name; }
 
 	// Draws the cameras into the current window's remaining content region.
 	// results and executionProviders are indexed by camera. forearms
@@ -42,10 +62,11 @@ public:
 
 	// Draws the cameras the way drawBody does for another window showing
 	// them: nothing is published, so the wizards keep drawing on drawBody's
-	// panes, and a click changes no active camera
+	// panes, and a click changes no active camera. A pane's video button
+	// works as it does there.
 	void drawSecondaryBody(const std::vector<const TrackingFrameResult*>& results,
 						   const std::vector<const char*>& executionProviders,
-						   const std::vector<ForearmOverlay>* forearms, int cameraFilter) const;
+						   const std::vector<ForearmOverlay>* forearms, int cameraFilter);
 
 	// Called on a frame the body is not drawn, so the wizard overlays see no
 	// draw list rather than last frame's
@@ -58,11 +79,11 @@ public:
 	// Draw list for wizard overlays (nullptr on a frame the body is not drawn)
 	ImDrawList* getLastDrawList() const { return m_lastDrawList; }
 
-	// Live GL texture of one camera's latest frame (0 until a frame arrived),
-	// for embedding small previews outside the panel (e.g. the setup flow's
-	// camera-selection prompt)
+	// Live GL texture of one camera's latest frame (0 until a frame arrived
+	// and while the camera's video is hidden), for embedding small previews
+	// outside the panel (e.g. the setup flow's camera-selection prompt)
 	uint32_t getCameraTextureId(int cameraIndex) const;
-	// Width over height of that texture; 16:9 until a frame arrived
+	// Width over height of the camera's newest frame; 16:9 until one arrived
 	float getCameraAspect(int cameraIndex) const;
 	// The size of the camera's newest frame, false before one has arrived
 	bool getCameraFrameSize(int cameraIndex, int& outWidth, int& outHeight) const;
@@ -97,23 +118,39 @@ public:
 private:
 	struct CameraPane
 	{
+		// Holds a GL texture only while the camera's video is visible
 		std::unique_ptr<GlTexture> texture;
 		ImageToScreenMapping mapping;
 		bool bHasFrame= false;
+		// The newest frame's size, kept whether or not its pixels were
+		int frameWidth= 0;
+		int frameHeight= 0;
+		bool bVideoVisible= false;
+		bool bVideoGranted= false;
+	};
+
+	// What was clicked in the panes on a frame, -1 for none: the pane, and
+	// the pane whose video button was pressed
+	struct PaneClicks
+	{
+		int paneCamera= -1;
+		int videoToggleCamera= -1;
 	};
 
 	// Draws the panes into the current window's remaining region on its
 	// draw list. inOutMappings holds one mapping per camera, and each pane
-	// drawn with a frame writes its own. Returns the camera whose pane was
-	// clicked, -1 for none.
-	int drawPanes(const std::vector<const TrackingFrameResult*>& results,
-				  const std::vector<const char*>& executionProviders, const std::vector<ForearmOverlay>* forearms,
-				  int cameraFilter, std::vector<ImageToScreenMapping>& inOutMappings) const;
+	// drawn with a frame writes its own.
+	PaneClicks drawPanes(const std::vector<const TrackingFrameResult*>& results,
+						 const std::vector<const char*>& executionProviders,
+						 const std::vector<ForearmOverlay>* forearms, int cameraFilter,
+						 std::vector<ImageToScreenMapping>& inOutMappings) const;
 
 	std::vector<std::unique_ptr<CameraPane>> m_panes;
 	ImageToScreenMapping m_fallbackMapping;
 	ImDrawList* m_lastDrawList= nullptr;
 	int m_activeCamera= 0;
+	int m_videoToggleRequest= -1;
+	std::string m_streamingSoftwareName;
 
 	bool m_bShowOverlay= true;
 	bool m_bShowDetectionBoxes= false;

@@ -29,13 +29,48 @@ void VideoPreviewPanel::setCameraCount(size_t count)
 	m_activeCamera= std::min(m_activeCamera, (int)m_panes.size() - 1);
 }
 
+void VideoPreviewPanel::setVideoVisible(int cameraIndex, bool bVisible, bool bGranted)
+{
+	if (cameraIndex < 0 || cameraIndex >= (int)m_panes.size())
+		return;
+
+	CameraPane& pane= *m_panes[cameraIndex];
+	// A hidden camera keeps no pixels, so none can be drawn by a later frame
+	if (!bVisible)
+		pane.texture->dispose();
+	pane.bVideoVisible= bVisible;
+	pane.bVideoGranted= bGranted;
+}
+
+bool VideoPreviewPanel::getVideoVisible(int cameraIndex) const
+{
+	return cameraIndex >= 0 && cameraIndex < (int)m_panes.size() && m_panes[cameraIndex]->bVideoVisible;
+}
+
 void VideoPreviewPanel::setFrame(int cameraIndex, const cv::Mat& bgr)
 {
-	if (cameraIndex >= 0 && cameraIndex < (int)m_panes.size() && !bgr.empty())
-	{
-		m_panes[cameraIndex]->texture->uploadBGR(bgr);
-		m_panes[cameraIndex]->bHasFrame= true;
-	}
+	if (cameraIndex < 0 || cameraIndex >= (int)m_panes.size() || bgr.empty())
+		return;
+
+	CameraPane& pane= *m_panes[cameraIndex];
+	pane.bHasFrame= true;
+	pane.frameWidth= bgr.cols;
+	pane.frameHeight= bgr.rows;
+	if (!pane.bVideoVisible)
+		return;
+
+	// A new texture shows its second upload first
+	const bool bNewTexture= !pane.texture->getIsValid();
+	pane.texture->uploadBGR(bgr);
+	if (bNewTexture)
+		pane.texture->uploadBGR(bgr);
+}
+
+int VideoPreviewPanel::consumeVideoToggleRequest()
+{
+	const int cameraIndex= m_videoToggleRequest;
+	m_videoToggleRequest= -1;
+	return cameraIndex;
 }
 
 uint32_t VideoPreviewPanel::getCameraTextureId(int cameraIndex) const
@@ -44,7 +79,7 @@ uint32_t VideoPreviewPanel::getCameraTextureId(int cameraIndex) const
 		return 0;
 
 	const CameraPane& pane= *m_panes[cameraIndex];
-	if (!pane.bHasFrame || !pane.texture->getIsValid())
+	if (!pane.bHasFrame || !pane.bVideoVisible || !pane.texture->getIsValid())
 		return 0;
 	return pane.texture->getGlTextureId();
 }
@@ -54,8 +89,8 @@ float VideoPreviewPanel::getCameraAspect(int cameraIndex) const
 	if (cameraIndex >= 0 && cameraIndex < (int)m_panes.size())
 	{
 		const CameraPane& pane= *m_panes[cameraIndex];
-		if (pane.bHasFrame && pane.texture->getHeight() > 0)
-			return (float)pane.texture->getWidth() / (float)pane.texture->getHeight();
+		if (pane.bHasFrame && pane.frameHeight > 0)
+			return (float)pane.frameWidth / (float)pane.frameHeight;
 	}
 	return 16.f / 9.f;
 }
@@ -65,10 +100,10 @@ bool VideoPreviewPanel::getCameraFrameSize(int cameraIndex, int& outWidth, int& 
 	if (cameraIndex >= 0 && cameraIndex < (int)m_panes.size())
 	{
 		const CameraPane& pane= *m_panes[cameraIndex];
-		if (pane.bHasFrame && pane.texture->getWidth() > 0 && pane.texture->getHeight() > 0)
+		if (pane.bHasFrame && pane.frameWidth > 0 && pane.frameHeight > 0)
 		{
-			outWidth= pane.texture->getWidth();
-			outHeight= pane.texture->getHeight();
+			outWidth= pane.frameWidth;
+			outHeight= pane.frameHeight;
 			return true;
 		}
 	}
@@ -94,25 +129,30 @@ void VideoPreviewPanel::drawBody(const std::vector<const TrackingFrameResult*>& 
 	std::vector<ImageToScreenMapping> mappings;
 	for (const std::unique_ptr<CameraPane>& pane : m_panes)
 		mappings.push_back(pane->mapping);
-	const int clickedCamera= drawPanes(results, executionProviders, forearms, cameraFilter, mappings);
+	const PaneClicks clicks= drawPanes(results, executionProviders, forearms, cameraFilter, mappings);
 	for (size_t cameraIndex= 0; cameraIndex < m_panes.size(); ++cameraIndex)
 		m_panes[cameraIndex]->mapping= mappings[cameraIndex];
-	if (clickedCamera >= 0)
-		m_activeCamera= clickedCamera;
+	if (clicks.paneCamera >= 0)
+		m_activeCamera= clicks.paneCamera;
+	if (clicks.videoToggleCamera >= 0)
+		m_videoToggleRequest= clicks.videoToggleCamera;
 }
 
 void VideoPreviewPanel::drawSecondaryBody(const std::vector<const TrackingFrameResult*>& results,
 										  const std::vector<const char*>& executionProviders,
-										  const std::vector<ForearmOverlay>* forearms, int cameraFilter) const
+										  const std::vector<ForearmOverlay>* forearms, int cameraFilter)
 {
 	std::vector<ImageToScreenMapping> mappings(m_panes.size());
-	drawPanes(results, executionProviders, forearms, cameraFilter, mappings);
+	const PaneClicks clicks= drawPanes(results, executionProviders, forearms, cameraFilter, mappings);
+	if (clicks.videoToggleCamera >= 0)
+		m_videoToggleRequest= clicks.videoToggleCamera;
 }
 
-int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& results,
-								 const std::vector<const char*>& executionProviders,
-								 const std::vector<ForearmOverlay>* forearms, int cameraFilter,
-								 std::vector<ImageToScreenMapping>& inOutMappings) const
+VideoPreviewPanel::PaneClicks VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& results,
+														   const std::vector<const char*>& executionProviders,
+														   const std::vector<ForearmOverlay>* forearms,
+														   int cameraFilter,
+														   std::vector<ImageToScreenMapping>& inOutMappings) const
 {
 	const bool bOneCamera= cameraFilter >= 0 && cameraFilter < (int)m_panes.size();
 	const int firstCamera= bOneCamera ? cameraFilter : 0;
@@ -124,7 +164,7 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 
 	ImDrawList* drawList= ImGui::GetWindowDrawList();
 	const ImVec2 panelOrigin= ImGui::GetCursorScreenPos();
-	int clickedCamera= -1;
+	PaneClicks clicks;
 
 	for (int paneIndex= 0; paneIndex < paneCount; ++paneIndex)
 	{
@@ -143,7 +183,7 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 				IM_COL32(120, 180, 255, 180), 0.f, 0, 2.f);
 		}
 
-		if (!pane.bHasFrame || !pane.texture->getIsValid())
+		if (!pane.bHasFrame || pane.frameWidth <= 0 || pane.frameHeight <= 0)
 		{
 			const char* message= paneCount > 1 ? locText("videoPreviewPanel.noStreamText")
 												: locText("videoPreviewPanel.noVideoStreamText");
@@ -155,27 +195,32 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 		}
 
 		// Letterbox the image inside the pane
-		const float imageWidth= (float)pane.texture->getWidth();
-		const float imageHeight= (float)pane.texture->getHeight();
+		const float imageWidth= (float)pane.frameWidth;
+		const float imageHeight= (float)pane.frameHeight;
 		const float scale= std::min(paneWidth / imageWidth, paneHeight / imageHeight);
 		const ImVec2 displaySize(imageWidth * scale, imageHeight * scale);
 		const ImVec2 imagePos(
 			paneOrigin.x + (paneWidth - displaySize.x) * 0.5f,
 			paneOrigin.y + (paneHeight - displaySize.y) * 0.5f);
+		const ImVec2 imageMax(imagePos.x + displaySize.x, imagePos.y + displaySize.y);
 
-		drawList->AddImage(
-			(ImTextureID)(intptr_t)pane.texture->getGlTextureId(),
-			imagePos, ImVec2(imagePos.x + displaySize.x, imagePos.y + displaySize.y));
+		// The camera's video, or the frame's shape alone while it is hidden
+		const bool bShowVideo= pane.bVideoVisible && pane.texture->getIsValid();
+		if (bShowVideo)
+			drawList->AddImage((ImTextureID)(intptr_t)pane.texture->getGlTextureId(), imagePos, imageMax);
+		else
+			drawList->AddRectFilled(imagePos, imageMax, IM_COL32(24, 25, 30, 255));
 
 		mapping.screenOrigin= imagePos;
 		mapping.scale= scale;
 
-		// The pane's click, which drawBody makes the active camera
+		// The pane's click, which drawBody makes the active camera. The
+		// video button drawn over it below takes its own clicks.
 		ImGui::SetCursorScreenPos(paneOrigin);
 		ImGui::PushID(cameraIndex);
+		ImGui::SetNextItemAllowOverlap();
 		if (ImGui::InvisibleButton("pane", ImVec2(paneWidth, paneHeight)))
-			clickedCamera= cameraIndex;
-		ImGui::PopID();
+			clicks.paneCamera= cameraIndex;
 
 		const TrackingFrameResult* result=
 			cameraIndex < (int)results.size() ? results[cameraIndex] : nullptr;
@@ -199,6 +244,8 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 		}
 
 		// HUD: camera label + fps / inference / EP badge
+		const ImVec2 hudPos(imagePos.x + 8.f, imagePos.y + 8.f);
+		float hudBottom= hudPos.y;
 		{
 			const char* executionProvider=
 				cameraIndex < (int)executionProviders.size() ? executionProviders[cameraIndex] : "?";
@@ -214,7 +261,6 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 				hud= locFormat("videoPreviewPanel.hudFmt", cameraIndex + 1, executionProvider);
 			}
 
-			const ImVec2 hudPos(imagePos.x + 8.f, imagePos.y + 8.f);
 			const ImVec2 hudSize= ImGui::CalcTextSize(hud.c_str());
 			drawList->AddRectFilled(
 				ImVec2(hudPos.x - 4.f, hudPos.y - 2.f),
@@ -223,7 +269,41 @@ int VideoPreviewPanel::drawPanes(const std::vector<const TrackingFrameResult*>& 
 
 			const bool bGpu= executionProvider != nullptr && strstr(executionProvider, "DirectML") != nullptr;
 			drawList->AddText(hudPos, bGpu ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 220, 100, 255), hud.c_str());
+			hudBottom= hudPos.y + hudSize.y + 2.f;
 		}
+
+		// The video button under the HUD, and beside it the badge that says
+		// the camera's video is on screen
+		{
+			ImGui::SetCursorScreenPos(ImVec2(hudPos.x - 4.f, hudBottom + 4.f));
+			ImGui::BeginDisabled(pane.bVideoGranted);
+			if (ImGui::SmallButton(locLabel(pane.bVideoVisible ? "videoPreviewPanel.hideVideoButton"
+															   : "videoPreviewPanel.showVideoButton")))
+				clicks.videoToggleCamera= cameraIndex;
+			ImGui::EndDisabled();
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			{
+				ImGui::SetTooltip("%s", locText(pane.bVideoGranted    ? "videoPreviewPanel.videoCalibrationTooltip"
+												  : pane.bVideoVisible ? "videoPreviewPanel.hideVideoTooltip"
+																	   : "videoPreviewPanel.showVideoTooltip"));
+			}
+
+			if (pane.bVideoVisible)
+			{
+				const std::string badge= m_streamingSoftwareName.empty()
+					? std::string(locText("videoPreviewPanel.videoVisibleBadge"))
+					: locFormat("videoPreviewPanel.videoVisibleStreamingBadgeFmt", m_streamingSoftwareName.c_str());
+				const ImVec2 buttonMin= ImGui::GetItemRectMin();
+				const ImVec2 buttonMax= ImGui::GetItemRectMax();
+				const ImVec2 badgeSize= ImGui::CalcTextSize(badge.c_str());
+				const ImVec2 badgePos(buttonMax.x + 10.f, buttonMin.y + (buttonMax.y - buttonMin.y - badgeSize.y) * 0.5f);
+				drawList->AddRectFilled(ImVec2(badgePos.x - 4.f, buttonMin.y),
+										ImVec2(badgePos.x + badgeSize.x + 4.f, buttonMax.y),
+										IM_COL32(190, 30, 30, 230), 3.f);
+				drawList->AddText(badgePos, IM_COL32(255, 255, 255, 255), badge.c_str());
+			}
+		}
+		ImGui::PopID();
 	}
-	return clickedCamera;
+	return clicks;
 }

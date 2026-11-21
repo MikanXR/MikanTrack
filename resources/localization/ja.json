@@ -62,6 +62,9 @@
 		"viewTimelinePanel": "タイムラインパネル"
 	},
 	"windows": {
+		"modalShowVideo": "カメラ映像の表示",
+		"modalVideoCalibration": "キャリブレーション中の映像表示",
+		"modalSetupVideoWarning": "セットアップ中の映像表示",
 		"modalDeleteCustomPose": "ポーズの削除",
 		"bodyWizard": "身体の採寸",
 		"extrinsicsWizard": "外部パラメータキャリブレーション（全カメラ）",
@@ -89,6 +92,7 @@
 		"expressionEditor": "表情式エディター"
 	},
 	"setupFlow": {
+		"videoWarningPrompt": "次の手順ではカメラのライブ映像が表示されます。カメラ選択では選んだデバイスのプレビューが表示され、レンズとマーカーのキャリブレーションでは使用するカメラが表示されます。これらの手順が終わると映像は再び非表示になります。",
 		"arucoPrintPrompt": "外部パラメータ用の原点マーカーを印刷し、黒い正方形の辺を正確に測定してください。このマーカーはトラッキングワールドの原点・軸・スケールを定義するため、辺の測定を誤るとすべての縮尺がずれます。",
 		"avatarLoadErrorFmt": "読み込みに失敗しました: %s",
 		"avatarLoadPrompt": "シングルカメラのトラッキングは、生のスケルトンではなくアバターを動かします。まずVRMモデルを選んでください。アバター自身のボーンの長さが前面カメラモードのスケールになり、肘のヒントはデスクモードのボディソルバーの初期値になります。",
@@ -843,10 +847,27 @@
 		"tableLensStatus": "ウェブカメラ表のレンズ値（未キャリブレーション）"
 	},
 	"videoPreviewPanel": {
+		"showVideoButton": "映像を表示",
+		"hideVideoButton": "映像を隠す",
+		"showVideoTooltip": "このカメラの映像は非表示です。トラッキングのオーバーレイのみ描画されます。",
+		"hideVideoTooltip": "このカメラの映像を再び非表示にします。",
+		"videoCalibrationTooltip": "キャリブレーションの実行中は映像が表示されます。",
+		"videoVisibleBadge": "映像表示中",
+		"videoVisibleStreamingBadgeFmt": "映像表示中 - %s が実行中です",
 		"hudFmt": "カメラ %d  |  %s",
 		"hudWithResultFmt": "カメラ %d  |  %.0f fps  |  %.1f ms  |  %s",
 		"noStreamText": "ストリームなし",
 		"noVideoStreamText": "映像ストリームがありません - パイプラインのキャプチャステージでカメラを選択してください"
+	},
+	"videoPrivacy": {
+		"showVideoPromptFmt": "カメラ %d の映像は、配信やこのウィンドウの録画に映り込まないよう非表示になっています。本当に表示しますか？",
+		"showVideoNote": "映像は、非表示にするか、カメラを変更するか、プロジェクトを閉じるまで表示されます。この選択は保存されません。",
+		"holdToPreviewButton": "押している間プレビュー（モザイク）",
+		"previewHiddenText": "プレビュー非表示",
+		"showVideoConfirmButton": "映像を表示",
+		"streamingWarningFmt": "警告: %s が実行中です。このウィンドウに表示される内容はキャプチャされる可能性があります。",
+		"wizardOneCameraPromptFmt": "このキャリブレーションの実行中は、カメラ %d のライブ映像が表示されます。キャリブレーションを閉じると映像は再び非表示になります。",
+		"wizardAllCamerasPrompt": "このキャリブレーションの実行中は、すべてのカメラのライブ映像が表示されます。キャリブレーションを閉じると映像は再び非表示になります。"
 	},
 	"scene3dPanel": {
 		"cameraControlsHint": "左ドラッグ: 回転\n中ドラッグ: 移動\nホイール: ズーム   F: 頭に合わせる",

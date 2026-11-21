@@ -36,6 +36,7 @@ class StageView;
 class StageInspector;
 class TimelinePanel;
 class VideoPreviewPanel;
+class VideoPrivacy;
 class WizardHost;
 enum class eWizardKind;
 
@@ -82,8 +83,12 @@ private:
 	void drawMainMenu();
 	void drawDockspaceAndMenuBar();
 	// Manual wizard launches (menu, panels). Refused while a wizard or the
-	// guided setup flow is running.
+	// guided setup flow is running. A camera calibration wizard shows video,
+	// so its launch goes through the video warning first.
 	void launchWizard(eWizardKind kind, int cameraIndex= 0);
+	// Decides which cameras' video is shown this frame and tells the camera
+	// view, before any frame is handed to it
+	void updateVideoVisibility();
 	// Global hotkeys, active anywhere in the tracking UI: fires the action
 	// bound to any key pressed this frame (the table is in the source file)
 	void handleHotkeys();
@@ -105,6 +110,9 @@ private:
 	// The File menu's New Project prompt, drawn in the dock host window
 	NewProjectModal m_newProjectModal;
 	std::unique_ptr<VideoPreviewPanel> m_videoPreviewPanel;
+	// Which cameras' video the camera view may show, and the prompts in
+	// front of showing it. Nothing of it is stored.
+	std::unique_ptr<VideoPrivacy> m_videoPrivacy;
 	std::unique_ptr<Scene3dPanel> m_scene3dPanel;
 	std::unique_ptr<DevicePanel> m_devicePanel;
 	std::unique_ptr<CalibrationPanel> m_calibrationPanel;
@@ -221,6 +229,11 @@ private:
 	// target in world space; with a verb, sets them, frames the head or
 	// turns to a named side
 	bool handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+							   std::string& outError);
+	// video: which cameras' video is shown and why, the open video prompt
+	// and the running streaming program; with a verb, opens the prompt for a
+	// camera, shows or hides a camera's video, or closes the prompt
+	bool handleVideoAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
 							   std::string& outError);
 	// performance source: the Performance panel's source, the samples its
 	// chart holds and the marked sample's total; with a source, sets it

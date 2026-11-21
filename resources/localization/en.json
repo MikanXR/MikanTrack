@@ -62,6 +62,9 @@
 		"viewTimelinePanel": "Timeline Panel"
 	},
 	"windows": {
+		"modalShowVideo": "Show Camera Video",
+		"modalVideoCalibration": "Calibration Shows Camera Video",
+		"modalSetupVideoWarning": "Setup Shows Camera Video",
 		"modalDeleteCustomPose": "Delete Pose",
 		"bodyWizard": "Body Measurements",
 		"extrinsicsWizard": "Extrinsics Calibration (all cameras)",
@@ -89,6 +92,7 @@
 		"expressionEditor": "Expression Editor"
 	},
 	"setupFlow": {
+		"videoWarningPrompt": "The next steps show live camera video. The camera selection shows a preview of each device you pick, and the lens and marker calibrations show the cameras they use. The video is hidden again when those steps end.",
 		"arucoPrintPrompt": "Print the origin marker used for camera extrinsics, then measure the black square's edge precisely. The marker defines the tracking world's origin, axes, and scale, so a mismeasured edge rescales everything.",
 		"avatarLoadErrorFmt": "Load failed: %s",
 		"avatarLoadPrompt": "Single-camera tracking drives an avatar rather than a raw skeleton, so pick the VRM model first. The avatar's own bone lengths are the scale of the front-camera mode, and its elbow hints seed the desk mode's body solver.",
@@ -843,10 +847,27 @@
 		"tableLensStatus": "Lens from the webcam table (not calibrated)"
 	},
 	"videoPreviewPanel": {
+		"showVideoButton": "Show video",
+		"hideVideoButton": "Hide video",
+		"showVideoTooltip": "This camera's video is hidden. Only the tracking overlay is drawn.",
+		"hideVideoTooltip": "Hide this camera's video again.",
+		"videoCalibrationTooltip": "The video is on while the calibration runs.",
+		"videoVisibleBadge": "VIDEO VISIBLE",
+		"videoVisibleStreamingBadgeFmt": "VIDEO VISIBLE - %s is running",
 		"hudFmt": "Cam %d  |  %s",
 		"hudWithResultFmt": "Cam %d  |  %.0f fps  |  %.1f ms  |  %s",
 		"noStreamText": "No stream",
 		"noVideoStreamText": "No video stream - select a camera in the Pipeline's Capture stage"
+	},
+	"videoPrivacy": {
+		"showVideoPromptFmt": "Camera %d's video is hidden so that it cannot end up on a stream or in a recording of this window. Are you sure you want to show it?",
+		"showVideoNote": "The video stays on until you hide it, change the camera or close the project. The choice is never saved.",
+		"holdToPreviewButton": "Hold to preview (pixelated)",
+		"previewHiddenText": "Preview hidden",
+		"showVideoConfirmButton": "Show video",
+		"streamingWarningFmt": "Warning: %s is running. Anything this window shows can be captured by it.",
+		"wizardOneCameraPromptFmt": "This calibration shows camera %d's live video while it runs. The video is hidden again when the calibration closes.",
+		"wizardAllCamerasPrompt": "This calibration shows every camera's live video while it runs. The video is hidden again when the calibration closes."
 	},
 	"scene3dPanel": {
 		"cameraControlsHint": "Left drag: orbit\nMiddle drag: pan\nWheel: zoom   F: frame head",

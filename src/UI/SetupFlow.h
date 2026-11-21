@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "NeutralCaptureControl.h"
+#include "StreamingSoftware.h"
 #include "WizardResult.h"
 
 class App;
@@ -22,7 +23,10 @@ enum class eIntrinsicsPattern;
 // Guided new-project setup: a chain of modal prompts and the existing
 // calibration wizards in dependency order (cameras, intrinsics per camera,
 // extrinsics, hands, then IMU mounting or body measurement by variant). The
-// two single-camera variants load their VRM avatar first. The single-front
+// two single-camera variants load their VRM avatar first. A warning that the
+// steps after it show camera video stands before the camera selection, whose
+// previews need the picture, as the camera wizards the flow starts do.
+// The single-front
 // variant is the front-camera retarget: one webcam facing the user, intrinsics
 // for undistortion, the left and right hand check, then the neutral
 // capture, with no marker and no calibration wizards. The single-desk
@@ -53,7 +57,8 @@ public:
 	{
 		Inactive,
 		TrackingSetup,
-		AvatarLoad, // single-camera variants only
+		AvatarLoad,   // single-camera variants only
+		VideoWarning, // the steps after it show camera video
 		CameraSelection,
 		CharucoPrint,
 		IntrinsicsRunning, // loops over every camera
@@ -82,6 +87,9 @@ public:
 
 	void begin();
 	bool isActive() const { return m_step != eStep::Inactive; }
+	// Whether the camera selection prompt is up, whose live previews need
+	// every camera's video
+	bool isShowingCameraPicker() const { return m_step == eStep::CameraSelection; }
 
 	// Draws the current prompt, or watches the running wizard and advances on
 	// its result. Called once per frame from MainWindow, after the panels and
@@ -118,6 +126,7 @@ private:
 
 	void updateTrackingSetupPrompt();
 	void updateAvatarLoadPrompt();
+	void updateVideoWarningPrompt();
 	void updateCameraSelectionPrompt();
 	void updateCharucoPrintPrompt();
 	// The single-front variant's form of that step
@@ -163,6 +172,8 @@ private:
 
 	// Print-prompt edit fields (seeded from the config on step entry)
 	std::unique_ptr<LensPatternPrompt> m_patternPrompt;
+	// Names a running streaming program in the video warning
+	StreamingSoftwareWatch m_streamingWatch;
 	eIntrinsicsPattern m_intrinsicsPattern;
 	// Lens step state: the choice, the camera's frame size and table match
 	// (looked up once its first frame is in), and the typed field of view
