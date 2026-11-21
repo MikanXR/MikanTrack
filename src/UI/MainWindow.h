@@ -278,6 +278,10 @@ private:
 														   const std::shared_ptr<const AvatarSkeleton>& skeleton);
 	// Writes a dragged elbow hint back into the rig settings
 	void applyGizmoDrags(const SceneGizmos& gizmos);
+	// The chain mode the scene's avatar is posed from: the panel's while the
+	// chains' settings are shown, in the Inspector or a pinned window, and
+	// tracking otherwise
+	eChainMode getShownChainMode() const;
 	// The rig and the chains as a gizmo drag found them, which Escape puts back
 	std::vector<SceneGizmoHandle> m_gizmoHandles;
 	bool m_bGizmoDragStartValid= false;

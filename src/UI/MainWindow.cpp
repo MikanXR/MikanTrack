@@ -110,6 +110,7 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		 "pipeline pin <stage>",
 		 "pipeline unpin <stage>|all",
 		 "pipeline pinned", "pipeline chain [torso|head|leftArm|rightArm|leftHand|rightHand]",
+		 "pipeline mode [tracking|rest|custom]",
 		 "pipeline fx <leftArm|rightArm> <elbowWeight|reachScale|ikWeight> [value <number>|expr <text...>]",
 		 "pipeline mapping <leftArm|rightArm> [boneAngles|boneAnglesThenIk]",
 		 "pipeline goal <leftArm|rightArm> [<x> <y> <z>]",
@@ -1145,12 +1146,13 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	const AppConfig* config= m_app->getConfig();
 	const AvatarRigSettings& rig= m_app->getAvatarRig();
 
-	// The feed: a preview pose from the Retarget stage, else replay frames,
-	// else the live output. Switching feeds starts the window's stage over,
-	// so nothing it holds or filters bridges two timelines.
-	const AvatarPanel::ePreviewPose preview= m_avatarPanel->getPreviewPose();
+	// The feed: the chain mode's pose while the chains' settings are shown,
+	// else replay frames, else the live output. Switching feeds starts the
+	// window's stage over, so nothing it holds or filters bridges two
+	// timelines.
+	const eChainMode mode= getShownChainMode();
 	const bool bReplay= m_shown.bReplay;
-	const int feed= preview != AvatarPanel::ePreviewPose::Live ? 1 + (int)preview : (bReplay ? 1 : 0);
+	const int feed= mode != eChainMode::Tracking ? 1 + (int)mode : (bReplay ? 1 : 0);
 	if (feed != m_avatarPoseFeed)
 	{
 		m_displayStage.reset();
@@ -1159,25 +1161,38 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	}
 
 	const DirectRetarget::SolveState* directState= nullptr;
-	// The direct Rest preview is posed from no source
+	// The rest pose is posed from no source
 	const RetargetResult* shownResult= nullptr;
 	// The head the shown result's frame measured
 	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
-	if (preview != AvatarPanel::ePreviewPose::Live)
+	if (mode != eChainMode::Tracking)
 	{
-		if (preview == AvatarPanel::ePreviewPose::Rest && config->direct.enabled)
+		if (mode == eChainMode::RestPose)
 		{
-			// Direct mode: the same rest pose the stream falls back to
+			// The rest pose a lost chain eases into in either pipeline. It is
+			// posed with the root at the identity, which is the direct
+			// pipeline's root, and a multi-camera project's fixed root carries
+			// it the way the solve carries a resting arm.
 			DirectRetarget::makeRestPose(*skeleton, makeDirectRetargetConfig(*config, rig), m_avatarPose);
+			if (!config->direct.enabled)
+			{
+				const glm::quat root=
+					glm::angleAxis(glm::radians(config->avatar.rootYawDegrees), glm::vec3(0.f, 0.f, 1.f));
+				const glm::quat inverseRoot= glm::inverse(root);
+				for (AvatarPose::Bone& bone : m_avatarPose.bones)
+				{
+					if (bone.present)
+						bone.deltaWorld= root * bone.deltaWorld * inverseRoot;
+				}
+				m_avatarPose.rootRotationWorld= root;
+				m_avatarPose.rootPositionWorld= config->avatar.rootPositionWorld;
+			}
 		}
 		else
 		{
 			TrackingFrameResult frame;
 			BodyDimensions user;
-			if (preview == AvatarPanel::ePreviewPose::Rest)
-				AvatarPreviewPoses::makeRestFrame(*skeleton, frame, user);
-			else
-				AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
+			AvatarPreviewPoses::makeDemoFrame(*skeleton, frame, user);
 			RetargetStageConfig stageConfig= makeRetargetStageConfig(*config, rig, skeleton);
 			stageConfig.user= user;
 			m_displayStage.setConfig(stageConfig);
@@ -1224,6 +1239,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		gizmoInputs.chains= &chains;
 		gizmoInputs.goals= shownResult != nullptr ? &shownResult->goals : nullptr;
 		gizmoInputs.bDirect= config->direct.enabled;
+		gizmoInputs.mode= mode;
 		buildSceneGizmoHandles(gizmoInputs, m_avatarPanel->getSelectedChain(), outGizmos.handles);
 		outGizmos.selected= m_avatarPanel->getGizmoTarget();
 	}
@@ -1417,6 +1433,15 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 	if (!bSolved)
 		m_displayStage.resolveTarget(m_displayResult);
 	return m_displayResult.bDirectState ? &m_displayResult.directState : nullptr;
+}
+
+eChainMode MainWindow::getShownChainMode() const
+{
+	const PipelineStageId& selected= m_pipelinePanel->getSelected();
+	bool bShown= selected.isValid() && selected.stage == ePipelineStage::Chains;
+	for (const PipelineStageId& pinned : m_pinnedWindows->getPinned())
+		bShown|= pinned.stage == ePipelineStage::Chains;
+	return bShown ? m_avatarPanel->getChainMode() : eChainMode::Tracking;
 }
 
 void MainWindow::applyGizmoDrags(const SceneGizmos& gizmos)
@@ -1898,6 +1923,28 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 			}
 		}
 		outLines.push_back(AvatarPanel::getChainId(m_avatarPanel->getSelectedChain()));
+		return true;
+	}
+	if (verb == "mode")
+	{
+		// The chains' settings mode, which poses the scene's avatar while the
+		// IK chains stage is selected or pinned
+		if (args.size() >= 2)
+		{
+			eChainMode mode;
+			if (!AvatarPanel::parseChainModeId(args[1], mode))
+			{
+				outError= "expected tracking, rest or custom: " + args[1];
+				return false;
+			}
+			if (!m_avatarPanel->setChainMode(mode))
+			{
+				outError= "no avatar loaded, only tracking is set: " + args[1];
+				return false;
+			}
+		}
+		outLines.push_back(std::string("mode ") + AvatarPanel::getChainModeId(m_avatarPanel->getChainMode()) +
+						   " shown " + AvatarPanel::getChainModeId(getShownChainMode()));
 		return true;
 	}
 	if (verb == "fx")

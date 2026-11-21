@@ -38,6 +38,11 @@ const char* const k_chainLabelKeys[(int)eRetargetChain::Count]= {
 	"avatarPanel.leftHandHeader",
 	"avatarPanel.rightHandHeader",
 };
+const char* const k_modeIds[(int)eChainMode::Count]= {"tracking", "rest", "custom"};
+const char* const k_modeLabelKeys[(int)eChainMode::Count]= {"chains.modeTracking", "chains.modeRest",
+															  "chains.modeCustom"};
+const char* const k_modeTooltipKeys[(int)eChainMode::Count]= {"chains.modeTrackingTooltip", "chains.modeRestTooltip",
+																"chains.modeCustomTooltip"};
 const char* const k_chainIds[(int)eRetargetChain::Count]= {
 	"torso", "head", "leftArm", "rightArm", "leftHand", "rightHand",
 };
@@ -90,10 +95,9 @@ bool drawLimitControl(float& degrees, const char* labelKey, const char* tooltipK
 	return bChanged;
 }
 
-// What follows a chain's hold, as stored: freeze, the ease to the rest pose
-// with its blend time, and for an arm the blend time back out of it, or
-// release; true when anything changed
-bool drawLossAfter(RetargetChains::Loss& loss, bool bArm= false)
+// What follows a chain's hold, as stored: freeze, the ease to the rest pose,
+// or release; true when anything changed
+bool drawLossAfter(RetargetChains::Loss& loss)
 {
 	struct Choice
 	{
@@ -117,16 +121,23 @@ bool drawLossAfter(RetargetChains::Loss& loss, bool bArm= false)
 		}
 		ImGui::SetItemTooltip("%s", locText(choice.tooltipKey));
 	}
-	if (loss.after == eLossAfter::EaseToRest)
+	return bChanged;
+}
+
+// How long a chain takes to ease into its rest pose, and for an arm back out
+// of it; true when either changed. A chain that does not ease to rest says
+// so, since the times then do nothing.
+bool drawRestBlend(RetargetChains::Loss& loss, bool bArm)
+{
+	if (loss.after != eLossAfter::EaseToRest)
+		drawNote("chains.restNotUsedNote");
+	bool bChanged=
+		ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &loss.restBlendMs, 0.f, 1000.f, "%.0f ms");
+	ImGui::SetItemTooltip("%s", locText("avatarPanel.restBlendTooltip"));
+	if (bArm)
 	{
-		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restBlendSlider"), &loss.restBlendMs, 0.f, 1000.f, "%.0f ms");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restBlendTooltip"));
-		if (bArm)
-		{
-			bChanged|=
-				ImGui::SliderFloat(locLabel("avatarPanel.riseBlendSlider"), &loss.riseBlendMs, 0.f, 1000.f, "%.0f ms");
-			ImGui::SetItemTooltip("%s", locText("avatarPanel.riseBlendTooltip"));
-		}
+		bChanged|= ImGui::SliderFloat(locLabel("avatarPanel.riseBlendSlider"), &loss.riseBlendMs, 0.f, 1000.f, "%.0f ms");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.riseBlendTooltip"));
 	}
 	return bChanged;
 }
@@ -158,7 +169,7 @@ void AvatarPanel::update()
 {
 	if (m_app->getAvatarModel() == nullptr)
 	{
-		m_previewPose= ePreviewPose::Live;
+		m_chainMode= eChainMode::Tracking;
 		if (!isArmChain(m_selectedChain))
 			m_selectedChain= eRetargetChain::LeftArm;
 		m_gizmoTarget= SceneGizmoTarget();
@@ -173,6 +184,35 @@ bool AvatarPanel::setSelectedChain(eRetargetChain chain)
 		m_gizmoTarget= SceneGizmoTarget();
 	m_selectedChain= chain;
 	return true;
+}
+
+bool AvatarPanel::setChainMode(eChainMode mode)
+{
+	if (mode == eChainMode::Count || (mode != eChainMode::Tracking && !hasAvatar()))
+		return false;
+	// A setting's handle belongs to the mode that shows the setting
+	if (mode != m_chainMode)
+		m_gizmoTarget= SceneGizmoTarget();
+	m_chainMode= mode;
+	return true;
+}
+
+const char* AvatarPanel::getChainModeId(eChainMode mode)
+{
+	return mode < eChainMode::Count ? k_modeIds[(int)mode] : k_modeIds[0];
+}
+
+bool AvatarPanel::parseChainModeId(const std::string& id, eChainMode& outMode)
+{
+	for (int index= 0; index < (int)eChainMode::Count; ++index)
+	{
+		if (id == k_modeIds[index])
+		{
+			outMode= (eChainMode)index;
+			return true;
+		}
+	}
+	return false;
 }
 
 void AvatarPanel::setGizmoTarget(const SceneGizmoTarget& target)
@@ -521,21 +561,24 @@ void AvatarPanel::drawBoneRow(eHumanoidBone bone, const std::array<eAvatarMapDot
 	ImGui::PopID();
 }
 
-void AvatarPanel::drawPreviewPose()
+void AvatarPanel::drawModeRow()
 {
-	ImGui::TextUnformatted(locText("avatarPanel.previewPoseLabel"));
-	ImGui::SameLine();
-	int preview= (int)m_previewPose;
-	ImGui::RadioButton(locLabel("avatarPanel.previewLiveRadio"), &preview, (int)ePreviewPose::Live);
-	ImGui::SameLine();
-	ImGui::RadioButton(locLabel("avatarPanel.previewRestRadio"), &preview, (int)ePreviewPose::Rest);
-	ImGui::SameLine();
-	ImGui::RadioButton(locLabel("avatarPanel.previewDemoRadio"), &preview, (int)ePreviewPose::Demo);
-	m_previewPose= (ePreviewPose)preview;
-	ImGui::SameLine();
-	ImGui::TextDisabled("(?)");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s", locText("avatarPanel.previewPoseTooltip"));
+	// One button per mode, the current one drawn pressed, as the chain row
+	// below draws its chains
+	const ImGuiStyle& style= ImGui::GetStyle();
+	for (int index= 0; index < (int)eChainMode::Count; ++index)
+	{
+		if (index > 0)
+			ImGui::SameLine();
+		const bool bSelected= index == (int)m_chainMode;
+		if (bSelected)
+			ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+		if (ImGui::Button(locLabel(k_modeLabelKeys[index])))
+			setChainMode((eChainMode)index);
+		if (bSelected)
+			ImGui::PopStyleColor();
+		ImGui::SetItemTooltip("%s", locText(k_modeTooltipKeys[index]));
+	}
 }
 
 void AvatarPanel::drawChains()
@@ -543,32 +586,127 @@ void AvatarPanel::drawChains()
 	const bool bAvatar= hasAvatar();
 	// The inputs above can unload the model this frame, ahead of update
 	const eRetargetChain chain= bAvatar || isArmChain(m_selectedChain) ? m_selectedChain : eRetargetChain::LeftArm;
+	const eChainMode mode= bAvatar ? m_chainMode : eChainMode::Tracking;
 
+	if (bAvatar)
+	{
+		ImGui::SeparatorText(locText("chains.modeHeading"));
+		drawModeRow();
+	}
 	ImGui::SeparatorText(locText("chains.chainsHeading"));
 	drawChainRow(bAvatar);
 	ImGui::SeparatorText(locText(k_chainLabelKeys[(int)chain]));
 
 	ImGui::PushID("chain");
+	if (mode == eChainMode::RestPose)
+	{
+		drawRestRows(chain);
+	}
+	else if (mode == eChainMode::CustomPose)
+	{
+		drawNote("chains.customDemoNote");
+	}
+	else
+	{
+		switch (chain)
+		{
+		case eRetargetChain::Torso:
+			drawTorsoChain();
+			break;
+		case eRetargetChain::Head:
+			drawHeadChain();
+			break;
+		case eRetargetChain::LeftArm:
+		case eRetargetChain::RightArm:
+			drawArmChain(chain == eRetargetChain::LeftArm ? 0 : 1, bAvatar);
+			break;
+		case eRetargetChain::LeftHand:
+		case eRetargetChain::RightHand:
+			drawHandChain(chain == eRetargetChain::LeftHand ? 0 : 1);
+			break;
+		default:
+			break;
+		}
+	}
+	ImGui::PopID();
+}
+
+void AvatarPanel::drawRestRows(eRetargetChain chain)
+{
+	RetargetChains chains= m_app->getRetargetChains();
+	AvatarRigSettings rig= m_app->getAvatarRig();
+	bool bRigChanged= false;
+	bool bChainChanged= false;
+
 	switch (chain)
 	{
 	case eRetargetChain::Torso:
-		drawTorsoChain();
+		// A multi-camera project measures no torso, so it has none to rest
+		if (!isDirectPipeline())
+		{
+			drawNote("chains.torsoPositionNote");
+			break;
+		}
+		drawNote("chains.restIdentityNote");
+		bChainChanged|= drawRestBlend(chains.torso.loss, false);
 		break;
 	case eRetargetChain::Head:
-		drawHeadChain();
+		drawNote("chains.restIdentityNote");
+		bChainChanged|= drawRestBlend(chains.head.loss, false);
 		break;
 	case eRetargetChain::LeftArm:
 	case eRetargetChain::RightArm:
-		drawArmChain(chain == eRetargetChain::LeftArm ? 0 : 1, bAvatar);
+	{
+		const int sideIndex= chain == eRetargetChain::LeftArm ? 0 : 1;
+		AvatarRigSettings::Side& side= rig.sides[sideIndex];
+		RetargetChains::Arm& arm= chains.arms[sideIndex];
+		drawGizmoToggle(eSceneGizmoValue::RestElbow);
+		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restElbowDrag"), &side.restElbowOffset.x, 0.005f, -1.f,
+										1.f, "%.3f m");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.restElbowTooltip"));
+		drawGizmoToggle(eSceneGizmoValue::RestWrist);
+		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restWristDrag"), &side.restWristOffset.x, 0.005f, -1.f,
+										1.f, "%.3f m");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.restWristTooltip"));
+		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restPalmDrag"), &side.restPalmNormal.x, 0.01f, -1.f, 1.f,
+										"%.2f");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.restPalmTooltip"));
+		bChainChanged|= drawRestBlend(arm.loss, true);
+
+		ImGui::Spacing();
+		if (ImGui::Button(locLabel("avatarPanel.resetRestButton")))
+		{
+			const AvatarRigSettings::Side defaults;
+			side.restElbowOffset= defaults.restElbowOffset;
+			side.restWristOffset= defaults.restWristOffset;
+			side.restPalmNormal= defaults.restPalmNormal;
+			bRigChanged= true;
+			const RetargetChains::Arm armDefaults= RetargetChains::makeDefaultArm(sideIndex);
+			arm.loss.restBlendMs= armDefaults.loss.restBlendMs;
+			arm.loss.riseBlendMs= armDefaults.loss.riseBlendMs;
+			bChainChanged= true;
+		}
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.resetRestTooltip"));
 		break;
+	}
 	case eRetargetChain::LeftHand:
 	case eRetargetChain::RightHand:
-		drawHandChain(chain == eRetargetChain::LeftHand ? 0 : 1);
+	{
+		AvatarRigSettings::Side& side= rig.sides[chain == eRetargetChain::LeftHand ? 0 : 1];
+		drawNote("chains.handLossNote");
+		bRigChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restCurlSlider"), &side.restFingerCurlDegrees, 0.f, 90.f,
+										 "%.0f deg");
+		ImGui::SetItemTooltip("%s", locText("avatarPanel.restCurlTooltip"));
 		break;
+	}
 	default:
 		break;
 	}
-	ImGui::PopID();
+
+	if (bRigChanged)
+		m_app->setAvatarRig(rig);
+	if (bChainChanged)
+		m_app->setRetargetChains(chains);
 }
 
 void AvatarPanel::drawChainRow(bool bAvatar)
@@ -668,7 +806,7 @@ bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, Retarge
 		bChanged|= ImGui::SliderFloat(locLabel("oscPanel.dropoutHold"), &loss.holdMs, 0.f, 1000.f, "%.0f ms");
 		ImGui::SetItemTooltip("%s", locText("oscPanel.dropoutHoldTooltip"));
 	}
-	bChanged|= drawLossAfter(loss, true);
+	bChanged|= drawLossAfter(loss);
 	// The measured-length stream has no rest pose
 	if (!bAvatar && loss.after == eLossAfter::EaseToRest)
 		drawNote("chains.easeWithoutAvatarNote");
@@ -762,36 +900,11 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	drawSubHeading("chains.lossHeading");
 	bChainChanged|= drawArmLoss(sideIndex, bDirect, true, chains);
 
-	// The rest pose is where an arm that eases to rest goes, in either
-	// pipeline with an avatar
-	if (arm.loss.after == eLossAfter::EaseToRest && ImGui::TreeNode(locLabel("avatarPanel.restPoseLabel")))
-	{
-		drawGizmoToggle(eSceneGizmoValue::RestElbow);
-		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restElbowDrag"), &side.restElbowOffset.x, 0.005f, -1.f,
-										1.f, "%.3f m");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restElbowTooltip"));
-		drawGizmoToggle(eSceneGizmoValue::RestWrist);
-		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restWristDrag"), &side.restWristOffset.x, 0.005f, -1.f,
-										1.f, "%.3f m");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restWristTooltip"));
-		bRigChanged|= ImGui::DragFloat3(locLabel("avatarPanel.restPalmDrag"), &side.restPalmNormal.x, 0.01f, -1.f, 1.f,
-										"%.2f");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restPalmTooltip"));
-		bRigChanged|= ImGui::SliderFloat(locLabel("avatarPanel.restCurlSlider"), &side.restFingerCurlDegrees, 0.f,
-										 90.f, "%.0f deg");
-		ImGui::SetItemTooltip("%s", locText("avatarPanel.restCurlTooltip"));
-		ImGui::TreePop();
-	}
-
 	ImGui::Spacing();
 	if (ImGui::Button(locLabel("avatarPanel.resetArmButton")))
 	{
 		const AvatarRigSettings::Side defaults;
 		side.elbowHintOffset= defaults.elbowHintOffset;
-		side.restElbowOffset= defaults.restElbowOffset;
-		side.restWristOffset= defaults.restWristOffset;
-		side.restPalmNormal= defaults.restPalmNormal;
-		side.restFingerCurlDegrees= defaults.restFingerCurlDegrees;
 		bRigChanged= true;
 		// The chain's solve settings, the mapping and the IK weight the
 		// project's shape defaults to; its loss stays

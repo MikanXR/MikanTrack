@@ -144,6 +144,10 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 		return posed[(int)bone].rotationWorld * glm::inverse(skeleton.getBone(bone).restRotationWorld) * restFrameWorld;
 	};
 	auto makeTrimQuat= [&](B bone) { return glm::quat(glm::radians(rig.rotationTrimDegrees[(int)bone])); };
+	const bool bTracking= inputs.mode == eChainMode::Tracking;
+	const bool bRest= inputs.mode == eChainMode::RestPose;
+	if (!bTracking && !bRest)
+		return;
 
 	if (isArmChain(chain))
 	{
@@ -168,6 +172,13 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 			outHandles.push_back(handle);
 		};
 
+		if (bRest)
+		{
+			addOffset(eSceneGizmoValue::RestElbow, shoulder, side.restElbowOffset, true);
+			addOffset(eSceneGizmoValue::RestWrist, shoulder, side.restWristOffset, true);
+			return;
+		}
+
 		addOffset(eSceneGizmoValue::ElbowHint, shoulder, side.elbowHintOffset, true);
 		if (arm.mapping == eArmMapping::BoneAnglesThenIk && inputs.goals != nullptr &&
 			inputs.goals->bHasWristGoal[sideIndex])
@@ -176,12 +187,6 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 			const glm::vec3 goal= inputs.goals->wristGoalWorld[sideIndex];
 			addOffset(eSceneGizmoValue::GoalOffset, goal - rootRotation * arm.goalOffset, arm.goalOffset, false);
 		}
-		if (arm.loss.after == eLossAfter::EaseToRest)
-		{
-			addOffset(eSceneGizmoValue::RestElbow, shoulder, side.restElbowOffset, true);
-			addOffset(eSceneGizmoValue::RestWrist, shoulder, side.restWristOffset, true);
-		}
-
 		if (skeleton.getBone(lowerArmBone).present && skeleton.getBone(handBone).present)
 		{
 			const glm::vec3 elbow= posed[(int)lowerArmBone].positionWorld;
@@ -211,8 +216,9 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 		return;
 	}
 
+	// The head's and a hand's trims are how they follow tracking
 	B trimBone;
-	if (!getTrimBone(chain, trimBone) || !skeleton.getBone(trimBone).present)
+	if (!bTracking || !getTrimBone(chain, trimBone) || !skeleton.getBone(trimBone).present)
 		return;
 	SceneGizmoHandle handle;
 	handle.target= {chain, eSceneGizmoValue::Trim};

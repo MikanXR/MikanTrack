@@ -80,11 +80,14 @@ struct SceneGizmoInputs
 	// goal offset handle
 	const AvatarRetargetGoals* goals= nullptr;
 	bool bDirect= false;
+	// The mode whose settings get handles
+	eChainMode mode= eChainMode::Tracking;
 };
 
-// The handles of a chain's settings, in the order of eSceneGizmoValue. An
-// arm's goal offset has one only while the arm maps toward a goal and the
-// frame has one, its rest pose only while the arm eases to rest.
+// The handles of the chain's settings the mode shows, in the order of
+// eSceneGizmoValue. Tracking: an arm's elbow hint, its goal offset while the
+// arm maps toward a goal and the frame has one, and the trims. Rest pose: an
+// arm's rest elbow and rest wrist. Custom pose: none.
 void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain,
 							std::vector<SceneGizmoHandle>& outHandles);
 
