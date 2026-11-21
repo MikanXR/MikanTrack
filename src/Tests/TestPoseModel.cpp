@@ -66,7 +66,7 @@ static int runPoseModelTest(const TestArgs&)
 	}
 	MIKAN_LOG_INFO("test-posemodel") << "RTMPose model loaded (ep=" << rtmPose.activeEp() << ")";
 
-	// The whole-body 3D model is the single-camera direct mode's backend.
+	// The whole-body 3D model is the single-camera front-camera mode's backend.
 	// Its sizes are read from the tensors, so a load that reports 133
 	// keypoints with a depth axis is the contract check; the decode shares
 	// every line with the body model's, which the reference cross-checks.

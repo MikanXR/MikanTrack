@@ -49,7 +49,7 @@ struct StageViewContent
 // whole scene, nothing selected), with the user's two settings on top: the
 // avatar only while it is shown in the scene, and the per-camera skeletons
 // wherever the fused skeleton is while the Fusion stage's toggle is on. The
-// direct solve's chains and the gizmos go with the stage's avatar layer, and
+// front-camera solve's chains and the gizmos go with the stage's avatar layer, and
 // so do the IK goals. The Source pose stage draws the source pose alone and
 // the Retarget stage the source pose with the avatar, each in place of the
 // fused skeleton.
@@ -57,11 +57,11 @@ SceneLayers makeStageSceneLayers(const PipelineStageId& topLevel, bool bShowAvat
 
 // What a stage is shown with when the view follows it: the cameras for
 // Capture and its sub-stages (a lane's stage its own camera alone) and for
-// the Direct solver and its sub-stages (the direct camera in a direct
+// the Front-camera solver and its sub-stages (the front camera in a front-camera
 // project), and the scene with the top-level stage's layers for everything
 // else and for nothing selected. A camera index the view has no camera for
 // shows every camera. Never a wizard's content.
-StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bDirect, int directCameraIndex,
+StageViewContent decideStageViewContent(const PipelineStageId& stage, bool bFrontCameraMode, int frontCameraIndex,
 										int cameraCount);
 
 // What the view shows for a mode, given what following the selection shows
@@ -98,9 +98,9 @@ public:
 	};
 
 	// Decides what the view shows this frame, whether or not it is drawn.
-	// selected is the strip's selection, bDirect and directCameraIndex the
+	// selected is the strip's selection, bFrontCameraMode and frontCameraIndex the
 	// project shape the strip shows.
-	void update(const PipelineStageId& selected, bool bDirect, int directCameraIndex, bool bCameraWizardActive);
+	void update(const PipelineStageId& selected, bool bFrontCameraMode, int frontCameraIndex, bool bCameraWizardActive);
 
 	// Draws the window and the body update chose. Its camera body is the
 	// only one the wizards draw on: on a frame it is not drawn here, the
@@ -157,8 +157,8 @@ private:
 	// The camera half's share of the split mode's width, not persisted
 	float m_splitRatio= 0.5f;
 	PipelineStageId m_selected;
-	bool m_bDirect= false;
-	int m_directCameraIndex= -1;
+	bool m_bFrontCameraMode= false;
+	int m_frontCameraIndex= -1;
 	bool m_bCameraWizardActive= false;
 	StageViewContent m_content;
 	// Whether the first-appearance docking has been looked at this run

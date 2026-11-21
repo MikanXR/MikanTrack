@@ -9,7 +9,7 @@
 #include "AvatarRetarget.h"
 #include "NewProjectModal.h"
 #include "PipelineModel.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "RetargetStage.h"
 #include "CustomPose.h"
 #include "FaceProfileRunner.h"
@@ -65,13 +65,16 @@ public:
 	// The window's copies of the vision thread's latest output (the thread's
 	// fetch is one-shot, so other readers on the main thread read these)
 	const TrackingFrameResult& getLatestFused() const { return m_latestFused; }
-	// The direct pipeline's pose and solve state for that result, an invalid
+	// The front-camera pipeline's pose and solve state for that result, an invalid
 	// pose and an empty state when the position pipeline posed it
-	const AvatarPose& getLatestDirectPose() const
+	const AvatarPose& getLatestFrontCameraPose() const
 	{
-		return m_latestRetarget.bDirectState ? m_latestRetarget.pose : m_noDirectPose;
+		return m_latestRetarget.bFrontCameraState ? m_latestRetarget.pose : m_noFrontCameraPose;
 	}
-	const DirectRetarget::SolveState& getLatestDirectState() const { return m_latestRetarget.directState; }
+	const FrontCameraRetarget::SolveState& getLatestFrontCameraState() const
+	{
+		return m_latestRetarget.frontCameraState;
+	}
 
 private:
 	// The MainMenu app state: draws the startup menu and dispatches its
@@ -144,10 +147,10 @@ private:
 	// The fusion diagnostics behind m_latestFused
 	FusionDiagnostics m_latestFusionDiagnostics;
 	// What the vision thread's retarget stage made of that result: the pose
-	// the stream carries, the source pose after the loss stage, and in direct
+	// the stream carries, the source pose after the loss stage, and in front-camera
 	// mode the solve behind the pose
 	RetargetResult m_latestRetarget;
-	AvatarPose m_noDirectPose;
+	AvatarPose m_noFrontCameraPose;
 	// An immediate dump requested this frame, taken after the avatar update
 	bool m_bDumpPending= false;
 
@@ -190,12 +193,12 @@ private:
 	void updateImuReadout();
 	void updateFaceReadouts();
 	void updateOscReadout();
-	// The direct solve behind the shown avatar pose (its state null when the
-	// shown frame is not a direct-mode frame), refilled when the avatar is
-	// posed for the shown frame. The pipeline's status rules and the Direct
+	// The front-camera solve behind the shown avatar pose (its state null when the
+	// shown frame is not a front-camera frame), refilled when the avatar is
+	// posed for the shown frame. The pipeline's status rules and the Front-camera
 	// solver stages' sections read it, the sections in place.
-	DirectReadout m_directReadout;
-	void updateDirectReadout(const DirectRetarget::SolveState* state);
+	FrontCameraReadout m_frontCameraReadout;
+	void updateFrontCameraReadout(const FrontCameraRetarget::SolveState* state);
 	// The source pose behind the shown avatar pose (null when the shown frame
 	// has none), refilled when the avatar is posed for the shown frame. The
 	// Source pose and Delivery rules stages' sections read it in place.
@@ -203,7 +206,7 @@ private:
 	void updateSourcePoseReadout(const RetargetResult* result);
 	// The scene's source pose layer on the same result, its head drawn at the
 	// head the frame measured (the position pipeline's head is a world
-	// frame) or at the posed avatar's head (the direct pipeline's is a
+	// frame) or at the posed avatar's head (the front-camera pipeline's is a
 	// rotation alone); null for either draws no head
 	void updateSceneSourcePose(const RetargetResult* result, const TrackingFrameResult::HeadPose* measuredHead,
 							   const glm::vec3* posedHeadWorld);
@@ -264,21 +267,22 @@ private:
 	// Poses the scene's avatar and fills the elbow hint gizmos from it
 	void updateDisplayAvatar(SceneGizmos& outGizmos);
 	// The cameras the scene can look through, from the shown frame's config:
-	// the capture's, the direct solve's placement of its camera when one is
-	// shown (directState), and the view's chosen camera, the direct one
-	// placed the same way in a direct project, any other by its calibration;
+	// the capture's, the front-camera solve's placement of its camera when one is
+	// shown (frontCameraState), and the view's chosen camera, the front-camera one
+	// placed the same way in a front-camera project, any other by its calibration;
 	// and the solve's chains drawn beside the avatar
-	void updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton);
+	void updateSceneCameraMatch(const FrontCameraRetarget::SolveState* frontCameraState,
+								const AvatarSkeleton* skeleton);
 	// The project the view's camera choice was made in
 	std::filesystem::path m_povProjectDirectory;
 	// The window's stage brought to the Timeline's current frame: a
-	// direct-mode recording's frames through the direct pipeline under the
+	// front-camera recording's frames through the front-camera pipeline under the
 	// recorded config (a frame it cannot solve through the position
 	// pipeline), any other through the position pipeline with the
 	// recording's lengths and loss rules. A frame already solved runs the
-	// target solve alone, so a rig edit shows. Returns the direct solve state
-	// when the direct pipeline posed it.
-	const DirectRetarget::SolveState* updateReplayRetarget(const class AppConfig& liveConfig,
+	// target solve alone, so a rig edit shows. Returns the front-camera solve state
+	// when the front-camera pipeline posed it.
+	const FrontCameraRetarget::SolveState* updateReplayRetarget(const class AppConfig& liveConfig,
 														   const AvatarRigSettings& rig,
 														   const std::shared_ptr<const AvatarSkeleton>& skeleton);
 	// Writes a dragged elbow hint back into the rig settings

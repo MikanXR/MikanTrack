@@ -97,9 +97,11 @@ def main():
     print(f"\n== {args.label or device_name} (camera {args.camera}, {width} px wide) ==")
     print(f"charuco: fx {truth_fx:.1f} px, hfov {hfov_degrees(truth_fx, width):.1f} deg, "
           f"k1 {distortion[0]:.3f}, k2 {distortion[1]:.3f}")
-    tilt = header["appConfig"].get("direct", {}).get("cameraTiltDegrees")
+    app_config = header["appConfig"]
+    # A take from before the rename names the section "direct"
+    tilt = app_config.get("frontCamera", app_config.get("direct", {})).get("cameraTiltDegrees")
     if tilt is not None:
-        print(f"configured direct tilt: {tilt:.1f} deg")
+        print(f"configured front camera tilt: {tilt:.1f} deg")
 
     paths = sample_paths(args.raw_frames_dir, args.camera, args.samples)
     rows = []

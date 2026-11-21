@@ -26,7 +26,7 @@ StageContent::StageContent(App* app, DevicePanel* devicePanel, CalibrationPanel*
 void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscSectionContext& osc,
 							  const FusionReadout& fusion, const ImuReadout& imu, const FaceReadout& face,
 							  const MicrophoneReadout& microphone, const OscReadout& oscReadout,
-							  const DirectReadout& direct, const SourcePoseReadout& sourcePose,
+							  const FrontCameraReadout& frontCamera, const SourcePoseReadout& sourcePose,
 							  const FaceExprEditTarget* activeEdit, bool bWizardActive)
 {
 	m_tracking= tracking;
@@ -35,7 +35,7 @@ void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscS
 	m_tracking.fusion= &fusion;
 	m_tracking.imu= &imu;
 	m_tracking.face= &face;
-	m_tracking.direct= &direct;
+	m_tracking.frontCamera= &frontCamera;
 	m_tracking.sourcePose= &sourcePose;
 	m_microphone= &microphone;
 	m_activeEdit= activeEdit;
@@ -43,7 +43,7 @@ void StageContent::beginFrame(const TrackingSectionContext& tracking, const OscS
 	m_calibrationAction= CalibrationPanel::DrawResult();
 	m_audioAction= AudioPanel::DrawResult();
 	m_faceEditRequest.reset();
-	m_bDirectCameraMoved= false;
+	m_bFrontCameraMoved= false;
 }
 
 bool StageContent::isCameraInRange(const PipelineStageId& stage) const
@@ -102,7 +102,7 @@ bool StageContent::hasSection(const PipelineStageId& stage, eStageSection sectio
 	case ePipelineStage::Imu:
 	case ePipelineStage::BodySolver:
 	case ePipelineStage::Microphone:
-	case ePipelineStage::DirectSolver:
+	case ePipelineStage::FrontCameraSolver:
 		return true;
 	case ePipelineStage::Filters:
 	case ePipelineStage::Torso:
@@ -161,9 +161,9 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		{
 			m_devicePanel->drawRescanControl();
 			m_devicePanel->drawAddCameraControl();
-			// A direct project has no world calibration, whatever frame is
+			// A front-camera project has no world calibration, whatever frame is
 			// shown
-			if (!isDirectProject(*m_tracking.config))
+			if (!isFrontCameraProject(*m_tracking.config))
 				mergeCalibrationAction(m_calibrationPanel->drawExtrinsicsSection(m_bWizardActive));
 		}
 		else if (section == eStageSection::Settings)
@@ -181,8 +181,8 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 	case ePipelineStage::Camera:
 		// The Inspector's title names the camera, and its Camera Settings
 		// are the Video stage's
-		if (m_devicePanel->drawCameraSection(cameraIndex, false, false).bDirectCameraMoved)
-			m_bDirectCameraMoved= true;
+		if (m_devicePanel->drawCameraSection(cameraIndex, false, false).bFrontCameraMoved)
+			m_bFrontCameraMoved= true;
 		break;
 	case ePipelineStage::Video:
 		// The tree is the section's only content, so it starts open
@@ -200,9 +200,9 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 		break;
 	case ePipelineStage::Lift:
 		// The extrinsics status follows the shown frame, as the stage's own
-		// status does, and a direct project has none to show
+		// status does, and a front-camera project has none to show
 		mergeCalibrationAction(m_calibrationPanel->drawCameraCalibration(
-			cameraIndex, m_bWizardActive, false, !isDirectProject(getShownConfig()), &getShownConfig()));
+			cameraIndex, m_bWizardActive, false, !isFrontCameraProject(getShownConfig()), &getShownConfig()));
 		break;
 	case ePipelineStage::Fusion:
 		if (section == eStageSection::Inputs)
@@ -257,52 +257,52 @@ void StageContent::drawSection(const PipelineStageId& stage, eStageSection secti
 			SettingsPanels::drawBodySolveReadout(m_tracking);
 		}
 		break;
-	case ePipelineStage::DirectSolver:
+	case ePipelineStage::FrontCameraSolver:
 		if (section == eStageSection::Inputs)
 		{
 			// The calibration inputs: the camera, its tilt (set by hand,
 			// since nothing measures it) and the neutral
-			SettingsPanels::drawDirectCameraControl(m_tracking);
-			SettingsPanels::drawDirectTiltControl(m_tracking);
-			SettingsPanels::drawDirectNeutralControl(m_tracking);
+			SettingsPanels::drawFrontCameraControl(m_tracking);
+			SettingsPanels::drawFrontCameraTiltControl(m_tracking);
+			SettingsPanels::drawFrontCameraNeutralControl(m_tracking);
 		}
 		else if (section == eStageSection::Settings)
 		{
-			SettingsPanels::drawDirectWristDepthControls(m_tracking);
+			SettingsPanels::drawFrontCameraWristDepthControls(m_tracking);
 			// The proportions the arm chain and the head are solved with, and
-			// what each one does in the direct solve
-			ImGui::SeparatorText(locText("directStage.bodySection"));
+			// what each one does in the front-camera solve
+			ImGui::SeparatorText(locText("frontCameraStage.bodySection"));
 			SettingsPanels::BodyDimensionTooltips tooltips;
-			tooltips.deriveUpperArm= "directStage.deriveUpperArmTooltip";
-			tooltips.upperArmRatio= "directStage.upperArmRatioTooltip";
-			tooltips.upperArm= "directStage.upperArmTooltip";
-			tooltips.shoulderWidth= "directStage.shoulderWidthTooltip";
-			tooltips.headWidth= "directStage.headWidthTooltip";
-			tooltips.noseForward= "directStage.noseForwardTooltip";
+			tooltips.deriveUpperArm= "frontCameraStage.deriveUpperArmTooltip";
+			tooltips.upperArmRatio= "frontCameraStage.upperArmRatioTooltip";
+			tooltips.upperArm= "frontCameraStage.upperArmTooltip";
+			tooltips.shoulderWidth= "frontCameraStage.shoulderWidthTooltip";
+			tooltips.headWidth= "frontCameraStage.headWidthTooltip";
+			tooltips.noseForward= "frontCameraStage.noseForwardTooltip";
 			SettingsPanels::drawBodyDimensionControls(m_tracking, tooltips);
-			SettingsPanels::drawForearmLengthControl(m_tracking, "directStage.forearmLengthTooltip");
+			SettingsPanels::drawForearmLengthControl(m_tracking, "frontCameraStage.forearmLengthTooltip");
 		}
 		else
 		{
 			// Two readouts share the section, so each keeps its heading
-			SettingsPanels::drawDirectSolveSummary(m_tracking);
+			SettingsPanels::drawFrontCameraSolveSummary(m_tracking);
 			SettingsPanels::drawHoldStillSection(m_tracking);
 		}
 		break;
 	case ePipelineStage::Filters:
-		SettingsPanels::drawDirectFiltersReadout(m_tracking);
+		SettingsPanels::drawFrontCameraFiltersReadout(m_tracking);
 		break;
 	case ePipelineStage::Torso:
-		SettingsPanels::drawDirectTorsoReadout(m_tracking);
+		SettingsPanels::drawFrontCameraTorsoReadout(m_tracking);
 		break;
 	case ePipelineStage::ArmChain:
-		SettingsPanels::drawDirectArmChainReadout(m_tracking);
+		SettingsPanels::drawFrontCameraArmChainReadout(m_tracking);
 		break;
 	case ePipelineStage::Palm:
-		SettingsPanels::drawDirectPalmReadout(m_tracking);
+		SettingsPanels::drawFrontCameraPalmReadout(m_tracking);
 		break;
 	case ePipelineStage::HoldRest:
-		SettingsPanels::drawDirectHoldRestReadout(m_tracking);
+		SettingsPanels::drawFrontCameraHoldRestReadout(m_tracking);
 		break;
 	case ePipelineStage::Phone:
 		if (section == eStageSection::Settings)

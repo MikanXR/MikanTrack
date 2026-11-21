@@ -165,7 +165,7 @@ PipelineStageId StageInspector::drawStageBody(const PipelineStatusInputs& inputs
 	std::vector<PipelineStageId> subStages;
 	if (topLevel == stage)
 	{
-		for (const std::vector<PipelineStageId>& lane : PipelineModel::getSubStageLanes(stage, inputs.bDirect, inputs.cameraCount))
+		for (const std::vector<PipelineStageId>& lane : PipelineModel::getSubStageLanes(stage, inputs.bFrontCameraMode, inputs.cameraCount))
 			subStages.insert(subStages.end(), lane.begin(), lane.end());
 	}
 	bool bSubStageSection= false;
@@ -208,10 +208,11 @@ PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)
 		ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
 		drawRow("stageInspector.summaryPipeline",
-				locText(inputs.bDirect ? "stageInspector.pipelineDirect" : "stageInspector.pipelineMulti"));
+				locText(inputs.bFrontCameraMode ? "stageInspector.pipelineFrontCamera"
+												: "stageInspector.pipelineMulti"));
 		drawRow("stageInspector.summaryCameras", std::to_string(inputs.cameraCount).c_str());
 		drawRow("stageInspector.summaryImu",
-				locText(inputs.bImuEnabled && !inputs.bDirect ? "stageInspector.summaryEnabled"
+				locText(inputs.bImuEnabled && !inputs.bFrontCameraMode ? "stageInspector.summaryEnabled"
 															  : "stageInspector.summaryNone"));
 		drawRow("stageInspector.summaryAvatar",
 				locText(inputs.bAvatarLoaded ? "stageInspector.summaryLoaded" : "stageInspector.summaryNone"));
@@ -221,7 +222,7 @@ PipelineStageId StageInspector::drawProject(const PipelineStatusInputs& inputs)
 	// Every stage that is degraded or not configured, in pipeline order
 	ImGui::SeparatorText(locText("stageInspector.needsAttention"));
 	int listed= 0;
-	for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount))
+	for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bFrontCameraMode, inputs.cameraCount))
 	{
 		const StageStatus status= PipelineModel::computeStatus(inputs, stage);
 		if (status.state != eStageState::Degraded && status.state != eStageState::NotConfigured)

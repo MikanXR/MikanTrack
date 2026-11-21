@@ -57,7 +57,7 @@ struct RetargetChains
 		// The scale on the source's reach before the goal is placed, 0 to 1:
 		// at 1 the user's reach is scaled onto the avatar's arm, at 0 the
 		// measured shoulder-to-wrist offset is kept as measured (meters, or
-		// the direct source's avatar units). A function reads the source
+		// the front-camera source's avatar units). A function reads the source
 		// pose's inputs, as the elbow weight's does.
 		ExprParameter reachScale{1.f};
 		// Added to the goal after the scaling and before the clamp to the
@@ -110,20 +110,20 @@ ExprParameter makeDefaultElbowWeight(int sideIndex, float elbowHintConfidence);
 bool findElbowHintConfidence(const ExprParameter& elbowWeight, int sideIndex, float& outElbowHintConfidence);
 
 // The chains of a project from before chain settings existed. The arms take
-// the shape's mapping (bone angles for a direct project, bone angles then IK
-// otherwise) and its IK weight (0 direct, 1 otherwise), a reach scale of 1,
+// the shape's mapping (bone angles for a front-camera project, bone angles then IK
+// otherwise) and its IK weight (0 front-camera, 1 otherwise), a reach scale of 1,
 // no goal offset, and the elbow weight of the sidecar's elbow hint
 // confidence (makeDefaultElbowWeight). A multi-camera
-// arm holds for holdOnDropoutMs and then freezes or releases, a direct arm
+// arm holds for holdOnDropoutMs and then freezes or releases, a front-camera arm
 // takes the pipeline's hold and then eases to rest; both keep the other
 // shape's numbers (the hold length, the rest blend) so a change of shape
 // keeps them. The torso and the head take what the shape's loss policy gives
 // them.
-RetargetChains migrateRetargetChains(bool bDirect, float holdOnDropoutMs, bool bFreezeOnLoss, float restBlendMs,
-									 const std::array<float, 2>& elbowHintConfidence);
+RetargetChains migrateRetargetChains(bool bFrontCameraMode, float holdOnDropoutMs, bool bFreezeOnLoss,
+									 float restBlendMs, const std::array<float, 2>& elbowHintConfidence);
 
 // A shape's defaults: the migration of the default legacy settings
-RetargetChains makeDefaultRetargetChains(bool bDirect);
+RetargetChains makeDefaultRetargetChains(bool bFrontCameraMode);
 
 // The loss rules one pipeline performs from the chains. A stored kind the
 // pipeline cannot perform takes that pipeline's default for the chain, the
@@ -134,7 +134,7 @@ RetargetChains makeDefaultRetargetChains(bool bDirect);
 // it takes the default, a freeze for an arm and a release for the head. The
 // position pipeline performs no hold or a timed one (its own hold becomes a
 // timed one of the stored length) on the arms and the head, gates the arms
-// on minConfidence, and carries its torso with the arms. The direct pipeline
+// on minConfidence, and carries its torso with the arms. The front-camera pipeline
 // keeps its own hold on every chain, whatever kind is stored, since that
 // hold also keeps the solver's chain and filters alive.
 LossPolicy makeChainLossPolicy(const RetargetChains& chains, SourcePose::ePipeline pipeline, float minConfidence,

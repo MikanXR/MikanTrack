@@ -11,7 +11,7 @@
 #include "BodyPoseSolver.h"
 #include "CameraContext.h"
 #include "DiagnosticDump.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "FaceProfileRunner.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
@@ -75,8 +75,8 @@ public:
 	// Copies the newest fused (world-space, smoothed) tracking result, what
 	// the retarget stage made of it (the posed avatar the stream carries,
 	// invalid with no avatar loaded; the source pose after the loss stage;
-	// in direct mode the direct solve state), and the fusion diagnostics
-	// behind it (empty for a passthrough or direct frame). Returns false if
+	// in front-camera mode the front-camera solve state), and the fusion diagnostics
+	// behind it (empty for a passthrough or front-camera frame). Returns false if
 	// nothing new arrived since the last call.
 	bool fetchFusedResult(TrackingFrameResult& outResult, RetargetResult* outRetarget= nullptr,
 						  FusionDiagnostics* outFusionDiagnostics= nullptr);
@@ -171,20 +171,20 @@ public:
 	// Fetches a completed capture; returns false if none is pending
 	bool fetchRestPoseCapture(RestPoseCapture& outFused);
 
-	// Direct retarget: captures the solver's current filtered measurements
+	// Front-camera retarget: captures the solver's current filtered measurements
 	// as the neutral pose (the fingers need no zero there), and while the
 	// phone streams captures the face anchor with it (fetched separately,
-	// above). The UI fetches the capture and persists it in the direct
+	// above). The UI fetches the capture and persists it in the front-camera
 	// config. False from fetch until a capture lands; a request with no
-	// solved torso is dropped. A request names the direct camera it was made
+	// solved torso is dropped. A request names the front camera it was made
 	// for, which the capture carries back, so the UI can drop a capture that
-	// landed after the direct camera changed.
+	// landed after the front camera changed.
 	struct NeutralCapture
 	{
-		DirectNeutralPose neutral;
+		FrontCameraNeutralPose neutral;
 		int cameraIndex= -1;
 	};
-	void requestNeutralCapture(int directCameraIndex) { m_neutralCaptureRequestCamera= directCameraIndex; }
+	void requestNeutralCapture(int frontCameraIndex) { m_neutralCaptureRequestCamera= frontCameraIndex; }
 	bool fetchNeutralCapture(NeutralCapture& outCapture);
 
 	// Hand bone calibration: measures the user's own skeleton from the
@@ -249,9 +249,9 @@ public:
 
 	// Diagnostic dump (F9): the vision thread writes its rolling state history,
 	// the current camera frames (raw + annotated PNGs), the live config, the
-	// frame as a one-frame recording and, in direct mode, the posed avatar
+	// frame as a one-frame recording and, in front-camera mode, the posed avatar
 	// to dumpDir on its next loop iteration. avatarRender: the avatar as the
-	// UI rendered it from the direct camera this frame, saved beside the
+	// UI rendered it from the front camera this frame, saved beside the
 	// frame it should match (empty for none).
 	void requestDiagnosticDump(const std::string& dumpDir, const cv::Mat& avatarRender= cv::Mat());
 	// Directory of the last completed dump ("" until one succeeds)
@@ -299,7 +299,7 @@ public:
 			FaceOnly,
 			Fused,
 			Passthrough,
-			Direct
+			FrontCamera
 		};
 		bool bValid= false; // false until the first iteration publishes
 		ePath path= ePath::Idle;
@@ -336,9 +336,9 @@ private:
 		// The frame's output: fused world space, or camera 0's camera-space
 		// passthrough when no calibrated camera contributed
 		TrackingFrameResult outputResult;
-		// Direct mode this iteration: the output is the direct camera's result
-		// and the direct retarget poses the avatar from it
-		bool bDirect= false;
+		// Front-camera mode this iteration: the output is the front camera's result
+		// and the front-camera retarget poses the avatar from it
+		bool bFrontCameraMode= false;
 		// The recording record under assembly, live only while recording
 		bool bRecordingThisFrame= false;
 		RecordedFrame recordFrame;
@@ -347,7 +347,7 @@ private:
 		const double* phaseMs= nullptr;
 	};
 
-	// Which path the iteration took: the direct camera, the fusion, or the
+	// Which path the iteration took: the front camera, the fusion, or the
 	// camera-space passthrough
 	static Telemetry::ePath getCameraIterationPath(const IterationState& iteration);
 	// The stage state a recorded frame carries for display. nowMs places the
@@ -366,16 +366,16 @@ private:
 	// Cross-camera fusion (or the camera-space passthrough) and the fused
 	// checksum tap
 	void runFusionStage(IterationState& iteration);
-	// Direct mode: the direct camera's result as the output (the camera is
+	// Front-camera mode: the front camera's result as the output (the camera is
 	// the world), recorded as a passthrough of that camera, in place of the
 	// fusion, IMU and body-solve stages
-	bool isDirectModeActive() const;
-	void runDirectStage(IterationState& iteration);
-	// The retarget stage's direct pipeline over the direct camera's result,
+	bool isFrontCameraModeActive() const;
+	void runFrontCameraStage(IterationState& iteration);
+	// The retarget stage's front-camera pipeline over the front camera's result,
 	// after the face stage so the phone head reaches it. False when it cannot
 	// run (no skeleton, no intrinsics), when the frame takes the position
 	// pipeline instead.
-	bool solveDirectRetarget(const IterationState& iteration);
+	bool solveFrontCameraRetarget(const IterationState& iteration);
 	// Wrist IMU: sample drain, yaw anchor, forearm fill, mounting capture
 	void runImuStage(IterationState& iteration);
 	// The mounting wizard's motion recording and bias calibration requests,
@@ -395,7 +395,7 @@ private:
 	void runOutputStage(IterationState& iteration);
 	// The microphone's visemes onto the output's viseme source
 	void applyMouthToOutput(TrackingFrameResult& output, double nowMs);
-	// The direct camera's face block onto the output's webcam source
+	// The front camera's face block onto the output's webcam source
 	void applyWebcamToOutput(TrackingFrameResult& output, double nowMs);
 	// The face stream's blendshapes onto the output's phone source, and its
 	// head, which wins over the camera head while the stream is live and
@@ -456,14 +456,14 @@ private:
 	// Microphone mouth stage. Owned by App; this thread reads its sample.
 	AudioService* m_audioService= nullptr;
 	uint64_t m_lastMouthSequence= 0;
-	// The direct camera index this thread last applied from the config, read
+	// The front camera index this thread last applied from the config, read
 	// in place of the config's so the role moves at the refresh together
 	// with the body models. Kept across a restart, so a camera removal's
 	// restart still sees the index change. -1 before the first refresh.
-	int m_directCameraIndex= -1;
-	// The direct camera's last face ratios, for the neutral capture
+	int m_frontCameraIndex= -1;
+	// The front camera's last face ratios, for the neutral capture
 	WebcamFaceNeutralAverager m_webcamNeutralAverager;
-	// The Blink stage over the direct camera's eye openness
+	// The Blink stage over the front camera's eye openness
 	WebcamBlinkFilter m_blinkFilter;
 	// The timestamp of the last output a camera produced, so a face-only
 	// frame can tell when the hands it repeats have gone stale
@@ -526,14 +526,14 @@ private:
 	bool m_bFusedFresh= false;
 
 	// The retarget stage, run on every output frame ahead of the send-rate
-	// gate, and its result for the last one. In direct mode a camera frame
-	// the direct pipeline solved leaves m_bDirectRetarget set, and a
+	// gate, and its result for the last one. In front-camera mode a camera frame
+	// the front-camera pipeline solved leaves m_bFrontCameraRetarget set, and a
 	// face-only frame repeats that result.
 	RetargetStage m_retargetStage;
 	RetargetResult m_retarget;
-	bool m_bDirectRetarget= false;
-	// The direct retarget's neutral capture handoff
-	// The direct camera index a pending request was made for, -1 for none
+	bool m_bFrontCameraRetarget= false;
+	// The front-camera retarget's neutral capture handoff
+	// The front camera index a pending request was made for, -1 for none
 	std::atomic_int m_neutralCaptureRequestCamera{-1};
 	std::mutex m_neutralCaptureMutex;
 	NeutralCapture m_capturedNeutral;

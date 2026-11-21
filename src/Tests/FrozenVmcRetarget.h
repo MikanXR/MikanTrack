@@ -45,7 +45,7 @@ namespace VmcRetarget
 // (which is what a VMC receiver matches on). Deliberately partial: this rig
 // measures an upper body, so legs, eyes and jaw are left to the avatar's rest
 // pose rather than being invented. The torso and neck bones are on the list
-// but only a retargeted avatar pose that places them (the direct retarget's
+// but only a retargeted avatar pose that places them (the front-camera retarget's
 // lean) ever fills them.
 enum class eVmcBone : int
 {
@@ -180,7 +180,7 @@ eHumanoidBone humanoidBoneForVmc(eVmcBone bone);
 // Fills outPose from a retargeted avatar pose instead of the measured
 // lengths: each streamed bone's local rotation is its delta measured against
 // the nearest streamed ancestor's delta (the torso is streamed only when the
-// pose placed it: the direct retarget does, so an arm hangs off the leaned
+// pose placed it: the front-camera retarget does, so an arm hangs off the leaned
 // torso, and the position retarget never does, so an arm hangs off the rest
 // chest exactly as in buildPose), and its local
 // position is the AVATAR's own rest offset from its humanoid parent, so a

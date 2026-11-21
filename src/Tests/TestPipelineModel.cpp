@@ -27,12 +27,12 @@ PipelineStageId id(S stage, int cameraIndex= -1)
 }
 
 // Everything present, calibrated and tracking
-Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
+Inputs makeHealthy(bool bFrontCameraMode, int cameraCount, bool bImu, int bodyCamera)
 {
 	Inputs in;
-	in.bDirect= bDirect;
+	in.bFrontCameraMode= bFrontCameraMode;
 	in.cameraCount= cameraCount;
-	in.path= bDirect ? Inputs::ePath::Direct : Inputs::ePath::Fused;
+	in.path= bFrontCameraMode ? Inputs::ePath::FrontCamera : Inputs::ePath::Fused;
 	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
 	{
 		Inputs::Camera& camera= in.cameras[cameraIndex];
@@ -41,7 +41,7 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 		camera.captureFps= 30.f;
 		camera.bHandPipelineReady= true;
 		camera.bIntrinsics= true;
-		camera.bExtrinsics= !bDirect;
+		camera.bExtrinsics= !bFrontCameraMode;
 		camera.handsTracked= 2;
 		if (cameraIndex == bodyCamera)
 		{
@@ -49,19 +49,19 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 			camera.bBodyModelLoaded= true;
 			camera.bBodyValid= true;
 			camera.bodyConfidence= 0.85f;
-			camera.bBodyHasDepth= bDirect;
+			camera.bBodyHasDepth= bFrontCameraMode;
 		}
 	}
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		Inputs::Hand& hand= in.hands[sideIndex];
 		hand.bTracked= true;
-		hand.bWorldPose= !bDirect;
+		hand.bWorldPose= !bFrontCameraMode;
 		hand.confidence= 0.9f;
 		hand.dominantCamera= sideIndex % std::max(cameraCount, 1);
-		hand.bForearmPose= !bDirect && (bImu || bodyCamera >= 0);
+		hand.bForearmPose= !bFrontCameraMode && (bImu || bodyCamera >= 0);
 		hand.forearmConfidence= 0.8f;
-		hand.bShoulder= !bDirect && bodyCamera >= 0;
+		hand.bShoulder= !bFrontCameraMode && bodyCamera >= 0;
 		in.bArmPlaced[sideIndex]= true;
 
 		Inputs::Imu& imu= in.imu[sideIndex];
@@ -71,18 +71,18 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 		imu.bOrientationValid= bImu;
 		imu.sampleRateHz= bImu ? 200.f : 0.f;
 
-		Inputs::DirectArm& arm= in.directArms[sideIndex];
-		arm.bChain= bDirect;
-		arm.bHandSeen= bDirect;
-		arm.bElbowSeen= bDirect;
-		arm.bHandMeasured= bDirect;
+		Inputs::FrontCameraArm& arm= in.frontCameraArms[sideIndex];
+		arm.bChain= bFrontCameraMode;
+		arm.bHandSeen= bFrontCameraMode;
+		arm.bElbowSeen= bFrontCameraMode;
+		arm.bHandMeasured= bFrontCameraMode;
 	}
 	in.bHeadValid= bodyCamera >= 0;
 	in.bImuEnabled= bImu;
-	in.bDirectIntrinsics= bDirect;
-	in.bDirectNeutral= bDirect;
-	in.bDirectTorso= bDirect;
-	in.directShoulderDepthMeters= 0.62f;
+	in.bFrontCameraIntrinsics= bFrontCameraMode;
+	in.bFrontCameraNeutral= bFrontCameraMode;
+	in.bFrontCameraTorso= bFrontCameraMode;
+	in.frontCameraShoulderDepthMeters= 0.62f;
 	in.bAvatarLoaded= true;
 	in.avatarMappedBoneCount= 52;
 	in.bAvatarFollowShoulders= true;
@@ -96,11 +96,11 @@ Inputs makeHealthy(bool bDirect, int cameraCount, bool bImu, int bodyCamera)
 	in.bFaceStreaming= true;
 	in.bFaceTracked= true;
 	in.faceDatagramsPerSecond= 60.f;
-	// The webcam face is the direct camera's
-	in.bWebcamPresent= in.bDirect;
-	in.bWebcamTracked= in.bDirect;
-	in.bWebcamNeutral= in.bDirect;
-	in.bBlinkSettled= in.bDirect;
+	// The webcam face is the front camera's
+	in.bWebcamPresent= in.bFrontCameraMode;
+	in.bWebcamTracked= in.bFrontCameraMode;
+	in.bWebcamNeutral= in.bFrontCameraMode;
+	in.bBlinkSettled= in.bFrontCameraMode;
 	in.bAudioEnabled= true;
 	in.bAudioDeviceOpen= true;
 	in.bAudioBackendReady= true;
@@ -143,13 +143,13 @@ std::vector<Fault> makeFaults()
 		{"hand pipeline failed", [](Inputs& in) { in.cameras[0].bHandPipelineReady= false; }},
 		{"no intrinsics", [](Inputs& in) {
 			 in.cameras[0].bIntrinsics= false;
-			 in.bDirectIntrinsics= false;
+			 in.bFrontCameraIntrinsics= false;
 		 }},
 		{"one camera without extrinsics", [](Inputs& in) { in.cameras[0].bExtrinsics= false; }},
 		{"no extrinsics", [](Inputs& in) {
 			 for (Inputs::Camera& camera : in.cameras)
 				 camera.bExtrinsics= false;
-			 if (!in.bDirect)
+			 if (!in.bFrontCameraMode)
 				 in.path= Inputs::ePath::Passthrough;
 		 }},
 		{"body camera without extrinsics", [](Inputs& in) {
@@ -175,19 +175,19 @@ std::vector<Fault> makeFaults()
 				 hand.bShoulder= false;
 			 }
 			 in.bHeadValid= false;
-			 in.bDirectTorso= false;
-			 for (Inputs::DirectArm& arm : in.directArms)
-				 arm= Inputs::DirectArm();
+			 in.bFrontCameraTorso= false;
+			 for (Inputs::FrontCameraArm& arm : in.frontCameraArms)
+				 arm= Inputs::FrontCameraArm();
 			 in.bArmPlaced[0]= in.bArmPlaced[1]= false;
 		 }},
 		{"one hand lost", [](Inputs& in) {
 			 in.hands[0].bTracked= false;
-			 in.directArms[0].bChain= false;
-			 in.directArms[0].bResting= true;
-			 in.directArms[0].restBlend= 0.4f;
+			 in.frontCameraArms[0].bChain= false;
+			 in.frontCameraArms[0].bResting= true;
+			 in.frontCameraArms[0].restBlend= 0.4f;
 		 }},
 		{"both arms at rest", [](Inputs& in) {
-			 for (Inputs::DirectArm& arm : in.directArms)
+			 for (Inputs::FrontCameraArm& arm : in.frontCameraArms)
 			 {
 				 arm.bChain= false;
 				 arm.bResting= true;
@@ -205,13 +205,13 @@ std::vector<Fault> makeFaults()
 			 in.bReplay= true;
 			 in.bStageStateRecorded= false;
 		 }},
-		{"no neutral", [](Inputs& in) { in.bDirectNeutral= false; }},
+		{"no neutral", [](Inputs& in) { in.bFrontCameraNeutral= false; }},
 		{"no neutral, nobody in view", [](Inputs& in) {
-			 in.bDirectNeutral= false;
-			 in.bDirectTorso= false;
+			 in.bFrontCameraNeutral= false;
+			 in.bFrontCameraTorso= false;
 		 }},
-		{"swapped hand labels", [](Inputs& in) { in.bDirectHandednessSwapped= true; }},
-		{"nominal lens", [](Inputs& in) { in.bDirectIntrinsicsNominal= true; }},
+		{"swapped hand labels", [](Inputs& in) { in.bFrontCameraHandednessSwapped= true; }},
+		{"nominal lens", [](Inputs& in) { in.bFrontCameraIntrinsicsNominal= true; }},
 		{"no avatar", [](Inputs& in) { in.bAvatarLoaded= false; }},
 		{"bone map problem", [](Inputs& in) { in.avatarMappingProblemCount= 2; }},
 		{"follow shoulders off", [](Inputs& in) { in.bAvatarFollowShoulders= false; }},
@@ -241,7 +241,7 @@ std::vector<Fault> makeFaults()
 struct Shape
 {
 	const char* name;
-	bool bDirect;
+	bool bFrontCameraMode;
 	int cameraCount;
 	bool bImu;
 	int bodyCamera;
@@ -251,9 +251,9 @@ const Shape k_shapes[]= {
 	{"tri-camera, body, IMU", false, 3, true, 2},
 	{"dual, no body, no IMU", false, 2, false, -1},
 	{"single desk camera", false, 1, false, 0},
-	{"direct", true, 1, false, 0},
+	{"front-camera", true, 1, false, 0},
 	// The second camera runs no body pose: the project's mode decides
-	{"direct, two cameras", true, 2, false, 0},
+	{"front-camera, two cameras", true, 2, false, 0},
 };
 } // namespace
 
@@ -275,13 +275,14 @@ static int runPipelineModelTest(const TestArgs&)
 	// (a) Layout: the top row per shape, the side stage, the lanes
 	{
 		const std::vector<PipelineStageId> multi= PipelineModel::getTopRow(false);
-		const std::vector<PipelineStageId> direct= PipelineModel::getTopRow(true);
+		const std::vector<PipelineStageId> frontCamera= PipelineModel::getTopRow(true);
 		check(multi.size() == 7 && multi.front() == id(S::Capture) && multi[1] == id(S::Fusion) &&
 				  multi[2] == id(S::Imu) && multi[3] == id(S::BodySolver) && multi[4] == id(S::SourcePose) &&
 				  multi[5] == id(S::Retarget) && multi.back() == id(S::Output),
 			  "(a) multi-camera top row");
-		check(direct.size() == 5 && direct[1] == id(S::DirectSolver) && direct[2] == id(S::SourcePose),
-			  "(a) direct top row puts one solver where fusion, IMU and body solver were");
+		check(frontCamera.size() == 5 && frontCamera[1] == id(S::FrontCameraSolver) &&
+				  frontCamera[2] == id(S::SourcePose),
+			  "(a) front-camera top row puts one solver where fusion, IMU and body solver were");
 		check(PipelineModel::getSideStage() == id(S::Face), "(a) face is the side stage");
 
 		const auto captureLanes= PipelineModel::getSubStageLanes(id(S::Capture), false, 3);
@@ -290,23 +291,23 @@ static int runPipelineModelTest(const TestArgs&)
 			  "(a) capture opens one lane per camera");
 		check(PipelineModel::getSubStageLanes(id(S::HandModels, 1), false, 3).size() == 3,
 			  "(a) a sub-stage opens its top-level stage's lanes");
-		check(PipelineModel::getSubStageLanes(id(S::DirectSolver), true, 1).front().size() == 5 &&
+		check(PipelineModel::getSubStageLanes(id(S::FrontCameraSolver), true, 1).front().size() == 5 &&
 				  PipelineModel::getSubStageLanes(id(S::Face), false, 1).front().size() == 5 &&
 				  PipelineModel::getSubStageLanes(id(S::Output), false, 1).front().size() == 2 &&
 				  PipelineModel::getSubStageLanes(id(S::Fusion), false, 3).empty(),
-			  "(a) lanes of the direct solver, face, output, and none for fusion");
+			  "(a) lanes of the front-camera solver, face, output, and none for fusion");
 		const auto multiRetarget= PipelineModel::getSubStageLanes(id(S::Retarget), false, 3);
-		const auto directRetarget= PipelineModel::getSubStageLanes(id(S::Chains), true, 1);
+		const auto frontCameraRetarget= PipelineModel::getSubStageLanes(id(S::Chains), true, 1);
 		check(multiRetarget.size() == 1 && multiRetarget[0].size() == 3 && multiRetarget[0][0] == id(S::VrmModel) &&
 				  multiRetarget[0][1] == id(S::Placement) && multiRetarget[0][2] == id(S::Chains),
 			  "(a) the multi-camera retarget lane: the model, the placement, the chains");
-		check(directRetarget.size() == 1 && directRetarget[0].size() == 2 && directRetarget[0][0] == id(S::VrmModel) &&
-				  directRetarget[0][1] == id(S::Chains),
-			  "(a) the direct retarget lane has no placement");
+		check(frontCameraRetarget.size() == 1 && frontCameraRetarget[0].size() == 2 &&
+				  frontCameraRetarget[0][0] == id(S::VrmModel) && frontCameraRetarget[0][1] == id(S::Chains),
+			  "(a) the front-camera retarget lane has no placement");
 		check(PipelineModel::getAllStages(false, 3).size() == 33 && PipelineModel::getAllStages(true, 1).size() == 25,
-			  "(a) stage counts: 33 for three cameras, 25 for direct");
+			  "(a) stage counts: 33 for three cameras, 25 for front-camera");
 		check(PipelineModel::getTopLevel(id(S::Lift, 1)) == id(S::Capture) &&
-				  PipelineModel::getTopLevel(id(S::Palm)) == id(S::DirectSolver) &&
+				  PipelineModel::getTopLevel(id(S::Palm)) == id(S::FrontCameraSolver) &&
 				  PipelineModel::getTopLevel(id(S::Placement)) == id(S::Retarget) &&
 				  PipelineModel::getTopLevel(id(S::Fusion)) == id(S::Fusion),
 			  "(a) top-level stage of a sub-stage");
@@ -316,9 +317,9 @@ static int runPipelineModelTest(const TestArgs&)
 	{
 		bool bRoundTrip= true;
 		std::set<std::string> seen;
-		for (const bool bDirect : {false, true})
+		for (const bool bFrontCameraMode : {false, true})
 		{
-			for (const PipelineStageId& stage : PipelineModel::getAllStages(bDirect, 3))
+			for (const PipelineStageId& stage : PipelineModel::getAllStages(bFrontCameraMode, 3))
 			{
 				const std::string text= PipelineModel::toString(stage);
 				PipelineStageId parsed;
@@ -327,7 +328,7 @@ static int runPipelineModelTest(const TestArgs&)
 			}
 		}
 		check(bRoundTrip, "(b) every stage id survives toString and fromString");
-		check(seen.count("capture.cam2.hands") == 1 && seen.count("direct.arm") == 1 && seen.count("source") == 1 &&
+		check(seen.count("capture.cam2.hands") == 1 && seen.count("front.arm") == 1 && seen.count("source") == 1 &&
 				  seen.count("face.mic") == 1 && seen.count("body") == 1 && seen.count("capture.cam0.body") == 1 &&
 				  seen.count("retarget.model") == 1 && seen.count("retarget.placement") == 1 &&
 				  seen.count("retarget.chains") == 1,
@@ -348,20 +349,20 @@ static int runPipelineModelTest(const TestArgs&)
 			const eStageState state= stateOf(tri, stage);
 			// The overhead cameras run no body model
 			const bool bOverheadBody= stage.stage == S::BodyModel && stage.cameraIndex != 2;
-			// The webcam face and its blinks are a direct project's
+			// The webcam face and its blinks are a front-camera project's
 			const bool bInactive= bOverheadBody || stage.stage == S::Webcam || stage.stage == S::Blink;
 			bAllRunning&= bInactive ? state == eStageState::Inactive : state == eStageState::Running;
 		}
 		check(bAllRunning,
 			  "(c) tri-camera: every stage runs, the overhead cameras' body model, the webcam face and the blinks inactive");
 
-		const Inputs direct= makeHealthy(true, 1, false, 0);
-		bool bDirectRunning= true;
+		const Inputs frontCamera= makeHealthy(true, 1, false, 0);
+		bool bFrontCameraRunning= true;
 		for (const PipelineStageId& stage : PipelineModel::getAllStages(true, 1))
-			bDirectRunning&= stateOf(direct, stage) == eStageState::Running;
-		check(bDirectRunning, "(c) direct: every stage runs");
-		check(reasonOf(direct, id(S::Lift, 0)) == "pipeline.whyDirectNoWorld",
-			  "(c) direct: the lift says it stays in camera space");
+			bFrontCameraRunning&= stateOf(frontCamera, stage) == eStageState::Running;
+		check(bFrontCameraRunning, "(c) front-camera: every stage runs");
+		check(reasonOf(frontCamera, id(S::Lift, 0)) == "pipeline.whyFrontCameraNoWorld",
+			  "(c) front-camera: the lift says it stays in camera space");
 
 		const Inputs dual= makeHealthy(false, 2, false, -1);
 		check(stateOf(dual, id(S::Imu)) == eStageState::Inactive &&
@@ -406,7 +407,7 @@ static int runPipelineModelTest(const TestArgs&)
 			  "(e) no hands in view: fusion still runs and says so");
 	}
 
-	// (f) The avatar and the direct solver's needs
+	// (f) The avatar and the front-camera solver's needs
 	{
 		Inputs multi= makeHealthy(false, 2, false, -1);
 		multi.bAvatarLoaded= false;
@@ -415,34 +416,34 @@ static int runPipelineModelTest(const TestArgs&)
 				  stateOf(multi, id(S::Output)) == eStageState::Running,
 			  "(f) multi-camera with no avatar: retarget not configured, output still runs");
 
-		Inputs direct= makeHealthy(true, 1, false, 0);
-		direct.bAvatarLoaded= false;
-		check(stateOf(direct, id(S::DirectSolver)) == eStageState::NotConfigured &&
-				  stateOf(direct, id(S::ArmChain)) == eStageState::NotConfigured &&
-				  reasonOf(direct, id(S::Retarget)) == "pipeline.whyDirectNoAvatar",
-			  "(f) direct with no avatar: the solver and its sub-stages are not configured");
+		Inputs frontCamera= makeHealthy(true, 1, false, 0);
+		frontCamera.bAvatarLoaded= false;
+		check(stateOf(frontCamera, id(S::FrontCameraSolver)) == eStageState::NotConfigured &&
+				  stateOf(frontCamera, id(S::ArmChain)) == eStageState::NotConfigured &&
+				  reasonOf(frontCamera, id(S::Retarget)) == "pipeline.whyFrontCameraNoAvatar",
+			  "(f) front-camera with no avatar: the solver and its sub-stages are not configured");
 
 		Inputs noNeutral= makeHealthy(true, 1, false, 0);
-		noNeutral.bDirectNeutral= false;
-		check(stateOf(noNeutral, id(S::DirectSolver)) == eStageState::Degraded &&
+		noNeutral.bFrontCameraNeutral= false;
+		check(stateOf(noNeutral, id(S::FrontCameraSolver)) == eStageState::Degraded &&
 				  stateOf(noNeutral, id(S::Torso)) == eStageState::Degraded &&
 				  stateOf(noNeutral, id(S::ArmChain)) == eStageState::Running,
-			  "(f) direct with no neutral: the solver and the torso degraded, the arm chain running");
+			  "(f) front-camera with no neutral: the solver and the torso degraded, the arm chain running");
 
 		Inputs swapped= makeHealthy(true, 1, false, 0);
-		swapped.bDirectHandednessSwapped= true;
-		check(stateOf(swapped, id(S::DirectSolver)) == eStageState::Degraded &&
+		swapped.bFrontCameraHandednessSwapped= true;
+		check(stateOf(swapped, id(S::FrontCameraSolver)) == eStageState::Degraded &&
 				  stateOf(swapped, id(S::Filters)) == eStageState::Degraded &&
 				  valueOf(swapped, id(S::Filters)) == "pipeline.valHandednessSwapped" &&
-				  reasonOf(swapped, id(S::Filters)) == "pipeline.whyDirectHandednessSwapped" &&
+				  reasonOf(swapped, id(S::Filters)) == "pipeline.whyFrontCameraHandednessSwapped" &&
 				  stateOf(swapped, id(S::Torso)) == eStageState::Running,
-			  "(f) direct with swapped hand labels: the solver and its filters degraded, naming the swap");
+			  "(f) front-camera with swapped hand labels: the solver and its filters degraded, naming the swap");
 
 		Inputs nominal= makeHealthy(true, 1, false, 0);
-		nominal.bDirectIntrinsicsNominal= true;
-		check(stateOf(nominal, id(S::DirectSolver)) == eStageState::Running &&
-				  reasonOf(nominal, id(S::DirectSolver)) == "pipeline.whyDirectNominalIntrinsics",
-			  "(f) direct on a nominal lens: the solver runs and notes the lens");
+		nominal.bFrontCameraIntrinsicsNominal= true;
+		check(stateOf(nominal, id(S::FrontCameraSolver)) == eStageState::Running &&
+				  reasonOf(nominal, id(S::FrontCameraSolver)) == "pipeline.whyFrontCameraNominalIntrinsics",
+			  "(f) front-camera on a nominal lens: the solver runs and notes the lens");
 	}
 
 	// (f1) The retarget lane: each box's own state, and the model's problem
@@ -502,10 +503,10 @@ static int runPipelineModelTest(const TestArgs&)
 				  stateOf(noWorld, id(S::Retarget)) == eStageState::Inactive,
 			  "(f1) nothing to pose: the placement, chains and retarget inactive, the model still reports its map");
 
-		Inputs direct= makeHealthy(true, 1, false, 0);
-		direct.bAvatarLoaded= false;
-		check(reasonOf(direct, id(S::VrmModel)) == "pipeline.whyDirectNoAvatar",
-			  "(f1) direct with no avatar: the model gives the direct reason");
+		Inputs frontCamera= makeHealthy(true, 1, false, 0);
+		frontCamera.bAvatarLoaded= false;
+		check(reasonOf(frontCamera, id(S::VrmModel)) == "pipeline.whyFrontCameraNoAvatar",
+			  "(f1) front-camera with no avatar: the model gives the front-camera reason");
 	}
 
 	// (f2) A replayed frame from a take with no stage state: the stages that
@@ -558,9 +559,10 @@ static int runPipelineModelTest(const TestArgs&)
 			{
 				for (const Fault& fault : faults)
 				{
-					Inputs in= makeHealthy(shape.bDirect, shape.cameraCount, shape.bImu, shape.bodyCamera);
+					Inputs in= makeHealthy(shape.bFrontCameraMode, shape.cameraCount, shape.bImu, shape.bodyCamera);
 					fault.apply(in);
-					std::vector<PipelineStageId> stages= PipelineModel::getAllStages(shape.bDirect, shape.cameraCount);
+					std::vector<PipelineStageId> stages=
+						PipelineModel::getAllStages(shape.bFrontCameraMode, shape.cameraCount);
 					// A stage of a camera the project lacks, as a stale selection asks for
 					stages.push_back(id(S::Video, 7));
 					for (const PipelineStageId& stage : stages)

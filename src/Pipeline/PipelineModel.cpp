@@ -29,12 +29,12 @@ const StageInfo k_stages[(int)S::Count]= {
 	{"Fusion", "fusion", S::Fusion},
 	{"Imu", "imu", S::Imu},
 	{"BodySolver", "body", S::BodySolver},
-	{"DirectSolver", "direct", S::DirectSolver},
-	{"Filters", "filters", S::DirectSolver},
-	{"Torso", "torso", S::DirectSolver},
-	{"ArmChain", "arm", S::DirectSolver},
-	{"Palm", "palm", S::DirectSolver},
-	{"HoldRest", "hold", S::DirectSolver},
+	{"FrontCameraSolver", "front", S::FrontCameraSolver},
+	{"Filters", "filters", S::FrontCameraSolver},
+	{"Torso", "torso", S::FrontCameraSolver},
+	{"ArmChain", "arm", S::FrontCameraSolver},
+	{"Palm", "palm", S::FrontCameraSolver},
+	{"HoldRest", "hold", S::FrontCameraSolver},
 	{"SourcePose", "source", S::SourcePose},
 	{"Retarget", "retarget", S::Retarget},
 	{"VrmModel", "model", S::Retarget},
@@ -122,7 +122,7 @@ int clampedCameraCount(const Inputs& in)
 // passes camera 0 through in camera space and nothing hand-side is streamed
 bool isWithoutWorld(const Inputs& in)
 {
-	if (in.bDirect)
+	if (in.bFrontCameraMode)
 		return false;
 	if (in.path == Inputs::ePath::Passthrough)
 		return true;
@@ -221,7 +221,7 @@ StageStatus computePerCamera(const Inputs& in, const PipelineStageId& id)
 		return running(text("valHandsFmt", camera.handsTracked));
 	case S::BodyModel:
 		if (!camera.bBodyEnabled)
-			return inactive(text("valOff"), text(in.bDirect ? "whyBodyDirectCameraOnly" : "whyBodyDisabled"));
+			return inactive(text("valOff"), text(in.bFrontCameraMode ? "whyBodyFrontCameraOnly" : "whyBodyDisabled"));
 		if (device.state != eStageState::Running)
 			return inactive(text("valNoFrames"), text("whyCameraNotRunning"));
 		if (!camera.bBodyModelLoaded)
@@ -236,8 +236,8 @@ StageStatus computePerCamera(const Inputs& in, const PipelineStageId& id)
 			return inactive(text("valNoFrames"), text("whyCameraNotRunning"));
 		if (!camera.bIntrinsics)
 			return notConfigured(text("val2dOnly"), text("whyNoIntrinsicsLift"));
-		if (in.bDirect)
-			return running(text("valCameraSpace"), text("whyDirectNoWorld"));
+		if (in.bFrontCameraMode)
+			return running(text("valCameraSpace"), text("whyFrontCameraNoWorld"));
 		if (!camera.bExtrinsics)
 			return notConfigured(text("valCameraSpace"), text("whyNoExtrinsicsLift"));
 		return running(text("valWorld"));
@@ -319,49 +319,50 @@ StageStatus computeBodySolver(const Inputs& in)
 	return running(text("valShouldersFmt", shoulders), bImuForearms ? text("whyBodyImuForearms") : StageText());
 }
 
-int countDirect(const Inputs& in, bool Inputs::DirectArm::*field)
+int countFrontCamera(const Inputs& in, bool Inputs::FrontCameraArm::*field)
 {
-	return (in.directArms[0].*field ? 1 : 0) + (in.directArms[1].*field ? 1 : 0);
+	return (in.frontCameraArms[0].*field ? 1 : 0) + (in.frontCameraArms[1].*field ? 1 : 0);
 }
 
-StageStatus computeDirect(const Inputs& in, S stage)
+StageStatus computeFrontCamera(const Inputs& in, S stage)
 {
-	if (!in.bDirectIntrinsics)
-		return notConfigured(text("valNoIntrinsics"), text("whyDirectNoIntrinsics"));
+	if (!in.bFrontCameraIntrinsics)
+		return notConfigured(text("valNoIntrinsics"), text("whyFrontCameraNoIntrinsics"));
 	if (!in.bAvatarLoaded)
-		return notConfigured(text("valNoAvatar"), text("whyDirectNoAvatar"));
-	const StageText noNeutral= in.bDirectNeutral ? StageText() : text("whyDirectNoNeutral");
+		return notConfigured(text("valNoAvatar"), text("whyFrontCameraNoAvatar"));
+	const StageText noNeutral= in.bFrontCameraNeutral ? StageText() : text("whyFrontCameraNoNeutral");
 	// The solver runs on an assumed lens, which a running stage still says
-	const StageText nominalLens= in.bDirectIntrinsicsNominal ? text("whyDirectNominalIntrinsics") : StageText();
-	const int resting= countDirect(in, &Inputs::DirectArm::bResting);
-	const bool bEasing= (in.directArms[0].bResting && in.directArms[0].restBlend < 1.f) ||
-		(in.directArms[1].bResting && in.directArms[1].restBlend < 1.f);
+	const StageText nominalLens=
+		in.bFrontCameraIntrinsicsNominal ? text("whyFrontCameraNominalIntrinsics") : StageText();
+	const int resting= countFrontCamera(in, &Inputs::FrontCameraArm::bResting);
+	const bool bEasing= (in.frontCameraArms[0].bResting && in.frontCameraArms[0].restBlend < 1.f) ||
+		(in.frontCameraArms[1].bResting && in.frontCameraArms[1].restBlend < 1.f);
 
 	switch (stage)
 	{
-	case S::DirectSolver:
-		if (!in.bDirectNeutral)
+	case S::FrontCameraSolver:
+		if (!in.bFrontCameraNeutral)
 			return degraded(text("valNoNeutral"), noNeutral);
-		if (!in.bDirectTorso)
+		if (!in.bFrontCameraTorso)
 			return running(text("valNoPerson"), nominalLens);
-		if (in.bDirectHandednessSwapped)
-			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
+		if (in.bFrontCameraHandednessSwapped)
+			return degraded(text("valHandednessSwapped"), text("whyFrontCameraHandednessSwapped"));
 		if (resting == 2)
 			return running(text("valArmsResting"), nominalLens);
-		return running(text("valDepthFmt", in.directShoulderDepthMeters), nominalLens);
+		return running(text("valDepthFmt", in.frontCameraShoulderDepthMeters), nominalLens);
 	case S::Filters:
-		if (in.bDirectHandednessSwapped)
-			return degraded(text("valHandednessSwapped"), text("whyDirectHandednessSwapped"));
-		return running(text("valHandsSeenFmt", countDirect(in, &Inputs::DirectArm::bHandSeen)));
+		if (in.bFrontCameraHandednessSwapped)
+			return degraded(text("valHandednessSwapped"), text("whyFrontCameraHandednessSwapped"));
+		return running(text("valHandsSeenFmt", countFrontCamera(in, &Inputs::FrontCameraArm::bHandSeen)));
 	case S::Torso:
-		if (!in.bDirectTorso)
+		if (!in.bFrontCameraTorso)
 			return running(text("valNoPerson"), noNeutral);
-		return in.bDirectNeutral ? running(text("valLeanFmt", in.directLeanDegrees))
+		return in.bFrontCameraNeutral ? running(text("valLeanFmt", in.frontCameraLeanDegrees))
 								 : degraded(text("valNoNeutral"), noNeutral);
 	case S::ArmChain:
-		return running(text("valChainsFmt", countDirect(in, &Inputs::DirectArm::bChain)));
+		return running(text("valChainsFmt", countFrontCamera(in, &Inputs::FrontCameraArm::bChain)));
 	case S::Palm:
-		return running(text("valPalmsFmt", countDirect(in, &Inputs::DirectArm::bHandMeasured)));
+		return running(text("valPalmsFmt", countFrontCamera(in, &Inputs::FrontCameraArm::bHandMeasured)));
 	case S::HoldRest:
 		if (resting == 0)
 			return running(text("valAllLive"));
@@ -374,8 +375,8 @@ StageStatus computeDirect(const Inputs& in, S stage)
 
 int countMeasuredArms(const Inputs& in)
 {
-	if (in.bDirect)
-		return countDirect(in, &Inputs::DirectArm::bChain);
+	if (in.bFrontCameraMode)
+		return countFrontCamera(in, &Inputs::FrontCameraArm::bChain);
 	int count= 0;
 	for (const Inputs::Hand& hand : in.hands)
 		count+= (hand.bTracked && hand.bWorldPose) ? 1 : 0;
@@ -391,7 +392,7 @@ StageStatus computeSourcePose(const Inputs& in)
 
 StageStatus computeRetarget(const Inputs& in, S stage)
 {
-	const StageText noAvatarReason= text(in.bDirect ? "whyDirectNoAvatar" : "whyRetargetNoAvatar");
+	const StageText noAvatarReason= text(in.bFrontCameraMode ? "whyFrontCameraNoAvatar" : "whyRetargetNoAvatar");
 	const StageText armsPlaced= text("valArmsPlacedFmt", (in.bArmPlaced[0] ? 1 : 0) + (in.bArmPlaced[1] ? 1 : 0));
 	const bool bMappingProblem= in.avatarMappingProblemCount > 0;
 
@@ -466,12 +467,12 @@ StageStatus computePhone(const Inputs& in)
 	return running(text("valRateFmt", in.faceDatagramsPerSecond));
 }
 
-// The webcam face source is the direct camera's face block, so it exists on
-// a direct project alone
+// The webcam face source is the front camera's face block, so it exists on
+// a front-camera project alone
 StageStatus computeWebcam(const Inputs& in)
 {
-	if (!in.bDirect)
-		return inactive(text("valOff"), text("whyWebcamNotDirect"));
+	if (!in.bFrontCameraMode)
+		return inactive(text("valOff"), text("whyWebcamNotFrontCamera"));
 	if (!in.bWebcamPresent)
 		return degraded(text("valWaiting"), text("whyWebcamNoBody"));
 	if (!in.bWebcamTracked)
@@ -485,8 +486,8 @@ StageStatus computeWebcam(const Inputs& in)
 // waits on that source
 StageStatus computeBlink(const Inputs& in)
 {
-	if (!in.bDirect)
-		return inactive(text("valOff"), text("whyBlinkNotDirect"));
+	if (!in.bFrontCameraMode)
+		return inactive(text("valOff"), text("whyBlinkNotFrontCamera"));
 	if (!in.bWebcamPresent)
 		return degraded(text("valWaiting"), text("whyWebcamNoBody"));
 	if (!in.bWebcamTracked)
@@ -513,7 +514,7 @@ StageStatus computeMicrophone(const Inputs& in)
 
 StageStatus computeFace(const Inputs& in)
 {
-	const bool bWebcamLive= in.bDirect && in.bWebcamTracked;
+	const bool bWebcamLive= in.bFrontCameraMode && in.bWebcamTracked;
 	if (!in.bFaceEnabled && !in.bAudioEnabled)
 		return bWebcamLive ? running(text("valWebcamOnly")) : inactive(text("valOff"), text("whyFaceOff"));
 	if (isUnrecorded(in))
@@ -548,11 +549,11 @@ StageStatus computeProfile(const Inputs& in)
 
 namespace PipelineModel
 {
-std::vector<PipelineStageId> getTopRow(bool bDirect)
+std::vector<PipelineStageId> getTopRow(bool bFrontCameraMode)
 {
-	if (bDirect)
+	if (bFrontCameraMode)
 	{
-		return {makeId(S::Capture), makeId(S::DirectSolver), makeId(S::SourcePose), makeId(S::Retarget),
+		return {makeId(S::Capture), makeId(S::FrontCameraSolver), makeId(S::SourcePose), makeId(S::Retarget),
 				makeId(S::Output)};
 	}
 	return {makeId(S::Capture),    makeId(S::Fusion),   makeId(S::Imu),   makeId(S::BodySolver),
@@ -564,7 +565,7 @@ PipelineStageId getSideStage()
 	return makeId(S::Face);
 }
 
-std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bDirect,
+std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId& stage, bool bFrontCameraMode,
 														   int cameraCount)
 {
 	std::vector<std::vector<PipelineStageId>> lanes;
@@ -578,7 +579,7 @@ std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId
 							 makeId(S::Lift, cameraIndex)});
 		}
 		break;
-	case S::DirectSolver:
+	case S::FrontCameraSolver:
 		lanes.push_back({makeId(S::Filters), makeId(S::Torso), makeId(S::ArmChain), makeId(S::Palm),
 						 makeId(S::HoldRest)});
 		break;
@@ -587,8 +588,8 @@ std::vector<std::vector<PipelineStageId>> getSubStageLanes(const PipelineStageId
 			{makeId(S::Phone), makeId(S::Webcam), makeId(S::Blink), makeId(S::Microphone), makeId(S::Profile)});
 		break;
 	case S::Retarget:
-		// The direct solver places the body itself
-		if (bDirect)
+		// The front-camera solver places the body itself
+		if (bFrontCameraMode)
 			lanes.push_back({makeId(S::VrmModel), makeId(S::Chains)});
 		else
 			lanes.push_back({makeId(S::VrmModel), makeId(S::Placement), makeId(S::Chains)});
@@ -609,15 +610,15 @@ PipelineStageId getTopLevel(const PipelineStageId& stage)
 	return makeId(k_stages[(int)stage.stage].parent);
 }
 
-std::vector<PipelineStageId> getAllStages(bool bDirect, int cameraCount)
+std::vector<PipelineStageId> getAllStages(bool bFrontCameraMode, int cameraCount)
 {
 	std::vector<PipelineStageId> all;
-	std::vector<PipelineStageId> topLevel= getTopRow(bDirect);
+	std::vector<PipelineStageId> topLevel= getTopRow(bFrontCameraMode);
 	topLevel.push_back(getSideStage());
 	for (const PipelineStageId& top : topLevel)
 	{
 		all.push_back(top);
-		for (const std::vector<PipelineStageId>& lane : getSubStageLanes(top, bDirect, cameraCount))
+		for (const std::vector<PipelineStageId>& lane : getSubStageLanes(top, bFrontCameraMode, cameraCount))
 			all.insert(all.end(), lane.begin(), lane.end());
 	}
 	return all;
@@ -727,13 +728,13 @@ StageStatus computeStatus(const PipelineStatusInputs& inputs, const PipelineStag
 		return computeImu(inputs);
 	case S::BodySolver:
 		return computeBodySolver(inputs);
-	case S::DirectSolver:
+	case S::FrontCameraSolver:
 	case S::Filters:
 	case S::Torso:
 	case S::ArmChain:
 	case S::Palm:
 	case S::HoldRest:
-		return computeDirect(inputs, stage.stage);
+		return computeFrontCamera(inputs, stage.stage);
 	case S::SourcePose:
 		return computeSourcePose(inputs);
 	case S::Retarget:

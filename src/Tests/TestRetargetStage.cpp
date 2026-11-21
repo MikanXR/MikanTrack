@@ -13,7 +13,7 @@
 #include "RetargetStage.h"
 #include "SourcePoseInputs.h"
 #include "SyntheticAvatar.h"
-#include "SyntheticDirectUser.h"
+#include "SyntheticFrontCameraUser.h"
 
 // The retarget stage: the loss stage's hold and freeze, the display stage
 // against the stream stage, a scrub's pre-roll against a straight
@@ -21,7 +21,7 @@
 // elbow weight evaluated over the source pose's inputs, the reach scale and
 // the goal offset placing the wrist goal, and the loss policies: a position
 // arm's ease to rest, the position head's freeze, ease and timed hold, and
-// the direct pipeline's freeze, release and ease after the solver's hold,
+// the front-camera pipeline's freeze, release and ease after the solver's hold,
 // and the arm's mapping and IK weight from bone angles to the IK in both
 // pipelines.
 
@@ -29,7 +29,7 @@ namespace
 {
 using B= eHumanoidBone;
 using namespace SyntheticAvatar;
-using namespace SyntheticDirectUser;
+using namespace SyntheticFrontCameraUser;
 using eGroupState= SourcePose::eGroupState;
 
 const char* kTag= "test-retarget-stage";
@@ -171,7 +171,7 @@ TrackingFrameResult makePositionFrame(const AvatarSkeleton& skeleton, int index,
 	return frame;
 }
 
-// -- The direct input: the neutral user's arms swinging, the left wrist lost
+// -- The front-camera input: the neutral user's arms swinging, the left wrist lost
 // over a span --------------------------------------------------------------
 
 User makeMovingUser(double motionMs)
@@ -195,7 +195,7 @@ User makeMovingUser(double motionMs)
 	return user;
 }
 
-TrackingFrameResult makeDirectFrame(const Camera& camera, const AvatarSkeleton& skeleton, int index, int lostFrom,
+TrackingFrameResult makeFrontCameraFrame(const Camera& camera, const AvatarSkeleton& skeleton, int index, int lostFrom,
 									int lostTo)
 {
 	User user= makeMovingUser(index * kFrameMs);
@@ -525,20 +525,20 @@ static int runRetargetStageTest(const TestArgs&)
 	positionConfig.positionLoss= makePositionLossPolicy(0.f, 250.f, true);
 
 	const Camera camera= makeCamera(10.f);
-	RetargetStageConfig directConfig;
-	directConfig.skeleton= skeleton;
-	directConfig.direct.cameraTiltRadians= glm::radians(10.f);
-	directConfig.direct.userShoulderWidthMeters= kShoulderWidth;
-	directConfig.direct.userUpperArmLengthMeters= kUpperArmLength;
-	directConfig.direct.userForearmLengthMeters= kForearmLength;
-	directConfig.directLoss= makeDirectLossPolicy(directConfig.direct.restBlendMs);
-	// A direct project's arms: bone angles
+	RetargetStageConfig frontCameraConfig;
+	frontCameraConfig.skeleton= skeleton;
+	frontCameraConfig.frontCamera.cameraTiltRadians= glm::radians(10.f);
+	frontCameraConfig.frontCamera.userShoulderWidthMeters= kShoulderWidth;
+	frontCameraConfig.frontCamera.userUpperArmLengthMeters= kUpperArmLength;
+	frontCameraConfig.frontCamera.userForearmLengthMeters= kForearmLength;
+	frontCameraConfig.frontCameraLoss= makeFrontCameraLossPolicy(frontCameraConfig.frontCamera.restBlendMs);
+	// A front-camera project's arms: bone angles
 	{
-		const RetargetChains directChains= makeDefaultRetargetChains(true);
+		const RetargetChains frontCameraChains= makeDefaultRetargetChains(true);
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			directConfig.arms[sideIndex].mapping= directChains.arms[sideIndex].mapping;
-			directConfig.arms[sideIndex].ikWeight= directChains.arms[sideIndex].ikWeight;
+			frontCameraConfig.arms[sideIndex].mapping= frontCameraChains.arms[sideIndex].mapping;
+			frontCameraConfig.arms[sideIndex].ikWeight= frontCameraChains.arms[sideIndex].ikWeight;
 		}
 	}
 
@@ -590,29 +590,30 @@ static int runRetargetStageTest(const TestArgs&)
 							 << frozenFrames;
 		check(differ == 0 && frozenFrames > 0, "(c) the position display stage poses what the stream stage does");
 
-		RetargetStage directStream;
-		RetargetStage directDisplay;
-		directStream.setConfig(directConfig);
-		directDisplay.setConfig(directConfig);
-		int directFrames= 0;
-		int directDiffer= 0;
+		RetargetStage frontCameraStream;
+		RetargetStage frontCameraDisplay;
+		frontCameraStream.setConfig(frontCameraConfig);
+		frontCameraDisplay.setConfig(frontCameraConfig);
+		int frontCameraFrames= 0;
+		int frontCameraDiffer= 0;
 		int restingFrames= 0;
 		const TrackingFrameResult::HeadPose noPhone;
 		for (int index= 0; index < 160; ++index)
 		{
-			const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, 60, 110);
-			directStream.solveDirect(frame, camera.model, noPhone, frame.timestampMs, streamResult);
-			directDisplay.solveDirect(frame, camera.model, noPhone, frame.timestampMs, displayResult);
-			directFrames++;
-			directDiffer+= (samePoseBits(streamResult.pose, displayResult.pose) &&
+			const TrackingFrameResult frame= makeFrontCameraFrame(camera, *skeleton, index, 60, 110);
+			frontCameraStream.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, streamResult);
+			frontCameraDisplay.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, displayResult);
+			frontCameraFrames++;
+			frontCameraDiffer+= (samePoseBits(streamResult.pose, displayResult.pose) &&
 							sameStates(streamResult.source, displayResult.source))
 				? 0
 				: 1;
 			restingFrames+= displayResult.source.arms[0].state == eGroupState::Resting ? 1 : 0;
 		}
-		MIKAN_LOG_INFO(kTag) << "  (c) direct: " << directDiffer << " of " << directFrames
+		MIKAN_LOG_INFO(kTag) << "  (c) front-camera: " << frontCameraDiffer << " of " << frontCameraFrames
 							 << " frames differ, the left arm resting on " << restingFrames;
-		check(directDiffer == 0 && restingFrames > 0, "(c) the direct display stage poses what the stream stage does");
+		check(frontCameraDiffer == 0 && restingFrames > 0,
+			  "(c) the front-camera display stage poses what the stream stage does");
 	}
 
 	// (d) A scrub: the playhead jumps to a frame from far away, resets the
@@ -623,7 +624,7 @@ static int runRetargetStageTest(const TestArgs&)
 	// lands within 0.005: the root follow (0.3 s first order) has all but
 	// converged, and the most it keeps is after a freeze the pre-roll began
 	// inside, which the play-through's root followed and the scrub's did not
-	// see (0.0017 at frame 150). The direct pipeline lands within 0.08 (about
+	// see (0.0017 at frame 150). The front-camera pipeline lands within 0.08 (about
 	// 9 degrees): its wrist depth carries seconds of history through the
 	// heavy depth band, the chain's continuity terms and the hold its arm
 	// earned, so the held chain a scrub lands in is the one a second of
@@ -634,7 +635,7 @@ static int runRetargetStageTest(const TestArgs&)
 		struct Run
 		{
 			const char* name;
-			bool bDirect;
+			bool bFrontCameraMode;
 			float bound;
 			int frameCount;
 			int lostFrom;
@@ -643,16 +644,16 @@ static int runRetargetStageTest(const TestArgs&)
 		};
 		const Run runs[2]= {
 			{"position", false, 0.005f, 220, 100, 140, {50, 110, 125, 150, 210}},
-			{"direct", true, 0.08f, 220, 100, 140, {50, 110, 125, 150, 210}},
+			{"front-camera", true, 0.08f, 220, 100, 140, {50, 110, 125, 150, 210}},
 		};
 		const TrackingFrameResult::HeadPose noPhone;
 		for (const Run& run : runs)
 		{
 			auto solveFrame= [&](int frameIndex, RetargetStage& stage, RetargetResult& ioResult) {
-				if (run.bDirect)
+				if (run.bFrontCameraMode)
 				{
-					const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, frameIndex, run.lostFrom, run.lostTo);
-					stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, ioResult);
+					const TrackingFrameResult frame= makeFrontCameraFrame(camera, *skeleton, frameIndex, run.lostFrom, run.lostTo);
+					stage.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, ioResult);
 				}
 				else
 				{
@@ -663,7 +664,7 @@ static int runRetargetStageTest(const TestArgs&)
 
 			// The play-through, every target's pose on the way
 			RetargetStage straight;
-			straight.setConfig(run.bDirect ? directConfig : positionConfig);
+			straight.setConfig(run.bFrontCameraMode ? frontCameraConfig : positionConfig);
 			RetargetResult straightResult;
 			std::vector<AvatarPose> straightPoses(run.frameCount);
 			std::vector<SourcePose> straightSources(run.frameCount);
@@ -676,7 +677,7 @@ static int runRetargetStageTest(const TestArgs&)
 
 			// Each target reached by a scrub from the far end
 			RetargetStage scrubbed;
-			scrubbed.setConfig(run.bDirect ? directConfig : positionConfig);
+			scrubbed.setConfig(run.bFrontCameraMode ? frontCameraConfig : positionConfig);
 			RetargetPlayhead playhead;
 			RetargetResult scrubResult;
 			float worst= 0.f;
@@ -702,7 +703,7 @@ static int runRetargetStageTest(const TestArgs&)
 
 			// A step forward plays every frame between, and lands exactly
 			RetargetStage stepped;
-			stepped.setConfig(run.bDirect ? directConfig : positionConfig);
+			stepped.setConfig(run.bFrontCameraMode ? frontCameraConfig : positionConfig);
 			RetargetPlayhead stepHead;
 			RetargetResult stepResult;
 			bool bExact= true;
@@ -1097,27 +1098,28 @@ static int runRetargetStageTest(const TestArgs&)
 		}
 		check(bFallback, "(g) a reach scale text that does not compile falls back on the plain value");
 
-		// A direct arm by bone angles reads neither setting
-		RetargetStageConfig directSettings= directConfig;
-		directSettings.arms[0].reachScale= ExprParameter{0.f};
-		directSettings.arms[0].goalOffset= goalOffset;
-		RetargetStage directDefault;
-		RetargetStage directEdited;
-		directDefault.setConfig(directConfig);
-		directEdited.setConfig(directSettings);
-		bool bDirectSame= true;
+		// A front-camera arm by bone angles reads neither setting
+		RetargetStageConfig frontCameraSettings= frontCameraConfig;
+		frontCameraSettings.arms[0].reachScale= ExprParameter{0.f};
+		frontCameraSettings.arms[0].goalOffset= goalOffset;
+		RetargetStage frontCameraDefault;
+		RetargetStage frontCameraEdited;
+		frontCameraDefault.setConfig(frontCameraConfig);
+		frontCameraEdited.setConfig(frontCameraSettings);
+		bool bFrontCameraSame= true;
 		for (int index= 0; index < kFrames; ++index)
 		{
-			const TrackingFrameResult cameraFrame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
+			const TrackingFrameResult cameraFrame= makeFrontCameraFrame(camera, *skeleton, index, 1000, 1000);
 			const TrackingFrameResult::HeadPose noPhone;
 			RetargetResult a;
 			RetargetResult b;
-			directDefault.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, a);
-			directEdited.solveDirect(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, b);
-			bDirectSame&= a.pose.valid && samePoseBits(a.pose, b.pose) && !a.goals.bHasWristGoal[0] &&
+			frontCameraDefault.solveFrontCamera(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, a);
+			frontCameraEdited.solveFrontCamera(cameraFrame, camera.model, noPhone, cameraFrame.timestampMs, b);
+			bFrontCameraSame&= a.pose.valid && samePoseBits(a.pose, b.pose) && !a.goals.bHasWristGoal[0] &&
 				a.armParameters[0].bPosed && a.armParameters[0].effectiveIkWeight == 0.f;
 		}
-		check(bDirectSame, "(g) a direct arm by bone angles reads neither the reach scale nor the goal offset");
+		check(bFrontCameraSame,
+			  "(g) a front-camera arm by bone angles reads neither the reach scale nor the goal offset");
 	}
 
 	// (h) A position arm that eases to rest. Both hands are lost from frame
@@ -1126,10 +1128,10 @@ static int runRetargetStageTest(const TestArgs&)
 	// arm's eased bones start from exactly the bones its last carried values
 	// posed. The first frame of the ease and every frame after it turn each
 	// bone by no more than the blend's step times the bone's whole turn to
-	// the rest pose, the ease ends on the direct pipeline's rest pose
-	// (makeRestPose) exactly, and its state and blend read as a direct
+	// the rest pose, the ease ends on the front-camera pipeline's rest pose
+	// (makeRestPose) exactly, and its state and blend read as a front-camera
 	// arm's do. A hand that returns mid-ease or at rest is placed by its
-	// measurement on the frame it returns, with no ease out, as the direct
+	// measurement on the frame it returns, with no ease out, as the front-camera
 	// solver places a returning wrist the frame its entry gate admits it.
 	{
 		constexpr int kLostFrom= 20;
@@ -1166,7 +1168,7 @@ static int runRetargetStageTest(const TestArgs&)
 			runFrames(easeConfig, [](int index) { return index >= kLostFrom; }, kFrames);
 
 		AvatarPose rest;
-		DirectRetarget::makeRestPose(*skeleton, easeConfig.direct, rest);
+		FrontCameraRetarget::makeRestPose(*skeleton, easeConfig.frontCamera, rest);
 
 		int firstResting= -1;
 		int firstAtRest= -1;
@@ -1238,7 +1240,7 @@ static int runRetargetStageTest(const TestArgs&)
 		bool bAtRest= firstAtRest > 0;
 		for (int index= std::max(firstAtRest, 0); bAtRest && index < kFrames; ++index)
 			bAtRest&= sameBones(eased[index].pose, rest, leftBones);
-		check(bAtRest, "(h) at rest the arm's bones are the direct pipeline's rest pose exactly, every component equal");
+		check(bAtRest, "(h) at rest the arm's bones are the front-camera pipeline's rest pose exactly, every component equal");
 
 		// Under a root yawed 40 degrees the rest pose turns with the root: the
 		// bones against the root are the rest pose's within float rounding
@@ -1451,7 +1453,7 @@ static int runRetargetStageTest(const TestArgs&)
 			  "freezes");
 	}
 
-	// (j) The direct pipeline's choices after the solver's hold: an arm, the
+	// (j) The front-camera pipeline's choices after the solver's hold: an arm, the
 	// head and the torso each frozen (the last carried values repeated),
 	// released (left out of the pose and the stream) or, for the head and
 	// the torso, eased to the identity over a blend; every pose well formed.
@@ -1461,21 +1463,21 @@ static int runRetargetStageTest(const TestArgs&)
 		constexpr int kLostFrom= 30;
 		constexpr int kFrames= 70;
 		const TrackingFrameResult::HeadPose noPhone;
-		RetargetStageConfig leanConfig= directConfig;
+		RetargetStageConfig leanConfig= frontCameraConfig;
 		{
 			RetargetStage capture;
-			capture.setConfig(directConfig);
+			capture.setConfig(frontCameraConfig);
 			RetargetResult result;
 			for (int index= 0; index < 10; ++index)
 			{
-				const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
-				capture.solveDirect(frame, camera.model, noPhone, frame.timestampMs, result);
+				const TrackingFrameResult frame= makeFrontCameraFrame(camera, *skeleton, index, 1000, 1000);
+				capture.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, result);
 			}
-			DirectNeutralPose neutral;
+			FrontCameraNeutralPose neutral;
 			capture.captureNeutral(neutral);
 			neutral.torso= neutral.torso * glm::angleAxis(0.2f, glm::vec3(0.f, 0.f, 1.f));
 			neutral.head= neutral.head * glm::angleAxis(0.3f, glm::vec3(0.f, 0.f, 1.f));
-			leanConfig.direct.neutral= neutral;
+			leanConfig.frontCamera.neutral= neutral;
 		}
 		enum class eLost
 		{
@@ -1483,16 +1485,16 @@ static int runRetargetStageTest(const TestArgs&)
 			Head,
 			Torso,
 		};
-		auto runDirect= [&](eLost lost, const LossPolicy& policy) {
+		auto runFrontCamera= [&](eLost lost, const LossPolicy& policy) {
 			RetargetStageConfig config= leanConfig;
-			config.directLoss= policy;
+			config.frontCameraLoss= policy;
 			RetargetStage stage;
 			stage.setConfig(config);
 			std::vector<RetargetResult> results(kFrames);
 			for (int index= 0; index < kFrames; ++index)
 			{
 				TrackingFrameResult frame=
-					makeDirectFrame(camera, *skeleton, index, lost == eLost::Arm ? kLostFrom : 1000, 1000);
+					makeFrontCameraFrame(camera, *skeleton, index, lost == eLost::Arm ? kLostFrom : 1000, 1000);
 				if (index >= kLostFrom && lost == eLost::Head)
 					frame.body.visibility[(int)ePoseLandmark::NOSE]= 0.1f;
 				if (index >= kLostFrom && lost == eLost::Torso)
@@ -1500,7 +1502,7 @@ static int runRetargetStageTest(const TestArgs&)
 					frame.body.visibility[(int)ePoseLandmark::LEFT_SHOULDER]= 0.1f;
 					frame.body.visibility[(int)ePoseLandmark::RIGHT_SHOULDER]= 0.1f;
 				}
-				stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, results[index]);
+				stage.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, results[index]);
 			}
 			return results;
 		};
@@ -1522,7 +1524,7 @@ static int runRetargetStageTest(const TestArgs&)
 		streamer.setConfig(oscConfig);
 		std::vector<std::vector<uint8_t>> packets;
 		auto streamLast= [&](const std::vector<RetargetResult>& results) {
-			streamer.encodeFrame(makeDirectFrame(camera, *skeleton, kFrames - 1, 1000, 1000), results[kFrames - 1],
+			streamer.encodeFrame(makeFrontCameraFrame(camera, *skeleton, kFrames - 1, 1000, 1000), results[kFrames - 1],
 								 packets);
 		};
 		auto allWellFormed= [](const std::vector<RetargetResult>& results) {
@@ -1531,7 +1533,7 @@ static int runRetargetStageTest(const TestArgs&)
 				bWell&= result.pose.valid && isWellFormed(result.pose);
 			return bWell;
 		};
-		const LossPolicy defaults= makeDirectLossPolicy(leanConfig.direct.restBlendMs);
+		const LossPolicy defaults= makeFrontCameraLossPolicy(leanConfig.frontCamera.restBlendMs);
 		const std::vector<B> leftBones= makeArmBones(0);
 
 		// The arm's ease out of rest: lost for long enough to rest, then seen
@@ -1545,15 +1547,16 @@ static int runRetargetStageTest(const TestArgs&)
 			constexpr int kRiseFrames= 90;
 			auto runReturn= [&](float riseBlendMs) {
 				RetargetStageConfig config= leanConfig;
-				config.directLoss= defaults;
-				config.directLoss.arms[0].riseBlendMs= riseBlendMs;
+				config.frontCameraLoss= defaults;
+				config.frontCameraLoss.arms[0].riseBlendMs= riseBlendMs;
 				RetargetStage stage;
 				stage.setConfig(config);
 				std::vector<RetargetResult> results(kRiseFrames);
 				for (int index= 0; index < kRiseFrames; ++index)
 				{
-					const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, kLostFrom, kReturnFrom);
-					stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, results[index]);
+					const TrackingFrameResult frame=
+						makeFrontCameraFrame(camera, *skeleton, index, kLostFrom, kReturnFrom);
+					stage.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, results[index]);
 				}
 				return results;
 			};
@@ -1593,7 +1596,7 @@ static int runRetargetStageTest(const TestArgs&)
 			MIKAN_LOG_INFO(kTag) << "  (j) arm back at frame " << firstBack << ": forearm turn "
 								 << glm::degrees(snapTurn) << " deg with no rise blend, " << glm::degrees(riseTurn)
 								 << " deg on the first frame of a 200 ms one";
-			check(bRise, "(j) a direct arm with an ease out of rest returns from its rest placement onto its "
+			check(bRise, "(j) a front-camera arm with an ease out of rest returns from its rest placement onto its "
 						 "measurement over the blend, and without one the frame it returns");
 		}
 
@@ -1602,7 +1605,7 @@ static int runRetargetStageTest(const TestArgs&)
 			auto armState= [](const SourcePose& source) { return source.arms[0].state; };
 			LossPolicy policy= defaults;
 			policy.arms[0].after= eLossAfter::Freeze;
-			const std::vector<RetargetResult> frozen= runDirect(eLost::Arm, policy);
+			const std::vector<RetargetResult> frozen= runFrontCamera(eLost::Arm, policy);
 			const int last= lastCarried(frozen, armState);
 			bool bFrozen= last > kLostFrom && last < kFrames - 5;
 			for (int index= last + 1; bFrozen && index < kFrames; ++index)
@@ -1622,11 +1625,11 @@ static int runRetargetStageTest(const TestArgs&)
 			const bool bFrozenSent= streamsBone(packets, "LeftUpperArm") && streamsBone(packets, "LeftHand");
 			MIKAN_LOG_INFO(kTag) << "  (j) arm: held through frame " << last << ", frozen after";
 			check(bFrozen && bFrozenSent && allWellFormed(frozen),
-				  "(j) a direct arm that freezes repeats its last carried placement after the solver's hold, and "
+				  "(j) a front-camera arm that freezes repeats its last carried placement after the solver's hold, and "
 				  "streams");
 
 			policy.arms[0].after= eLossAfter::Release;
-			const std::vector<RetargetResult> released= runDirect(eLost::Arm, policy);
+			const std::vector<RetargetResult> released= runFrontCamera(eLost::Arm, policy);
 			const int releasedLast= lastCarried(released, armState);
 			bool bReleased= releasedLast == last;
 			for (int index= releasedLast + 1; bReleased && index < kFrames; ++index)
@@ -1642,8 +1645,8 @@ static int runRetargetStageTest(const TestArgs&)
 			const bool bSilent= !streamsBone(packets, "LeftUpperArm") && !streamsBone(packets, "LeftHand") &&
 				!streamsBone(packets, "LeftIndexProximal") && streamsBone(packets, "RightUpperArm");
 			check(bReleased && bSilent && allWellFormed(released),
-				  "(j) a direct arm that releases leaves the pose and the stream after the solver's hold, its hand "
-				  "with it");
+				  "(j) a front-camera arm that releases leaves the pose and the stream after the solver's hold, its "
+				  "hand with it");
 		}
 
 		// The head
@@ -1651,7 +1654,7 @@ static int runRetargetStageTest(const TestArgs&)
 			auto headState= [](const SourcePose& source) { return source.head.state; };
 			LossPolicy policy= defaults;
 			policy.head.after= eLossAfter::Freeze;
-			const std::vector<RetargetResult> frozen= runDirect(eLost::Head, policy);
+			const std::vector<RetargetResult> frozen= runFrontCamera(eLost::Head, policy);
 			const int last= lastCarried(frozen, headState);
 			bool bFrozen= last > kLostFrom && last < kFrames - 5;
 			for (int index= last + 1; bFrozen && index < kFrames; ++index)
@@ -1662,21 +1665,21 @@ static int runRetargetStageTest(const TestArgs&)
 					sameBones(frozen[index].pose, frozen[last].pose, {B::Head});
 			}
 			check(bFrozen && allWellFormed(frozen),
-				  "(j) a direct head that freezes repeats its last carried rotation after the solver's hold");
+				  "(j) a front-camera head that freezes repeats its last carried rotation after the solver's hold");
 
 			policy.head.after= eLossAfter::Release;
-			const std::vector<RetargetResult> released= runDirect(eLost::Head, policy);
+			const std::vector<RetargetResult> released= runFrontCamera(eLost::Head, policy);
 			bool bReleased= lastCarried(released, headState) == last;
 			for (int index= last + 1; bReleased && index < kFrames; ++index)
 				bReleased&= released[index].source.head.state == eGroupState::Lost &&
 					!released[index].pose.bones[(int)B::Head].present && released[index].pose.bones[(int)B::Neck].present;
 			streamLast(released);
 			check(bReleased && !streamsBone(packets, "Head") && streamsBone(packets, "Neck") && allWellFormed(released),
-				  "(j) a direct head that releases leaves the pose and the stream, the neck still placed");
+				  "(j) a front-camera head that releases leaves the pose and the stream, the neck still placed");
 
 			policy.head.after= eLossAfter::EaseToRest;
 			policy.head.restBlendMs= 200.f;
-			const std::vector<RetargetResult> rested= runDirect(eLost::Head, policy);
+			const std::vector<RetargetResult> rested= runFrontCamera(eLost::Head, policy);
 			const glm::quat from= rested[last].source.head.orientation;
 			const float firstBlend= rested[last + 1].source.head.restBlend;
 			const float firstTurn= rotationBetween(rested[last + 1].source.head.orientation, from);
@@ -1686,11 +1689,11 @@ static int runRetargetStageTest(const TestArgs&)
 				firstBlend < 0.2f && std::fabs(firstTurn - firstBlend * wholeTurn) < 1e-4f && end.restBlend == 1.f &&
 				rested[kFrames - 1].pose.bones[(int)B::Head].present &&
 				rotationBetween(boneDelta(rested[kFrames - 1].pose, B::Head),
-								glm::inverse(glm::quat(leanConfig.direct.headTrimRadians))) < 1e-6f;
+								glm::inverse(glm::quat(leanConfig.frontCamera.headTrimRadians))) < 1e-6f;
 			MIKAN_LOG_INFO(kTag) << "  (j) head: held through frame " << last << ", whole turn to rest "
 								 << glm::degrees(wholeTurn) << " deg, first blend " << firstBlend;
 			check(bRested && wholeTurn > 0.01f && allWellFormed(rested),
-				  "(j) a direct head that eases to rest turns from its last rotation to the rest over its blend");
+				  "(j) a front-camera head that eases to rest turns from its last rotation to the rest over its blend");
 		}
 
 		// The torso
@@ -1699,7 +1702,7 @@ static int runRetargetStageTest(const TestArgs&)
 			const B spineBones[]= {B::Spine, B::Chest, B::UpperChest, B::Neck};
 			LossPolicy policy= defaults;
 			policy.torso.after= eLossAfter::Freeze;
-			const std::vector<RetargetResult> frozen= runDirect(eLost::Torso, policy);
+			const std::vector<RetargetResult> frozen= runFrontCamera(eLost::Torso, policy);
 			const int last= lastCarried(frozen, torsoState);
 			bool bFrozen= last > kLostFrom && last < kFrames - 5 &&
 				rotationBetween(frozen[last].source.torso.spineDelta, glm::quat(1.f, 0.f, 0.f, 0.f)) > 0.05f;
@@ -1711,10 +1714,10 @@ static int runRetargetStageTest(const TestArgs&)
 					sameBones(frozen[index].pose, frozen[last].pose, {B::Spine, B::Chest, B::UpperChest, B::Neck});
 			}
 			check(bFrozen && allWellFormed(frozen),
-				  "(j) a direct torso that freezes repeats its last carried lean after the solver's hold");
+				  "(j) a front-camera torso that freezes repeats its last carried lean after the solver's hold");
 
 			policy.torso.after= eLossAfter::Release;
-			const std::vector<RetargetResult> released= runDirect(eLost::Torso, policy);
+			const std::vector<RetargetResult> released= runFrontCamera(eLost::Torso, policy);
 			bool bReleased= lastCarried(released, torsoState) == last;
 			bool bArmsPlaced= false;
 			for (int index= last + 1; bReleased && index < kFrames; ++index)
@@ -1728,12 +1731,12 @@ static int runRetargetStageTest(const TestArgs&)
 			streamLast(released);
 			check(bReleased && bArmsPlaced && !streamsBone(packets, "Spine") && !streamsBone(packets, "Neck") &&
 					  streamsBone(packets, "Head") && allWellFormed(released),
-				  "(j) a direct torso that releases leaves the spine bones out of the pose and the stream, the head "
-				  "and the arms still placed");
+				  "(j) a front-camera torso that releases leaves the spine bones out of the pose and the stream, the "
+				  "head and the arms still placed");
 
 			policy.torso.after= eLossAfter::EaseToRest;
 			policy.torso.restBlendMs= 200.f;
-			const std::vector<RetargetResult> rested= runDirect(eLost::Torso, policy);
+			const std::vector<RetargetResult> rested= runFrontCamera(eLost::Torso, policy);
 			const glm::quat from= rested[last].source.torso.spineDelta;
 			const float firstBlend= rested[last + 1].source.torso.restBlend;
 			const float firstTurn= rotationBetween(rested[last + 1].source.torso.spineDelta, from);
@@ -1747,14 +1750,15 @@ static int runRetargetStageTest(const TestArgs&)
 			MIKAN_LOG_INFO(kTag) << "  (j) torso: held through frame " << last << ", whole turn to rest "
 								 << glm::degrees(wholeTurn) << " deg, first blend " << firstBlend;
 			check(bRested && allWellFormed(rested),
-				  "(j) a direct torso that eases to rest turns from its last lean to the identity over its blend");
+				  "(j) a front-camera torso that eases to rest turns from its last lean to the identity over its "
+				  "blend");
 		}
 	}
 
 	// (k) The arm's mapping and IK weight in both pipelines, on the left arm.
 	// Each pipeline's default end is its old solve bit for bit, written as a
 	// value or as a function; the other end does what it says (a position arm
-	// at 0 takes the source's bone directions, a direct arm at 1 puts its
+	// at 0 takes the source's bone directions, a front-camera arm at 1 puts its
 	// wrist on the goal or as near as its reach allows); weights just inside
 	// either end pose within a small bound of that end; at 0.5 the wrist is
 	// midway; the wrist nears the goal as the weight rises; a position arm
@@ -1814,15 +1818,15 @@ static int runRetargetStageTest(const TestArgs&)
 			}
 			return results;
 		};
-		// The synthetic user has the avatar's proportions, which the direct
+		// The synthetic user has the avatar's proportions, which the front-camera
 		// solve's source keeps, so its bone angles already reach the goal. A
 		// user with a longer upper arm and a shorter forearm, in the solve's
 		// lengths, sets the two ends apart and the arm ratio off 1.
-		RetargetStageConfig directArmConfig= directConfig;
-		directArmConfig.direct.userUpperArmLengthMeters*= 1.25f;
-		directArmConfig.direct.userForearmLengthMeters*= 0.85f;
-		auto runDirectArm= [&](const RetargetArmSettings& left) {
-			RetargetStageConfig config= directArmConfig;
+		RetargetStageConfig frontCameraArmConfig= frontCameraConfig;
+		frontCameraArmConfig.frontCamera.userUpperArmLengthMeters*= 1.25f;
+		frontCameraArmConfig.frontCamera.userForearmLengthMeters*= 0.85f;
+		auto runFrontCameraArm= [&](const RetargetArmSettings& left) {
+			RetargetStageConfig config= frontCameraArmConfig;
 			config.arms[0]= left;
 			RetargetStage stage;
 			stage.setConfig(config);
@@ -1830,9 +1834,9 @@ static int runRetargetStageTest(const TestArgs&)
 			const TrackingFrameResult::HeadPose noPhone;
 			for (int index= 0; index < kArmFrames; ++index)
 			{
-				const TrackingFrameResult frame= makeDirectFrame(camera, *skeleton, index, 1000, 1000);
+				const TrackingFrameResult frame= makeFrontCameraFrame(camera, *skeleton, index, 1000, 1000);
 				RetargetResult result;
-				stage.solveDirect(frame, camera.model, noPhone, frame.timestampMs, result);
+				stage.solveFrontCamera(frame, camera.model, noPhone, frame.timestampMs, result);
 				results.push_back(result);
 			}
 			return results;
@@ -2077,93 +2081,100 @@ static int runRetargetStageTest(const TestArgs&)
 					  inputRun[kArmFrames - 1].armParameters[0].effectiveIkWeight,
 			  "(k) position: an IK weight written as a function of a source input follows the input");
 
-		// -- The direct pipeline --
-		const RetargetArmSettings directDefaults= directConfig.arms[0];
-		auto directAt= [&](float weight) {
-			return runDirectArm(withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{weight}));
+		// -- The front-camera pipeline --
+		const RetargetArmSettings frontCameraDefaults= frontCameraConfig.arms[0];
+		auto frontCameraAt= [&](float weight) {
+			return runFrontCameraArm(withIk(frontCameraDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{weight}));
 		};
-		const Results boneAnglesRun= runDirectArm(directDefaults);
+		const Results boneAnglesRun= runFrontCameraArm(frontCameraDefaults);
 		bool bPlacedAsBefore= true;
-		int directPosedFrames= 0;
+		int frontCameraPosedFrames= 0;
 		for (const RetargetResult& result : boneAnglesRun)
 		{
 			// The bone-angle placement on its own over the same source
-			DirectRetarget placement;
+			FrontCameraRetarget placement;
 			AvatarPose placed;
-			placement.place(result.source, *skeleton, directArmConfig.direct, placed);
+			placement.place(result.source, *skeleton, frontCameraArmConfig.frontCamera, placed);
 			bPlacedAsBefore&= samePoseBits(result.pose, placed) && !result.goals.bHasWristGoal[0];
-			directPosedFrames+= armPosed(result) ? 1 : 0;
+			frontCameraPosedFrames+= armPosed(result) ? 1 : 0;
 		}
-		check(directDefaults.mapping == eArmMapping::BoneAngles && directDefaults.ikWeight.value == 0.f &&
-				  directPosedFrames > kArmFrames / 2 && bPlacedAsBefore &&
+		check(frontCameraDefaults.mapping == eArmMapping::BoneAngles && frontCameraDefaults.ikWeight.value == 0.f &&
+				  frontCameraPosedFrames > kArmFrames / 2 && bPlacedAsBefore &&
 				  sameRuns(boneAnglesRun,
-						   runDirectArm(withIk(directDefaults, eArmMapping::BoneAnglesThenIk,
+						   runFrontCameraArm(withIk(frontCameraDefaults, eArmMapping::BoneAnglesThenIk,
 											   ExprParameter{0.7f, "0.5 - 0.5", true}))) &&
 				  sameRuns(boneAnglesRun,
-						   runDirectArm(withIk(directDefaults, eArmMapping::BoneAngles, ExprParameter{1.f}))),
-			  "(k) direct: bone angles, or IK at a function evaluating to 0, place the arm as the bone angles did, "
-			  "bit for bit, with no goal shown");
+						   runFrontCameraArm(withIk(frontCameraDefaults, eArmMapping::BoneAngles, ExprParameter{1.f}))),
+			  "(k) front-camera: bone angles, or IK at a function evaluating to 0, place the arm as the bone angles "
+			  "did, bit for bit, with no goal shown");
 
 		// At 1: the goal is the avatar's shoulder plus the chain's offset
 		// scaled by the arm ratio, and the wrist reaches it, bending toward
 		// the chain's elbow
-		const Results directIk= directAt(1.f);
-		float directGoalError= 0.f;
-		float directWristError= 0.f;
-		float directLargestReach= 0.f;
-		float directRatio= 0.f;
+		const Results frontCameraIk= frontCameraAt(1.f);
+		float frontCameraGoalError= 0.f;
+		float frontCameraWristError= 0.f;
+		float frontCameraLargestReach= 0.f;
+		float frontCameraRatio= 0.f;
 		bool bBendsTowardElbow= true;
-		for (const RetargetResult& result : directIk)
+		for (const RetargetResult& result : frontCameraIk)
 		{
 			if (!armPosed(result))
 				continue;
 			const SourcePose::Arm& arm= result.source.arms[0];
 			const Joints posed= joints(result.pose);
-			directRatio= avatarReach / (result.source.upperArmLength + result.source.forearmLength);
-			const glm::vec3 expected= posed.shoulder + (arm.wristPosition - arm.shoulderPosition) * directRatio;
-			directGoalError= std::max(directGoalError, glm::length(result.goals.wristGoalWorld[0] - expected));
-			directWristError= std::max(directWristError, glm::length(posed.wrist - result.goals.wristGoalWorld[0]));
-			directLargestReach= std::max(directLargestReach, glm::length(expected - posed.shoulder) / avatarReach);
+			frontCameraRatio= avatarReach / (result.source.upperArmLength + result.source.forearmLength);
+			const glm::vec3 expected= posed.shoulder + (arm.wristPosition - arm.shoulderPosition) * frontCameraRatio;
+			frontCameraGoalError=
+				std::max(frontCameraGoalError, glm::length(result.goals.wristGoalWorld[0] - expected));
+			frontCameraWristError=
+				std::max(frontCameraWristError, glm::length(posed.wrist - result.goals.wristGoalWorld[0]));
+			frontCameraLargestReach=
+				std::max(frontCameraLargestReach, glm::length(expected - posed.shoulder) / avatarReach);
 			const glm::vec3 axis= glm::normalize(posed.wrist - posed.shoulder);
 			const glm::vec3 bend= posed.elbow - posed.shoulder;
 			const glm::vec3 sourceBend= arm.elbowPosition - arm.shoulderPosition;
 			const glm::vec3 bendAcross= bend - axis * glm::dot(bend, axis);
 			bBendsTowardElbow&= glm::dot(bendAcross, sourceBend - axis * glm::dot(sourceBend, axis)) > 0.f;
 		}
-		MIKAN_LOG_INFO(kTag) << "  (k) direct at 1: arm ratio " << directRatio << ", goal off the expected by "
-							 << directGoalError << " m, posed wrist from the goal " << directWristError
-							 << " m, longest goal " << directLargestReach << " of the avatar's reach";
-		check(std::fabs(directRatio - 1.f) > 0.01f && directGoalError < 1e-5f && directWristError < 1e-4f &&
-				  directLargestReach < 0.99f && bBendsTowardElbow && goalShownAbove(directIk, true),
-			  "(k) direct: IK at 1 puts the wrist on the goal, the avatar's shoulder plus the chain's offset scaled "
-			  "by the arm ratio, bending toward the chain's elbow");
+		MIKAN_LOG_INFO(kTag) << "  (k) front-camera at 1: arm ratio " << frontCameraRatio
+							 << ", goal off the expected by " << frontCameraGoalError
+							 << " m, posed wrist from the goal " << frontCameraWristError << " m, longest goal "
+							 << frontCameraLargestReach << " of the avatar's reach";
+		check(std::fabs(frontCameraRatio - 1.f) > 0.01f && frontCameraGoalError < 1e-5f &&
+				  frontCameraWristError < 1e-4f && frontCameraLargestReach < 0.99f && bBendsTowardElbow &&
+				  goalShownAbove(frontCameraIk, true),
+			  "(k) front-camera: IK at 1 puts the wrist on the goal, the avatar's shoulder plus the chain's offset "
+			  "scaled by the arm ratio, bending toward the chain's elbow");
 
 		// Beyond the reach, pushed out by a goal offset: clamped to it
-		RetargetArmSettings farSettings= withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
+		RetargetArmSettings farSettings= withIk(frontCameraDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
 		farSettings.goalOffset= glm::vec3(avatarReach * 1.5f, 0.f, 0.f);
-		const Results directFar= runDirectArm(farSettings);
-		float directClampError= 0.f;
-		float directShortestReach= 1e9f;
-		for (const RetargetResult& result : directFar)
+		const Results frontCameraFar= runFrontCameraArm(farSettings);
+		float frontCameraClampError= 0.f;
+		float frontCameraShortestReach= 1e9f;
+		for (const RetargetResult& result : frontCameraFar)
 		{
 			if (!armPosed(result))
 				continue;
 			const Joints posed= joints(result.pose);
 			const glm::vec3 goal= result.goals.wristGoalWorld[0];
-			directClampError= std::max(directClampError, glm::length(posed.wrist - clampToReach(posed.shoulder, goal)));
-			directShortestReach= std::min(directShortestReach, glm::length(goal - posed.shoulder));
+			frontCameraClampError=
+				std::max(frontCameraClampError, glm::length(posed.wrist - clampToReach(posed.shoulder, goal)));
+			frontCameraShortestReach= std::min(frontCameraShortestReach, glm::length(goal - posed.shoulder));
 		}
-		MIKAN_LOG_INFO(kTag) << "  (k) direct at 1 beyond reach: shortest goal reach " << directShortestReach
-							 << " m, posed wrist from the clamped goal " << directClampError << " m";
-		check(directShortestReach > avatarReach * 1.05f && directClampError < 1e-4f,
-			  "(k) direct: a goal beyond the avatar's reach is clamped to it");
+		MIKAN_LOG_INFO(kTag) << "  (k) front-camera at 1 beyond reach: shortest goal reach " << frontCameraShortestReach
+							 << " m, posed wrist from the clamped goal " << frontCameraClampError << " m";
+		check(frontCameraShortestReach > avatarReach * 1.05f && frontCameraClampError < 1e-4f,
+			  "(k) front-camera: a goal beyond the avatar's reach is clamped to it");
 
 		// The reach scale at 0 keeps the chain's offset as it is
-		RetargetArmSettings unscaledSettings= withIk(directDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
+		RetargetArmSettings unscaledSettings=
+			withIk(frontCameraDefaults, eArmMapping::BoneAnglesThenIk, ExprParameter{1.f});
 		unscaledSettings.reachScale= ExprParameter{0.f};
 		float unscaledError= 0.f;
 		int unscaledFrames= 0;
-		for (const RetargetResult& result : runDirectArm(unscaledSettings))
+		for (const RetargetResult& result : runFrontCameraArm(unscaledSettings))
 		{
 			if (!armPosed(result))
 				continue;
@@ -2172,30 +2183,34 @@ static int runRetargetStageTest(const TestArgs&)
 			unscaledError= std::max(unscaledError, glm::length(result.goals.wristGoalWorld[0] - expected));
 			unscaledFrames++;
 		}
-		check(unscaledFrames == directPosedFrames && unscaledError < 1e-5f,
-			  "(k) direct: at a reach scale of 0 the goal is the avatar's shoulder plus the chain's offset unscaled");
+		check(unscaledFrames == frontCameraPosedFrames && unscaledError < 1e-5f,
+			  "(k) front-camera: at a reach scale of 0 the goal is the avatar's shoulder plus the chain's offset "
+			  "unscaled");
 
-		const Gap directNearAngle= gapBetween(directAt(0.001f), boneAnglesRun);
-		const Gap directNearIk= gapBetween(directAt(0.999f), directIk);
-		const Results directHalf= directAt(0.5f);
-		const float directMidError= midpointError(boneAnglesRun, directHalf, directIk);
-		const Gap directEnds= gapBetween(boneAnglesRun, directIk);
-		MIKAN_LOG_INFO(kTag) << "  (k) direct: 0.001 from bone angles " << directNearAngle.position * 1000.f << " mm, "
-							 << glm::degrees(directNearAngle.turn) << " deg; 0.999 from the IK "
-							 << directNearIk.position * 1000.f << " mm, " << glm::degrees(directNearIk.turn)
-							 << " deg; the two ends " << directEnds.position * 1000.f << " mm, "
-							 << glm::degrees(directEnds.turn) << " deg apart; wrist at 0.5 from the midpoint "
-							 << directMidError * 1000.f << " mm";
-		check(directNearAngle.frames == directPosedFrames && directNearIk.frames == directPosedFrames &&
-				  directNearAngle.position < 1e-3f && directNearAngle.turn < glm::radians(0.2f) &&
-				  directNearIk.position < 1e-3f && directNearIk.turn < glm::radians(0.2f) &&
-				  directEnds.position > 0.01f && directMidError < 1e-4f && goalShownAbove(directHalf, true),
-			  "(k) direct: weights of 0.001 and 0.999 pose within 1 mm and 0.2 deg of their ends, and the wrist at "
-			  "0.5 is midway between the ends' wrists with the goal shown");
-		float directEndDistance= 0.f;
-		const bool bDirectFalls= sweepFalls(directAt, directEndDistance);
-		check(bDirectFalls && directEndDistance < 1e-4f,
-			  "(k) direct: over weights 0 to 1 in tenths the wrist's distance to the goal falls, to the goal at 1");
+		const Gap frontCameraNearAngle= gapBetween(frontCameraAt(0.001f), boneAnglesRun);
+		const Gap frontCameraNearIk= gapBetween(frontCameraAt(0.999f), frontCameraIk);
+		const Results frontCameraHalf= frontCameraAt(0.5f);
+		const float frontCameraMidError= midpointError(boneAnglesRun, frontCameraHalf, frontCameraIk);
+		const Gap frontCameraEnds= gapBetween(boneAnglesRun, frontCameraIk);
+		MIKAN_LOG_INFO(kTag) << "  (k) front-camera: 0.001 from bone angles "
+							 << frontCameraNearAngle.position * 1000.f << " mm, "
+							 << glm::degrees(frontCameraNearAngle.turn) << " deg; 0.999 from the IK "
+							 << frontCameraNearIk.position * 1000.f << " mm, " << glm::degrees(frontCameraNearIk.turn)
+							 << " deg; the two ends " << frontCameraEnds.position * 1000.f << " mm, "
+							 << glm::degrees(frontCameraEnds.turn) << " deg apart; wrist at 0.5 from the midpoint "
+							 << frontCameraMidError * 1000.f << " mm";
+		check(frontCameraNearAngle.frames == frontCameraPosedFrames &&
+				  frontCameraNearIk.frames == frontCameraPosedFrames && frontCameraNearAngle.position < 1e-3f &&
+				  frontCameraNearAngle.turn < glm::radians(0.2f) && frontCameraNearIk.position < 1e-3f &&
+				  frontCameraNearIk.turn < glm::radians(0.2f) && frontCameraEnds.position > 0.01f &&
+				  frontCameraMidError < 1e-4f && goalShownAbove(frontCameraHalf, true),
+			  "(k) front-camera: weights of 0.001 and 0.999 pose within 1 mm and 0.2 deg of their ends, and the "
+			  "wrist at 0.5 is midway between the ends' wrists with the goal shown");
+		float frontCameraEndDistance= 0.f;
+		const bool bFrontCameraFalls= sweepFalls(frontCameraAt, frontCameraEndDistance);
+		check(bFrontCameraFalls && frontCameraEndDistance < 1e-4f,
+			  "(k) front-camera: over weights 0 to 1 in tenths the wrist's distance to the goal falls, to the goal "
+			  "at 1");
 	}
 
 	MIKAN_LOG_INFO(kTag) << (failures == 0 ? "ALL PASSED" : "FAILED") << " (" << failures << " failures)";

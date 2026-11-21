@@ -189,7 +189,7 @@ static int runCustomPoseTest(const TestArgs& args)
 			  "(d) a position source puts the wrist where the pose asks under the fixed root, and the solve reaches it");
 	}
 
-	// (e) The direct form: the chain's joints at the avatar's bone lengths
+	// (e) The front-camera form: the chain's joints at the avatar's bone lengths
 	// with the wrist on its target, the lean as the spine's, an elbow the
 	// pose gives taken, and the placement posing the hand's palm where the
 	// pose turned it
@@ -198,7 +198,7 @@ static int runCustomPoseTest(const TestArgs& args)
 		CustomPoseSolveInputs inputs;
 		inputs.skeleton= skeleton.get();
 		inputs.rig= &rig;
-		inputs.bDirect= true;
+		inputs.bFrontCameraMode= true;
 		RetargetResult solved;
 		std::array<glm::quat, 2> palms;
 		fillCustomSource(pose, inputs, SourcePose::Clock(), solved, &palms);
@@ -209,7 +209,7 @@ static int runCustomPoseTest(const TestArgs& args)
 		const float fore= skeleton->getForearmLength(eHandSide::Left);
 		const glm::quat lean= glm::quat(glm::radians(pose.leanDegrees));
 		const glm::vec3 target= arm.shoulderPosition + lean * (pose.arms[0].wristOffset * armLength);
-		const bool bChain= source.pipeline == SourcePose::ePipeline::Direct && arm.bHasShoulder && arm.bHasElbow &&
+		const bool bChain= source.pipeline == SourcePose::ePipeline::FrontCamera && arm.bHasShoulder && arm.bHasElbow &&
 			std::fabs(glm::length(arm.elbowPosition - arm.shoulderPosition) - upper) < 1e-5f &&
 			std::fabs(glm::length(arm.wristPosition - arm.elbowPosition) - fore) < 1e-5f &&
 			glm::length(arm.wristPosition - target) < 1e-4f && arm.forearmConfidence.value == 0.f;
@@ -219,7 +219,7 @@ static int runCustomPoseTest(const TestArgs& args)
 
 		RetargetStageConfig config;
 		config.skeleton= skeleton;
-		config.direct.wristLimitRadians= {glm::pi<float>(), glm::pi<float>()};
+		config.frontCamera.wristLimitRadians= {glm::pi<float>(), glm::pi<float>()};
 		RetargetStage stage;
 		stage.setConfig(config);
 		stage.solveTarget(solved.source, solved.pose);
@@ -243,8 +243,8 @@ static int runCustomPoseTest(const TestArgs& args)
 		const bool bElbow= glm::length(elbowArm.upperDirection - givenDirection) < 1e-5f &&
 			elbowArm.forearmConfidence.value == 1.f;
 		check(bChain && bTorso && solved.pose.valid && wristMiss < 2e-3f && palmMatch > 1.f - 1e-4f && bElbow,
-			  "(e) a direct source is a chain at the avatar's lengths on its wrist target, and the placement poses the "
-			  "palm the pose gives");
+			  "(e) a front-camera source is a chain at the avatar's lengths on its wrist target, and the placement "
+			  "poses the palm the pose gives");
 	}
 
 	// (f) Nothing is filled without a skeleton
@@ -295,5 +295,5 @@ static int runCustomPoseTest(const TestArgs& args)
 }
 
 MIKAN_REGISTER_TEST("--test-custom-pose",
-					"Custom pose file, library, built-in pose, and its source in the position and direct forms",
+					"Custom pose file, library, built-in pose, and its source in the position and front-camera forms",
 					eTestCategory::SelfTest, runCustomPoseTest);

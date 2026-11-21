@@ -719,7 +719,7 @@ static int runVmcTest(const TestArgs&)
 	}
 
 	// (i2) The torso and neck bones. They only go out when a pose places them,
-	// which the direct retarget does and the position retarget never does.
+	// which the front-camera retarget does and the position retarget never does.
 	{
 		check(strcmp(boneName(eVmcBone::Spine), "Spine") == 0 && strcmp(boneName(eVmcBone::Chest), "Chest") == 0 &&
 				  strcmp(boneName(eVmcBone::UpperChest), "UpperChest") == 0 &&
@@ -739,7 +739,7 @@ static int runVmcTest(const TestArgs&)
 		OscStreamer streamer;
 		streamer.setConfig(config);
 
-		// A direct pose leaning 20 degrees about up, torso chain at one world
+		// A front-camera pose leaning 20 degrees about up, torso chain at one world
 		// delta, with one arm placed at identity
 		const glm::quat lean= glm::angleAxis(glm::radians(20.f), glm::vec3(0.f, 0.f, 1.f));
 		AvatarPose pose;
@@ -751,12 +751,12 @@ static int runVmcTest(const TestArgs&)
 		}
 		pose.bones[(int)eHumanoidBone::LeftUpperArm].present= true;
 
-		auto decodeFrame= [&streamer](const AvatarPose* directPose, std::vector<DecodedMessage>& outMessages) {
+		auto decodeFrame= [&streamer](const AvatarPose* frontCameraPose, std::vector<DecodedMessage>& outMessages) {
 			TrackingFrameResult emptyFrame;
 			std::vector<std::vector<uint8_t>> packets;
 			RetargetResult retarget;
-			if (directPose != nullptr)
-				retarget.pose= *directPose;
+			if (frontCameraPose != nullptr)
+				retarget.pose= *frontCameraPose;
 			streamer.encodeFrame(emptyFrame, retarget, packets);
 			outMessages.clear();
 			bool bWellFormed= !packets.empty();
@@ -775,14 +775,14 @@ static int runVmcTest(const TestArgs&)
 		};
 
 		std::vector<DecodedMessage> messages;
-		check(decodeFrame(&pose, messages), "a direct pose frame is complete bundles");
+		check(decodeFrame(&pose, messages), "a front-camera pose frame is complete bundles");
 
 		const DecodedMessage* spine= findBone(messages, "Spine");
 		const DecodedMessage* neck= findBone(messages, "Neck");
 		check(spine != nullptr && neck != nullptr && findBone(messages, "Chest") != nullptr,
-			  "a direct pose streams the torso bones it placed");
+			  "a front-camera pose streams the torso bones it placed");
 		check(findBone(messages, "UpperChest") == nullptr, "an upper chest the pose never placed is not streamed");
-		check(findBone(messages, "LeftUpperArm") != nullptr, "a direct pose streams the arm it placed");
+		check(findBone(messages, "LeftUpperArm") != nullptr, "a front-camera pose streams the arm it placed");
 
 		bool bFingerStreamed= false;
 		for (const DecodedMessage& message : messages)
@@ -794,7 +794,7 @@ static int runVmcTest(const TestArgs&)
 							  name.find("Middle") != std::string::npos || name.find("Ring") != std::string::npos ||
 							  name.find("Little") != std::string::npos;
 		}
-		check(!bFingerStreamed, "a direct pose that placed no fingers streams none");
+		check(!bFingerStreamed, "a front-camera pose that placed no fingers streams none");
 
 		// The spine hangs off the unplaced hips, so it carries the whole lean
 		const glm::quat expectedSpine= worldToUnityRotation(lean);
@@ -812,18 +812,19 @@ static int runVmcTest(const TestArgs&)
 			  "an arm measured against the leaned chest streams relative to it");
 
 		const DecodedMessage* ok= findMessage(messages, "/VMC/Ext/OK");
-		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 1, "a direct pose with an arm reports tracking");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 1,
+			  "a front-camera pose with an arm reports tracking");
 
 		AvatarPose torsoOnly= pose;
 		torsoOnly.bones[(int)eHumanoidBone::LeftUpperArm].present= false;
 		decodeFrame(&torsoOnly, messages);
 		ok= findMessage(messages, "/VMC/Ext/OK");
-		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 0, "a direct pose with no arm reports not tracking");
+		check(ok != nullptr && ok->ints.size() == 4 && ok->ints[3] == 0, "a front-camera pose with no arm reports not tracking");
 
 		// The position path never places the torso
 		decodeFrame(nullptr, messages);
 		check(findBone(messages, "Spine") == nullptr && findBone(messages, "Neck") == nullptr,
-			  "with no direct pose the torso bones are not streamed");
+			  "with no front-camera pose the torso bones are not streamed");
 
 		// No skeleton, no bones, but the rest of the frame still goes out
 		OscStreamerConfig bareConfig;
@@ -843,7 +844,7 @@ static int runVmcTest(const TestArgs&)
 			bAnyBone|= message.address == "/VMC/Ext/Bone/Pos";
 		check(!bAnyBone && findMessage(messages, "/VMC/Ext/OK") != nullptr &&
 				  findMessage(messages, "/VMC/Ext/T") != nullptr && findMessage(messages, "/VMC/Ext/Root/Pos") != nullptr,
-			  "a direct pose with no avatar skeleton streams no bones but the rest of the frame");
+			  "a front-camera pose with no avatar skeleton streams no bones but the rest of the frame");
 	}
 
 	// (j) The face stream and the avatar announcement on the wire. The names

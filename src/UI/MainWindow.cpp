@@ -323,9 +323,9 @@ void MainWindow::refreshDevicePanelState()
 void MainWindow::launchWizard(eWizardKind kind, int cameraIndex)
 {
 	// The host refuses while one of its wizards runs; the flow launches its
-	// own wizards and must not be interrupted by a manual one. A direct
+	// own wizards and must not be interrupted by a manual one. A front-camera
 	// project has no world calibration, whatever frame is shown.
-	if (kind == eWizardKind::Extrinsics && isDirectProject(*m_app->getConfig()))
+	if (kind == eWizardKind::Extrinsics && isFrontCameraProject(*m_app->getConfig()))
 		return;
 	if (!m_setupFlow->isActive())
 		m_wizardHost->launch(kind, cameraIndex);
@@ -483,8 +483,8 @@ void MainWindow::drawDockspaceAndMenuBar()
 
 			// One shared session: every camera calibrates against the same
 			// marker placement (separate sessions = disagreeing world frames).
-			// A direct project has no world calibration.
-			if (!isDirectProject(*config))
+			// A front-camera project has no world calibration.
+			if (!isFrontCameraProject(*config))
 			{
 				bool bAllIntrinsics= true;
 				for (size_t i= 0; i < config->cameraCount(); ++i)
@@ -552,7 +552,7 @@ void MainWindow::handleHotkeys()
 	}
 }
 
-// Diagnostic dump: state history + camera frames + config, and in direct
+// Diagnostic dump: state history + camera frames + config, and in front-camera
 // mode the posed avatar
 void MainWindow::dumpDiagnostics()
 {
@@ -686,7 +686,7 @@ void MainWindow::update(float deltaSeconds)
 	oscContext.visionThread= visionThread;
 	// The stage sections the Inspector draws read this frame's contexts
 	m_stageContent->beginFrame(trackingContext, oscContext, m_fusionReadout, m_imuReadout, m_faceReadout,
-							   m_microphoneReadout, m_oscReadout, m_directReadout, m_sourcePoseReadout,
+							   m_microphoneReadout, m_oscReadout, m_frontCameraReadout, m_sourcePoseReadout,
 							   m_faceExprEditor->getTarget(), bWizardActive);
 	if (m_bShowSettingsPanel)
 		SettingsPanels::drawAppSettingsPanel(&m_bShowSettingsPanel);
@@ -750,10 +750,10 @@ void MainWindow::update(float deltaSeconds)
 		forearmOverlays.push_back(HandOverlay::makeForearmOverlay(
 			config->camera(cameraIndex), m_latestFused, config->body.forearmLengthMeters));
 	}
-	// Direct mode: which of the direct camera's hand slots the solver took
-	m_videoPreviewPanel->setHandUse(config->direct.enabled ? config->direct.cameraIndex : -1,
-									{m_latestRetarget.directState.arms[0].bHandSeen,
-									 m_latestRetarget.directState.arms[1].bHandSeen});
+	// Front-camera mode: which of the front camera's hand slots the solver took
+	m_videoPreviewPanel->setHandUse(config->frontCamera.enabled ? config->frontCamera.cameraIndex : -1,
+									{m_latestRetarget.frontCameraState.arms[0].bHandSeen,
+									 m_latestRetarget.frontCameraState.arms[1].bHandSeen});
 
 	// The 3D scene's inputs. In replay view the whole feed comes from the
 	// timeline's scrub position instead, with the frustums built from the
@@ -768,8 +768,8 @@ void MainWindow::update(float deltaSeconds)
 
 	// The Stage View, on the strip's selection as the strip last drew it, once
 	// the avatar is posed for the shown frame: the camera view or the scene
-	m_stageView->update(m_pipelinePanel->getSelected(), m_pipelineInputs.bDirect, m_pipelineInputs.directCameraIndex,
-						m_wizardHost->isCameraWizardActive());
+	m_stageView->update(m_pipelinePanel->getSelected(), m_pipelineInputs.bFrontCameraMode,
+						m_pipelineInputs.frontCameraIndex, m_wizardHost->isCameraWizardActive());
 	// The frame both the Stage View and the pinned stages' windows draw
 	const std::vector<SceneCameraView> replayCameras=
 		m_shown.bReplay ? m_timelinePanel->getSceneCameras() : std::vector<SceneCameraView>();
@@ -840,10 +840,10 @@ void MainWindow::update(float deltaSeconds)
 		launchWizard(eWizardKind::Extrinsics);
 	if (m_stageContent->getAudioAction().bLaunchAudioWizard)
 		launchWizard(eWizardKind::AudioCalibration);
-	// A removed direct camera moved the role and cleared the neutral, so a
+	// A removed front camera moved the role and cleared the neutral, so a
 	// countdown started for it must not capture through camera 1
-	if (m_stageContent->getDirectCameraMoved() && isDirectProject(*config))
-		m_trackingPanelState.directNeutral.reset();
+	if (m_stageContent->getFrontCameraMoved() && isFrontCameraProject(*config))
+		m_trackingPanelState.frontCameraNeutral.reset();
 	// A face profile row's Edit button opens the expression editor on the
 	// row. The editor runs every frame, after the Inspector so the open lands
 	// this frame, and reads the frame the scene shows.
@@ -1064,22 +1064,23 @@ void MainWindow::updateFaceReadouts()
 		}
 	}
 	// The webcam face of the shown frame: the output's own while live, and
-	// in a replay the direct camera's recorded observation under the take's
+	// in a replay the front camera's recorded observation under the take's
 	// neutral
 	if (m_shown.config != nullptr)
 	{
-		const DirectConfig& direct= m_shown.config->direct;
-		face.bWebcamNeutral= direct.neutralFacePresent;
+		const FrontCameraConfig& frontCamera= m_shown.config->frontCamera;
+		face.bWebcamNeutral= frontCamera.neutralFacePresent;
 		if (!m_shown.bReplay)
 		{
 			if (m_shown.fused != nullptr)
 				face.webcam= m_shown.fused->face.webcam;
 		}
-		else if (direct.enabled && direct.cameraIndex >= 0 && direct.cameraIndex < (int)m_shown.perCamera.size() &&
-				 m_shown.perCamera[direct.cameraIndex] != nullptr)
+		else if (frontCamera.enabled && frontCamera.cameraIndex >= 0 &&
+				 frontCamera.cameraIndex < (int)m_shown.perCamera.size() &&
+				 m_shown.perCamera[frontCamera.cameraIndex] != nullptr)
 		{
-			fillWebcamFaceSource(m_shown.perCamera[direct.cameraIndex]->body, true,
-								 direct.neutralFacePresent ? &direct.neutralFace : nullptr, face.webcam);
+			fillWebcamFaceSource(m_shown.perCamera[frontCamera.cameraIndex]->body, true,
+								 frontCamera.neutralFacePresent ? &frontCamera.neutralFace : nullptr, face.webcam);
 		}
 	}
 	// The Blink stage of the shown frame: the output's own, which a replay
@@ -1127,7 +1128,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 {
 	m_gizmoHandles.clear();
 	m_scene3dPanel->setCustomSourcePalms(nullptr);
-	updateDirectReadout(nullptr);
+	updateFrontCameraReadout(nullptr);
 	updateSourcePoseReadout(nullptr);
 	updateSceneSourcePose(nullptr, nullptr, nullptr);
 	m_avatarPanel->setShownResult(nullptr);
@@ -1166,12 +1167,12 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		++m_customPoseEpoch;
 	}
 
-	const DirectRetarget::SolveState* directState= nullptr;
+	const FrontCameraRetarget::SolveState* frontCameraState= nullptr;
 	// The rest pose is posed from no source
 	const RetargetResult* shownResult= nullptr;
 	// The head the shown result's frame measured
 	TrackingFrameResult::HeadPose shownHead= m_shown.fused->head;
-	// The custom pose's direct palms, and whether it is what is shown
+	// The custom pose's front-camera palms, and whether it is what is shown
 	bool bCustomPose= false;
 	std::array<glm::quat, 2> customPalms;
 	if (mode != eChainMode::Tracking)
@@ -1179,11 +1180,11 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		if (mode == eChainMode::RestPose)
 		{
 			// The rest pose a lost chain eases into in either pipeline. It is
-			// posed with the root at the identity, which is the direct
+			// posed with the root at the identity, which is the front-camera
 			// pipeline's root, and a multi-camera project's fixed root carries
 			// it the way the solve carries a resting arm.
-			DirectRetarget::makeRestPose(*skeleton, makeDirectRetargetConfig(*config, rig), m_avatarPose);
-			if (!config->direct.enabled)
+			FrontCameraRetarget::makeRestPose(*skeleton, makeFrontCameraRetargetConfig(*config, rig), m_avatarPose);
+			if (!config->frontCamera.enabled)
 			{
 				const glm::quat root=
 					glm::angleAxis(glm::radians(config->avatar.rootYawDegrees), glm::vec3(0.f, 0.f, 1.f));
@@ -1216,7 +1217,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 			CustomPoseSolveInputs solveInputs;
 			solveInputs.skeleton= skeleton.get();
 			solveInputs.rig= &rig;
-			solveInputs.bDirect= config->direct.enabled;
+			solveInputs.bFrontCameraMode= config->frontCamera.enabled;
 			solveInputs.rootPositionWorld= config->avatar.rootPositionWorld;
 			solveInputs.rootYawDegrees= config->avatar.rootYawDegrees;
 			const double frameMs= (double)ImGui::GetIO().DeltaTime * 1000.0;
@@ -1244,7 +1245,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 	}
 	else if (bReplay)
 	{
-		directState= updateReplayRetarget(*config, rig, skeleton);
+		frontCameraState= updateReplayRetarget(*config, rig, skeleton);
 		m_avatarPose= m_displayResult.pose;
 		shownResult= &m_displayResult;
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
@@ -1256,15 +1257,15 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		// what the stream carries
 		m_avatarPose= m_latestRetarget.pose;
 		shownResult= &m_latestRetarget;
-		if (m_latestRetarget.bDirectState)
-			directState= &m_latestRetarget.directState;
+		if (m_latestRetarget.bFrontCameraState)
+			frontCameraState= &m_latestRetarget.frontCameraState;
 		m_scene3dPanel->setAvatarFace(&m_shown.fused->face);
 	}
 	m_scene3dPanel->setAvatarPose(&m_avatarPose);
 	m_avatarPanel->setShownResult(shownResult);
-	updateDirectReadout(directState);
+	updateFrontCameraReadout(frontCameraState);
 	updateSourcePoseReadout(shownResult);
-	updateSceneCameraMatch(directState, skeleton.get());
+	updateSceneCameraMatch(frontCameraState, skeleton.get());
 
 	// The selected chain's handles on the avatar as the shown frame posed
 	// it, and the one the panel attached the gizmo to
@@ -1277,7 +1278,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		gizmoInputs.rig= &rig;
 		gizmoInputs.chains= &chains;
 		gizmoInputs.goals= shownResult != nullptr ? &shownResult->goals : nullptr;
-		gizmoInputs.bDirect= config->direct.enabled;
+		gizmoInputs.bFrontCameraMode= config->frontCamera.enabled;
 		gizmoInputs.mode= mode;
 		// The built-in pose is read-only, so it has no handles
 		const CustomPose& gizmoPose= m_app->getActiveCustomPose();
@@ -1296,7 +1297,7 @@ void MainWindow::updateDisplayAvatar(SceneGizmos& outGizmos)
 		// is drawn on the avatar's
 		shownHead.valid= true;
 		shownHead.positionWorld= posedHeadWorld;
-		if (config->direct.enabled)
+		if (config->frontCamera.enabled)
 			m_scene3dPanel->setCustomSourcePalms(&customPalms);
 	}
 	updateSceneSourcePose(shownResult, &shownHead, &posedHeadWorld);
@@ -1322,9 +1323,9 @@ void MainWindow::updateSceneSourcePose(const RetargetResult* result, const Track
 	else
 	{
 		headAnchor= posedHeadWorld;
-		// The direct camera's body model tracks the face the source's head
+		// The front camera's body model tracks the face the source's head
 		// was read from
-		const int cameraIndex= m_shown.config->direct.cameraIndex;
+		const int cameraIndex= m_shown.config->frontCamera.cameraIndex;
 		if (cameraIndex >= 0 && cameraIndex < (int)m_shown.perCamera.size() && m_shown.perCamera[cameraIndex] != nullptr)
 			faceBody= &m_shown.perCamera[cameraIndex]->body;
 	}
@@ -1332,17 +1333,17 @@ void MainWindow::updateSceneSourcePose(const RetargetResult* result, const Track
 	m_scene3dPanel->setSourcePose(result, headAnchor);
 }
 
-void MainWindow::updateDirectReadout(const DirectRetarget::SolveState* state)
+void MainWindow::updateFrontCameraReadout(const FrontCameraRetarget::SolveState* state)
 {
-	DirectReadout readout;
+	FrontCameraReadout readout;
 	readout.state= state;
-	readout.bNeutralPresent= m_shown.config->direct.neutralPresent;
+	readout.bNeutralPresent= m_shown.config->frontCamera.neutralPresent;
 	if (state != nullptr)
 	{
 		readout.shoulderDepth= glm::length(state->shoulderMidpoint);
 		readout.leanDegrees= glm::degrees(glm::angle(glm::normalize(state->spineDelta)));
 	}
-	m_directReadout= readout;
+	m_frontCameraReadout= readout;
 }
 
 void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
@@ -1357,33 +1358,35 @@ void MainWindow::updateSourcePoseReadout(const RetargetResult* result)
 	m_sourcePoseReadout= readout;
 }
 
-void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* directState, const AvatarSkeleton* skeleton)
+void MainWindow::updateSceneCameraMatch(const FrontCameraRetarget::SolveState* frontCameraState,
+										const AvatarSkeleton* skeleton)
 {
 	// The cameras and their calibration come from the config the shown frame
 	// was made under, as the frustums do
 	const AppConfig& config= *m_shown.config;
 
-	// The direct solve's camera, placed at the measured shoulders. It is the
+	// The front-camera solve's camera, placed at the measured shoulders. It is the
 	// camera the dump's annotated frame shows the posed avatar over, so the
 	// capture looks through it whatever the view's choice is.
-	SceneCameraMatch directMatch;
-	if (directState != nullptr && skeleton != nullptr && directState->torsoValid && directState->camera.width > 0 &&
-		directState->camera.height > 0)
+	SceneCameraMatch frontCameraMatch;
+	if (frontCameraState != nullptr && skeleton != nullptr && frontCameraState->torsoValid &&
+		frontCameraState->camera.width > 0 && frontCameraState->camera.height > 0)
 	{
-		directMatch.valid= true;
-		directMatch.cameraIndex= config.direct.cameraIndex;
-		directMatch.camera= directState->camera;
-		directMatch.cameraToWorld= DirectRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *directState);
+		frontCameraMatch.valid= true;
+		frontCameraMatch.cameraIndex= config.frontCamera.cameraIndex;
+		frontCameraMatch.camera= frontCameraState->camera;
+		frontCameraMatch.cameraToWorld=
+			FrontCameraRetarget::makeCameraToWorld(*skeleton, m_avatarPose, *frontCameraState);
 		// The chains live in the solve's world, the camera at the origin; the
 		// camera's translation carries them to the avatar's
-		m_scene3dPanel->setDirectSolve(directState,
-									   glm::translate(glm::mat4(1.f), glm::vec3(directMatch.cameraToWorld[3])));
+		m_scene3dPanel->setFrontCameraSolve(frontCameraState,
+									   glm::translate(glm::mat4(1.f), glm::vec3(frontCameraMatch.cameraToWorld[3])));
 	}
 	else
 	{
-		m_scene3dPanel->setDirectSolve(nullptr, glm::mat4(1.f));
+		m_scene3dPanel->setFrontCameraSolve(nullptr, glm::mat4(1.f));
 	}
-	m_scene3dPanel->setCaptureMatch(directMatch);
+	m_scene3dPanel->setCaptureMatch(frontCameraMatch);
 
 	// The view's choice, checked against the shown frame's cameras first. A
 	// project loaded in place of another starts at the free camera.
@@ -1399,10 +1402,10 @@ void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* direct
 	m_scene3dPanel->setPovCameras(povCameras);
 	const int povCamera= m_scene3dPanel->getPovCamera();
 	SceneCameraMatch povMatch;
-	if (povCamera >= 0 && config.direct.enabled)
+	if (povCamera >= 0 && config.frontCamera.enabled)
 	{
-		// Only the direct camera is available, placed by the solve
-		povMatch= directMatch;
+		// Only the front camera is available, placed by the solve
+		povMatch= frontCameraMatch;
 	}
 	else if (povCamera >= 0)
 	{
@@ -1429,10 +1432,10 @@ void MainWindow::updateSceneCameraMatch(const DirectRetarget::SolveState* direct
 	m_scene3dPanel->setPovMatch(povMatch);
 }
 
-const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
+const FrontCameraRetarget::SolveState* MainWindow::updateReplayRetarget(
 	const AppConfig& liveConfig, const AvatarRigSettings& rig, const std::shared_ptr<const AvatarSkeleton>& skeleton)
 {
-	// The recording's lengths, direct settings and retarget chains (its loss
+	// The recording's lengths, front-camera settings and retarget chains (its loss
 	// rules and elbow weights), the project's avatar placement, and the live
 	// rig. A take from before chain settings migrates its chains from its own
 	// legacy settings and the live rig.
@@ -1442,13 +1445,13 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 	stageConfig.position= makeAvatarRetargetConfig(liveConfig, rig);
 	m_displayStage.setConfig(stageConfig);
 
-	// A direct-mode recording's camera and its undistorted pinhole, the
+	// A front-camera recording's camera and its undistorted pinhole, the
 	// space its landmarks live in
-	const int cameraIndex= recordedConfig.direct.cameraIndex;
-	const bool bDirect= recordedConfig.direct.enabled && cameraIndex >= 0 &&
+	const int cameraIndex= recordedConfig.frontCamera.cameraIndex;
+	const bool bFrontCameraMode= recordedConfig.frontCamera.enabled && cameraIndex >= 0 &&
 		cameraIndex < (int)recordedConfig.cameraCount() && recordedConfig.camera(cameraIndex).intrinsics.present;
-	DirectCameraModel pinhole;
-	if (bDirect)
+	FrontCameraModel pinhole;
+	if (bFrontCameraMode)
 	{
 		const MikanMatrix3d& cameraMatrix=
 			recordedConfig.camera(cameraIndex).intrinsics.intrinsics.undistorted_camera_matrix;
@@ -1465,14 +1468,14 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 		TrackingFrameResult fused;
 		std::vector<const TrackingFrameResult*> perCamera;
 		timeline.getRetargetInputs(frameIndex, fused, perCamera);
-		if (bDirect && cameraIndex < (int)perCamera.size() && perCamera[cameraIndex] != nullptr)
+		if (bFrontCameraMode && cameraIndex < (int)perCamera.size() && perCamera[cameraIndex] != nullptr)
 		{
 			const TrackingFrameResult& frame= *perCamera[cameraIndex];
-			DirectCameraModel cameraModel= pinhole;
+			FrontCameraModel cameraModel= pinhole;
 			cameraModel.width= frame.frameWidth;
 			cameraModel.height= frame.frameHeight;
 			const TrackingFrameResult::HeadPose noPhoneHead;
-			if (stage.solveDirect(frame, cameraModel, noPhoneHead, frame.timestampMs, ioResult))
+			if (stage.solveFrontCamera(frame, cameraModel, noPhoneHead, frame.timestampMs, ioResult))
 				return;
 		}
 		stage.solvePosition(fused, ioResult);
@@ -1483,7 +1486,7 @@ const DirectRetarget::SolveState* MainWindow::updateReplayRetarget(
 											  timeline.getCurrentFrameIndex(), frameTimeMs, solveFrame, m_displayResult);
 	if (!bSolved)
 		m_displayStage.resolveTarget(m_displayResult);
-	return m_displayResult.bDirectState ? &m_displayResult.directState : nullptr;
+	return m_displayResult.bFrontCameraState ? &m_displayResult.frontCameraState : nullptr;
 }
 
 eChainMode MainWindow::getShownChainMode() const
@@ -1660,9 +1663,9 @@ void MainWindow::gatherPipelineInputs()
 	const RecordedTelemetry* recorded= bReplay ? m_timelinePanel->getDisplayTelemetry() : nullptr;
 
 	PipelineStatusInputs in;
-	in.bDirect= isDirectProject(*config);
+	in.bFrontCameraMode= isFrontCameraProject(*config);
 	in.cameraCount= (int)config->cameraCount();
-	in.directCameraIndex= config->direct.cameraIndex;
+	in.frontCameraIndex= config->frontCamera.cameraIndex;
 	in.bReplay= bReplay;
 	in.bStageStateRecorded= !bReplay || recorded != nullptr;
 
@@ -1726,8 +1729,8 @@ void MainWindow::gatherPipelineInputs()
 			return ePath::Fused;
 		case VisionThread::Telemetry::ePath::Passthrough:
 			return ePath::Passthrough;
-		case VisionThread::Telemetry::ePath::Direct:
-			return ePath::Direct;
+		case VisionThread::Telemetry::ePath::FrontCamera:
+			return ePath::FrontCamera;
 		}
 		return ePath::Unknown;
 	};
@@ -1739,7 +1742,7 @@ void MainWindow::gatherPipelineInputs()
 	{
 		// Unrecorded: the frame's own world pose says which way it went
 		const bool bWorld= fused.poses[0].hasWorldPose || fused.poses[1].hasWorldPose;
-		in.path= in.bDirect ? ePath::Direct : (bWorld ? ePath::Fused : ePath::Unknown);
+		in.path= in.bFrontCameraMode ? ePath::FrontCamera : (bWorld ? ePath::Fused : ePath::Unknown);
 	}
 	else if (telemetry.bValid)
 	{
@@ -1782,26 +1785,27 @@ void MainWindow::gatherPipelineInputs()
 	in.bHeadValid= fused.head.valid;
 	in.bImuEnabled= config->imu.enabled;
 
-	// The direct solve behind the shown pose
-	if (in.bDirect && in.directCameraIndex >= 0 && in.directCameraIndex < in.cameraCount)
+	// The front-camera solve behind the shown pose
+	if (in.bFrontCameraMode && in.frontCameraIndex >= 0 && in.frontCameraIndex < in.cameraCount)
 	{
-		const IntrinsicsConfig& directIntrinsics= config->camera(in.directCameraIndex).intrinsics;
-		in.bDirectIntrinsics= directIntrinsics.present;
-		in.bDirectIntrinsicsNominal= directIntrinsics.present && directIntrinsics.source == eIntrinsicsSource::Nominal;
+		const IntrinsicsConfig& frontCameraIntrinsics= config->camera(in.frontCameraIndex).intrinsics;
+		in.bFrontCameraIntrinsics= frontCameraIntrinsics.present;
+		in.bFrontCameraIntrinsicsNominal=
+			frontCameraIntrinsics.present && frontCameraIntrinsics.source == eIntrinsicsSource::Nominal;
 	}
-	in.bDirectNeutral= config->direct.neutralPresent;
-	if (m_directReadout.state != nullptr)
+	in.bFrontCameraNeutral= config->frontCamera.neutralPresent;
+	if (m_frontCameraReadout.state != nullptr)
 	{
-		const DirectRetarget::SolveState& state= *m_directReadout.state;
-		in.bDirectTorso= state.torsoValid;
-		in.bDirectHeadMeasured= state.headMeasured;
-		in.bDirectHandednessSwapped= state.bHandednessSwapped;
-		in.directShoulderDepthMeters= m_directReadout.shoulderDepth;
-		in.directLeanDegrees= m_directReadout.leanDegrees;
+		const FrontCameraRetarget::SolveState& state= *m_frontCameraReadout.state;
+		in.bFrontCameraTorso= state.torsoValid;
+		in.bFrontCameraHeadMeasured= state.headMeasured;
+		in.bFrontCameraHandednessSwapped= state.bHandednessSwapped;
+		in.frontCameraShoulderDepthMeters= m_frontCameraReadout.shoulderDepth;
+		in.frontCameraLeanDegrees= m_frontCameraReadout.leanDegrees;
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
-			PipelineStatusInputs::DirectArm& out= in.directArms[sideIndex];
+			const FrontCameraRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+			PipelineStatusInputs::FrontCameraArm& out= in.frontCameraArms[sideIndex];
 			out.bChain= arm.chain.valid;
 			out.bHandSeen= arm.bHandSeen;
 			out.bElbowSeen= arm.bElbowSeen;
@@ -1908,9 +1912,9 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 
 	if (verb == "stages")
 	{
-		outLines.push_back(std::string("shape ") + (inputs.bDirect ? "direct" : "multi") + " cameras " +
+		outLines.push_back(std::string("shape ") + (inputs.bFrontCameraMode ? "front" : "multi") + " cameras " +
 						   std::to_string(inputs.cameraCount) + " shown " + (inputs.bReplay ? "replay" : "live"));
-		for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount))
+		for (const PipelineStageId& stage : PipelineModel::getAllStages(inputs.bFrontCameraMode, inputs.cameraCount))
 			outLines.push_back(describe(stage));
 		return true;
 	}
@@ -2120,7 +2124,8 @@ bool MainWindow::handlePipelineAutomation(const std::vector<std::string>& args, 
 			return true;
 		}
 		PipelineStageId stage;
-		const std::vector<PipelineStageId> all= PipelineModel::getAllStages(inputs.bDirect, inputs.cameraCount);
+		const std::vector<PipelineStageId> all=
+			PipelineModel::getAllStages(inputs.bFrontCameraMode, inputs.cameraCount);
 		if (!PipelineModel::fromString(args[1], stage) || std::find(all.begin(), all.end(), stage) == all.end())
 		{
 			outError= "no such stage in this project: " + args[1];
@@ -2192,8 +2197,8 @@ bool MainWindow::handleLimitAutomation(const std::vector<std::string>& args, std
 	char text[64];
 	std::snprintf(text, sizeof(text), "%s %.6g", args[1].c_str(), *degrees);
 	std::string line= text;
-	// Only the direct placement applies the limits
-	if (!m_pipelineInputs.bDirect)
+	// Only the front-camera placement applies the limits
+	if (!m_pipelineInputs.bFrontCameraMode)
 		line+= " (unused: the position pipeline applies no joint limit)";
 	outLines.push_back(line);
 	return true;
@@ -2314,21 +2319,21 @@ bool MainWindow::handleLossAutomation(const std::vector<std::string>& args, std:
 	}
 	outLines.push_back("stored " + formatLoss(loss.hold, loss.holdMs, loss.after, loss.restBlendMs, loss.riseBlendMs));
 
-	// What the project's pipeline performs: the direct one with an avatar in
-	// a direct project, the position one otherwise
+	// What the project's pipeline performs: the front-camera one with an avatar in
+	// a front-camera project, the position one otherwise
 	const AppConfig* config= m_app->getConfig();
 	const bool bAvatar= m_app->getAvatarSkeleton() != nullptr;
-	const bool bDirect= config->direct.enabled && bAvatar;
+	const bool bFrontCameraMode= config->frontCamera.enabled && bAvatar;
 	const LossPolicy policy= makeChainLossPolicy(
-		chains, bDirect ? SourcePose::ePipeline::Direct : SourcePose::ePipeline::Position, config->osc.minConfidence,
-		bAvatar);
+		chains, bFrontCameraMode ? SourcePose::ePipeline::FrontCamera : SourcePose::ePipeline::Position,
+		config->osc.minConfidence, bAvatar);
 	const ChainLossPolicy* resolvedPolicy= &policy.head;
 	if (sideIndex >= 0)
 		resolvedPolicy= &policy.arms[sideIndex];
 	else if (chain == eRetargetChain::Torso)
 		resolvedPolicy= &policy.torso;
 	const ChainLossPolicy& resolved= *resolvedPolicy;
-	std::string line= std::string("resolved ") + (bDirect ? "direct " : "position ");
+	std::string line= std::string("resolved ") + (bFrontCameraMode ? "front " : "position ");
 	if (resolved.bFollowsParent)
 		line+= "follows the arms";
 	else

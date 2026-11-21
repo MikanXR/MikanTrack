@@ -9,7 +9,7 @@
 
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 
 using json= nlohmann::json;
 
@@ -259,16 +259,16 @@ bool customPoseFromJson(const std::string& text, CustomPose& outPose, std::strin
 }
 
 void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& inputs, const SourcePose::Clock& clock,
-					  RetargetResult& outResult, std::array<glm::quat, 2>* outDirectPalms)
+					  RetargetResult& outResult, std::array<glm::quat, 2>* outFrontCameraPalms)
 {
 	outResult.source= SourcePose();
 	outResult.hands= LossHands();
-	outResult.bDirectState= false;
+	outResult.bFrontCameraState= false;
 	if (inputs.skeleton == nullptr)
 		return;
 	const AvatarSkeleton& skeleton= *inputs.skeleton;
 	SourcePose& source= outResult.source;
-	source.pipeline= inputs.bDirect ? SourcePose::ePipeline::Direct : SourcePose::ePipeline::Position;
+	source.pipeline= inputs.bFrontCameraMode ? SourcePose::ePipeline::FrontCamera : SourcePose::ePipeline::Position;
 	source.clock= clock;
 	source.upperArmLength= skeleton.getUpperArmLength(eHandSide::Left);
 	source.forearmLength= skeleton.getForearmLength(eHandSide::Left);
@@ -277,7 +277,7 @@ void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& input
 	const SourcePose::Confidence unsure{true, 0.f};
 	const glm::quat head= quatFromDegrees(pose.headDegrees);
 
-	if (inputs.bDirect)
+	if (inputs.bFrontCameraMode)
 	{
 		// The solve's world is the avatar's with the root at the identity.
 		// The lean turns the spine, and the shoulders, the offsets and the
@@ -304,8 +304,8 @@ void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& input
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const CustomPose::Arm& arm= pose.arms[sideIndex];
-			if (outDirectPalms != nullptr)
-				(*outDirectPalms)[sideIndex]= glm::quat(1.f, 0.f, 0.f, 0.f);
+			if (outFrontCameraPalms != nullptr)
+				(*outFrontCameraPalms)[sideIndex]= glm::quat(1.f, 0.f, 0.f, 0.f);
 			if (!arm.bEnabled)
 				continue;
 			const eHandSide side= (eHandSide)sideIndex;
@@ -319,7 +319,7 @@ void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& input
 			const glm::quat palm= spineDelta * quatFromDegrees(arm.palmDegrees);
 
 			glm::vec3 elbow, wrist;
-			const DirectRetarget::ArmPlacement placement= DirectRetarget::makePosedPlacement(
+			const FrontCameraRetarget::ArmPlacement placement= FrontCameraRetarget::makePosedPlacement(
 				skeleton, sideIndex, spineDelta, shoulder, wristTarget, arm.bHasElbow ? &givenElbow : nullptr, elbowHint,
 				palm, pose.fingers[sideIndex], elbow, wrist);
 
@@ -344,8 +344,8 @@ void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& input
 			sourceHand.wristRotation= placement.wristRotation;
 			sourceHand.fingerZero= SourcePose::eFingerZero::Metacarpal;
 			sourceHand.fingers= placement.fingers;
-			if (outDirectPalms != nullptr)
-				(*outDirectPalms)[sideIndex]= palm;
+			if (outFrontCameraPalms != nullptr)
+				(*outFrontCameraPalms)[sideIndex]= palm;
 		}
 		return;
 	}

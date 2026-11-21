@@ -7,7 +7,7 @@
 #include "WebcamBlink.h"
 #include "WebcamFace.h"
 
-// Runs the Blink stage over the face points a recording holds for its direct
+// Runs the Blink stage over the face points a recording holds for its front
 // camera, in model frame order from the take's own neutral, so a change to
 // the stage can be judged against old recordings without the model or the
 // raw frames. The settings are the recorded project's unless --defaults asks
@@ -57,14 +57,14 @@ static int runReplayBlink(const TestArgs& args)
 		return 1;
 	}
 	const AppConfig& config= replay.getRecordedConfig();
-	const DirectConfig& direct= config.direct;
-	if (!direct.enabled || direct.cameraIndex < 0)
+	const FrontCameraConfig& frontCamera= config.frontCamera;
+	if (!frontCamera.enabled || frontCamera.cameraIndex < 0)
 	{
-		MIKAN_LOG_ERROR(tag) << "the recording is not of a direct project, so it has no camera the stage reads";
+		MIKAN_LOG_ERROR(tag) << "the recording is not of a front-camera project, so it has no camera the stage reads";
 		return 1;
 	}
 	const BlinkConfig blinkConfig= bDefaults ? BlinkConfig() : config.blink;
-	const WholeBodyFaceRatios* neutral= direct.neutralFacePresent ? &direct.neutralFace : nullptr;
+	const WholeBodyFaceRatios* neutral= frontCamera.neutralFacePresent ? &frontCamera.neutralFace : nullptr;
 
 	std::ofstream csv;
 	if (!outPath.empty())
@@ -100,8 +100,8 @@ static int runReplayBlink(const TestArgs& args)
 		const RecordedFrame& recorded= *replay.getFrame(frameIndex).recorded;
 		for (const RecordedCameraInput& fresh : recorded.freshCameras)
 		{
-			if (fresh.cameraIndex != direct.cameraIndex || !fresh.valid || !fresh.bHaveBodyPose || !fresh.body.valid ||
-				!fresh.body.wholeBody.present || fresh.body.modelFrameIndex == lastModelFrameIndex)
+			if (fresh.cameraIndex != frontCamera.cameraIndex || !fresh.valid || !fresh.bHaveBodyPose ||
+				!fresh.body.valid || !fresh.body.wholeBody.present || fresh.body.modelFrameIndex == lastModelFrameIndex)
 				continue;
 			lastModelFrameIndex= fresh.body.modelFrameIndex;
 
@@ -136,7 +136,7 @@ static int runReplayBlink(const TestArgs& args)
 	}
 	if (modelFrames == 0)
 	{
-		MIKAN_LOG_ERROR(tag) << "the recording holds no whole-body face points for camera " << direct.cameraIndex;
+		MIKAN_LOG_ERROR(tag) << "the recording holds no whole-body face points for camera " << frontCamera.cameraIndex;
 		return 1;
 	}
 
@@ -146,7 +146,7 @@ static int runReplayBlink(const TestArgs& args)
 		return std::string(text);
 	};
 	MIKAN_LOG_INFO(tag) << recordingPath.filename().string() << ": " << modelFrames << " model frames of camera "
-						<< direct.cameraIndex << ", the face tracked on " << trackedFrames << ", "
+						<< frontCamera.cameraIndex << ", the face tracked on " << trackedFrames << ", "
 						<< (bDefaults ? "default settings" : "the recorded settings") << " (sensitivity "
 						<< blinkConfig.sensitivity << ", wink threshold " << blinkConfig.winkThreshold << ", clarity "
 						<< blinkConfig.clarity << ")";

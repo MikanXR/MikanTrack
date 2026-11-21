@@ -9,7 +9,7 @@
 #include "AvatarRetarget.h"
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "MathGLM.h"
 #include "PathUtils.h"
 #include "SyntheticAvatar.h"
@@ -247,12 +247,12 @@ static int runAvatarRigTest(const TestArgs&)
 				  versionOne.sides[0].wristLimitDegrees == 80.f && versionOne.sides[1].wristLimitDegrees == 80.f,
 			  "(a) a sidecar without the joint limits loads today's limits (head 70, spine 45, wrists 80 degrees)");
 		{
-			// The default limits reach the direct solver on the bits of the
+			// The default limits reach the front-camera solver on the bits of the
 			// constants it applied before the sidecar carried them, and an
 			// edited limit reaches it converted
 			AppConfig config;
-			DirectRetargetConfig defaults;
-			const DirectRetargetConfig mapped= makeDirectRetargetConfig(config, AvatarRigSettings());
+			FrontCameraRetargetConfig defaults;
+			const FrontCameraRetargetConfig mapped= makeFrontCameraRetargetConfig(config, AvatarRigSettings());
 			auto sameBits= [](float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; };
 			const float k_degrees= glm::pi<float>() / 180.f;
 			check(sameBits(mapped.headLimitRadians, 70.f * glm::pi<float>() / 180.f) &&
@@ -262,13 +262,13 @@ static int runAvatarRigTest(const TestArgs&)
 					  sameBits(mapped.headLimitRadians, defaults.headLimitRadians) &&
 					  sameBits(mapped.spineLimitRadians, defaults.spineLimitRadians) &&
 					  sameBits(mapped.wristLimitRadians[1], defaults.wristLimitRadians[1]),
-				  "(a) the default joint limits reach the direct solver bit for bit");
-			const DirectRetargetConfig edited= makeDirectRetargetConfig(config, saved);
+				  "(a) the default joint limits reach the front-camera solver bit for bit");
+			const FrontCameraRetargetConfig edited= makeFrontCameraRetargetConfig(config, saved);
 			check(nearlyEqual(edited.headLimitRadians, 55.f * k_degrees, 1e-6f) &&
 					  nearlyEqual(edited.spineLimitRadians, 30.f * k_degrees, 1e-6f) &&
 					  nearlyEqual(edited.wristLimitRadians[1], 65.f * k_degrees, 1e-6f) &&
 					  nearlyEqual(edited.wristLimitRadians[0], 80.f * k_degrees, 1e-6f),
-				  "(a) edited joint limits reach the direct solver");
+				  "(a) edited joint limits reach the front-camera solver");
 		}
 		check(loaded.boneNodeOverrides[(int)B::LeftEye].has_value() && loaded.boneNodeOverrides[(int)B::LeftEye]->empty() &&
 				  !loaded.boneNodeOverrides[(int)B::RightEye].has_value(),

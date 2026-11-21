@@ -117,18 +117,18 @@ void addHand(SourceSkeleton& skeleton, const HandPose& pose, const SourcePose::H
 	}
 }
 
-// One direct hand: the palm frame the solve measured, hung on the chain's
+// One front-camera hand: the palm frame the solve measured, hung on the chain's
 // wrist half a palm back from the palm's center, its fingers from the source's
 // angles. Those are measured against each finger's own metacarpal, so that is
 // where the forward kinematics starts them.
-void addDirectHand(SourceSkeleton& skeleton, const SourceSkeletonInputs::DirectHand& directHand,
+void addFrontCameraHand(SourceSkeleton& skeleton, const SourceSkeletonInputs::FrontCameraHand& frontCameraHand,
 				   const SourcePose::Hand& hand, const glm::vec3& wristPosition, int sideIndex,
 				   const glm::mat4& toWorld)
 {
 	const eRetargetChain chain= handChain(sideIndex);
 	const glm::vec3 color= getSourceConfidenceColor(hand.confidence);
 
-	HandSkeleton handSkeleton= directHand.skeleton;
+	HandSkeleton handSkeleton= frontCameraHand.skeleton;
 	const float halfPalm= handSkeleton.baseInPalm[(int)eFinger::Middle].x;
 	const glm::vec3 wristInPalm(-halfPalm, 0.f, 0.f);
 	for (int finger= 0; finger < FINGER_COUNT; ++finger)
@@ -140,8 +140,8 @@ void addDirectHand(SourceSkeleton& skeleton, const SourceSkeletonInputs::DirectH
 			handSkeleton.neutralDirInPalm[finger]= metacarpal / length;
 	}
 
-	glm::mat4 palmTransform= glm::mat4_cast(directHand.palmOrientation);
-	palmTransform[3]= glm::vec4(wristPosition + directHand.palmOrientation * glm::vec3(halfPalm, 0.f, 0.f), 1.f);
+	glm::mat4 palmTransform= glm::mat4_cast(frontCameraHand.palmOrientation);
+	palmTransform[3]= glm::vec4(wristPosition + frontCameraHand.palmOrientation * glm::vec3(halfPalm, 0.f, 0.f), 1.f);
 	palmTransform= toWorld * palmTransform;
 	const glm::vec3 wristWorld= glm::vec3(toWorld * glm::vec4(wristPosition, 1.f));
 
@@ -237,10 +237,10 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 		return;
 	const SourcePose& source= *inputs.source;
 	const bool bPosition= source.pipeline == SourcePose::ePipeline::Position;
-	const bool bDirect= source.pipeline == SourcePose::ePipeline::Direct;
-	if (!bPosition && !(bDirect && inputs.directToWorld != nullptr))
+	const bool bFrontCameraMode= source.pipeline == SourcePose::ePipeline::FrontCamera;
+	if (!bPosition && !(bFrontCameraMode && inputs.frontCameraToWorld != nullptr))
 		return;
-	const glm::mat4 toWorld= bDirect ? *inputs.directToWorld : glm::mat4(1.f);
+	const glm::mat4 toWorld= bFrontCameraMode ? *inputs.frontCameraToWorld : glm::mat4(1.f);
 
 	// The arms that carry positions: a resting arm carries its placement
 	// alone, so it has nothing to draw
@@ -263,17 +263,17 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 		}
 	}
 
-	// The direct hands, on the wrists of the chains that are drawn
-	if (bDirect && inputs.directHands != nullptr)
+	// The front-camera hands, on the wrists of the chains that are drawn
+	if (bFrontCameraMode && inputs.frontCameraHands != nullptr)
 	{
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
 			const SourcePose::Arm& arm= source.arms[sideIndex];
 			const SourcePose::Hand& hand= source.hands[sideIndex];
-			const SourceSkeletonInputs::DirectHand& directHand= (*inputs.directHands)[sideIndex];
-			if (directHand.bValid && isSourceGroupDrawn(hand.state) && isSourceGroupDrawn(arm.state) &&
+			const SourceSkeletonInputs::FrontCameraHand& frontCameraHand= (*inputs.frontCameraHands)[sideIndex];
+			if (frontCameraHand.bValid && isSourceGroupDrawn(hand.state) && isSourceGroupDrawn(arm.state) &&
 				arm.state != eGroupState::Resting)
-				addDirectHand(outSkeleton, directHand, hand, arm.wristPosition, sideIndex, toWorld);
+				addFrontCameraHand(outSkeleton, frontCameraHand, hand, arm.wristPosition, sideIndex, toWorld);
 		}
 	}
 
@@ -294,7 +294,7 @@ void buildSourceSkeleton(const SourceSkeletonInputs& inputs, SourceSkeleton& out
 	}
 
 	// The head: its marker at the anchor with its facing and up. The position
-	// pipeline's head is a world frame (+X facing, +Z up), and the direct
+	// pipeline's head is a world frame (+X facing, +Z up), and the front-camera
 	// one's a rotation from the neutral head, which faces the same way.
 	if (isSourceGroupDrawn(source.head.state) && inputs.headAnchorWorld != nullptr)
 	{

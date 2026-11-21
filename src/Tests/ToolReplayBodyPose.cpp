@@ -14,7 +14,7 @@
 // usage: --replay-bodypose <recording.jsonl> [camera] [rtmpose|rtmw3d] [divider=<n>]
 //
 // The camera defaults to the first one the recorded project's mode runs body
-// pose on (a direct take's direct camera). The backend defaults to the one
+// pose on (a front-camera take's front camera). The backend defaults to the one
 // the take's body observations name on it; naming the other
 // re-runs the same frames through it, the model A/B. divider runs the
 // models every nth frame as the live stage does, for a take that stored

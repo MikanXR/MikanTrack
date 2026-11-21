@@ -189,7 +189,7 @@ struct AnglePriorConfig
 
 // Body-pose stage, opt-in per camera in a multi-camera project. The person
 // detector only fires on cameras that see the user upright, so this stays off
-// for overhead cameras and costs them nothing. A direct project ignores the
+// for overhead cameras and costs them nothing. A front-camera project ignores the
 // switch: getBodyPoseBackend decides from the project's mode.
 struct BodyPoseCameraConfig
 {
@@ -357,12 +357,12 @@ struct AvatarConfig
 	std::string customPoseId;
 };
 
-// The single-camera direct retarget: one camera's landmarks posed straight
+// The single-camera front-camera retarget: one camera's landmarks posed straight
 // onto the loaded avatar with no world calibration, the camera being the
 // world. The neutral capture is the user's rest (sitting square, hands
 // resting), the zero every relative rotation is measured from, stored in the
 // camera-fixed frame at zero tilt.
-struct DirectConfig
+struct FrontCameraConfig
 {
 	bool enabled= false;
 	// The camera whose landmarks drive the avatar
@@ -434,28 +434,28 @@ struct FusionConfig
 struct BodyDimensions;
 BodyDimensions makeBodyDimensions(const class AppConfig& config);
 
-// The project's mode: a direct project poses the avatar from one camera with
+// The project's mode: a front-camera project poses the avatar from one camera with
 // no world calibration, a multi-camera one fuses its cameras in a world frame
-bool isDirectProject(const class AppConfig& config);
+bool isFrontCameraProject(const class AppConfig& config);
 
 // The body pose a camera runs and its model, decided by the project's mode:
-// the whole-body model on a direct project's direct camera and none on its
+// the whole-body model on a front-camera project's front camera and none on its
 // other cameras, the body model on a multi-camera project's cameras with
 // body pose enabled, and none for an index the config does not have.
-// directCameraIndex is the direct camera to decide with; the overload without
+// frontCameraIndex is the front camera to decide with; the overload without
 // it reads the config's.
 std::optional<eBodyPoseBackend> getBodyPoseBackend(const class AppConfig& config, int cameraIndex);
 std::optional<eBodyPoseBackend> getBodyPoseBackend(const class AppConfig& config, int cameraIndex,
-												   int directCameraIndex);
+												   int frontCameraIndex);
 
-// Clears the direct neutral pose (the phone's face anchor is camera
+// Clears the front-camera neutral pose (the phone's face anchor is camera
 // independent and stays)
-void clearDirectNeutral(DirectConfig& direct);
+void clearFrontCameraNeutral(FrontCameraConfig& frontCamera);
 
-// Erases a camera, keeping the direct camera index on the same physical
-// camera: a removed camera below it decrements it, and removing the direct
+// Erases a camera, keeping the front camera index on the same physical
+// camera: a removed camera below it decrements it, and removing the front
 // camera itself moves the role to camera 0 and clears the neutral. True when
-// the direct role moved to another camera. Camera 0 is never removed.
+// the front-camera role moved to another camera. Camera 0 is never removed.
 bool removeCamera(class AppConfig& config, int cameraIndex);
 
 // Same drift-proofing for the fusion config: the vision thread, the replay
@@ -465,7 +465,7 @@ struct HandFusionConfig;
 HandFusionConfig makeHandFusionConfig(const class AppConfig& config);
 
 // The retarget chain settings a project runs on: its own chain block, or for
-// a project without one the chains migrated from its shape (direct or not),
+// a project without one the chains migrated from its shape (front-camera or not),
 // its legacy stream settings (holdOnDropoutMs, vmcFreezeOnLoss) and the
 // avatar's sidecar (the rest blend, each arm's elbow hint confidence). The
 // second form takes the block in place of the config's, so a caller holding
@@ -483,11 +483,11 @@ RetargetChains resolveRetargetChains(const RetargetChains* block, const class Ap
 struct AvatarRetargetConfig;
 AvatarRetargetConfig makeAvatarRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
 
-// And for the direct retarget: the vision thread, the 3D view's replay feed
+// And for the front-camera retarget: the vision thread, the 3D view's replay feed
 // and the gate tool all solve from this one mapping
-struct DirectRetargetConfig;
-DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
-DirectRetargetConfig makeDirectRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig,
+struct FrontCameraRetargetConfig;
+FrontCameraRetargetConfig makeFrontCameraRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig);
+FrontCameraRetargetConfig makeFrontCameraRetargetConfig(const class AppConfig& config, const AvatarRigSettings& rig,
 											  const RetargetChains& chains);
 
 // And for the retarget stage: both pipelines' solves through the mappings
@@ -524,7 +524,7 @@ public:
 	BodyConfig body;
 	RecordingConfig recording;
 	AvatarConfig avatar;
-	DirectConfig direct;
+	FrontCameraConfig frontCamera;
 	// The retarget chain settings under the project's "retarget" section, an
 	// immutable snapshot replaced whole on an edit; null for a project that
 	// has none yet, which runs on chains migrated from its legacy settings

@@ -5,19 +5,19 @@
 
 #include "AvatarRig.h"
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "PathUtils.h"
 #include "RetargetChains.h"
 #include "RetargetStage.h"
 #include "TrackingReplay.h"
 #include "VrmLoader.h"
 
-// Solves every frame of a direct-mode take through the retarget stage, as the
+// Solves every frame of a front-camera take through the retarget stage, as the
 // app solved it, and writes the solve state per frame: the instrument for what
 // a still frame cannot show, the shoulders' jitter, an elbow that pops between
 // frames, and how an arm leaves and returns to rest.
 //
-//   --direct-trace <recording.jsonl> [out.csv]
+//   --front-camera-trace <recording.jsonl> [out.csv]
 //
 // The CSV carries per frame the shoulders, the spine's turn, and per arm the
 // chain, the elbow's direction weight and the rest blend. The log carries the
@@ -30,7 +30,7 @@
 // frame could not solve and held.
 namespace
 {
-constexpr const char* kTag= "direct-trace";
+constexpr const char* kTag= "front-camera-trace";
 constexpr float kInboardMeters= 0.05f;
 constexpr float kSwivelJumpDegrees= 30.f;
 
@@ -45,7 +45,7 @@ float percentile(std::vector<float> values, float fraction)
 
 // The elbow's offset from the shoulder to wrist line, unit, zero on a
 // straight arm
-glm::vec3 swivelDirection(const DirectRetarget::ArmChain& chain)
+glm::vec3 swivelDirection(const FrontCameraRetarget::ArmChain& chain)
 {
 	const glm::vec3 span= chain.wrist - chain.shoulder;
 	const float spanSquared= glm::dot(span, span);
@@ -57,16 +57,16 @@ glm::vec3 swivelDirection(const DirectRetarget::ArmChain& chain)
 	return offsetLength > 1e-4f ? offset / offsetLength : glm::vec3(0.f);
 }
 
-int runDirectTraceTool(const TestArgs& args)
+int runFrontCameraTraceTool(const TestArgs& args)
 {
 	if (args.empty())
 	{
-		MIKAN_LOG_ERROR(kTag) << "Usage: --direct-trace <recording.jsonl> [out.csv]";
+		MIKAN_LOG_ERROR(kTag) << "Usage: --front-camera-trace <recording.jsonl> [out.csv]";
 		return 1;
 	}
 	const std::string recordingPath= args[0];
 	std::filesystem::path outPath= PathUtils::utf8ToPath(recordingPath);
-	outPath.replace_extension(".direct-trace.csv");
+	outPath.replace_extension(".front-camera-trace.csv");
 	if (args.size() > 1)
 		outPath= PathUtils::utf8ToPath(args[1]);
 
@@ -78,16 +78,16 @@ int runDirectTraceTool(const TestArgs& args)
 		return 1;
 	}
 	const AppConfig& config= replay.getRecordedConfig();
-	if (!config.direct.enabled)
+	if (!config.frontCamera.enabled)
 	{
-		MIKAN_LOG_ERROR(kTag) << recordingPath << ": not a direct-mode recording";
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": not a front-camera recording";
 		return 1;
 	}
-	const int cameraIndex= config.direct.cameraIndex;
+	const int cameraIndex= config.frontCamera.cameraIndex;
 	if (cameraIndex < 0 || cameraIndex >= (int)config.cameraCount() ||
 		!config.camera(cameraIndex).intrinsics.present)
 	{
-		MIKAN_LOG_ERROR(kTag) << recordingPath << ": the direct camera " << cameraIndex << " has no intrinsics";
+		MIKAN_LOG_ERROR(kTag) << recordingPath << ": the front camera " << cameraIndex << " has no intrinsics";
 		return 1;
 	}
 	if (config.avatar.modelPath.empty())
@@ -140,7 +140,7 @@ int runDirectTraceTool(const TestArgs& args)
 	int stalledFrames[2]= {0, 0};
 	int coastedFrames[2]= {0, 0};
 	int losses[2]= {0, 0};
-	DirectRetarget::ArmChain previousChain[2];
+	FrontCameraRetarget::ArmChain previousChain[2];
 	int swivelJumps[2]= {0, 0};
 	int solvedFrames= 0;
 	for (int frameIndex= 0; frameIndex < replay.getFrameCount(); ++frameIndex)
@@ -149,15 +149,15 @@ int runDirectTraceTool(const TestArgs& args)
 		if (cameraIndex >= (int)frame.perCamera.size() || !frame.perCameraValid[cameraIndex])
 			continue;
 		const TrackingFrameResult& cameraFrame= frame.perCamera[cameraIndex];
-		DirectCameraModel cameraModel;
+		FrontCameraModel cameraModel;
 		cameraModel.fx= (float)cameraMatrix.x0;
 		cameraModel.fy= (float)cameraMatrix.y1;
 		cameraModel.cx= (float)cameraMatrix.z0;
 		cameraModel.cy= (float)cameraMatrix.z1;
 		cameraModel.width= cameraFrame.frameWidth;
 		cameraModel.height= cameraFrame.frameHeight;
-		stage.solveDirect(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs, result);
-		const DirectRetarget::SolveState& state= result.directState;
+		stage.solveFrontCamera(cameraFrame, cameraModel, noPhoneHead, cameraFrame.timestampMs, result);
+		const FrontCameraRetarget::SolveState& state= result.frontCameraState;
 		solvedFrames++;
 
 		const float spineDegrees=
@@ -177,8 +177,8 @@ int runDirectTraceTool(const TestArgs& args)
 
 		for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 		{
-			const DirectRetarget::SolveState::Arm& arm= state.arms[sideIndex];
-			const DirectRetarget::ArmChain& chain= arm.chain;
+			const FrontCameraRetarget::SolveState::Arm& arm= state.arms[sideIndex];
+			const FrontCameraRetarget::ArmChain& chain= arm.chain;
 			float swivelStepDegrees= 0.f;
 			glm::vec3 swivel(0.f);
 			if (chain.valid)
@@ -188,7 +188,7 @@ int runDirectTraceTool(const TestArgs& args)
 					coastedFrames[sideIndex]++;
 				// A chain that stands exactly as it was: the frame did not
 				// solve the arm, and it is held
-				const DirectRetarget::ArmChain& previous= previousChain[sideIndex];
+				const FrontCameraRetarget::ArmChain& previous= previousChain[sideIndex];
 				if (previous.valid && chain.elbow == previous.elbow && chain.wrist == previous.wrist)
 					stalledFrames[sideIndex]++;
 				// Toward the body's midline: the left arm's inboard is world -Y
@@ -241,7 +241,7 @@ int runDirectTraceTool(const TestArgs& args)
 }
 } // namespace
 
-MIKAN_REGISTER_TEST("--direct-trace",
-					"Solve every frame of a direct-mode take and write the solve state per frame, with the shoulder "
+MIKAN_REGISTER_TEST("--front-camera-trace",
+					"Solve every frame of a front-camera take and write the solve state per frame, with the shoulder "
 					"jitter and elbow pop summary (<recording.jsonl> [out.csv])",
-					eTestCategory::Tool, runDirectTraceTool);
+					eTestCategory::Tool, runFrontCameraTraceTool);

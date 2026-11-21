@@ -3,9 +3,9 @@
   python make_video.py <recording_frames_dir> <cameraIndex> <out.mp4> <fps> <label>=<dir>[,mirror] ...
 
 The camera is the first panel, then one panel per <label>=<dir> of frame_<frameIndex>.jpg images, as
---render-direct and the Kalidokit page write them. Up to three panels sit in one row and four in a square.
+--render-front-camera and the Kalidokit page write them. Up to three panels sit in one row and four in a square.
 Kalidokit's avatar is a mirror of the user, so the camera is flipped to read the same way round, and so
-is a panel given with ,mirror, which a --render-direct sequence needs. Only the frames every panel has
+is a panel given with ,mirror, which a --render-front-camera sequence needs. Only the frames every panel has
 are written. Needs ffmpeg on the path.
 """
 

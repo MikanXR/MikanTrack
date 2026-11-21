@@ -151,9 +151,9 @@ private:
 
 	// A model and its skeleton are loaded
 	bool hasAvatar() const;
-	// The direct pipeline poses the avatar: a direct project with a model.
+	// The front-camera pipeline poses the avatar: a front-camera project with a model.
 	// Without a model the position pipeline's stream runs in either shape.
-	bool isDirectPipeline() const;
+	bool isFrontCameraPipeline() const;
 	void drawModeRow();
 	// bFaceEntry adds the Face entry after the chains
 	void drawChainRow(bool bAvatar, bool bFaceEntry);
@@ -174,7 +174,7 @@ private:
 	void drawArmChain(int sideIndex, bool bAvatar);
 	// The arm's loss controls, edited in chains: the hold as the pipeline
 	// performs it, then what follows it; true when anything changed
-	bool drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains);
+	bool drawArmLoss(int sideIndex, bool bFrontCameraMode, bool bAvatar, RetargetChains& chains);
 	void drawHandChain(int sideIndex);
 	// The toggle ahead of a row the gizmo can edit, on the row's line
 	void drawGizmoToggle(eSceneGizmoValue value);

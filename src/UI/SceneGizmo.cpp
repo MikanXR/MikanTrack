@@ -208,9 +208,9 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 		if (!arm.bEnabled || !skeleton.getBone(upperArmBone).present)
 			return;
 		// The frame the pose's offsets and palm are in: the rooted torso,
-		// which the direct pipeline leans
+		// which the front-camera pipeline leans
 		const glm::quat torsoFrame= glm::normalize(
-			inputs.bDirect ? rootRotation * glm::quat(glm::radians(custom->leanDegrees)) : rootRotation);
+			inputs.bFrontCameraMode ? rootRotation * glm::quat(glm::radians(custom->leanDegrees)) : rootRotation);
 		const float armLength= skeleton.getUpperArmLength(side) + skeleton.getForearmLength(side);
 		const glm::vec3 shoulder= posed[(int)upperArmBone].positionWorld;
 		auto addPoint= [&](eSceneGizmoValue value, const glm::vec3& offset, bool bLine) {
@@ -328,9 +328,9 @@ void buildSceneGizmoHandles(const SceneGizmoInputs& inputs, eRetargetChain chain
 		const int sideIndex= getSideIndex(chain);
 		const AvatarSkeleton::HandRest& handRest= skeleton.getHand(sideIndex == 0 ? eHandSide::Left : eHandSide::Right);
 		const glm::quat restPalm= glm::quat_cast(glm::mat3(handRest.palmFrameWorld));
-		if (inputs.bDirect)
+		if (inputs.bFrontCameraMode)
 		{
-			// The direct placement turns the wrist about the trimmed rest
+			// The front-camera placement turns the wrist about the trimmed rest
 			// palm's axes as the forearm carries them
 			const B lowerArmBone= sideIndex == 0 ? B::LeftLowerArm : B::RightLowerArm;
 			handle.trimRule= eSceneGizmoTrimRule::AxesTurn;

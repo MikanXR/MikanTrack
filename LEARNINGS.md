@@ -1,5 +1,7 @@
 # Experiments and Learnings
 
+The front-camera mode, with its solver, retarget and camera, was called the direct mode until 2026-11-21, and the sections below use the names of their time. The code, the command-line flags, the pipeline stage ids and the project file's `direct` section were renamed with it.
+
 MikanTrack went from empty repo to a working multi-camera hand tracker between late July and mid August 2026, developed almost entirely in AI pair-programming sessions (Claude Fable 5 and Opus 5, see `TOKEN_STATS.md`). Most major experiments ran on their own branch and were merged when they won or parked when they lost. This document records what was tried and what each experiment taught us. It is a companion to `README.md`, which describes what the app IS. This describes how it got that way, including the dead ends.
 
 ## Timeline at a glance

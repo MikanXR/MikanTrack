@@ -7,7 +7,7 @@
 
 #include "AvatarRetarget.h"
 #include "BodyPoseSolver.h" // BodyDimensions
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "ExprParameter.h"
 #include "LossStage.h"
 #include "RetargetChains.h" // makeDefaultElbowWeight
@@ -38,8 +38,8 @@ struct RetargetArmSettings
 	glm::vec3 goalOffset{0.f};
 	// Bone angles alone, or bone angles then the pull toward the goal by the
 	// IK weight (0 to 1). The defaults are a multi-camera project's: a
-	// stage that runs the direct pipeline takes the chains' values, bone
-	// angles for a direct project.
+	// stage that runs the front-camera pipeline takes the chains' values, bone
+	// angles for a front-camera project.
 	eArmMapping mapping= eArmMapping::BoneAnglesThenIk;
 	ExprParameter ikWeight{1.f};
 };
@@ -52,18 +52,18 @@ struct RetargetStageConfig
 {
 	// The avatar the target solve poses; null poses nothing, while the
 	// position pipeline still resolves its hands for the measured-length
-	// stream. A change of skeleton restarts the direct solver and the
+	// stream. A change of skeleton restarts the front-camera solver and the
 	// position root follow, and nothing else.
 	std::shared_ptr<const AvatarSkeleton> skeleton;
 	// The position pipeline's solve and the user's lengths its source is
 	// measured in
 	AvatarRetargetConfig position;
 	BodyDimensions user;
-	// The direct pipeline's solve
-	DirectRetargetConfig direct;
+	// The front-camera pipeline's solve
+	FrontCameraRetargetConfig frontCamera;
 	// Each pipeline's loss rules
 	LossPolicy positionLoss;
-	LossPolicy directLoss;
+	LossPolicy frontCameraLoss;
 	// Each arm's settings from its chain (by eHandSide), its elbow weight
 	// defaulting to the function of the rule the solve always applied
 	std::array<RetargetArmSettings, 2> arms{
@@ -148,10 +148,10 @@ struct RetargetResult
 	// The position pipeline's hands as the loss stage resolved them, what
 	// the measured-length stream builds its bones from with no avatar
 	LossHands hands;
-	// The direct solve behind the pose, its arms' rest readout taken from
+	// The front-camera solve behind the pose, its arms' rest readout taken from
 	// the source pose
-	bool bDirectState= false;
-	DirectRetarget::SolveState directState;
+	bool bFrontCameraState= false;
+	FrontCameraRetarget::SolveState frontCameraState;
 	// Where the arm solve aimed each arm's wrist, for display, for every arm
 	// solved at an IK weight above 0, in the posed avatar's world
 	AvatarRetargetGoals goals;
@@ -175,20 +175,20 @@ public:
 	// solve
 	void solvePosition(const TrackingFrameResult& frame, RetargetResult& outResult);
 
-	// One camera's frame through the direct pipeline: DirectRetarget::measure,
+	// One camera's frame through the front-camera pipeline: FrontCameraRetarget::measure,
 	// the loss stage, then the target solve. phoneHead is valid while the
 	// phone drives the head. False, with nothing solved and an invalid pose,
 	// without a skeleton, which the measurement needs.
-	bool solveDirect(const TrackingFrameResult& camera, const DirectCameraModel& cameraModel,
+	bool solveFrontCamera(const TrackingFrameResult& camera, const FrontCameraModel& cameraModel,
 					 const TrackingFrameResult::HeadPose& phoneHead, double timestampMs, RetargetResult& outResult);
 
 	// The target solve over a source pose the loss stage handed on, with
 	// each arm's parameters evaluated over the source and its IK weight from
 	// its mapping (effectiveArmIkWeight). A position source takes the
 	// position solve (AvatarRetarget::solve, the IK alone at weight 1), each
-	// resting arm's bones then blended by its rest blend into the direct
-	// pipeline's rest pose (DirectRetarget::makeRestPose) with no wrist goal.
-	// A direct source takes the direct placement (DirectRetarget::place, the
+	// resting arm's bones then blended by its rest blend into the front-camera
+	// pipeline's rest pose (FrontCameraRetarget::makeRestPose) with no wrist goal.
+	// A front-camera source takes the front-camera placement (FrontCameraRetarget::place, the
 	// bone angles alone at weight 0). outGoals and outArmParameters, when
 	// given, receive the wrist goals and what each arm's parameters evaluated
 	// to with the weight each arm was solved at, and none otherwise.
@@ -200,19 +200,19 @@ public:
 	// fill and the loss stage do not run.
 	void resolveTarget(RetargetResult& ioResult);
 
-	// The direct solve state's rest readout from the source pose the loss
+	// The front-camera solve state's rest readout from the source pose the loss
 	// stage handed on: which arms rest and how far into the rest pose
-	static void writeDirectRestReadout(const SourcePose& source, DirectRetarget::SolveState& ioState);
+	static void writeFrontCameraRestReadout(const SourcePose& source, FrontCameraRetarget::SolveState& ioState);
 
-	// The direct solver, for its chains and the hand lift's depth scale
-	const DirectRetarget& getDirectRetarget() const { return m_direct; }
-	// The direct solver's current filtered measurements as a neutral pose
-	bool captureNeutral(DirectNeutralPose& outNeutral) const { return m_direct.captureNeutral(outNeutral); }
+	// The front-camera solver, for its chains and the hand lift's depth scale
+	const FrontCameraRetarget& getFrontCameraRetarget() const { return m_frontCamera; }
+	// The front-camera solver's current filtered measurements as a neutral pose
+	bool captureNeutral(FrontCameraNeutralPose& outNeutral) const { return m_frontCamera.captureNeutral(outNeutral); }
 
 private:
 	RetargetStageConfig m_config;
 	AvatarRetarget m_position;
-	DirectRetarget m_direct;
+	FrontCameraRetarget m_frontCamera;
 	LossStage m_loss;
 	// This stage's own evaluation of the arm parameters, so every stage (the
 	// vision thread's, the window's, a tool's) keeps its own stateful calls

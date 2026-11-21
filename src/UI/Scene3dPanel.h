@@ -15,7 +15,7 @@
 #include "FaceProfileBinding.h"
 #include "AvatarMeshView.h"
 #include "AvatarRetarget.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "RetargetStage.h" // RetargetResult
 #include "SceneGizmo.h"
 #include "SourceSkeleton.h"
@@ -68,7 +68,7 @@ struct SceneGizmos
 
 // What one render of the scene draws. The grid takes the marker axes with
 // it. A layer that is on still draws only what the frame holds: the avatar
-// needs a loaded model, the direct chains a direct solve, a gizmo its enable.
+// needs a loaded model, the front-camera chains a front-camera solve, a gizmo its enable.
 // The source pose and the IK goals are off unless a host asks for them: they
 // need the result the avatar was posed from, and the IK goals a position
 // solve.
@@ -79,7 +79,7 @@ struct SceneLayers
 	bool bFusedSkeleton= true;
 	bool bPerCameraSkeletons= true;
 	bool bAvatar= true;
-	bool bDirectSolve= true;
+	bool bFrontCameraSolve= true;
 	bool bGizmos= true;
 	bool bSourcePose= false;
 	bool bIkGoals= false;
@@ -88,7 +88,7 @@ struct SceneLayers
 // Side by side splits a scene's layers between two halves of the view: the
 // source half takes what was measured (the source pose, the skeletons and
 // the camera frustums), the avatar half what posed the avatar (the avatar,
-// the direct solve's chains, the gizmos and the IK goals). Both take the
+// the front-camera solve's chains, the gizmos and the IK goals). Both take the
 // grid.
 void splitSideBySideLayers(const SceneLayers& layers, SceneLayers& outSource, SceneLayers& outAvatar);
 
@@ -111,14 +111,14 @@ const glm::mat4& displayFromWorld();
 
 // A real camera's view of the scene: its undistorted pinhole and its pose
 // (OpenCV camera axes to world), for the view's camera choice and the
-// avatar capture. In direct mode the pose comes from the solve (the camera
+// avatar capture. In front-camera mode the pose comes from the solve (the camera
 // at the measured shoulders), in stereo mode from the extrinsics.
 struct SceneCameraMatch
 {
 	bool valid= false;
 	// The configured camera it is, -1 when not told
 	int cameraIndex= -1;
-	DirectCameraModel camera;
+	FrontCameraModel camera;
 	glm::mat4 cameraToWorld{1.f};
 };
 
@@ -132,11 +132,11 @@ enum class eScenePovAvailability : int
 	NotCalibrated,
 	// A multi-camera project's camera without extrinsics has no placement
 	NoExtrinsics,
-	// In a direct project only the direct camera has a placement, the one
+	// In a front-camera project only the front camera has a placement, the one
 	// the solve gives it
-	NotDirectCamera,
+	NotFrontCamera,
 };
-// The rule over a config alone. A direct camera that is available still
+// The rule over a config alone. A front camera that is available still
 // needs a solve with a torso on the frame to have its placement.
 eScenePovAvailability getScenePovAvailability(const AppConfig& config, int cameraIndex);
 
@@ -145,7 +145,7 @@ eScenePovAvailability getScenePovAvailability(const AppConfig& config, int camer
 // puts it on, with image row 0 at the top of the rendered image (NDC +Y),
 // which is how the panel displays its framebuffer and how the capture
 // reads it back
-void makeCameraMatchedView(const DirectCameraModel& camera, const glm::mat4& cameraToWorld, float zNear, float zFar,
+void makeCameraMatchedView(const FrontCameraModel& camera, const glm::mat4& cameraToWorld, float zNear, float zFar,
 						   glm::mat4& outView, glm::mat4& outProjection);
 // A world point through that view onto the frame's pixels; false behind
 // the camera
@@ -194,7 +194,7 @@ bool getSceneViewFaceAngles(const std::string& face, float& outYawDegrees, float
 // The 3D scene: renders the marker-plane grid, marker axes, one frustum per
 // calibrated camera, the FUSED hand/arm skeletons (full brightness), each
 // camera's unfused skeleton (dimmed, in that camera's color), the avatar,
-// the direct solve's chains, the gizmos, the source pose the retarget took
+// the front-camera solve's chains, the gizmos, the source pose the retarget took
 // and the IK goals it aimed the avatar's wrists at, each as its layer says, into an
 // FBO shown as an ImGui image. It owns no window: a host draws the body.
 //
@@ -281,23 +281,23 @@ public:
 	bool getShowPerCameraSkeletons() const { return m_bShowPerCameraSkeletons; }
 	void setShowPerCameraSkeletons(bool bShow) { m_bShowPerCameraSkeletons= bShow; }
 
-	// The direct solver's chains (its world, the camera at the origin) drawn
+	// The front-camera solver's chains (its world, the camera at the origin) drawn
 	// beside the avatar they posed; solveToWorld carries them into the
 	// avatar's world. Null draws none.
-	void setDirectSolve(const DirectRetarget::SolveState* state, const glm::mat4& solveToWorld);
+	void setFrontCameraSolve(const FrontCameraRetarget::SolveState* state, const glm::mat4& solveToWorld);
 
 	// The result the avatar was posed from (copied), for the source pose
 	// layer and the IK goals, and where its head is drawn (the source pose
 	// carries the head's orientation alone; null draws no head). Null, or a
-	// result no pipeline filled, draws neither. A direct result's positions
-	// are carried into the avatar's world by the direct solve's transform,
-	// so they draw only while a direct solve is set.
+	// result no pipeline filled, draws neither. A front-camera result's positions
+	// are carried into the avatar's world by the front-camera solve's transform,
+	// so they draw only while a front-camera solve is set.
 	void setSourcePose(const RetargetResult* result, const glm::vec3* headAnchorWorld);
-	// The face the direct camera's body model tracked on the shown frame
+	// The face the front camera's body model tracked on the shown frame
 	// (copied), drawn with the source pose's head through the capture's
 	// camera; null, or an observation without the face block, draws none
 	void setSourceFace(const BodyPoseObservation* body);
-	// A direct source made by hand has no solve behind it: its positions are
+	// A front-camera source made by hand has no solve behind it: its positions are
 	// the scene's world already, and its palms are given here, each in that
 	// world, where a solved source's come from the solve. Null for a source
 	// a solve produced.
@@ -389,7 +389,7 @@ private:
 	// Fills the view's cube state.
 	static void drawViewCube(SceneViewState& view, const glm::vec2& imageMin, const glm::vec2& imageSize);
 	void drawGizmos(const SceneGizmos& gizmos);
-	void drawDirectSolve();
+	void drawFrontCameraSolve();
 	// Runs the transform gizmo on the selected handle and the click that
 	// picks a handle by its marker, over the scene image; returns whether
 	// either owns the mouse this frame (the orbit drag and the chain pick
@@ -414,8 +414,8 @@ private:
 	int m_povCamera= -1;
 	SceneCameraMatch m_povMatch;
 	SceneCameraMatch m_captureMatch;
-	bool m_bHasDirectSolve= false;
-	DirectRetarget::SolveState m_directSolve;
+	bool m_bHasFrontCameraSolve= false;
+	FrontCameraRetarget::SolveState m_frontCameraSolve;
 	glm::mat4 m_solveToWorld{1.f};
 
 	// The source pose layer's inputs, the skeleton built from them (rebuilt

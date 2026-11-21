@@ -126,9 +126,9 @@ A drag is driven by `input`: `press` on an arrow or a ring, `move` across frames
 
 ### Pipeline panel (pipeline)
 
-The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `direct`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`direct.arm`, `retarget.model`, `retarget.placement`, `retarget.chains`, `output.vmc`, `face.mic`, `face.blink`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
+The Pipeline strip's stages and the selection the Inspector follows. A stage is named by its text id: a top-level stage by one word (`capture`, `fusion`, `imu`, `body`, `front`, `source`, `retarget`, `output`, `face`), a sub-stage under it (`front.arm`, `retarget.model`, `retarget.placement`, `retarget.chains`, `output.vmc`, `face.mic`, `face.blink`), and a camera's lane and its stages by camera index from zero (`capture.cam0`, `capture.cam0.hands`). A stage answers as one line, `<id> <state> | <value> | <reason>`, with the state one of `running`, `degraded`, `inactive`, `not-configured` and the two texts as the panel shows them in the active language.
 
-- `pipeline stages`: a first line `shape multi|direct cameras <n> shown live|replay`, then every stage of the project in pipeline order
+- `pipeline stages`: a first line `shape multi|front cameras <n> shown live|replay`, then every stage of the project in pipeline order
 - `pipeline status <stage>`: that stage's line, or an error for a stage the project does not have
 - `pipeline selected`: the selected stage's line, or `none`
 - `pipeline select <stage>|none`: selects the stage as a click on its box does, or clears the selection
@@ -149,7 +149,7 @@ The Pipeline strip's stages and the selection the Inspector follows. A stage is 
 - `pipeline pose select <id>|demo`: makes a library pose the project's, with an error for an id the library lacks
 - `pipeline pose new <name...>`: a new pose at the default under that name, saved and made the project's
 - `pipeline pose delete <id>`: deletes the pose's file, and a project that showed it shows the built-in pose
-- `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <direct|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
+- `pipeline loss <torso|head|leftArm|rightArm>`: three lines: the stored policy (`stored hold <none|pipeline|timed> <ms> after <release|freeze|easeToRest> blend <ms>`), what the project's pipeline resolves it to (`resolved <front|position> hold ... after ... blend ...`, or `resolved position follows the arms` for the position torso), and the chain's state on the shown frame (`shown <lost|measured|held|frozen|resting>`, with ` blend <x>` while resting, or `shown none`)
 - `pipeline loss <chain> after <release|freeze|easeToRest>`, `pipeline loss <chain> hold <ms>`, `pipeline loss <chain> blend <ms>`, `pipeline loss <leftArm|rightArm> rise <ms>`: set that field of the chain's stored policy. `rise` is an arm's ease out of rest, and the policy lines carry it as `rise <ms>` after the blend. A hold on the head also makes its hold timed
 - `pipeline goal <leftArm|rightArm>`: the arm chain's goal offset (`offset <x> <y> <z>`, with a note when the arm maps by bone angles, which has no goal) and the shown frame's wrist goal in world space (`shown goal <x> <y> <z>`, or `shown none`)
 - `pipeline goal <arm> <x> <y> <z>`: sets the goal offset, meters in the rooted torso frame

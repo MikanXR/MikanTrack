@@ -4,8 +4,8 @@ import json, math, pathlib, statistics, sys
 # with both hands held up open, palms to the camera, fingers straight and
 # relaxed: the per-joint median of the raw per-camera finger angles over the
 # dump's history, per hand and pooled, in degrees. The pooled four-finger and
-# thumb medians are the open-hand bias the direct retarget subtracts
-# (DirectRetarget::kFingerOpenBias, kThumbOpenBias); re-measure them from a
+# thumb medians are the open-hand bias the front-camera retarget subtracts
+# (FrontCameraRetarget::kFingerOpenBias, kThumbOpenBias); re-measure them from a
 # fresh dump when the hand model changes.
 #
 #   python tools/finger_bias.py <dump.json> [cameraIndex]

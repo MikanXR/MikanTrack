@@ -16,7 +16,7 @@ enum class eBodyPoseBackend : int
 	// rig's choice, where depth comes from the stereo wrists.
 	RtmPoseBody= 0,
 	// RTMW3D-X whole body: 133 keypoints with a root-relative depth per
-	// keypoint. The single-camera direct mode's choice, where that depth is
+	// keypoint. The single-camera front-camera mode's choice, where that depth is
 	// all the depth there is.
 	Rtmw3dWholeBody= 1,
 };

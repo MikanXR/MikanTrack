@@ -29,7 +29,7 @@ struct CustomPose
 
 	// The head's rotation from facing straight ahead, XYZ Euler degrees
 	glm::vec3 headDegrees{0.f};
-	// The torso's lean from upright, XYZ Euler degrees. Only the direct
+	// The torso's lean from upright, XYZ Euler degrees. Only the front-camera
 	// pipeline places a spine, so a multi-camera project ignores it.
 	glm::vec3 leanDegrees{0.f};
 
@@ -95,11 +95,11 @@ bool customPoseFromJson(const std::string& text, CustomPose& outPose, std::strin
 struct CustomPoseSolveInputs
 {
 	const AvatarSkeleton* skeleton= nullptr;
-	// The rig's elbow hints, where the direct chain's elbow goes when the
+	// The rig's elbow hints, where the front-camera chain's elbow goes when the
 	// pose gives none
 	const AvatarRigSettings* rig= nullptr;
-	// The project's pipeline: the direct one, or the position one
-	bool bDirect= false;
+	// The project's pipeline: the front-camera one, or the position one
+	bool bFrontCameraMode= false;
 	// The position pipeline's fixed root, which places the pose in the world
 	glm::vec3 rootPositionWorld{0.f};
 	float rootYawDegrees= 0.f;
@@ -112,14 +112,14 @@ struct CustomPoseSolveInputs
 //
 // Position: the wrist, the palm and the elbow in the world under the fixed
 // root, no shoulders, so the fixed root places the avatar, and the hands the
-// source pose layer draws. Direct: the chain's joints in the solve's world,
+// source pose layer draws. Front-camera: the chain's joints in the solve's world,
 // which is the avatar's with the root at the identity, the elbow nearest the
 // rig's hint when the pose gives none, the chain's directions and the palm
-// as the forearm's twist and the wrist, and the lean as the spine's. outDirectPalms,
-// when given, receives each direct palm frame in that world for the source
+// as the forearm's twist and the wrist, and the lean as the spine's. outFrontCameraPalms,
+// when given, receives each front-camera palm frame in that world for the source
 // pose layer.
 //
 // Fills outResult's source and hands and leaves its pose to the target solve.
 // Nothing is filled without a skeleton.
 void fillCustomSource(const CustomPose& pose, const CustomPoseSolveInputs& inputs, const SourcePose::Clock& clock,
-					  RetargetResult& outResult, std::array<glm::quat, 2>* outDirectPalms= nullptr);
+					  RetargetResult& outResult, std::array<glm::quat, 2>* outFrontCameraPalms= nullptr);

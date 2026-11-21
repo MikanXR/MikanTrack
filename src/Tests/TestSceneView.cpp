@@ -5,7 +5,7 @@
 
 #include "AvatarOverlay.h"
 #include "CustomPose.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "OrbitCamera.h"
 #include "PipelineModel.h"
 #include "Scene3dPanel.h"
@@ -33,7 +33,7 @@ static int runSceneViewTest(const TestArgs& args)
 		}
 	};
 
-	DirectCameraModel camera;
+	FrontCameraModel camera;
 	camera.fx= 610.f;
 	camera.fy= 590.f;
 	camera.cx= 335.f;
@@ -41,7 +41,7 @@ static int runSceneViewTest(const TestArgs& args)
 	camera.width= 640;
 	camera.height= 480;
 	const glm::mat4 cameraToWorld= glm::translate(glm::mat4(1.f), glm::vec3(0.1f, 0.2f, 0.3f)) *
-		glm::mat4_cast(DirectRetarget::worldFromCamera(0.2f));
+		glm::mat4_cast(FrontCameraRetarget::worldFromCamera(0.2f));
 
 	glm::mat4 view, projection;
 	makeCameraMatchedView(camera, cameraToWorld, 0.01f, 100.f, view, projection);
@@ -117,7 +117,7 @@ static int runSceneViewTest(const TestArgs& args)
 	}
 
 	// The layers: Retarget draws the source pose with the avatar, its gizmos,
-	// the direct chains and the IK goals in place of the fused skeleton;
+	// the front-camera chains and the IK goals in place of the fused skeleton;
 	// the Source pose stage the source pose alone; the IK goals go with the
 	// avatar; the whole scene and Fusion keep the fused skeleton and no
 	// source pose
@@ -133,10 +133,10 @@ static int runSceneViewTest(const TestArgs& args)
 		const SceneLayers s= makeStageSceneLayers(sourcePose, true, true);
 		const SceneLayers f= makeStageSceneLayers(fusion, true, false);
 		const SceneLayers whole= makeStageSceneLayers(PipelineStageId(), true, false);
-		const bool bRetarget= r.bGrid && r.bSourcePose && r.bAvatar && r.bGizmos && r.bDirectSolve && r.bIkGoals &&
+		const bool bRetarget= r.bGrid && r.bSourcePose && r.bAvatar && r.bGizmos && r.bFrontCameraSolve && r.bIkGoals &&
 			!r.bFusedSkeleton && !r.bPerCameraSkeletons && !r.bCameraFrustums;
 		const bool bHidden= rHidden.bSourcePose && !rHidden.bAvatar && !rHidden.bGizmos && !rHidden.bIkGoals;
-		const bool bSource= s.bGrid && s.bSourcePose && !s.bAvatar && !s.bFusedSkeleton && !s.bDirectSolve &&
+		const bool bSource= s.bGrid && s.bSourcePose && !s.bAvatar && !s.bFusedSkeleton && !s.bFrontCameraSolve &&
 			!s.bIkGoals && !s.bGizmos && !s.bCameraFrustums;
 		const bool bOthers= f.bFusedSkeleton && !f.bSourcePose && whole.bFusedSkeleton && !whole.bSourcePose &&
 			!whole.bIkGoals && whole.bAvatar && whole.bCameraFrustums;
@@ -147,8 +147,8 @@ static int runSceneViewTest(const TestArgs& args)
 		SceneLayers sourceHalf, avatarHalf;
 		splitSideBySideLayers(r, sourceHalf, avatarHalf);
 		const bool bSplit= sourceHalf.bGrid && sourceHalf.bSourcePose && !sourceHalf.bAvatar && !sourceHalf.bGizmos &&
-			!sourceHalf.bIkGoals && !sourceHalf.bDirectSolve && avatarHalf.bGrid && avatarHalf.bAvatar &&
-			avatarHalf.bGizmos && avatarHalf.bIkGoals && avatarHalf.bDirectSolve && !avatarHalf.bSourcePose;
+			!sourceHalf.bIkGoals && !sourceHalf.bFrontCameraSolve && avatarHalf.bGrid && avatarHalf.bAvatar &&
+			avatarHalf.bGizmos && avatarHalf.bIkGoals && avatarHalf.bFrontCameraSolve && !avatarHalf.bSourcePose;
 		check(bSplit, "(g) side by side puts the source pose in one half and the avatar with its gizmos in the other");
 	}
 
@@ -230,21 +230,21 @@ static int runSceneViewTest(const TestArgs& args)
 		check(bOk, "(j) confidence runs green to amber, a group without one is neutral");
 	}
 
-	// The direct pipeline: the chain is carried by the solve's transform, a
+	// The front-camera pipeline: the chain is carried by the solve's transform, a
 	// resting arm carries no positions and draws nothing, the head is a
 	// marker with its facing and up, and without the transform nothing draws
 	{
-		SourcePose direct= position;
-		direct.pipeline= SourcePose::ePipeline::Direct;
-		direct.arms[0].forearmConfidence= SourcePose::Confidence();
-		direct.arms[1]= SourcePose::Arm();
-		direct.arms[1].state= SourcePose::eGroupState::Resting;
-		direct.torso.state= SourcePose::eGroupState::Held;
+		SourcePose frontCamera= position;
+		frontCamera.pipeline= SourcePose::ePipeline::FrontCamera;
+		frontCamera.arms[0].forearmConfidence= SourcePose::Confidence();
+		frontCamera.arms[1]= SourcePose::Arm();
+		frontCamera.arms[1].state= SourcePose::eGroupState::Resting;
+		frontCamera.torso.state= SourcePose::eGroupState::Held;
 		const glm::vec3 offset(0.f, 0.f, 2.f);
 		const glm::mat4 toWorld= glm::translate(glm::mat4(1.f), offset);
 		SourceSkeletonInputs inputs;
-		inputs.source= &direct;
-		inputs.directToWorld= &toWorld;
+		inputs.source= &frontCamera;
+		inputs.frontCameraToWorld= &toWorld;
 		inputs.headAnchorWorld= &headAnchor;
 		SourceSkeleton skeleton;
 		buildSourceSkeleton(inputs, skeleton);
@@ -252,7 +252,7 @@ static int runSceneViewTest(const TestArgs& args)
 		for (const SourceSkeleton::Segment& segment : skeleton.segments)
 		{
 			if (segment.chain == eRetargetChain::LeftArm &&
-				glm::length(segment.start - (direct.arms[0].shoulderPosition + offset)) < 1e-5f)
+				glm::length(segment.start - (frontCamera.arms[0].shoulderPosition + offset)) < 1e-5f)
 				bCarried= true;
 		}
 		const int restingPieces= countSegments(skeleton, eRetargetChain::RightArm, false) +
@@ -260,27 +260,27 @@ static int runSceneViewTest(const TestArgs& args)
 		const bool bHead= countMarkers(skeleton, eRetargetChain::Head) == 1 &&
 			countSegments(skeleton, eRetargetChain::Head, false) == 2;
 
-		// A direct hand hangs on the drawn chain's wrist, four bones a finger,
+		// A front-camera hand hangs on the drawn chain's wrist, four bones a finger,
 		// and a resting arm's hand draws nothing whatever was measured
-		std::array<SourceSkeletonInputs::DirectHand, 2> directHands;
-		for (SourceSkeletonInputs::DirectHand& directHand : directHands)
+		std::array<SourceSkeletonInputs::FrontCameraHand, 2> frontCameraHands;
+		for (SourceSkeletonInputs::FrontCameraHand& frontCameraHand : frontCameraHands)
 		{
-			directHand.bValid= true;
+			frontCameraHand.bValid= true;
 			for (int finger= 0; finger < FINGER_COUNT; ++finger)
 			{
-				directHand.skeleton.baseInPalm[finger]= glm::vec3(0.04f, 0.02f * (float)(finger - 2), 0.f);
-				directHand.skeleton.phalanxLengths[finger]= {0.04f, 0.025f, 0.02f};
-				directHand.skeleton.neutralDirInPalm[finger]= glm::vec3(1.f, 0.f, 0.f);
+				frontCameraHand.skeleton.baseInPalm[finger]= glm::vec3(0.04f, 0.02f * (float)(finger - 2), 0.f);
+				frontCameraHand.skeleton.phalanxLengths[finger]= {0.04f, 0.025f, 0.02f};
+				frontCameraHand.skeleton.neutralDirInPalm[finger]= glm::vec3(1.f, 0.f, 0.f);
 			}
 		}
-		direct.hands[0].state= SourcePose::eGroupState::Measured;
-		direct.hands[1].state= SourcePose::eGroupState::Measured;
-		inputs.directHands= &directHands;
+		frontCamera.hands[0].state= SourcePose::eGroupState::Measured;
+		frontCamera.hands[1].state= SourcePose::eGroupState::Measured;
+		inputs.frontCameraHands= &frontCameraHands;
 		SourceSkeleton withHands;
 		buildSourceSkeleton(inputs, withHands);
 		bool bOnWrist= false;
 		float maxReach= 0.f;
-		const glm::vec3 wristWorld= direct.arms[0].wristPosition + offset;
+		const glm::vec3 wristWorld= frontCamera.arms[0].wristPosition + offset;
 		for (const SourceSkeleton::Segment& segment : withHands.segments)
 		{
 			if (segment.chain != eRetargetChain::LeftHand)
@@ -297,13 +297,13 @@ static int runSceneViewTest(const TestArgs& args)
 			countSegments(withHands, eRetargetChain::RightHand, false) +
 					countSegments(withHands, eRetargetChain::RightHand, true) ==
 				0;
-		directHands[0].bValid= false;
+		frontCameraHands[0].bValid= false;
 		SourceSkeleton unmeasured;
 		buildSourceSkeleton(inputs, unmeasured);
 		const bool bUnmeasured= countSegments(unmeasured, eRetargetChain::LeftHand, false) == 0;
 		check(bHands && bUnmeasured,
-			  "(k2) a direct hand draws on its chain's wrist from the measured palm, and not for a resting arm or a "
-			  "hand never measured");
+			  "(k2) a front-camera hand draws on its chain's wrist from the measured palm, and not for a resting arm "
+			  "or a hand never measured");
 
 		// The tracked face lies on the plane through the anchor that faces the
 		// camera: the landmarks' center on the anchor, a pixel offset at the
@@ -336,7 +336,7 @@ static int runSceneViewTest(const TestArgs& args)
 		const bool bBehind=
 			!placeSourceFacePoint(faceBehind, glm::vec2(320.f, 240.f), headAnchor, glm::vec2(320.f, 240.f), behind);
 
-		inputs.directHands= nullptr;
+		inputs.frontCameraHands= nullptr;
 		inputs.face= &face;
 		SourceSkeleton withFace;
 		buildSourceSkeleton(inputs, withFace);
@@ -355,11 +355,12 @@ static int runSceneViewTest(const TestArgs& args)
 		check(bPlane && bBehind && bFace,
 			  "(k3) the tracked face is laid on the camera-facing plane through the head's anchor, gated by score");
 
-		inputs.directToWorld= nullptr;
+		inputs.frontCameraToWorld= nullptr;
 		SourceSkeleton unplaced;
 		buildSourceSkeleton(inputs, unplaced);
 		check(bCarried && restingPieces == 0 && bHead && unplaced.segments.empty() && unplaced.markers.empty(),
-			  "(k) direct source: carried into the avatar's world, a resting arm and an unplaced solve draw nothing");
+			  "(k) front-camera source: carried into the avatar's world, a resting arm and an unplaced solve draw "
+			  "nothing");
 	}
 
 	// The dashes: a bone of 10 cm in dashes of 1.5 cm with gaps of 1 cm is
@@ -423,7 +424,7 @@ static int runSceneViewTest(const TestArgs& args)
 
 	// The cameras the scene can be looked through, from a config alone: a
 	// multi-camera project needs a camera's lens calibration and its
-	// extrinsics, a direct project the lens calibration of its direct camera
+	// extrinsics, a front-camera project the lens calibration of its front camera
 	{
 		AppConfig config;
 		config.cameras.assign(3, CameraProfile());
@@ -437,15 +438,15 @@ static int runSceneViewTest(const TestArgs& args)
 			getScenePovAvailability(config, 3) == eScenePovAvailability::Missing &&
 			getScenePovAvailability(config, -1) == eScenePovAvailability::Missing;
 
-		config.direct.enabled= true;
-		config.direct.cameraIndex= 1;
-		const bool bDirect= getScenePovAvailability(config, 1) == eScenePovAvailability::Available &&
-			getScenePovAvailability(config, 0) == eScenePovAvailability::NotDirectCamera &&
+		config.frontCamera.enabled= true;
+		config.frontCamera.cameraIndex= 1;
+		const bool bFrontCameraMode= getScenePovAvailability(config, 1) == eScenePovAvailability::Available &&
+			getScenePovAvailability(config, 0) == eScenePovAvailability::NotFrontCamera &&
 			getScenePovAvailability(config, 2) == eScenePovAvailability::NotCalibrated;
 		config.camera(1).intrinsics.present= false;
-		const bool bDirectUncalibrated= getScenePovAvailability(config, 1) == eScenePovAvailability::NotCalibrated;
-		check(bMulti && bDirect && bDirectUncalibrated,
-			  "(n) a camera is looked through with its lens calibration, and its extrinsics or as the direct camera");
+		const bool bFrontCameraUncalibrated= getScenePovAvailability(config, 1) == eScenePovAvailability::NotCalibrated;
+		check(bMulti && bFrontCameraMode && bFrontCameraUncalibrated,
+			  "(n) a camera is looked through with its lens calibration, and its extrinsics or as the front camera");
 
 		// The choice holds an available camera and falls back to the free
 		// camera when the camera stops being available

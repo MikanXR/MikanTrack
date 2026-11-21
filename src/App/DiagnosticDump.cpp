@@ -415,12 +415,13 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 	bool bSuccess= true;
 	json j;
 
-	// The avatar half applies when the direct solver posed one
+	// The avatar half applies when the front-camera solver posed one
 	const bool bAvatar= avatar != nullptr && avatar->skeleton != nullptr && avatar->pose != nullptr &&
 		avatar->pose->valid && avatar->solveState != nullptr;
 	glm::mat4 avatarCameraToWorld(1.f);
 	if (bAvatar)
-		avatarCameraToWorld= DirectRetarget::makeCameraToWorld(*avatar->skeleton, *avatar->pose, *avatar->solveState);
+		avatarCameraToWorld= FrontCameraRetarget::makeCameraToWorld(*avatar->skeleton, *avatar->pose,
+																   *avatar->solveState);
 
 	// The live config (may differ from the saved config.json)
 	try
@@ -654,7 +655,7 @@ bool DiagnosticDump::write(const std::string& dumpDir,
 			{"cameraIndex", avatar->cameraIndex},
 			{"cameraToWorld", columns},
 			{"pose", AvatarJson::avatarPoseToJson(*avatar->skeleton, *avatar->pose)},
-			{"solveState", AvatarJson::directSolveStateToJson(*avatar->solveState)},
+			{"solveState", AvatarJson::frontCameraSolveStateToJson(*avatar->solveState)},
 		};
 	}
 	else

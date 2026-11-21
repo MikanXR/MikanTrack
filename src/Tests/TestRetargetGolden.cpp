@@ -5,11 +5,11 @@
 #include "glm/gtx/quaternion.hpp"
 
 #include "AvatarSkeleton.h"
-#include "DirectRetarget.h"
+#include "FrontCameraRetarget.h"
 #include "MathGLM.h"
 #include "RetargetGolden.h"
 #include "SyntheticAvatar.h"
-#include "SyntheticDirectUser.h"
+#include "SyntheticFrontCameraUser.h"
 
 // The retarget golden test: the live position retarget path beside the frozen
 // copy of it over synthetic sequences that walk every loss, hold and restart
@@ -17,14 +17,14 @@
 // avatar pose and the encoded VMC packets. A case that is expected to differ
 // after a deliberate change states the difference here: (p7), where the live
 // stage steps on the source's step clock across the backward steps face-only
-// frames make. The direct pipeline has no frozen copy: only its source pose's
+// frames make. The front-camera pipeline has no frozen copy: only its source pose's
 // clock and group states are checked, against the live solver alone.
 
 namespace
 {
 using B= eHumanoidBone;
 using namespace SyntheticAvatar;
-using namespace SyntheticDirectUser;
+using namespace SyntheticFrontCameraUser;
 using namespace RetargetGolden;
 
 const char* kTag= "test-retarget-golden";
@@ -314,13 +314,13 @@ PositionResult runPositionSequence(const PositionRig& inputRig, const StreamConf
 	return result;
 }
 
-// -- The direct source pose's input -------------------------------------------
+// -- The front-camera source pose's input -------------------------------------------
 
 constexpr float kTiltDegrees= 10.f;
 
-DirectRetargetConfig makeDirectConfig()
+FrontCameraRetargetConfig makeFrontCameraConfig()
 {
-	DirectRetargetConfig config;
+	FrontCameraRetargetConfig config;
 	config.cameraTiltRadians= glm::radians(kTiltDegrees);
 	config.userShoulderWidthMeters= kShoulderWidth;
 	config.userUpperArmLengthMeters= kUpperArmLength;
@@ -755,14 +755,14 @@ static int runRetargetGoldenTest(const TestArgs&)
 			  "(c1) position source pose: clock, epoch, group states and confidences");
 	}
 
-	// (c2) The direct source pose: a dropped hand on a placed arm reads as
+	// (c2) The front-camera source pose: a dropped hand on a placed arm reads as
 	// held, a lost wrist holds the arm and then loses it, a gap, a
 	// regression and a reset each start a new epoch, and the phone head
 	// reads as measured with its confidence
 	{
 		const Camera camera= makeCamera(kTiltDegrees);
-		const DirectRetargetConfig directConfig= makeDirectConfig();
-		DirectRetarget retarget;
+		const FrontCameraRetargetConfig frontCameraConfig= makeFrontCameraConfig();
+		FrontCameraRetarget retarget;
 		SourcePose source;
 		using eGroupState= SourcePose::eGroupState;
 		uint32_t firstEpoch= 0;
@@ -817,11 +817,11 @@ static int runRetargetGoldenTest(const TestArgs&)
 			restarts+= (bRestart && index != 0) ? 1u : 0u;
 			const double timestampMs= index * kFrameMs + timeShiftMs;
 			const TrackingFrameResult frame= makeFrame(camera, user, *rig.skeleton, timestampMs, index);
-			retarget.measure(frame, camera.model, phoneHead, timestampMs, *rig.skeleton, directConfig, source);
+			retarget.measure(frame, camera.model, phoneHead, timestampMs, *rig.skeleton, frontCameraConfig, source);
 			if (index == 0)
 				firstEpoch= source.clock.resetEpoch;
 
-			if (source.pipeline != SourcePose::ePipeline::Direct || source.clock.timestampMs != timestampMs ||
+			if (source.pipeline != SourcePose::ePipeline::FrontCamera || source.clock.timestampMs != timestampMs ||
 				source.clock.stepMs != timestampMs ||
 				source.clock.frameIntervalMs != (bRestart ? 0.0 : timestampMs - lastTimestampMs) ||
 				source.clock.resetEpoch != firstEpoch + restarts)
@@ -861,12 +861,12 @@ static int runRetargetGoldenTest(const TestArgs&)
 							 << " restarts; the long wrist loss held " << longLossHeld << " frames and lost "
 							 << longLossLost;
 		check(clockWrong == 0 && restarts == 3,
-			  "(c2) direct source pose: clock and epoch through a gap, a regression and a reset");
-		check(steadyWrong == 0, "(c2) direct source pose: every group measured in steady motion");
-		check(handDropWrong == 0, "(c2) direct source pose: a dropped hand on a placed arm reads as held");
+			  "(c2) front-camera source pose: clock and epoch through a gap, a regression and a reset");
+		check(steadyWrong == 0, "(c2) front-camera source pose: every group measured in steady motion");
+		check(handDropWrong == 0, "(c2) front-camera source pose: a dropped hand on a placed arm reads as held");
 		check(shortLossWrong == 0 && longLossHeld > 0 && longLossLost > 0 && longLossHandWrong == 0,
-			  "(c2) direct source pose: a lost wrist holds the arm, then loses it with its hand");
-		check(phoneWrong == 0, "(c2) direct source pose: the phone head measured with its confidence");
+			  "(c2) front-camera source pose: a lost wrist holds the arm, then loses it with its hand");
+		check(phoneWrong == 0, "(c2) front-camera source pose: the phone head measured with its confidence");
 	}
 
 	// -- The compare is not vacuous -------------------------------------------

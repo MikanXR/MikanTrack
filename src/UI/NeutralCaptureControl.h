@@ -2,12 +2,12 @@
 
 class AppConfig;
 class VisionThread;
-struct DirectConfig;
+struct FrontCameraConfig;
 
-// The direct retarget's neutral capture as the Direct solver stage and the
+// The front-camera retarget's neutral capture as the Front-camera solver stage and the
 // guided setup share it: a settle countdown, the capture request to the vision
 // thread at zero, then the landed capture written into the project as the
-// direct config's neutral references. The status is drawn here too, since
+// front-camera config's neutral references. The status is drawn here too, since
 // both callers show the same; the countdown and the buttons stay with them.
 class NeutralCaptureControl
 {
@@ -17,7 +17,7 @@ public:
 	// Arms the countdown; update() runs it down
 	void start() { m_countdownSeconds= k_countdownSeconds; }
 	// Cancels a running countdown. A request already sent still lands, and
-	// is dropped when the direct camera has changed since.
+	// is dropped when the front camera has changed since.
 	void reset() { m_countdownSeconds= 0.f; }
 
 	// Counts down with the frame's dt, sends the request at zero, then polls
@@ -31,7 +31,7 @@ public:
 
 	// No neutral, a neutral loaded with the project, or one captured this
 	// session
-	void drawStatus(const DirectConfig& direct) const;
+	void drawStatus(const FrontCameraConfig& frontCamera) const;
 
 private:
 	float m_countdownSeconds= 0.f;

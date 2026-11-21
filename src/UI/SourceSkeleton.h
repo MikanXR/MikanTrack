@@ -52,28 +52,28 @@ struct SourceSkeletonInputs
 	// The position pipeline's hands as the loss stage resolved them; null
 	// draws no hands
 	const LossHands* hands= nullptr;
-	// The direct pipeline's positions live in the solve's world, the camera
+	// The front-camera pipeline's positions live in the solve's world, the camera
 	// at the origin: this carries them into the scene's. Null leaves the
-	// direct arms and shoulder line out.
-	const glm::mat4* directToWorld= nullptr;
+	// front-camera arms and shoulder line out.
+	const glm::mat4* frontCameraToWorld= nullptr;
 	// Where the head is drawn, in the scene's world; the source pose carries
 	// the head's orientation alone. Null leaves the head out.
 	const glm::vec3* headAnchorWorld= nullptr;
 
-	// A direct hand, which the source pose carries as a wrist rotation and
+	// A front-camera hand, which the source pose carries as a wrist rotation and
 	// finger angles alone: the palm frame the solve measured, in the solve's
 	// world, and the hand skeleton its fingers are laid out along, in the
 	// source's units (the avatar's)
-	struct DirectHand
+	struct FrontCameraHand
 	{
 		bool bValid= false;
 		glm::quat palmOrientation{1.f, 0.f, 0.f, 0.f};
 		HandSkeleton skeleton;
 	};
-	// By eHandSide; null draws no direct hands
-	const std::array<DirectHand, 2>* directHands= nullptr;
+	// By eHandSide; null draws no front-camera hands
+	const std::array<FrontCameraHand, 2>* frontCameraHands= nullptr;
 
-	// The face the direct camera's body model tracked: its landmarks in the
+	// The face the front camera's body model tracked: its landmarks in the
 	// camera's undistorted pixels with their scores, and the camera they are
 	// in, its focal lengths and its pose in the scene's world (OpenCV camera
 	// axes to world)
@@ -106,10 +106,10 @@ constexpr float kCarriedMarkerSize= 5.f;
 // through the finger forward kinematics from its resolved hand pose, the
 // shoulder line and a neck line from its midpoint to the head while the
 // torso is carried, and the head's marker with its facing and up lines.
-// Direct pipeline: each carried arm's solved chain and the shoulder line,
-// carried by directToWorld, the hand at the chain's wrist through the same
+// Front-camera pipeline: each carried arm's solved chain and the shoulder line,
+// carried by frontCameraToWorld, the hand at the chain's wrist through the same
 // finger forward kinematics from the palm frame the solve measured, with the
-// fingers' zero along their metacarpals as the direct angles have it, and
+// fingers' zero along their metacarpals as the front-camera angles have it, and
 // the head's marker with its facing and up lines. A lost group draws
 // nothing, and so does a resting arm, which carries a placement and no
 // positions, and its hand with it.

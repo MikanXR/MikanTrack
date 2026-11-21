@@ -102,7 +102,7 @@ private:
 	void buildRecordedResult(const RecordedFrame& recorded, TrackingFrameResult& outResult) const;
 	// The face sources of a recorded frame: the mouth from the record, the
 	// phone from the face sidecar's newest sample at or before it, the
-	// webcam and the Blink stage from the direct camera's observation. Steps
+	// webcam and the Blink stage from the front camera's observation. Steps
 	// the Blink stage, so frames come in order.
 	FaceSources makeReplayFaceSources(int frameIndex);
 	// Evaluates the face profile and the Blink stage up to the current

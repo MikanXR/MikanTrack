@@ -484,7 +484,7 @@ void TimelinePanel::buildRecordedResult(const RecordedFrame& recorded,
 {
 	outResult= TrackingFrameResult();
 	outResult.timestampMs= recorded.nowTimestampMs;
-	const bool bDirectTake= isDirectProject(m_replay.getRecordedConfig());
+	const bool bFrontCameraTake= isFrontCameraProject(m_replay.getRecordedConfig());
 	for (int sideIndex= 0; sideIndex < 2; ++sideIndex)
 	{
 		const RecordedPoseOutput& recordedPose= recorded.outPoses[sideIndex];
@@ -501,10 +501,10 @@ void TimelinePanel::buildRecordedResult(const RecordedFrame& recorded,
 		pose.hasCameraPose= recordedPose.hasCameraPose;
 		pose.palmPositionCamera= recordedPose.palmPositionCamera;
 		pose.palmOrientationCamera= recordedPose.palmOrientationCamera;
-		// A direct take has no world calibration: the recorded world pose of
+		// A front-camera take has no world calibration: the recorded world pose of
 		// a take made while stored extrinsics still applied is dropped, as the
 		// replayed view's config parse drops them
-		if (!bDirectTake)
+		if (!bFrontCameraTake)
 		{
 			pose.hasWorldPose= recordedPose.hasWorldPose;
 			pose.palmPositionWorld= recordedPose.palmPositionWorld;
@@ -587,16 +587,16 @@ FaceSources TimelinePanel::makeReplayFaceSources(int frameIndex)
 	// The phone as the live stream saw it at the record
 	FaceSidecar::samplePhone(m_replay.getFaceSamples(), recorded.nowTimestampMs, FaceService::k_streamingWindowMs,
 							 sources.phone);
-	// The webcam from the direct camera's observation as the record holds
+	// The webcam from the front camera's observation as the record holds
 	// it, under the take's own neutral
-	const DirectConfig& direct= m_replay.getRecordedConfig().direct;
+	const FrontCameraConfig& frontCamera= m_replay.getRecordedConfig().frontCamera;
 	const TrackingReplay::ReplayFrame& frame= m_replay.getFrame(frameIndex);
-	if (direct.enabled && direct.cameraIndex >= 0 && direct.cameraIndex < (int)frame.perCamera.size() &&
-		frame.perCameraValid[direct.cameraIndex])
+	if (frontCamera.enabled && frontCamera.cameraIndex >= 0 && frontCamera.cameraIndex < (int)frame.perCamera.size() &&
+		frame.perCameraValid[frontCamera.cameraIndex])
 	{
-		const TrackingFrameResult& camera= frame.perCamera[direct.cameraIndex];
+		const TrackingFrameResult& camera= frame.perCamera[frontCamera.cameraIndex];
 		const bool bFresh= recorded.nowTimestampMs - camera.timestampMs <= k_webcamFaceFreshMs;
-		const WholeBodyFaceRatios* neutral= direct.neutralFacePresent ? &direct.neutralFace : nullptr;
+		const WholeBodyFaceRatios* neutral= frontCamera.neutralFacePresent ? &frontCamera.neutralFace : nullptr;
 		fillWebcamFaceSource(camera.body, bFresh, neutral, sources.webcam);
 		if (!m_blinkFilter.isSeededFrom(neutral))
 			m_blinkFilter.reset(neutral);
@@ -616,8 +616,8 @@ void TimelinePanel::rebuildDisplayFace()
 	else if (m_currentFrame != m_faceFrame)
 	{
 		m_faceRunner.reset();
-		const DirectConfig& direct= m_replay.getRecordedConfig().direct;
-		m_blinkFilter.reset(direct.neutralFacePresent ? &direct.neutralFace : nullptr);
+		const FrontCameraConfig& frontCamera= m_replay.getRecordedConfig().frontCamera;
+		m_blinkFilter.reset(frontCamera.neutralFacePresent ? &frontCamera.neutralFace : nullptr);
 		const double targetMs= m_replay.getFrame(m_currentFrame).recorded->nowTimestampMs;
 		while (firstFrame > 0 && targetMs - m_replay.getFrame(firstFrame - 1).recorded->nowTimestampMs <= k_facePreRollMs)
 			--firstFrame;

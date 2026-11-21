@@ -86,9 +86,9 @@ public:
 	// context list is fixed while running) and resizes the capture slots
 	void applyCameraCountChange();
 	// Removes a camera (never camera 0) with the vision thread stopped, so the
-	// running thread never sees the camera list and the direct camera index
-	// change under it, then restarts it. True when the direct role moved to
-	// camera 0 (the removed camera was the direct one), which also cleared
+	// running thread never sees the camera list and the front camera index
+	// change under it, then restarts it. True when the front-camera role moved to
+	// camera 0 (the removed camera was the front camera), which also cleared
 	// the neutral.
 	bool removeCamera(int cameraIndex);
 

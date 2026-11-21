@@ -36,7 +36,7 @@ const ImVec4 k_warningColor(1.f, 0.8f, 0.4f, 1.f);
 // the chain blocks in the project's chain settings.
 const char* const k_chainLabelKeys[(int)eRetargetChain::Count]= {
 	"sourceStage.torso",
-	"directStage.head",
+	"frontCameraStage.head",
 	"avatarPanel.leftArmHeader",
 	"avatarPanel.rightArmHeader",
 	"avatarPanel.leftHandHeader",
@@ -278,9 +278,9 @@ bool AvatarPanel::hasAvatar() const
 	return m_app->getAvatarModel() != nullptr && m_app->getAvatarSkeleton() != nullptr;
 }
 
-bool AvatarPanel::isDirectPipeline() const
+bool AvatarPanel::isFrontCameraPipeline() const
 {
-	return m_config->direct.enabled && hasAvatar();
+	return m_config->frontCamera.enabled && hasAvatar();
 }
 
 void AvatarPanel::loadAvatarFromDialog()
@@ -817,8 +817,8 @@ void AvatarPanel::drawPoseRows(eRetargetChain chain)
 	switch (chain)
 	{
 	case eRetargetChain::Torso:
-		// Only the direct placement places a spine
-		if (!isDirectPipeline())
+		// Only the front-camera placement places a spine
+		if (!isFrontCameraPipeline())
 			drawNote("chains.poseLeanPositionNote");
 		bChanged|= ImGui::DragFloat3(locLabel("chains.poseLeanDrag"), &pose.leanDegrees.x, 0.25f, -90.f, 90.f, "%.1f");
 		ImGui::SetItemTooltip("%s", locText("chains.poseLeanTooltip"));
@@ -961,7 +961,7 @@ void AvatarPanel::drawRestRows(eRetargetChain chain)
 	{
 	case eRetargetChain::Torso:
 		// A multi-camera project measures no torso, so it has none to rest
-		if (!isDirectPipeline())
+		if (!isFrontCameraPipeline())
 		{
 			drawNote("chains.torsoPositionNote");
 			break;
@@ -1076,18 +1076,18 @@ void AvatarPanel::drawChainRow(bool bAvatar, bool bFaceEntry)
 
 void AvatarPanel::drawTorsoChain()
 {
-	if (!isDirectPipeline())
+	if (!isFrontCameraPipeline())
 	{
 		drawNote("chains.torsoPositionNote");
 		return;
 	}
-	drawNote("chains.torsoDirectNote");
+	drawNote("chains.torsoFrontCameraNote");
 	AvatarRigSettings rig= m_app->getAvatarRig();
 	if (drawLimitControl(rig.spineLimitDegrees, "chains.spineLimit", "chains.spineLimitTooltip"))
 		m_app->setAvatarRig(rig);
 	// The solver's hold, then what follows it
 	drawSubHeading("chains.lossHeading");
-	drawNote("chains.torsoDirectLossNote");
+	drawNote("chains.torsoFrontCameraLossNote");
 	RetargetChains chains= m_app->getRetargetChains();
 	if (drawLossAfter(chains.torso.loss))
 		m_app->setRetargetChains(chains);
@@ -1095,24 +1095,24 @@ void AvatarPanel::drawTorsoChain()
 
 void AvatarPanel::drawHeadChain()
 {
-	const bool bDirect= isDirectPipeline();
+	const bool bFrontCameraMode= isFrontCameraPipeline();
 	AvatarRigSettings rig= m_app->getAvatarRig();
 	drawGizmoToggle(eSceneGizmoValue::Trim);
 	bool bChanged= drawTrimControl(rig, B::Head, "chains.headTrim", false);
-	// Only the direct placement limits the head
-	if (bDirect)
+	// Only the front-camera placement limits the head
+	if (bFrontCameraMode)
 		bChanged|= drawLimitControl(rig.headLimitDegrees, "chains.headLimit", "chains.headLimitTooltip");
 	if (bChanged)
 		m_app->setAvatarRig(rig);
 
-	// The direct solver's own hold, or a timed one, then what follows it
+	// The front-camera solver's own hold, or a timed one, then what follows it
 	drawSubHeading("chains.lossHeading");
 	RetargetChains chains= m_app->getRetargetChains();
 	RetargetChains::Loss& loss= chains.head.loss;
 	bool bChainChanged= false;
-	if (bDirect)
+	if (bFrontCameraMode)
 	{
-		drawNote("chains.headDirectLossNote");
+		drawNote("chains.headFrontCameraLossNote");
 	}
 	else
 	{
@@ -1130,13 +1130,13 @@ void AvatarPanel::drawHeadChain()
 		m_app->setRetargetChains(chains);
 }
 
-bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, RetargetChains& chains)
+bool AvatarPanel::drawArmLoss(int sideIndex, bool bFrontCameraMode, bool bAvatar, RetargetChains& chains)
 {
 	RetargetChains::Loss& loss= chains.arms[sideIndex].loss;
 	bool bChanged= false;
-	if (bDirect)
+	if (bFrontCameraMode)
 	{
-		drawNote("chains.directArmLossNote");
+		drawNote("chains.frontCameraArmLossNote");
 	}
 	else
 	{
@@ -1152,7 +1152,7 @@ bool AvatarPanel::drawArmLoss(int sideIndex, bool bDirect, bool bAvatar, Retarge
 
 void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 {
-	const bool bDirect= isDirectPipeline();
+	const bool bFrontCameraMode= isFrontCameraPipeline();
 	RetargetChains chains= m_app->getRetargetChains();
 	bool bChainChanged= false;
 
@@ -1205,12 +1205,12 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 											   locText("chains.ikWeightTooltip"), SourcePoseInputs::table(),
 											   toLiveValue(m_shownArmParameters[sideIndex].ikWeight));
 		// The source's reach is in meters on a multi-camera project and in
-		// the avatar's units with the user's proportions on a direct one; the
+		// the avatar's units with the user's proportions on a front-camera one; the
 		// scale has an effect on both, since the source's arm is not the
 		// avatar's
 		bChainChanged|= drawExprParameterField(
 			sideIndex == 0 ? "leftReachScale" : "rightReachScale", locText("chains.reachScaleField"), arm.reachScale, 0.f,
-			1.f, "%.2f", locText(bDirect ? "chains.reachScaleDirectTooltip" : "chains.reachScaleTooltip"),
+			1.f, "%.2f", locText(bFrontCameraMode ? "chains.reachScaleFrontCameraTooltip" : "chains.reachScaleTooltip"),
 			SourcePoseInputs::table(), toLiveValue(m_shownArmParameters[sideIndex].reachScale));
 		drawGizmoToggle(eSceneGizmoValue::GoalOffset);
 		bChainChanged|= ImGui::DragFloat3(locLabel("chains.goalOffsetDrag"), &arm.goalOffset.x, 0.005f, -1.f, 1.f,
@@ -1235,7 +1235,7 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 	bRigChanged|= drawTrimControl(rig, lowerArmBone, "chains.rollTrim", true);
 
 	drawSubHeading("chains.lossHeading");
-	bChainChanged|= drawArmLoss(sideIndex, bDirect, true, chains);
+	bChainChanged|= drawArmLoss(sideIndex, bFrontCameraMode, true, chains);
 
 	ImGui::Spacing();
 	if (ImGui::Button(locLabel("avatarPanel.resetArmButton")))
@@ -1249,7 +1249,8 @@ void AvatarPanel::drawArmChain(int sideIndex, bool bAvatar)
 		arm.elbowWeight= armDefaults.elbowWeight;
 		arm.reachScale= armDefaults.reachScale;
 		arm.goalOffset= armDefaults.goalOffset;
-		const RetargetChains::Arm shapeDefaults= makeDefaultRetargetChains(m_config->direct.enabled).arms[sideIndex];
+		const RetargetChains::Arm shapeDefaults=
+			makeDefaultRetargetChains(m_config->frontCamera.enabled).arms[sideIndex];
 		arm.mapping= shapeDefaults.mapping;
 		arm.ikWeight= shapeDefaults.ikWeight;
 		bChainChanged= true;
@@ -1293,8 +1294,8 @@ void AvatarPanel::drawHandChain(int sideIndex)
 
 	drawGizmoToggle(eSceneGizmoValue::Trim);
 	bChanged|= drawTrimControl(rig, sideIndex == 0 ? B::LeftHand : B::RightHand, "chains.handTrim", false);
-	// Only the direct placement limits the wrist
-	if (isDirectPipeline())
+	// Only the front-camera placement limits the wrist
+	if (isFrontCameraPipeline())
 		bChanged|= drawLimitControl(side.wristLimitDegrees, "chains.wristLimit", "chains.wristLimitTooltip");
 
 	if (ImGui::Checkbox(locLabel("avatarPanel.thumbPronationAutoCheckbox"), &side.bThumbPronationAuto))

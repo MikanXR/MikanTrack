@@ -7,7 +7,7 @@
 
 #include "opencv2/core/mat.hpp"
 
-#include "DirectRetarget.h" // SolveState
+#include "FrontCameraRetarget.h" // SolveState
 #include "HandFusion.h" // CameraFrameResult, FusionDiagnostics
 #include "HandTrackingPipeline.h" // HandSeedStats
 #include "TrackingRecording.h" // RecordedFrame
@@ -34,7 +34,7 @@ struct DiagHandState
 	float presence= 0.f;
 	float handednessScore= 0.f;
 	float rightProb= 0.5f; // flip-adjusted classifier opinion (what fusion votes with)
-	bool bSideCorrected= false; // the direct camera moved the hand to this side
+	bool bSideCorrected= false; // the front camera moved the hand to this side
 	bool bSideDecided= false;   // the whole-body hands name the hand's side
 	int labeledSide= -1;   // camera records: that camera's own label; fused: assigned side
 	float visibility= 0.f;
@@ -189,7 +189,7 @@ struct DiagCameraSnapshot
 	const HandSeedStats* seedStats= nullptr;
 };
 
-// The avatar side of a dump, direct mode only: the solver's pose for the
+// The avatar side of a dump, front-camera mode only: the solver's pose for the
 // latest output and the state behind it, the model it posed, the camera it
 // solved from, and the avatar as the UI rendered it from that camera (empty
 // when the UI had no view to render)
@@ -197,7 +197,7 @@ struct DiagAvatarSnapshot
 {
 	const AvatarSkeleton* skeleton= nullptr;
 	const AvatarPose* pose= nullptr;
-	const DirectRetarget::SolveState* solveState= nullptr;
+	const FrontCameraRetarget::SolveState* solveState= nullptr;
 	std::string modelPath;
 	int cameraIndex= -1;
 	cv::Mat render;
