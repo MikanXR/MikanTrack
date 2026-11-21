@@ -1,7 +1,7 @@
 # MikanTrack
 
 <!-- AI_USAGE_BADGES:BEGIN -->
-![AI tokens](https://img.shields.io/badge/AI_tokens-20M_out_%2F_5.5B_read-blueviolet) ![API-equiv. cost](https://img.shields.io/badge/API--equiv._cost-~$4.2k-green)
+![AI tokens](https://img.shields.io/badge/AI_tokens-21M_out_%2F_5.5B_read-blueviolet) ![API-equiv. cost](https://img.shields.io/badge/API--equiv._cost-~$4.2k-green)
 (cost is the API-equivalent at list prices, see [TOKEN_STATS.md](TOKEN_STATS.md))
 <!-- AI_USAGE_BADGES:END -->
 
