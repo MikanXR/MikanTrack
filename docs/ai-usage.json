@@ -948,16 +948,16 @@
     "632efd84-40aa-436e-b06b-adaeade89846": {
       "label": "Scene view cube and chain gizmo, IK chain modes, custom pose library",
       "firstActivity": "2026-11-20T21:20:36.368Z",
-      "lastActivity": "2026-11-21T03:30:09.949Z",
+      "lastActivity": "2026-11-21T04:11:16.050Z",
       "branch": "token-stats-cost-badge",
       "models": {
         "claude-fable-5-2": {
-          "calls": 230,
-          "input": 482,
+          "calls": 284,
+          "input": 616,
           "cacheWrite5m": 0,
-          "cacheWrite1h": 1266848,
-          "cacheRead": 77610717,
-          "output": 332292
+          "cacheWrite1h": 1299122,
+          "cacheRead": 87258930,
+          "output": 350721
         },
         "claude-opus-5-5": {
           "calls": 125,
