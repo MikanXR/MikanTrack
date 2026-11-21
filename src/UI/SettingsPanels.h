@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -85,6 +86,15 @@ struct TrackingPanelState
 	bool bDumpRequested= false;
 	bool bDelayedDumpRequested= false;
 	Countdown dumpCountdown;
+
+	// The Blink stage of the last seconds of shown frames, oldest first, for
+	// the readout's history plots
+	struct BlinkSample
+	{
+		double timestampMs= 0.0;
+		FaceSources::Blink blink;
+	};
+	std::deque<BlinkSample> blinkHistory;
 };
 
 // What fusion reported for the shown frame
@@ -144,8 +154,9 @@ struct FaceReadout
 	// neutral capture holds the face
 	FaceSources::Webcam webcam;
 	bool bWebcamNeutral= false;
-	// The Blink stage of the shown frame
+	// The Blink stage of the shown frame, and the frame's time
 	FaceSources::Blink blink;
+	double blinkTimestampMs= 0.0;
 };
 
 // The direct solve behind the shown avatar pose
@@ -289,8 +300,8 @@ void drawFaceStreamStatus(const TrackingSectionContext& context);
 // raw values
 void drawWebcamFaceReadout(const TrackingSectionContext& context);
 // The Blink stage pieces, no headers. The controls edit the live config,
-// which the stage reads each frame. The readout shows the shown frame's eyes:
-// openness against the baseline and the floor, the state, and the output.
+// which the stage reads each frame. The readout plots the last seconds of
+// shown frames: each eye's openness against its levels, and the output.
 void drawBlinkControls(const TrackingSectionContext& context);
 void drawBlinkReadout(const TrackingSectionContext& context);
 // The body pieces, no headers: the proportions intro with Measure My Body,

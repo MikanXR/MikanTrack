@@ -678,6 +678,7 @@ void MainWindow::update(float deltaSeconds)
 	trackingContext.fusedResult= &m_latestFused;
 	trackingContext.fusion= &m_fusionReadout;
 	trackingContext.imu= &m_imuReadout;
+	trackingContext.face= &m_faceReadout;
 	trackingContext.shownConfig= m_shown.config;
 	trackingContext.shownBodyBackends= &m_shown.bodyBackends;
 	// The tracking panel's countdowns, captures and readouts run whether or
@@ -1088,7 +1089,10 @@ void MainWindow::updateFaceReadouts()
 	// The Blink stage of the shown frame: the output's own, which a replay
 	// steps in order on the timeline
 	if (m_shown.fused != nullptr)
+	{
 		face.blink= m_shown.fused->face.blink;
+		face.blinkTimestampMs= m_shown.fused->timestampMs;
+	}
 	m_faceReadout= face;
 	m_microphoneReadout= microphone;
 }

@@ -948,16 +948,16 @@
     "632efd84-40aa-436e-b06b-adaeade89846": {
       "label": "Scene view cube and chain gizmo, IK chain modes, custom pose library",
       "firstActivity": "2026-11-20T21:20:36.368Z",
-      "lastActivity": "2026-11-21T04:11:16.050Z",
+      "lastActivity": "2026-11-21T04:22:43.241Z",
       "branch": "token-stats-cost-badge",
       "models": {
         "claude-fable-5-2": {
-          "calls": 284,
-          "input": 616,
+          "calls": 289,
+          "input": 628,
           "cacheWrite5m": 0,
-          "cacheWrite1h": 1299122,
-          "cacheRead": 87258930,
-          "output": 350721
+          "cacheWrite1h": 1301058,
+          "cacheRead": 88235139,
+          "output": 351583
         },
         "claude-opus-5-5": {
           "calls": 125,
@@ -966,6 +966,22 @@
           "cacheWrite1h": 0,
           "cacheRead": 20749199,
           "output": 64774
+        }
+      }
+    },
+    "7a1a42ee-f48f-45e0-beab-a97002932812": {
+      "label": "Webcam blink readout history plots, held winks and the second-frame rule",
+      "firstActivity": "2026-11-21T04:21:49.005Z",
+      "lastActivity": "2026-11-21T05:39:35.174Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 136,
+          "input": 282,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 426458,
+          "cacheRead": 40808414,
+          "output": 191009
         }
       }
     }
