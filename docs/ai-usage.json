@@ -972,16 +972,56 @@
     "7a1a42ee-f48f-45e0-beab-a97002932812": {
       "label": "Webcam blink readout history plots, held winks and the second-frame rule",
       "firstActivity": "2026-11-21T04:21:49.005Z",
-      "lastActivity": "2026-11-21T05:39:35.174Z",
+      "lastActivity": "2026-11-21T07:35:39.861Z",
       "branch": "main",
       "models": {
         "claude-fable-5-2": {
-          "calls": 136,
-          "input": 282,
+          "calls": 249,
+          "input": 530,
           "cacheWrite5m": 0,
-          "cacheWrite1h": 426458,
-          "cacheRead": 40808414,
-          "output": 191009
+          "cacheWrite1h": 655468,
+          "cacheRead": 105517976,
+          "output": 291905
+        },
+        "claude-sonnet-5-5": {
+          "calls": 25,
+          "input": 50,
+          "cacheWrite5m": 128092,
+          "cacheWrite1h": 0,
+          "cacheRead": 2351058,
+          "output": 48874
+        }
+      }
+    },
+    "a4c27d59-03e7-4fa4-a4f3-437e19b96b46": {
+      "label": "Extrinsic marker calibration via ArUco triangulation",
+      "firstActivity": "2026-11-21T06:52:32.092Z",
+      "lastActivity": "2026-11-21T07:15:37.856Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 4,
+          "input": 10,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 45322,
+          "cacheRead": 247117,
+          "output": 7176
+        }
+      }
+    },
+    "1036390e-8d46-4237-99f8-aaad2d252ce7": {
+      "label": "Camera video hidden by default, the show video confirmation and the streaming software warnings",
+      "firstActivity": "2026-11-21T07:33:51.340Z",
+      "lastActivity": "2026-11-21T08:06:33.812Z",
+      "branch": "main",
+      "models": {
+        "claude-fable-5-2": {
+          "calls": 88,
+          "input": 188,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 321863,
+          "cacheRead": 23948918,
+          "output": 101041
         }
       }
     }
