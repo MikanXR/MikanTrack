@@ -59,6 +59,7 @@
 #include "VideoModeUtils.h"
 #include "VideoCaptureSystem.h"
 #include "VideoPreviewPanel.h"
+#include "VideoPrivacy.h"
 #include "WizardHost.h"
 
 #include "tinyfiledialogs.h"
@@ -67,6 +68,7 @@ MainWindow::MainWindow(App* app)
 	: m_app(app)
 	, m_mainMenuScreen(std::make_unique<MainMenuScreen>())
 	, m_videoPreviewPanel(std::make_unique<VideoPreviewPanel>())
+	, m_videoPrivacy(std::make_unique<VideoPrivacy>())
 	, m_scene3dPanel(std::make_unique<Scene3dPanel>())
 	, m_devicePanel(std::make_unique<DevicePanel>(app, app->getVideoCapture(), app->getConfig()))
 	, m_calibrationPanel(std::make_unique<CalibrationPanel>(app->getConfig()))
@@ -141,6 +143,107 @@ void MainWindow::registerAutomation(AutomationServer* server)
 		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
 			return handlePerformanceAutomation(args, outLines, outError);
 		});
+	server->registerCommandNamespace(
+		"video",
+		{"video status", "video request <cameraIndex>", "video show <cameraIndex>", "video hide <cameraIndex>|all",
+		 "video dismiss", "video streaming"},
+		[this](const std::vector<std::string>& args, std::vector<std::string>& outLines, std::string& outError) {
+			return handleVideoAutomation(args, outLines, outError);
+		});
+}
+
+bool MainWindow::handleVideoAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
+									   std::string& outError)
+{
+	if (args.empty())
+	{
+		outError= "missing verb";
+		return false;
+	}
+	const std::string& verb= args[0];
+	VideoPrivacyState& state= m_videoPrivacy->getState();
+	const int cameraCount= (int)state.getCameraCount();
+	auto parseCamera= [&](int& outCameraIndex) {
+		if (args.size() != 2 || args[1].empty() || args[1].size() > 4 ||
+			args[1].find_first_not_of("0123456789") != std::string::npos)
+		{
+			outError= "expected <cameraIndex>";
+			return false;
+		}
+		outCameraIndex= std::stoi(args[1]);
+		if (outCameraIndex >= cameraCount)
+		{
+			outError= "no camera " + args[1];
+			return false;
+		}
+		return true;
+	};
+
+	if (verb == "streaming")
+	{
+		const std::string& name= m_videoPrivacy->getStreamingSoftwareName();
+		outLines.push_back(name.empty() ? std::string("none") : name);
+		return true;
+	}
+	if (verb == "request")
+	{
+		int cameraIndex= -1;
+		if (!parseCamera(cameraIndex))
+			return false;
+		if (m_videoPrivacy->getPrompt() != VideoPrivacy::ePrompt::None)
+		{
+			outError= "a video prompt is open";
+			return false;
+		}
+		m_videoPrivacy->requestShow(cameraIndex);
+	}
+	else if (verb == "show")
+	{
+		// Takes the prompt's place, for a drive that cannot press its button
+		int cameraIndex= -1;
+		if (!parseCamera(cameraIndex))
+			return false;
+		state.setUserShown(cameraIndex, true);
+	}
+	else if (verb == "hide")
+	{
+		if (args.size() == 2 && args[1] == "all")
+		{
+			for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+				state.setUserShown(cameraIndex, false);
+		}
+		else
+		{
+			int cameraIndex= -1;
+			if (!parseCamera(cameraIndex))
+				return false;
+			state.setUserShown(cameraIndex, false);
+		}
+	}
+	else if (verb == "dismiss")
+	{
+		m_videoPrivacy->dismiss();
+	}
+	else if (verb != "status")
+	{
+		outError= "unknown verb: " + verb;
+		return false;
+	}
+
+	// The choices as they stand now. The camera view follows on the next frame.
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+	{
+		outLines.push_back("camera " + std::to_string(cameraIndex) + (state.isVisible(cameraIndex) ? " shown" : " hidden") +
+						   " user " + (state.getUserShown(cameraIndex) ? "on" : "off") + " calibration " +
+						   (state.isGranted(cameraIndex) ? "on" : "off"));
+	}
+	std::string prompt= "prompt none";
+	if (m_videoPrivacy->getPrompt() == VideoPrivacy::ePrompt::ShowVideo)
+		prompt= "prompt show " + std::to_string(m_videoPrivacy->getPromptCamera());
+	else if (m_videoPrivacy->getPrompt() == VideoPrivacy::ePrompt::WizardLaunch)
+		prompt= "prompt calibration";
+	outLines.push_back(prompt);
+	return true;
 }
 
 bool MainWindow::handleSceneAutomation(const std::vector<std::string>& args, std::vector<std::string>& outLines,
@@ -327,8 +430,38 @@ void MainWindow::launchWizard(eWizardKind kind, int cameraIndex)
 	// project has no world calibration, whatever frame is shown.
 	if (kind == eWizardKind::Extrinsics && isFrontCameraProject(*m_app->getConfig()))
 		return;
-	if (!m_setupFlow->isActive())
+	if (m_setupFlow->isActive() || m_wizardHost->isAnyActive())
+		return;
+	// The pattern feed is a camera wizard's whole UI, so it runs with video
+	// on, and the user is told before it starts
+	if (kind == eWizardKind::Intrinsics || kind == eWizardKind::Extrinsics)
+		m_videoPrivacy->requestWizardLaunch(kind, cameraIndex);
+	else
 		m_wizardHost->launch(kind, cameraIndex);
+}
+
+void MainWindow::updateVideoVisibility()
+{
+	VideoCaptureSystem* videoCapture= m_app->getVideoCapture();
+	const int cameraCount= (int)m_app->getConfig()->cameraCount();
+
+	std::vector<std::string> deviceNames;
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+		deviceNames.push_back(videoCapture->getCurrentDeviceFriendlyName(cameraIndex));
+
+	// A calibration that needs the picture holds its cameras' video on while
+	// it runs: the intrinsics wizard its own camera, the extrinsics wizard
+	// and the guided setup's camera picker every camera
+	VideoPrivacyState& state= m_videoPrivacy->getState();
+	state.setCameras(deviceNames);
+	state.setGrants(m_wizardHost->getIntrinsicsCameraIndex(),
+					m_wizardHost->getActiveKind() == eWizardKind::Extrinsics || m_setupFlow->isShowingCameraPicker());
+
+	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
+		m_videoPreviewPanel->setVideoVisible(cameraIndex, state.isVisible(cameraIndex), state.isGranted(cameraIndex));
+	// The process list is read only while a camera is on screen to warn about
+	m_videoPreviewPanel->setStreamingSoftwareName(
+		state.isAnyVisible() ? m_videoPrivacy->getStreamingSoftwareName() : std::string());
 }
 
 void MainWindow::drawMainMenu()
@@ -600,6 +733,10 @@ void MainWindow::update(float deltaSeconds)
 		// camera choice returns to the free camera
 		m_pinnedWindows->unpinAll();
 		m_scene3dPanel->setPovCamera(-1);
+		// A closed project's cameras go back to hidden, and their pixels go
+		m_videoPrivacy->reset();
+		for (int cameraIndex= 0; cameraIndex < (int)m_videoPreviewPanel->getCameraCount(); ++cameraIndex)
+			m_videoPreviewPanel->setVideoVisible(cameraIndex, false, false);
 		drawMainMenu();
 		return;
 	}
@@ -626,6 +763,7 @@ void MainWindow::update(float deltaSeconds)
 	// Keep per-camera containers in sync with the config
 	m_latestPreviews.resize(cameraCount);
 	m_videoPreviewPanel->setCameraCount(cameraCount);
+	updateVideoVisibility();
 
 	// Pull the newest per-camera previews + the fused result
 	for (int cameraIndex= 0; cameraIndex < cameraCount; ++cameraIndex)
@@ -722,6 +860,14 @@ void MainWindow::update(float deltaSeconds)
 	// Guided setup chain: draws its prompt modals on top of the panels, and
 	// launches/watches the wizards updated below
 	m_setupFlow->update();
+
+	// The video prompts, and the camera wizard launch one of them accepted
+	{
+		eWizardKind acceptedKind= eWizardKind::None;
+		int acceptedCamera= 0;
+		if (m_videoPrivacy->drawPrompts(m_latestPreviews, acceptedKind, acceptedCamera) && !m_setupFlow->isActive())
+			m_wizardHost->launch(acceptedKind, acceptedCamera);
+	}
 
 	// Show and front the Stage View when a camera calibration wizard starts:
 	// the pattern feed is the wizard's whole UI, and the view may be closed or
@@ -826,6 +972,18 @@ void MainWindow::update(float deltaSeconds)
 		const PipelineStageId requested= m_pinnedWindows->draw(m_pipelineInputs, stageFrame, m_stageContent.get());
 		if (requested.isValid())
 			m_pipelinePanel->setSelected(requested);
+	}
+	// A camera pane's video button, in the Stage View or a pinned window:
+	// hiding is immediate, and showing asks first
+	{
+		const int toggleCamera= m_videoPreviewPanel->consumeVideoToggleRequest();
+		if (toggleCamera >= 0)
+		{
+			if (m_videoPrivacy->getState().getUserShown(toggleCamera))
+				m_videoPrivacy->getState().setUserShown(toggleCamera, false);
+			else
+				m_videoPrivacy->requestShow(toggleCamera);
+		}
 	}
 	// After the menu bar, the Inspector and the pinned windows, the draws
 	// that can unload the avatar, so the preview pose is back to Live before

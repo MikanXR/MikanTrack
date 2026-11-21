@@ -119,6 +119,19 @@ The scene's transform gizmo edits one setting of the chain selected in the Retar
 
 A drag is driven by `input`: `press` on an arrow or a ring, `move` across frames, `release`, and `input key escape` before the release to cancel. The handles follow the live pose, so a drive that aims at one by pixel sets `pipeline mode custom` first, whose pose holds still, or reads a fresh screenshot right before the press.
 
+### Camera video (video)
+
+Which cameras' video the camera view shows ([architecture.md](./architecture.md), UI and Render). Every form but `video streaming` answers one line per camera, `camera <index> shown|hidden user on|off calibration on|off` (the user's choice and a calibration's grant, either of which shows the camera), then `prompt none`, `prompt show <cameraIndex>` or `prompt calibration`. The camera view follows on the next frame.
+
+- `video status`: the lines as they stand
+- `video request <cameraIndex>`: opens the Show Camera Video confirmation for a camera, as its pane's Show video button does, with an error while a video prompt is open
+- `video show <cameraIndex>`: shows the camera's video without the confirmation, for a drive that has no reason to press through it
+- `video hide <cameraIndex>|all`: hides a camera's video, or every camera's. A calibration's grant is not the user's to hide.
+- `video dismiss`: closes the open video prompt, accepting nothing
+- `video streaming`: the running streaming program's name (`OBS Studio`, `Streamlabs Desktop`), or `none`
+
+The confirmation's hold-to-preview button is driven by `input press` on it, a screenshot, and `input release`.
+
 ### Performance panel (performance)
 
 - `performance source`: `live` or `recording`, the number of samples charted and the newest or playhead sample's total (`recording samples 600 total 8.22`)

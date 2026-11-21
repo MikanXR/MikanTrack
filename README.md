@@ -55,6 +55,12 @@ and the streamed arm degrades as described under [VMC output](#vmc-output).
   triangulation, and a hand tracked by one camera but lost by another is
   projected into the lost camera's image to re-seed its search directly.
   Prefer 720p per camera and separate USB controllers for two streams.
+- **Camera video hidden by default**: MikanTrack runs beside streaming
+  software, so the camera views draw only the tracking overlay on a dark
+  frame. A camera's video shows after its Show video button and a
+  confirmation (with a hold-to-look pixelated preview), the choice is never
+  saved, and the camera calibrations warn before they turn video on. The
+  warnings name OBS or Streamlabs when one is running.
 - **VRM avatar**: load a VRM 0.x or 1.0 avatar (Retarget stage, or File > Load Avatar) and see it
   toon-shaded in the 3D scene, posed from the tracked hands, elbows and head
   with the avatar's own proportions (reach scaled onto its arms, elbows from a
@@ -245,6 +251,9 @@ On first run an existing `%APPDATA%/MikanTrack/config.json` is migrated into a
    metrics; accept saves all cameras atomically. Re-run the wizard if a camera
    or the marker moves. `--replay-extrinsics <recording> <config.json>`
    A/Bs a new calibration against a recorded session offline.
+
+Both wizards show live camera video while they run and warn before they
+start. Camera video is hidden otherwise.
 
 Without calibration the app still tracks and streams, but only image-space
 data is meaningful (no metric 3D / world space).
