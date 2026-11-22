@@ -1,0 +1,152 @@
+name: Release
+
+# Pushing a v<version> tag builds the release configuration and drafts a GitHub release
+# with MikanTrack_<version>_Win64.zip attached. The draft is never published
+# automatically: the notes and the zip get a human read first.
+#
+# A manual run is a dry run: it builds, packages, and uploads the same zip as a workflow
+# artifact, but skips the tag check and the draft release, so it publishes nothing.
+# gh workflow run release.yml
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Needed by the draft-release step, which creates a release object on this repository.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Visual Studio 2026, pinned by the explicit label
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+
+      # Every submodule but tracy: a release build does not compile the profiler client.
+      - name: Init required submodules
+        shell: bash
+        run: |
+          git submodule update --init --depth=1 \
+            thirdparty/imgui \
+            thirdparty/implot \
+            thirdparty/ImGuizmo \
+            thirdparty/glm \
+            thirdparty/nlohmann_json \
+            thirdparty/readerwriterqueue \
+            thirdparty/cgltf
+
+      # The zip is named after the VERSION of the project() call in CMakeLists.txt and
+      # the release after the pushed tag. Refuse a release where the two disagree.
+      - name: Check the tag against CMakeLists.txt
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          expected="v$(python tools/package.py --print-version)"
+          if [ "$expected" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match CMakeLists.txt, which says $expected."
+            echo "Set the project VERSION in CMakeLists.txt or retag, then push again."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches CMakeLists.txt"
+
+      # InitialSetup_x64.bat is the one place dependency and model versions are pinned,
+      # so its hash is the cache key. No restore-keys: the script wipes deps wholesale,
+      # so a partial restore would only be downloaded and then deleted.
+      - name: Cache dependencies and models
+        id: cache-deps
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            models
+          key: deps-models-${{ runner.os }}-${{ hashFiles('InitialSetup_x64.bat') }}
+
+      - name: Fetch dependencies and models
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call InitialSetup_x64.bat
+          if %ERRORLEVEL% NEQ 0 (
+            echo InitialSetup_x64.bat failed
+            exit /b 1
+          )
+
+      # The OpenCV sources and the Tracy viewer are not used by the build. Dropping them
+      # keeps the cache entry small.
+      - name: Trim the dependency folder
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: rm -rf deps/opencv/sources deps/tracy
+
+      # No MIKANTRACK_TRACY: a release build carries no profiler client. The Oculus
+      # Lipsync SDK is a manual download a hosted runner does not have, so this build
+      # has no Oculus LipSync mouth model.
+      - name: Generate project files
+        shell: cmd
+        run: |
+          cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+          if %ERRORLEVEL% NEQ 0 (
+            echo CMake configure failed
+            exit /b 1
+          )
+
+      - name: Build
+        shell: cmd
+        run: |
+          cmake --build build --target MikanTrack --config Release --parallel
+          if %ERRORLEVEL% NEQ 0 (
+            echo Build failed
+            exit /b 1
+          )
+
+      - name: Package
+        shell: bash
+        run: python tools/package.py --build-dir build/Release --out dist
+
+      # Extract the zip and run two self-tests from the extracted folder. Neither needs a
+      # GPU or a window. They prove the exe starts from the zip alone (every DLL resolves)
+      # and that the resources arrived (the localization test reads them).
+      - name: Smoke test the zip
+        shell: bash
+        run: |
+          mkdir smoke
+          python -c "import glob, zipfile; zipfile.ZipFile(glob.glob('dist/MikanTrack_*_Win64.zip')[0]).extractall('smoke')"
+          test -f smoke/MikanTrack.exe || { echo "MikanTrack.exe is not at the zip root"; exit 1; }
+          cd smoke
+          for flag in --test-vmc --loc-test; do
+            set +e
+            ./MikanTrack.exe "$flag"
+            code=$?
+            set -e
+            log="${flag#--}.log"
+            echo "===== $log ====="
+            if [ -f "$log" ]; then cat "$log"; fi
+            if [ "$code" -ne 0 ]; then
+              echo "$flag failed with exit code $code"
+              exit 1
+            fi
+          done
+
+      # Uploaded on a tag push as well, so a failure in the draft step still leaves the
+      # zip somewhere it can be inspected.
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MikanTrack-Release
+          path: dist/MikanTrack_*_Win64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      # A tag push only: a manual dry run stops at the workflow artifact above
+      - name: Draft the GitHub release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/MikanTrack_*_Win64.zip --draft --generate-notes --verify-tag

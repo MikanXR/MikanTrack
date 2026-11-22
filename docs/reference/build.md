@@ -49,7 +49,7 @@ Three steps, in order:
 
 ### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
 
-The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. Release builds are made with the SDK present, so `OVRLipSync.dll` ships beside the exe under that license. Unpack it so these exist:
+The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. A release built with the SDK present ships `OVRLipSync.dll` beside the exe under that license, and one built by the release workflow does not have it (see Release below). Unpack it so these exist:
 
 - `deps/OVRLipSyncNative/Include/OVRLipSync.h`
 - `deps/OVRLipSyncNative/Lib/Win64/OVRLipSyncShim.lib`
@@ -119,3 +119,37 @@ A `POST_BUILD` custom command on the `MikanTrack` target:
 - `copy_directory`s `models/` and `resources/` into `<exe dir>/models` and `<exe dir>/resources`.
 
 `VS_DEBUGGER_WORKING_DIRECTORY` is set to the exe's own directory, which is the working directory Visual Studio's F5 launches with. This matters beyond the debugger: every model load path in the code is relative (`models/palm_detection.onnx`, `models/rtmpose_body.onnx`, ...), so the exe must be run with its current working directory set to the exe's directory. Running it with the repo root as the working directory silently fails to load models (or loads the wrong stale copy if the same exe was previously run correctly from its own directory).
+
+---
+
+## Release
+
+A release is one file, `MikanTrack_<version>_Win64.zip`, attached to the GitHub release of the tag `v<version>`. `<version>` is the `VERSION` of the `project()` call in `CMakeLists.txt`, the one place the version is defined. The zip is flat: `MikanTrack.exe` is at its root with everything it needs at run time, and the extracted folder runs as it is.
+
+`tools/package.py` assembles the zip from a built tree into `dist/`. Its contents are an allowlist rather than a copy of the build folder:
+
+- `MikanTrack.exe` and the DLLs the post-build step copied, with `OVRLipSync.dll` when the build has it
+- the five models and two avatars `InitialSetup_x64.bat` fetches, from `models/`
+- the files git tracks under `resources/`
+- the VC++ runtime DLLs of the installed Visual Studio
+- `NOTICE.md`
+
+Logs, `imgui.ini`, generated calibration images, the bench clips, and models only the measurement tools load stay out. The script refuses a tree configured with `MIKANTRACK_TRACY` unless `--allow-tracy` is passed.
+
+`.github/workflows/release.yml` cuts the release on a hosted runner. To release:
+
+1. Set the `project()` `VERSION` in `CMakeLists.txt` and merge it to `main`.
+2. Dry run: `gh workflow run release.yml`. It builds, packages, runs `--test-vmc` and `--loc-test` from the extracted zip, and uploads the zip as the `MikanTrack-Release` workflow artifact. It publishes nothing.
+3. Push the tag `v<version>`. The workflow refuses a tag that does not match `CMakeLists.txt`, then creates a draft release with the zip attached.
+4. Read the draft's notes and publish it by hand.
+
+The hosted runner does not have the Oculus Lipsync SDK, so a zip built by the workflow has no Oculus LipSync mouth model. A zip with it is built on a machine that has the SDK, from a tree configured without Tracy, and attached by hand:
+
+```
+cmake -S . -B build-release -G "Visual Studio 18 2026" -A x64
+cmake --build build-release --target MikanTrack --config Release --parallel
+python tools/package.py --build-dir build-release/Release
+gh release create v<version> dist/MikanTrack_<version>_Win64.zip --draft --generate-notes
+```
+
+The workflow caches `deps/` and `models/` under the hash of `InitialSetup_x64.bat`, so a change to that script refetches both.

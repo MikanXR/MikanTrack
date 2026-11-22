@@ -51,6 +51,17 @@ It serves `http://127.0.0.1:47380/mcp` from its own window, building its venv an
 
 ---
 
+## Package a release
+
+```
+python tools/package.py --build-dir build/Release --allow-tracy
+gh workflow run release.yml
+```
+
+The first writes `dist/MikanTrack_<version>_Win64.zip` from a built tree (`--allow-tracy` because the tree the generation scripts configure carries the profiler, which a real release does not). The second is the release workflow's dry run. The release procedure is in [build.md](./build.md).
+
+---
+
 ## Automation server
 
 ```
