@@ -84,9 +84,19 @@ jobs:
         shell: bash
         run: rm -rf deps/opencv/sources deps/tracy
 
-      # No MIKANTRACK_TRACY: a release build carries no profiler client. The Oculus
-      # Lipsync SDK is a manual download a hosted runner does not have, so this build
-      # has no Oculus LipSync mouth model.
+      # The Oculus Lipsync SDK is a developer-portal download under the Oculus SDK
+      # License, so it is kept in a private repository and read with a deploy key.
+      # CMake builds the Oculus LipSync mouth model when it finds the SDK here. This
+      # runs after the dependency fetch, which wipes deps.
+      - name: Fetch the Oculus Lipsync SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MikanXR/OVRLipSyncNative
+          ssh-key: ${{ secrets.OVRLIPSYNC_DEPLOY_KEY }}
+          path: deps/OVRLipSyncNative
+          persist-credentials: false
+
+      # No MIKANTRACK_TRACY: a release build carries no profiler client.
       - name: Generate project files
         shell: cmd
         run: |
@@ -107,7 +117,7 @@ jobs:
 
       - name: Package
         shell: bash
-        run: python tools/package.py --build-dir build/Release --out dist
+        run: python tools/package.py --build-dir build/Release --out dist --require-ovrlipsync
 
       # Extract the zip and run two self-tests from the extracted folder. Neither needs a
       # GPU or a window. They prove the exe starts from the zip alone (every DLL resolves)
@@ -132,6 +142,13 @@ jobs:
               exit 1
             fi
           done
+
+      # The dependency cache is saved when the job ends, and a cache of a public
+      # repository can be restored by pull request workflows. The SDK must not be in it.
+      - name: Remove the Oculus Lipsync SDK before the cache is saved
+        if: always()
+        shell: bash
+        run: rm -rf deps/OVRLipSyncNative
 
       # Uploaded on a tag push as well, so a failure in the draft step still leaves the
       # zip somewhere it can be inspected.

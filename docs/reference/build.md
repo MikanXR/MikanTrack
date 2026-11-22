@@ -49,7 +49,7 @@ Three steps, in order:
 
 ### Optional: the Oculus Lipsync SDK (`deps/OVRLipSyncNative`)
 
-The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. A release built with the SDK present ships `OVRLipSync.dll` beside the exe under that license, and one built by the release workflow does not have it (see Release below). Unpack it so these exist:
+The microphone mouth stage's Oculus LipSync model needs the Oculus Lipsync native SDK (OVRLipSync 1.61.0), a manual download from https://developer.oculus.com/downloads/package/oculus-lipsync-native/ under the Oculus SDK License. It sits behind the developer portal, so the setup script cannot fetch it, and its 40 MB DLL is not committed. Release builds are made with the SDK present, so `OVRLipSync.dll` ships beside the exe under that license. The release workflow reads the SDK from a private repository (see Release below). Unpack it so these exist:
 
 - `deps/OVRLipSyncNative/Include/OVRLipSync.h`
 - `deps/OVRLipSyncNative/Lib/Win64/OVRLipSyncShim.lib`
@@ -128,7 +128,7 @@ A release is one file, `MikanTrack_<version>_Win64.zip`, attached to the GitHub 
 
 `tools/package.py` assembles the zip from a built tree into `dist/`. Its contents are an allowlist rather than a copy of the build folder:
 
-- `MikanTrack.exe` and the DLLs the post-build step copied, with `OVRLipSync.dll` when the build has it
+- `MikanTrack.exe` and the DLLs the post-build step copied, with `OVRLipSync.dll` when the build has it (`--require-ovrlipsync`, which the workflow passes, fails without it)
 - the five models and two avatars `InitialSetup_x64.bat` fetches, from `models/`
 - the files git tracks under `resources/`
 - the VC++ runtime DLLs of the installed Visual Studio
@@ -143,12 +143,14 @@ Logs, `imgui.ini`, generated calibration images, the bench clips, and models onl
 3. Push the tag `v<version>`. The workflow refuses a tag that does not match `CMakeLists.txt`, then creates a draft release with the zip attached.
 4. Read the draft's notes and publish it by hand.
 
-The hosted runner does not have the Oculus Lipsync SDK, so a zip built by the workflow has no Oculus LipSync mouth model. A zip with it is built on a machine that has the SDK, from a tree configured without Tracy, and attached by hand:
+The workflow reads the Oculus Lipsync SDK from the private repository `MikanXR/OVRLipSyncNative` (the SDK's header, its Win64 libraries and its license texts) into `deps/OVRLipSyncNative`, with a read-only deploy key of that repository held in the `OVRLIPSYNC_DEPLOY_KEY` Actions secret. It deletes the folder before the dependency cache is saved, since a cache of a public repository is readable from pull request workflows. A new SDK version is a commit to that repository.
+
+A release can also be cut by hand on a machine that has the SDK, from a tree configured without Tracy:
 
 ```
 cmake -S . -B build-release -G "Visual Studio 18 2026" -A x64
 cmake --build build-release --target MikanTrack --config Release --parallel
-python tools/package.py --build-dir build-release/Release
+python tools/package.py --build-dir build-release/Release --require-ovrlipsync
 gh release create v<version> dist/MikanTrack_<version>_Win64.zip --draft --generate-notes
 ```
 

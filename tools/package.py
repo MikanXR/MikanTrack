@@ -141,6 +141,8 @@ def main():
                         help="package a build configured with MIKANTRACK_TRACY, which a release is not")
     parser.add_argument("--no-vc-runtime", action="store_true",
                         help="leave the VC++ runtime DLLs out")
+    parser.add_argument("--require-ovrlipsync", action="store_true",
+                        help="fail when the build has no OVRLipSync.dll, as a release must have it")
     parser.add_argument("--print-version", action="store_true",
                         help="print the version from CMakeLists.txt and exit")
     args = parser.parse_args()
@@ -176,6 +178,9 @@ def main():
         if (build_dir / binary).is_file():
             copy_into(stage, build_dir / binary, binary)
             print(f"included optional {binary}")
+        elif args.require_ovrlipsync:
+            fail(f"{binary} is not in {build_dir}: the build was configured without the "
+                 "Oculus Lipsync SDK under deps/OVRLipSyncNative")
         else:
             print(f"optional {binary} is not in the build: left out")
 
