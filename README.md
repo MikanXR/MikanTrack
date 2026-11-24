@@ -220,6 +220,9 @@ test means adding a file. Run one by passing its flag (for example
 `--test-fusion`); it logs to `<flag>.log` next to the exe and exits non-zero on
 failure.
 
+The MikanXR name and logo are not covered by the code's license. A build from
+this repository uses a generic icon and splash image in their place.
+
 ## Projects
 
 A tracking setup is a project: a folder under `%USERPROFILE%/Documents/MikanTrack/`

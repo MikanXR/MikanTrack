@@ -92,7 +92,7 @@ Each model's exact tensor input/output contract (shapes, layout, normalization, 
 
 ## Configuring and the target
 
-Both `GenerateProjectFiles_X64_VS*.bat` wrappers call `tools/GenerateProjectFiles_X64.bat` with their generator name, which runs `cmake .. -G <generator> -A x64 -DMIKANTRACK_TRACY=ON` from a `build/` directory it creates. A `build/` tree keeps the generator that first configured it, so switching Visual Studio versions means deleting `build/` first. Every dependency path is a fixed relative path under `deps/` or `thirdparty/` set directly in `CMakeLists.txt`. The one cache variable is `MIKANTRACK_TRACY`, which builds the Tracy profiler client into the exe. It is off by default in `CMakeLists.txt` and the generation scripts turn it on, so a local build carries the profiler and a release build is a configure that does not pass it:
+Both `GenerateProjectFiles_X64_VS*.bat` wrappers call `tools/GenerateProjectFiles_X64.bat` with their generator name, which runs `cmake .. -G <generator> -A x64 -DMIKANTRACK_TRACY=ON` from a `build/` directory it creates. A `build/` tree keeps the generator that first configured it, so switching Visual Studio versions means deleting `build/` first. Every dependency path is a fixed relative path under `deps/` or `thirdparty/` set directly in `CMakeLists.txt`. There are two cache variables, `MIKAN_BRANDING_DIR` (see Branding below) and `MIKANTRACK_TRACY`. `MIKANTRACK_TRACY` builds the Tracy profiler client into the exe. It is off by default in `CMakeLists.txt` and the generation scripts turn it on, so a local build carries the profiler and a release build is a configure that does not pass it:
 
 ```
 cmake -S . -B <release build dir> -G <generator> -A x64
@@ -107,6 +107,20 @@ Source collection is per-directory `file(GLOB ...)` (one glob per `src/<Dir>`, e
 OpenCV's Windows pack maps `MSVC_VERSION` to a runtime folder only up to 194x (VS2022), so under the VS2026 compiler its `OpenCVConfig.cmake` finds no binaries and configure fails. `CMakeLists.txt` presets `OpenCV_ARCH`/`OpenCV_RUNTIME` to `x64`/`vc16` for `MSVC_VERSION` 1950 and newer, the only runtime the pack ships.
 
 Every module directory under `src/` is on the include path (see the `target_include_directories` block), so includes across the codebase use bare filenames (`#include "HandLandmarkModel.h"`) rather than directory-qualified paths.
+
+---
+
+## Branding
+
+The app icon and the splash image come from one folder holding `icon.ico` and `splash.png`, chosen at configure time:
+
+- `-DMIKAN_BRANDING_DIR=<folder>` when it is passed
+- `branding/official/mikantrack` when that folder exists
+- `branding/generic` otherwise
+
+`branding/generic` is committed. `branding/official` is a gitignored checkout of the private `MikanXR/MikanBranding` repository, which holds the logo art. That art is trademark art and is never committed here, so a clone without access builds with the generic set. The checkout is not under `deps/`, which the setup script wipes and the release workflow caches. `CMakeLists.txt` prints the folder it resolved as `Branding:` at configure time and fails the configure when either file is missing. `MIKAN_BRANDING_DIR` is a cache variable, so a `build/` tree keeps a passed folder until `cmake -S . -B build -UMIKAN_BRANDING_DIR` clears it.
+
+Both files are compiled into `MikanTrack.exe` through `src/winapp_resources.rc.in`, which CMake configures into the build tree: the icon as the exe's icon and the splash image as an `RCDATA` resource named `MIKAN_SPLASH`. Nothing is copied beside the exe, so the post-build copies and `tools/package.py` do not know about branding. `SplashWindow` (`src/App/SplashWindow.h`) decodes the resource and shows it in a borderless window from `SDL_Init` until the main window's first frame has presented.
 
 ---
 
@@ -144,6 +158,8 @@ Logs, `imgui.ini`, generated calibration images, the bench clips, and models onl
 4. Read the draft's notes and publish it by hand.
 
 The workflow reads the Oculus Lipsync SDK from the private repository `MikanXR/OVRLipSyncNative` (the SDK's header, its Win64 libraries and its license texts) into `deps/OVRLipSyncNative`, with a read-only deploy key of that repository held in the `OVRLIPSYNC_DEPLOY_KEY` Actions secret. It deletes the folder before the dependency cache is saved, since a cache of a public repository is readable from pull request workflows. A new SDK version is a commit to that repository.
+
+The workflow checks out `MikanXR/MikanBranding` at the tag `v1` into `branding/official` with a read-only deploy key held in the `MIKAN_BRANDING_DEPLOY_KEY` Actions secret, so the configure picks up the official set. The step is skipped when the secret is absent, as in a fork, and that run builds with the generic set. A tag build under the `MikanXR` owner fails when `branding/official/mikantrack/icon.ico` is missing after it. New art is a new tag on that repository and a change of the pinned ref here.
 
 A release can also be cut by hand on a machine that has the SDK, from a tree configured without Tracy:
 

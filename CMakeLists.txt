@@ -121,6 +121,38 @@ set(IMGUIZMO_SOURCES ${IMGUIZMO_DIR}/ImGuizmo.cpp ${IMGUIZMO_DIR}/ImGuizmo.h)
 set(TINYFD_DIR ${THIRDPARTY_DIR}/tinyfiledialogs)
 set(TINYFD_SOURCES ${TINYFD_DIR}/tinyfiledialogs.c ${TINYFD_DIR}/tinyfiledialogs.h)
 
+# ---------------------------------------------------------------- branding
+# The folder the app icon and the splash image are taken from. The repository
+# carries a generic set. An official build supplies the MikanTrack set, which
+# is not part of this repository, either by path or as a checkout at
+# branding/official.
+set(MIKAN_BRANDING_DIR "" CACHE PATH "Folder holding icon.ico and splash.png. Empty selects branding/official/mikantrack when present, else branding/generic")
+
+if(MIKAN_BRANDING_DIR)
+    set(MIKAN_BRANDING_PATH "${MIKAN_BRANDING_DIR}")
+elseif(EXISTS "${ROOT_DIR}/branding/official/mikantrack/icon.ico")
+    set(MIKAN_BRANDING_PATH "${ROOT_DIR}/branding/official/mikantrack")
+else()
+    set(MIKAN_BRANDING_PATH "${ROOT_DIR}/branding/generic")
+endif()
+file(TO_CMAKE_PATH "${MIKAN_BRANDING_PATH}" MIKAN_BRANDING_PATH)
+
+set(MIKAN_BRANDING_ICON "${MIKAN_BRANDING_PATH}/icon.ico")
+set(MIKAN_BRANDING_SPLASH "${MIKAN_BRANDING_PATH}/splash.png")
+
+foreach(BRANDING_FILE "${MIKAN_BRANDING_ICON}" "${MIKAN_BRANDING_SPLASH}")
+    if(NOT EXISTS "${BRANDING_FILE}")
+        message(FATAL_ERROR "Branding file not found: ${BRANDING_FILE}")
+    endif()
+endforeach()
+
+message(STATUS "Branding: ${MIKAN_BRANDING_PATH}")
+
+# Both files are compiled into the exe by this resource script, the icon as
+# the app icon and the splash image as raw data the app decodes at startup
+set(WINAPP_RESOURCES_RC ${CMAKE_CURRENT_BINARY_DIR}/winapp_resources.rc)
+configure_file(${ROOT_DIR}/src/winapp_resources.rc.in ${WINAPP_RESOURCES_RC} @ONLY)
+
 # ---------------------------------------------------------------- sources
 file(GLOB APP_SRC          ${ROOT_DIR}/src/App/*.h          ${ROOT_DIR}/src/App/*.cpp)
 file(GLOB AUTOMATION_SRC   ${ROOT_DIR}/src/Automation/*.h   ${ROOT_DIR}/src/Automation/*.cpp)
@@ -146,6 +178,7 @@ file(GLOB TESTS_SRC        ${ROOT_DIR}/src/Tests/*.h        ${ROOT_DIR}/src/Test
 
 add_executable(MikanTrack WIN32
     ${ROOT_DIR}/src/main.cpp
+    ${WINAPP_RESOURCES_RC}
     ${APP_SRC}
     ${AUTOMATION_SRC}
     ${UTILITY_SRC}

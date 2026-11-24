@@ -22,6 +22,10 @@ jobs:
     # Visual Studio 2026, pinned by the explicit label
     runs-on: windows-2025-vs2026
 
+    env:
+      # A step cannot read a secret in its condition, so the branding checkout tests this
+      HAS_BRANDING_KEY: ${{ secrets.MIKAN_BRANDING_DEPLOY_KEY != '' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,6 +99,28 @@ jobs:
           ssh-key: ${{ secrets.OVRLIPSYNC_DEPLOY_KEY }}
           path: deps/OVRLipSyncNative
           persist-credentials: false
+
+      # The MikanTrack icon and splash art are not part of this repository. A run
+      # without the key, a fork's for one, builds with the generic set. The checkout
+      # sits outside deps so it never enters that cache. CMake picks it up from here.
+      - name: Checkout branding
+        if: env.HAS_BRANDING_KEY == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MikanXR/MikanBranding
+          ref: v1
+          ssh-key: ${{ secrets.MIKAN_BRANDING_DEPLOY_KEY }}
+          path: branding/official
+          persist-credentials: false
+
+      - name: Require branding for a tagged release
+        if: github.repository_owner == 'MikanXR' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if [ ! -f branding/official/mikantrack/icon.ico ]; then
+            echo "::error::A tagged MikanTrack release needs the branding checkout, and it is missing. Check the MIKAN_BRANDING_DEPLOY_KEY secret."
+            exit 1
+          fi
 
       # No MIKANTRACK_TRACY: a release build carries no profiler client.
       - name: Generate project files

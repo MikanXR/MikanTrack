@@ -36,6 +36,7 @@
 #include "ProfilerGpu.h"
 #include "ProjectManager.h"
 #include "RetargetChains.h"
+#include "SplashWindow.h"
 #include "VideoCaptureSystem.h"
 #include "VisionThread.h"
 #include "VrmLoader.h"
@@ -155,6 +156,11 @@ bool App::startup()
 		return false;
 	}
 
+	// Up before the GL context and everything after it, and closed by the
+	// first frame
+	m_splashWindow= std::make_unique<SplashWindow>();
+	m_splashWindow->open("MikanTrack");
+
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -162,11 +168,12 @@ bool App::startup()
 	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
+	// Hidden until its first frame has presented, so it never shows empty
 	m_sdlWindow= SDL_CreateWindow(
 		"MikanTrack",
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 		1600, 900,
-		SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+		SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN);
 	if (m_sdlWindow == nullptr)
 	{
 		MIKAN_LOG_ERROR("App::startup") << "SDL_CreateWindow failed: " << SDL_GetError();
@@ -971,6 +978,8 @@ void App::shutdown()
 		SDL_GL_DeleteContext(m_glContext);
 		m_glContext= nullptr;
 	}
+	// Still open when startup failed before the first frame
+	m_splashWindow= nullptr;
 	if (m_sdlWindow != nullptr)
 	{
 		SDL_DestroyWindow(m_sdlWindow);
@@ -1074,12 +1083,33 @@ void App::tick(float deltaSeconds)
 	}
 	MIKAN_PROFILE_GPU_COLLECT();
 
+	// The first frame has presented, so the main window has something to show
+	if (!m_bMainWindowRevealed)
+		revealMainWindow();
+
 	{
 		MIKAN_PROFILE_SCOPE("Autosave");
 		m_config->updateAutoSave(deltaSeconds);
 		updateAvatarRigAutoSave(deltaSeconds);
 		updateFaceProfileAutoSave(deltaSeconds);
 		updateCustomPoseAutoSave(deltaSeconds);
+	}
+}
+
+void App::revealMainWindow()
+{
+	m_bMainWindowRevealed= true;
+
+	SDL_ShowWindow(m_sdlWindow);
+
+	if (m_splashWindow != nullptr)
+	{
+		if (m_splashWindow->isOpen())
+		{
+			MIKAN_LOG_INFO("App::revealMainWindow")
+				<< "Splash was up for " << (int)(m_splashWindow->getSecondsOpen() * 1000.f) << " ms";
+		}
+		m_splashWindow= nullptr;
 	}
 }
 

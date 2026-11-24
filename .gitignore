@@ -12,3 +12,6 @@ resources/audio/bench/
 # The intrinsics spike venv and caches
 tools/intrinsics_spike/.venv/
 tools/**/__pycache__/
+
+# The MikanXR branding checkout, which is not part of this repository
+/branding/official/

@@ -26,6 +26,7 @@ class FaceService;
 class ImuService;
 class LocalizationManager;
 class ProjectManager;
+class SplashWindow;
 struct RetargetChains;
 class VideoCaptureSystem;
 class VisionThread;
@@ -284,6 +285,11 @@ private:
 
 	SDL_Window* m_sdlWindow= nullptr;
 	SDL_GLContext m_glContext= nullptr;
+	// Open from SDL's startup until the main window's first frame
+	std::unique_ptr<SplashWindow> m_splashWindow;
+	// Shows the main window, which is created hidden, and closes the splash
+	void revealMainWindow();
+	bool m_bMainWindowRevealed= false;
 	// A timestamp written before each swap and read after it, where the wait
 	// for vsync is taken
 	uint32_t m_swapQuery= 0;
